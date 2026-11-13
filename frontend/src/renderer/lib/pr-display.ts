@@ -342,10 +342,12 @@ export function prCardPresentation(pr: SessionPRSummary, options: { noChecks?: b
 function mergeReadinessRows(pr: SessionPRSummary, options: { noChecks?: boolean }): PRCardStatus[] {
 	const merge = pr.mergeability.state;
 	const conflictsKnown = merge !== "unknown";
+	const conflicts = (value: "pr.merge.conflictsWithBase" | "pr.fact.none" | "pr.fact.unknown", state: PRCheckState) =>
+		({ title: appI18n.t("pr.fact.conflicts"), value: appI18n.t(value), state });
 	const rows: PRCardStatus[] = [
 		merge === "conflicting"
-			? cardStatus("merge", "pr.card.mergeConflict", "error", undefined, mergeLinks(pr))
-			: cardStatus("merge", conflictsKnown ? "pr.merge.noConflicts" : "pr.merge.conflictsUnknown", conflictsKnown ? "success" : "passive"),
+			? { ...cardStatus("merge", "pr.card.mergeConflict", "error", undefined, mergeLinks(pr)), fact: conflicts("pr.merge.conflictsWithBase", "failed") }
+			: { ...cardStatus("merge", conflictsKnown ? "pr.merge.noConflicts" : "pr.merge.conflictsUnknown", conflictsKnown ? "success" : "passive"), fact: conflicts(conflictsKnown ? "pr.fact.none" : "pr.fact.unknown", conflictsKnown ? "passed" : "pending") },
 	];
 	// The row opens to the checks, each with its own link, so it carries no
 	// link of its own; it says the counts at each state in place of its label.
@@ -408,28 +410,32 @@ function reviewReadinessRow(pr: SessionPRSummary): PRCardStatus {
 	const unresolved = pr.review.hasUnresolvedHumanComments
 		? appI18n.t("inspector.unresolvedCount", { count: pr.review.unresolvedBy.reduce((sum, reviewer) => sum + reviewer.count, 0) })
 		: undefined;
-	const row = (label: string, tone: PRDisplayTone, detail?: string): PRCardStatus => ({ key: "review", label, detail, links: [], tone });
+	// The label is the whole fact in words; `value` is what follows "Review" on a row that splits it.
+	const row = (label: string, tone: PRDisplayTone, detail: string | undefined, state: PRCheckState, value = label): PRCardStatus =>
+		({ key: "review", label, detail, links: [], tone, fact: { title: appI18n.t("pr.fact.review"), value, state } });
 	const decision = pr.review.decision;
 	if (decision === "changes_requested" || (decision === "none" && changesRequestedBy.length > 0)) {
 		return row(
 			changesRequestedBy.length > 0 ? appI18n.t("pr.review.changesRequestedBy", { names: changesRequestedBy.join(", ") }) : appI18n.t("pr.review.changesRequested"),
 			"warning",
 			unresolved,
+			"failed",
 		);
 	}
 	if (decision === "review_required") {
 		// A partial approval still counts for something when more reviews are needed.
-		return row(appI18n.t("pr.card.reviewRequired"), "review", approvedBy.length > 0 ? appI18n.t("pr.review.approvedBy", { names: approvedBy.join(", ") }) : unresolved);
+		return row(appI18n.t("pr.card.reviewRequired"), "review", approvedBy.length > 0 ? appI18n.t("pr.review.approvedBy", { names: approvedBy.join(", ") }) : unresolved, "pending", appI18n.t("pr.fact.required"));
 	}
 	if (decision === "approved" || approvedBy.length > 0) {
 		return row(
 			approvedBy.length > 0 ? appI18n.t("pr.review.approvedBy", { names: approvedBy.join(", ") }) : appI18n.t("pr.review.approved"),
 			unresolved ? "warning" : "success",
 			unresolved,
+			"passed",
 		);
 	}
 	// No rule and no verdict: unresolved comments still block the merge.
-	return unresolved ? row(unresolved, "warning") : row(appI18n.t("pr.review.noReviewsYet"), "passive");
+	return unresolved ? row(unresolved, "warning", undefined, "pending") : row(appI18n.t("pr.review.noReviewsYet"), "passive", undefined, "skipped");
 }
 
 /** Who currently approves or blocks the PR: each reviewer's newest verdict, a later comment-only review not counting. */

@@ -432,9 +432,26 @@ function StatusRow({
 	const reduceMotion = useReducedMotion();
 	// The checks row says its counts instead of a verdict; their glyphs carry the state.
 	const tally = status.checks && status.checks.counts.length > 0 ? status.checks : undefined;
+	// Without a dot, a review or conflicts row reads like the checks row: what it
+	// is about, then a glyph and where it stands.
+	const fact = !dot && !tally ? status.fact : undefined;
+	const plain = tally || fact;
+	const line = tally
+		? <ChecksTally tally={tally} />
+		: fact
+			? (
+				<span className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1" data-testid="pr-status-fact">
+					<span>{fact.title}</span>
+					<span className="inline-flex min-w-0 items-center gap-1" data-state={fact.state}>
+						<CheckStateGlyph className={toneClass[status.tone]} state={fact.state} />
+						<span className="min-w-0 truncate">{fact.value}</span>
+					</span>
+				</span>
+			)
+			: undefined;
 	return (
 		<div className="min-w-0">
-			<div className={cn("flex min-w-0 items-center gap-2 text-xs font-medium leading-4", tally ? "text-foreground" : toneClass[status.tone])}>
+			<div className={cn("flex min-w-0 items-center gap-2 text-xs font-medium leading-4", plain ? "text-foreground" : toneClass[status.tone])}>
 				{dot && !tally ? <span aria-hidden="true" className={cn("size-dot-sm shrink-0 rounded-full bg-current", status.breathe && "animate-status-pulse")} /> : null}
 				{details ? (
 					<>
@@ -443,13 +460,13 @@ function StatusRow({
 							aria-expanded={open}
 							className={cn(
 								"inline-flex min-w-0 items-center gap-1 rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
-								tally ? "flex-1 gap-3 text-left" : "underline-offset-2 hover:underline",
+								plain ? "flex-1 gap-3 text-left" : "underline-offset-2 hover:underline",
 							)}
 							onClick={() => setOpen((value) => !value)}
 							type="button"
 						>
-							{tally ? <ChecksTally tally={tally} /> : <span className="min-w-0 truncate">{status.label}</span>}
-							<ChevronIcon aria-hidden="true" className={cn("size-icon-2xs shrink-0", tally && "ml-auto text-muted-foreground")} direction={open ? "up" : "down"} />
+							{line ?? <span className="min-w-0 truncate">{status.label}</span>}
+							<ChevronIcon aria-hidden="true" className={cn("size-icon-2xs shrink-0", plain && "ml-auto text-muted-foreground")} direction={open ? "up" : "down"} />
 						</button>
 						{status.href ? (
 							<ExternalLink
@@ -461,8 +478,8 @@ function StatusRow({
 							</ExternalLink>
 						) : null}
 					</>
-				) : tally ? (
-					<ChecksTally tally={tally} />
+				) : line ? (
+					line
 				) : (
 					<PRCardStatusLink externalLink={ExternalLink} status={status} />
 				)}

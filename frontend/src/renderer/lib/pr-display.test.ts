@@ -517,6 +517,28 @@ describe("merge readiness rows", () => {
 		verdict,
 	});
 
+	it("splits the conflicts and review rows the way the checks row reads: what it is about, then where it stands", () => {
+		const facts = (pr: SessionPRSummary) => prCardPresentation(pr).readinessRows?.filter((row) => row.key !== "ci").map((row) => row.fact);
+		expect(facts(summary({ review: { decision: "review_required", hasUnresolvedHumanComments: false, unresolvedBy: [] } }))).toEqual([
+			{ title: "Conflicts", value: "None", state: "passed" },
+			{ title: "Review", value: "Required", state: "pending" },
+		]);
+		expect(facts(summary({
+			mergeability: { state: "conflicting", reasons: [], prUrl: "", conflictFiles: [] },
+			review: { decision: "approved", hasUnresolvedHumanComments: false, unresolvedBy: [], reviews: [reviewEntry("grace", "approved")] },
+		}))).toEqual([
+			{ title: "Conflicts", value: "Conflicts with the base branch", state: "failed" },
+			{ title: "Review", value: "Approved by grace", state: "passed" },
+		]);
+		expect(facts(summary({
+			mergeability: { state: "unknown", reasons: [], prUrl: "", conflictFiles: [] },
+			review: { decision: "changes_requested", hasUnresolvedHumanComments: false, unresolvedBy: [], reviews: [reviewEntry("linus", "changes_requested")] },
+		}))).toEqual([
+			{ title: "Conflicts", value: "Unknown", state: "pending" },
+			{ title: "Review", value: "Changes requested by linus", state: "failed" },
+		]);
+	});
+
 	it("always shows conflicts, checks and review, saying no reviews yet instead of no review required", () => {
 		const pr = summary({ review: { decision: "none", hasUnresolvedHumanComments: false, unresolvedBy: [] } });
 		expect(labels(pr)).toEqual(["No conflicts", "Checks passing", "No reviews yet"]);

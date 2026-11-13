@@ -746,7 +746,7 @@ describe("SessionInspector PR section", () => {
     expect(screen.queryByText(/Pull requests \(/)).not.toBeInTheDocument();
     expect(prSection("Pull request").getByText("PR #7")).toBeInTheDocument();
     fireEvent.click(prSection("Pull request").getByRole("button", { name: "Checks passing" }));
-    expect(prSection("Pull request").getByText("No conflicts")).toBeInTheDocument();
+    expect(prSection("Pull request").getByText("Conflicts")).toBeInTheDocument();
     expect(prSection("Pull request").getByText("Approved")).toBeInTheDocument();
     expect(
       prSection("Pull request").getByText("Checks passing"),
@@ -1776,7 +1776,7 @@ describe("SessionInspector PR section", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "Squash and merge: PR #7" })).toBeEnabled());
     // With no review rule and no reviews, review decides nothing, so it stays out.
     fireEvent.click(prSection("Pull request").getByRole("button", { name: "Checks passing" }));
-    expect(prSection("Pull request").getByText("No conflicts")).toBeInTheDocument();
+    expect(prSection("Pull request").getByText("Conflicts")).toBeInTheDocument();
     expect(prSection("Pull request").queryByText("No reviews yet")).not.toBeInTheDocument();
     expect(prSection("Pull request").queryByText("No review required")).not.toBeInTheDocument();
     expect(prSection("Pull request").queryByText("Review pending")).not.toBeInTheDocument();
@@ -6344,16 +6344,19 @@ describe("SessionInspector branch summary", () => {
     renderWithQuery(<SessionInspector session={session([pr(7, "open")], { branchState: pushed(2) })} />, undefined, (client) => seedPRSummaries(client, [failing]));
 
     expect(await screen.findByTestId("pr-checks-tally")).toHaveTextContent("Checks1 failing");
-    expect(screen.queryByText("No conflicts")).not.toBeInTheDocument();
+    expect(screen.queryByText("Conflicts")).not.toBeInTheDocument();
     expect(screen.queryByTestId("pr-checks")).not.toBeInTheDocument();
     expect(screen.queryByText("Not mergeable yet")).not.toBeInTheDocument();
     expect(screen.queryByText("No reviews yet")).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: /^Checks/ }));
     expect(within(await screen.findByTestId("pr-checks")).getByText("format")).toBeInTheDocument();
-    expect(screen.getByText("No conflicts")).toBeInTheDocument();
-    // The label's colour says the state; these rows carry no dot before it.
-    expect(screen.getByText("No conflicts").parentElement?.querySelector("span[aria-hidden='true'].rounded-full")).toBeNull();
+    expect(screen.getByText("Conflicts")).toBeInTheDocument();
+    // Like the checks row: what it is about, then a glyph and where it stands. No dot.
+    const conflicts = screen.getByText("Conflicts").closest("[data-testid='pr-status-fact']") as HTMLElement;
+    expect(conflicts).toHaveTextContent("ConflictsNone");
+    expect(conflicts.querySelector("[data-state='passed'] svg")).not.toBeNull();
+    expect(conflicts.parentElement?.querySelector("span[aria-hidden='true'].rounded-full")).toBeNull();
   });
 
   it("says the PR row opens a tab, until that tab is showing", async () => {
@@ -6375,7 +6378,7 @@ describe("SessionInspector branch summary", () => {
 
     expect(await screen.findByTestId("pr-checks-tally")).toHaveTextContent("Checks1 passed1 skipped");
     await userEvent.click(screen.getByRole("button", { name: /^Checks/ }));
-    expect(await screen.findByText("No conflicts")).toBeInTheDocument();
+    expect(await screen.findByText("Conflicts")).toBeInTheDocument();
     const checks = within(screen.getByTestId("pr-checks"));
     expect(checks.getAllByRole("listitem").map((item) => item.textContent)).toEqual(["build passed"]);
   });
