@@ -19,7 +19,10 @@ export function HarnessSavedKeys({ agentId, hostId, providerKeys, onProviderKeys
 }) {
 	const { t } = useTranslation();
 	const [notice, setNotice] = useState<{ warn: boolean; text: string } | null>(null);
-	const keys = providerKeys?.filter((key) => key.configured && key.agents.includes(agentId)) ?? [];
+	// Gemini's own key method saves GEMINI_API_KEY in AO too, though Gemini
+	// isn't listed among the key's readers.
+	const keys = providerKeys?.filter((key) => key.configured
+		&& (key.agents.includes(agentId) || (agentId === "gemini" && key.name === "GEMINI_API_KEY"))) ?? [];
 	if (!keys.length && !notice) return null;
 	return <HarnessDetailGroup title={t("settings.harness.loginUi.groupKeys")}>
 		{keys.map((key) => <SavedKeyRow key={key.name} providerKey={key} hostId={hostId} onRemoved={(result) => {

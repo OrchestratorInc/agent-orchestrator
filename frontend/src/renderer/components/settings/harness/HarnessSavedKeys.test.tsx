@@ -22,6 +22,19 @@ describe("HarnessSavedKeys", () => {
 		expect(screen.queryByText("Factory API key")).toBeNull();
 	});
 
+	// Gemini's key method saves GEMINI_API_KEY, whose readers don't include Gemini.
+	it("lists the GEMINI_API_KEY that Gemini's key method saved", async () => {
+		const user = userEvent.setup();
+		const geminiKey: ProviderKey = { name: "GEMINI_API_KEY", label: "Gemini API key", configured: true, hint: "wxyz", device: false, deviceAvailable: true, checkable: true, agents: ["opencode", "pi"] };
+		vi.mocked(removeProviderKey).mockResolvedValue({ ...geminiKey, configured: false, hint: undefined });
+		render(<HarnessSavedKeys agentId="gemini" providerKeys={[geminiKey, openAIKey]} />);
+		expect(screen.getByText("Gemini API key")).toBeVisible();
+		expect(screen.queryByText("OpenAI API key")).toBeNull();
+		await user.click(screen.getByRole("button", { name: "Remove" }));
+		await user.click(screen.getByRole("button", { name: "Confirm remove" }));
+		expect(removeProviderKey).toHaveBeenCalledWith("GEMINI_API_KEY", undefined);
+	});
+
 	it("renders nothing when the harness has no saved key", () => {
 		const { container } = render(<HarnessSavedKeys agentId="amp" providerKeys={[openAIKey, unsavedKey]} />);
 		expect(container).toBeEmptyDOMElement();
