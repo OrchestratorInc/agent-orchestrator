@@ -146,6 +146,7 @@ if (typeof window !== "undefined") {
 			start: async () => undefined,
 			stop: async () => undefined,
 			cancel: async () => undefined,
+			authorize: async () => ({ granted: true }),
 			onEvent: () => () => undefined,
 		},
 		app: {

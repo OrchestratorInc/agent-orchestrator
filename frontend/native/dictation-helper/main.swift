@@ -4,6 +4,8 @@ import Speech
 
 // Streams one dictation as JSON lines on stdout. "stop" on stdin (or EOF)
 // ends the audio and waits for the final transcript; "cancel" exits at once.
+// With --authorize it only asks macOS for the speech and microphone access
+// dictation needs, reports the answer as one "authorization" line, and exits.
 
 let output = DispatchQueue(label: "ao.dictation.output")
 
@@ -50,7 +52,10 @@ final class Dictation {
 		}
 		request.shouldReportPartialResults = true
 		if #available(macOS 13, *) { request.addsPunctuation = true }
-		if recognizer.supportsOnDeviceRecognition { request.requiresOnDeviceRecognition = true }
+		guard recognizer.supportsOnDeviceRecognition else {
+			fail("On-device speech recognition is unavailable for this language. Choose a downloaded model in Settings → Dictation.")
+		}
+		request.requiresOnDeviceRecognition = true
 
 		let input = engine.inputNode
 		let format = input.outputFormat(forBus: 0)
@@ -147,7 +152,8 @@ if getenv("AO_DICTATION_DISCLAIMED") == nil, let executable = Bundle.main.execut
 	var attrs: posix_spawnattr_t?
 	posix_spawnattr_init(&attrs)
 	_ = responsibility_spawnattrs_setdisclaim(&attrs, 1)
-	let argv: [UnsafeMutablePointer<CChar>?] = [strdup(executable), nil]
+	// Arguments such as --authorize must survive the relaunch.
+	let argv: [UnsafeMutablePointer<CChar>?] = [strdup(executable)] + CommandLine.arguments.dropFirst().map { strdup($0) } + [nil]
 	if posix_spawn(&disclaimedChild, executable, nil, &attrs, argv, environ) == 0 {
 		signal(SIGTERM) { _ in
 			kill(disclaimedChild, SIGTERM)
@@ -161,22 +167,38 @@ if getenv("AO_DICTATION_DISCLAIMED") == nil, let executable = Bundle.main.execut
 
 let dictation = Dictation()
 
-Thread.detachNewThread {
-	while let line = readLine() {
-		if line == "cancel" { exit(0) }
-		if line == "stop" { break }
+/// Asks macOS for speech recognition, then microphone access. Each prompt only
+/// appears while its answer is still undecided, so once both are granted this
+/// returns at once. `nil` means both were granted.
+func requestAccess(_ completion: @escaping (String?) -> Void) {
+	SFSpeechRecognizer.requestAuthorization { status in
+		guard status == .authorized else {
+			completion("Allow Speech Recognition for Orchestrator in System Settings > Privacy & Security.")
+			return
+		}
+		AVCaptureDevice.requestAccess(for: .audio) { granted in
+			completion(granted ? nil : "Allow Microphone access for Orchestrator in System Settings > Privacy & Security.")
+		}
 	}
-	DispatchQueue.main.async { dictation.stop() }
 }
 
-SFSpeechRecognizer.requestAuthorization { status in
-	guard status == .authorized else {
-		fail("Allow Speech Recognition for Orchestrator in System Settings > Privacy & Security.")
+if CommandLine.arguments.contains("--authorize") {
+	requestAccess { message in
+		var event: [String: Any] = ["type": "authorization", "granted": message == nil]
+		if let message { event["message"] = message }
+		finish(event, code: 0)
 	}
-	AVCaptureDevice.requestAccess(for: .audio) { granted in
-		guard granted else {
-			fail("Allow Microphone access for Orchestrator in System Settings > Privacy & Security.")
+} else {
+	Thread.detachNewThread {
+		while let line = readLine() {
+			if line == "cancel" { exit(0) }
+			if line == "stop" { break }
 		}
+		DispatchQueue.main.async { dictation.stop() }
+	}
+
+	requestAccess { message in
+		if let message { fail(message) }
 		DispatchQueue.main.async { dictation.start() }
 	}
 }

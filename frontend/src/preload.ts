@@ -30,7 +30,7 @@ import {
 } from "./shared/tray";
 import type { DaemonStatus } from "./shared/daemon-status";
 import type { AgentLoginRequest, AgentLoginResponse } from "./main/agent-login-ipc";
-import type { DictationEvent } from "./shared/dictation";
+import type { DictationAuthorization, DictationEvent } from "./shared/dictation";
 import type { RemoteHostView } from "./main/remotes-ipc";
 import type { ConnectedHostView } from "./main/remote-registry";
 import type { RemoteHealth } from "./main/remote-request";
@@ -234,6 +234,7 @@ const api = {
 		start: () => ipcRenderer.invoke("dictation:start") as Promise<void>,
 		stop: () => ipcRenderer.invoke("dictation:stop") as Promise<void>,
 		cancel: () => ipcRenderer.invoke("dictation:cancel") as Promise<void>,
+		authorize: () => ipcRenderer.invoke("dictation:authorize") as Promise<DictationAuthorization>,
 		onEvent: (listener: (event: DictationEvent) => void) => {
 			const handler = (_event: Electron.IpcRendererEvent, message: DictationEvent) => listener(message);
 			ipcRenderer.on("dictation:event", handler);
