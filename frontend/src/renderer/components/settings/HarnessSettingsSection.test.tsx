@@ -342,6 +342,37 @@ describe("HarnessSettingsSection", () => {
 		await waitFor(() => expect(keyLoads).toBe(2));
 	});
 
+	// Without the harness there is no sign-in panel, so a key saved for it is
+	// listed on its page, where it can still be removed.
+	it("removes a key saved for a harness that is not installed", async () => {
+		const readiness = { agents: [agentReadiness("codex", "Codex", { installation: "not_installed", authentication: "unknown" })] };
+		let removed = false;
+		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
+			if (path === "/api/v1/agents/readiness") return { data: readiness } as never;
+			if (path === "/api/v1/agents/installers") return { data: { agents: [] } } as never;
+			if (path === "/api/v1/agents/install-jobs") return { data: { jobs: [] } } as never;
+			if (path === "/api/v1/agents/provider-keys") return { data: { keys: [{ name: "OPENAI_API_KEY", label: "OpenAI API key", agents: ["codex", "goose"], configured: !removed, hint: removed ? undefined : "abcd", checkable: true, device: !removed, deviceAvailable: true }] } } as never;
+			return { data: undefined } as never;
+		});
+		vi.mocked(apiClient.POST).mockImplementation(async (path) => {
+			if (path === "/api/v1/agents/readiness/ensure" || path === "/api/v1/agents/refresh") return { data: readiness } as never;
+			return { data: undefined } as never;
+		});
+		const remove = vi.spyOn(apiClient, "DELETE").mockImplementation(async () => {
+			removed = true;
+			return { data: { name: "OPENAI_API_KEY", label: "OpenAI API key", agents: ["codex", "goose"], configured: false, checkable: true, device: false, deviceAvailable: true } } as never;
+		});
+		const user = userEvent.setup();
+		renderSection();
+		const page = await findAgentRow("codex");
+		expect(await within(page).findByText("Saved, ending abcd · Also set outside AO")).toBeVisible();
+		await user.click(within(page).getByRole("button", { name: "Remove" }));
+		await user.click(within(page).getByRole("button", { name: "Confirm remove" }));
+		expect(remove).toHaveBeenCalledWith("/api/v1/agents/provider-keys/{name}", { params: { path: { name: "OPENAI_API_KEY" } } });
+		expect(await within(page).findByText("Removed. Copies an agent saved in its own settings stay there.")).toBeVisible();
+		await waitFor(() => expect(within(page).queryByRole("button", { name: "Remove" })).toBeNull());
+	});
+
 	it("blocks updates during inline sign-in and releases the guard after cancellation", async () => {
 		mockInstalledOperations("npm");
 		const login = { id: "login-update-guard", agentId: "codex", method: "browser", status: "running", expiresAt: "2026-10-28T12:00:00Z", loginUrl: "https://auth.openai.com/authorize" };

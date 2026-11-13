@@ -13,15 +13,13 @@ import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
 import { SettingsOptionMenu } from "../SettingsOptionMenu";
 import { CatalogProviderPickerSkeleton } from "./CatalogProviderPicker";
-import { DeviceEnvToggle, KEY_FIELD_CLASS, KeyWarning, providerKeyNeedsModel, savedKeySummary } from "../providerKeyUi";
+import { DeviceEnvToggle, KEY_FIELD_CLASS, KeyWarning, providerKeyNeedsModel, REMOVE_CONFIRM_MS, savedKeySummary } from "../providerKeyUi";
 import { cn } from "../../../lib/utils";
 
 const CATALOG_METHOD = "provider_key";
 // A native screen AO cannot read stays "waiting"; after this long the panel
 // offers the terminal instead of a silent spinner.
 const NATIVE_STALL_MS = 12_000;
-// An armed "Confirm remove" for a saved key disarms itself after this long.
-const REMOVE_CONFIRM_MS = 4_000;
 // Crush providers whose stored sign-in Crush itself removes when a key is
 // saved for them (backend crushSignInFields).
 const CRUSH_SIGN_IN_PROVIDERS = new Set(["openai", "xai", "anthropic"]);

@@ -20,7 +20,7 @@ import { HarnessDetailGroup, HarnessDetailRow, HarnessTimestamp } from "./harnes
 
 /** Install, update and login each own one row. While a job or login runs,
 	* the row that started it shows progress instead. */
-export function HarnessAccountTab({ details, hostId, cloud, authWorkflowActive, loginPanel, copied, diagnosticsExpanded, onToggleDiagnostics, onCopyDiagnostics, onInstall, onSelectMethod, onCopyCommand, onUpdate, onCloudUpdate, onCloudReset, onLogin, onLogout, onVerify, onCloseAuth, onRetryAuth, onTerminalState, onViewSessions }: {
+export function HarnessAccountTab({ details, hostId, cloud, authWorkflowActive, loginPanel, savedKeys, copied, diagnosticsExpanded, onToggleDiagnostics, onCopyDiagnostics, onInstall, onSelectMethod, onCopyCommand, onUpdate, onCloudUpdate, onCloudReset, onLogin, onLogout, onVerify, onCloseAuth, onRetryAuth, onTerminalState, onViewSessions }: {
 	details: HarnessDetails;
 	hostId?: string;
 	/** AO Cloud's side of this harness, when AO Cloud runs it: a second line of the installation row. */
@@ -28,6 +28,8 @@ export function HarnessAccountTab({ details, hostId, cloud, authWorkflowActive, 
 	/** A login or logout terminal is open for any harness. */
 	authWorkflowActive: boolean;
 	loginPanel?: ReactNode;
+	/** Keys AO saved for this harness while it is not installed, so they can still be removed. */
+	savedKeys?: ReactNode;
 	copied: boolean;
 	diagnosticsExpanded: boolean;
 	onToggleDiagnostics: () => void;
@@ -150,6 +152,7 @@ export function HarnessAccountTab({ details, hostId, cloud, authWorkflowActive, 
 			</HarnessDetailRow>}
 			{loginPanel}
 		</HarnessDetailGroup> : null}
+		{savedKeys}
 		{accountProvider ? <AgentAccountsPanel provider={accountProvider} cliLogin={{
 			disabled: authBusy || authWorkflowActive || details.busy || !authPlan?.available || authPlan.action === "instructions",
 			canLogout: Boolean(authPlan?.logoutCommand),

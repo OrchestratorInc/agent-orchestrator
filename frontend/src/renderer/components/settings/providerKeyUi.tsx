@@ -12,6 +12,9 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../ui/
 // Pieces of the provider-key form in a harness's Account login panel, so
 // a saved key reads and behaves the same for every harness.
 
+/** An armed "Confirm remove" for a saved key disarms itself after this long. */
+export const REMOVE_CONFIRM_MS = 4_000;
+
 /** "Saved, ending 1234 · Also set outside AO", or undefined while no key is saved. */
 export function savedKeySummary(t: TFunction, key?: ProviderKey): string | undefined {
 	if (!key?.configured) return undefined;

@@ -55,6 +55,7 @@ import { describeHarness, supportsUpdate, type AgentAuthState, type AgentOperati
 import { HarnessAccountTab } from "./HarnessAccountTab";
 import { cloudNeedsAttention, type HarnessCloudState } from "./HarnessCloudLine";
 import { HarnessLoginPanel } from "./HarnessLoginPanel";
+import { HarnessSavedKeys } from "./HarnessSavedKeys";
 import { closeAuthTerminal, type AuthTerminalWorkflow } from "./HarnessAuthTerminalPanel";
 import { diagnosticsText, healthText, machineText } from "./harness-diagnostics";
 import { HarnessHealthTab } from "./HarnessHealthTab";
@@ -201,11 +202,14 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 	const plans = useMemo(() => new Map(installers.data?.map((plan) => [plan.agentId, plan]) ?? []), [installers.data]);
 	const jobMap = useMemo(() => new Map(jobs.data?.map((job) => [job.target, job]) ?? []), [jobs.data]);
 	const agentAuthPlans = useMemo(() => new Map(authPlans.data?.map((plan) => [plan.agentId, plan]) ?? []), [authPlans.data]);
-	// Saved provider keys, fetched only while a panel that offers one is open.
-	const providerKeys = useProviderKeys(hostId, Boolean(uiLoginAgent && agentAuthPlans.get(uiLoginAgent)?.methods?.some((method) => method.id.startsWith("env_") || method.id === "gemini_api_key")));
-	const invalidateProviderKeys = useInvalidateProviderKeys(hostId);
 	const readinessAgents = useMemo(() => new Map(agents.data?.agents.map((agent) => [agent.id, agent]) ?? []), [agents.data]);
 	const installed = useMemo(() => installedAgentIds(agents.data), [agents.data]);
+	// Saved provider keys, fetched only while a panel that offers one is open,
+	// or while a harness that is not installed is open: its saved keys can
+	// only be removed from its page.
+	const providerKeys = useProviderKeys(hostId, Boolean(uiLoginAgent && agentAuthPlans.get(uiLoginAgent)?.methods?.some((method) => method.id.startsWith("env_") || method.id === "gemini_api_key"))
+		|| Boolean(selectedAgentId && agents.data && !agents.error && !installed.has(selectedAgentId)));
+	const invalidateProviderKeys = useInvalidateProviderKeys(hostId);
 	const refreshModelsOnOpen = (agentId: AgentId) => {
 		if (!installed.has(agentId) || (needsAuthentication(agentId) && !MULTI_PROVIDER_HARNESSES.has(agentId))) return;
 		const options = agentModelsQueryOptions(agentId, "", hostId, true);
@@ -842,6 +846,13 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 					}
 					return false;
 				}}
+			/> : undefined}
+			savedKeys={!details.isInstalled && !details.installationPending ? <HarnessSavedKeys
+				key={agentId}
+				agentId={agentId}
+				hostId={hostId}
+				providerKeys={providerKeys.data}
+				onProviderKeysChanged={() => void invalidateProviderKeys()}
 			/> : undefined}
 			authWorkflowActive={Boolean(authWorkflow) || uiLoginAgent !== null}
 			copied={copiedAgent === agentId}
