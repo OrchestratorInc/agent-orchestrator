@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // A transcript moved to AO Cloud names this machine's working directory and
@@ -68,4 +69,31 @@ func WriteClaudeTranscriptForCloud(ctx context.Context, w io.Writer, opts Claude
 		return "", err
 	}
 	return id, nil
+}
+
+// WriteClaudeArchiveFromCloud writes an archive ImportClaude places on this
+// machine from a transcript an AO Cloud sandbox kept in projectDir. The file
+// at transcriptPath must be named <session id>.jsonl. Its sidecar files stay
+// in Cloud.
+func WriteClaudeArchiveFromCloud(ctx context.Context, w io.Writer, transcriptPath, projectDir string) (Manifest, error) {
+	id, err := canonicalUUID(strings.TrimSuffix(filepath.Base(transcriptPath), ".jsonl"))
+	if err != nil {
+		return Manifest{}, err
+	}
+	m := Manifest{Version: formatVersion, Harness: HarnessClaudeCode, NativeID: id, SourceProjectDir: projectDir}
+	if m.SourceCwd, m.CLIVersion, err = claudeTranscriptFacts(transcriptPath); err != nil {
+		return Manifest{}, err
+	}
+	if m.SourceCwd == "" {
+		return Manifest{}, errors.New("nativetransfer: transcript records no working directory")
+	}
+	size, sum, err := hashFile(transcriptPath)
+	if err != nil {
+		return Manifest{}, err
+	}
+	m.Files = []File{{Path: id + ".jsonl", Size: size, SHA256: sum}}
+	if err := m.validate(); err != nil {
+		return Manifest{}, err
+	}
+	return m, writeArchive(ctx, w, m, filepath.Dir(transcriptPath))
 }

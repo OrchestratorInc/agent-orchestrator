@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -170,4 +171,41 @@ func TestMoveTranscriptInfoSaysWhyTheConversationStays(t *testing.T) {
 			t.Errorf("moveTranscriptInfo = %+v, want %+v", got, tc.want)
 		}
 	}
+}
+
+func TestWriteImportArchiveReadsTheCloudTranscript(t *testing.T) {
+	const id = "0b5a6c1e-3f2d-4c8a-9e7b-1d2c3b4a5f60"
+	var gz bytes.Buffer
+	zw := gzip.NewWriter(&gz)
+	_, _ = zw.Write([]byte(`{"type":"user","cwd":"/workspace/repository","sessionId":"` + id + `","version":"2.1.287","message":{"role":"user","content":"hi"}}` + "\n"))
+	_ = zw.Close()
+	transcript := MoveImportTranscript{AgentSessionID: id, ProjectDir: "/home/agent/.claude/projects/-workspace-repository", Gzip: gz.Bytes()}
+
+	archive, err := writeImportArchive(context.Background(), t.TempDir(), transcript)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := nativetransfer.ImportClaude(context.Background(), mustOpen(t, archive), nativetransfer.ClaudeImportOptions{ConfigDir: t.TempDir(), LaunchCwd: t.TempDir()})
+	if err != nil || res.NativeID != id {
+		t.Fatalf("ImportClaude = %+v, %v", res, err)
+	}
+
+	for name, bad := range map[string]MoveImportTranscript{
+		"not gzip":   {AgentSessionID: id, ProjectDir: transcript.ProjectDir, Gzip: []byte("plain")},
+		"id as path": {AgentSessionID: "../" + id, ProjectDir: transcript.ProjectDir, Gzip: gz.Bytes()},
+	} {
+		if _, err := writeImportArchive(context.Background(), t.TempDir(), bad); err == nil {
+			t.Errorf("%s: no error", name)
+		}
+	}
+}
+
+func mustOpen(t *testing.T, name string) *os.File {
+	t.Helper()
+	f, err := os.Open(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = f.Close() })
+	return f
 }

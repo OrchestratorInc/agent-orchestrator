@@ -113,9 +113,13 @@ func (c *SessionMovesController) importMove(w http.ResponseWriter, r *http.Reque
 		writeInvalidJSON(w, r)
 		return
 	}
-	out, err := c.Svc.ImportMove(r.Context(), sessionsvc.MoveImportInput{
+	input := sessionsvc.MoveImportInput{
 		ProjectID: domain.ProjectID(in.ProjectID), MoveID: in.MoveID, Manifest: in.Manifest, HandoffNote: in.HandoffNote,
-	})
+	}
+	if t := in.Transcript; t != nil {
+		input.Transcript = &sessionsvc.MoveImportTranscript{AgentSessionID: t.AgentSessionID, ProjectDir: t.ProjectDir, Gzip: t.TranscriptGzip}
+	}
+	out, err := c.Svc.ImportMove(r.Context(), input)
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return

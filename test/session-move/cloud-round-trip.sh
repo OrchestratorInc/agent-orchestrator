@@ -2,9 +2,9 @@
 # Moves one session local -> Cloud -> local -> Cloud -> local, against a real
 # AO daemon and a real AO Cloud control plane with Docker sandboxes. At every
 # hop it checks the destination's branch, its HEAD commit and every file that
-# is not ignored, and that ignored files stayed behind. On each move to Cloud
-# it also checks that the local agent's conversation was placed, with this
-# machine's paths replaced, and that the Cloud agent resumed it.
+# is not ignored, and that ignored files stayed behind. On each move it also
+# checks that the agent's conversation was placed, with the source's paths
+# replaced, and that the destination's agent resumed it.
 #
 # GitHub is replaced by a git server container on the compose network
 # (AO_CLOUD_DEVELOPMENT_GITHUB_URL); the local repository reaches the same
@@ -276,6 +276,26 @@ check_cloud_conversation() {
 	fail "the Cloud agent did not resume conversation $1"
 }
 
+# check_local_conversation checks this machine placed conversation $1 in the
+# new worktree, with the sandbox's working directory ($2) and Claude project
+# folder ($3) replaced, and resumed it.
+check_local_conversation() {
+	local wt file
+	wt=$(worktree_for)
+	file=$(grep -lF "\"cwd\":\"$wt\"" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"/projects/*/"$1".jsonl 2>/dev/null | head -1 || true)
+	[[ -n "$file" ]] || fail "this machine did not place conversation $1 for $wt"
+	grep -qF "\"cwd\":\"$2\"" "$file" && fail "$file still runs in the sandbox's $2"
+	grep -qF "$3" "$file" && fail "$file still names the sandbox's $3"
+	for _ in $(seq 1 60); do
+		pgrep -f -- "--resume $1" >/dev/null && {
+			echo "  local agent resumed conversation $1 from $file"
+			return 0
+		}
+		sleep 1
+	done
+	fail "the local agent did not resume conversation $1"
+}
+
 # local_to_cloud moves local session $1, with its agent's conversation, to a
 # new Cloud session and sets NEXT to its id.
 local_to_cloud() {
@@ -311,24 +331,29 @@ PY
 	NEXT=$cid
 }
 
-# cloud_to_local moves Cloud session $1 to a new local session and sets NEXT to its id.
+# cloud_to_local moves Cloud session $1, with its agent's conversation, to a
+# new local session and sets NEXT to its id.
 cloud_to_local() {
-	local cid=$1 move="m-$2" out tip sid body
+	local cid=$1 move="m-$2" out tip sid aid project_dir
 	cloud_exec "$SNAPSHOT" "$CLOUD_REPO" > "$W/want.snap"
-	out=$(cloud POST "/orgs/$ORG/sessions/$cid/move/export")
-	tip=$(echo "$out" | json "d['manifest']['tip']") || { echo "$out"; fail "Cloud export"; }
-	[[ "$(echo "$out" | json "d['manifest']['wip']")" == "True" ]] || fail "Cloud export made no WIP commit"
+	cloud POST "/orgs/$ORG/sessions/$cid/move/export" > "$W/export.json"
+	tip=$(json "d['manifest']['tip']" < "$W/export.json") || { cat "$W/export.json"; fail "Cloud export"; }
+	[[ "$(json "d['manifest']['wip']" < "$W/export.json")" == "True" ]] || fail "Cloud export made no WIP commit"
 	[[ "$(remote_tip)" == "$tip" ]] || fail "origin $BRANCH is $(remote_tip), want the exported $tip"
-	echo "$out" > "$W/export.json"
-	body=$(python3 - "$W/export.json" "$LOCAL_PROJECT" "$move" <<'PY'
+	aid=$(json "d['transcript']['agentSessionId']" < "$W/export.json") || fail "Cloud export carried no conversation"
+	project_dir=$(json "d['transcript']['projectDir']" < "$W/export.json")
+	# The transcript can exceed the argument limit, so the body goes from a file.
+	python3 - "$W/export.json" "$LOCAL_PROJECT" "$move" > "$W/import.json" <<'PY'
 import json, sys
 d = json.load(open(sys.argv[1]))
-print(json.dumps({"projectId": sys.argv[2], "moveId": sys.argv[3], "manifest": d["manifest"], "handoffNote": d["handoffNote"]}))
+print(json.dumps({"projectId": sys.argv[2], "moveId": sys.argv[3], "manifest": d["manifest"],
+                  "handoffNote": d["handoffNote"], "transcript": d["transcript"]}))
 PY
-)
-	out=$(api POST /sessions/move/import "$body")
+	out=$(curl -sS -X POST "http://127.0.0.1:$PORT/api/v1/sessions/move/import" -H 'Content-Type: application/json' --data-binary @"$W/import.json")
 	sid=$(echo "$out" | json "d['session']['id']") || { echo "$out"; fail "local import"; }
+	[[ "$(echo "$out" | json "len(d.get('warnings') or [])")" == 0 ]] || { echo "$out"; fail "local import warned"; }
 	check_local "$tip" "$W/want.snap"
+	check_local_conversation "$aid" "$CLOUD_REPO" "$project_dir"
 	cloud DELETE "/orgs/$ORG/sessions/$cid" >/dev/null
 	NEXT=$sid
 }
