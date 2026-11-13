@@ -22,7 +22,7 @@ import { captureRendererEvent } from "../lib/telemetry";
 import { aoBridge } from "../lib/bridge";
 import { clientForHost } from "../lib/host-clients";
 import { useConnectedHosts } from "./useHostConnection";
-import { requestRemoteHostsRefresh } from "./useRemoteHosts";
+import { requestRemoteHostCheck } from "./useRemoteHosts";
 import { applyOptimisticSessionKills, optimisticSessionKillsVersion, subscribeOptimisticSessionKills } from "./optimistic-session-kills";
 import { applyOptimisticProjectRemovals, isOptimisticallyRemovedProject, optimisticProjectRemovalsVersion, subscribeOptimisticProjectRemovals } from "./optimistic-project-removals";
 import { appI18n } from "../i18n";
@@ -176,9 +176,9 @@ function recheckRemoteHost(hostId: string, status: number): void {
 	if (![401, 403, 426, 502, 503, 530].includes(status)) return;
 	const now = Date.now();
 	const last = lastRemoteHealthRecheck.get(hostId);
-	if (last !== undefined && now >= last && now - last < 15_000) return;
+	if (last !== undefined && now >= last && now - last < 2_000) return;
 	lastRemoteHealthRecheck.set(hostId, now);
-	requestRemoteHostsRefresh();
+	requestRemoteHostCheck(hostId);
 }
 export function workspaceStatusesChecking(workspaces: WorkspaceSummary[] | undefined): boolean {
 	return (
