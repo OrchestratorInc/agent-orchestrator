@@ -96,13 +96,13 @@ export function ComposerSuggestMenu({
 									<Icon aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
 								) : null}
 								{/* Name first, then its description or folder on the same line,
-								    smaller and quieter, so a row stays one line tall. */}
+								    in smaller text, so a row stays one line tall. */}
 								<span className="flex min-w-0 flex-1 items-baseline gap-2">
 									<span className={cn("truncate", item.detail ? "max-w-3/5 shrink-0" : "min-w-0")}>
 										{kind === "skill" ? `/${item.label}` : item.label}
 									</span>
 									{item.detail ? (
-										<span className="min-w-0 flex-1 truncate text-caption text-passive">
+										<span className="min-w-0 flex-1 truncate text-caption text-muted-foreground">
 											{item.detail}
 										</span>
 									) : null}
@@ -126,7 +126,7 @@ export function ComposerSuggestMenu({
 				// Said out loud rather than letting a capped list read as the whole
 				// worktree: a file that is missing because of the cap looks identical to
 				// one that does not exist.
-				<p className="mt-1 border-t border-border px-2 pt-1.5 pb-0.5 text-micro text-passive">
+				<p className="mt-1 border-t border-border px-2 pt-1.5 pb-0.5 text-micro text-muted-foreground">
 					Showing part of a large worktree — type more to narrow it.
 				</p>
 			) : null}
