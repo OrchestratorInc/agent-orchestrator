@@ -50,6 +50,26 @@ export function frostStops(barHeight: number, tail = FROST_TAIL): FrostStop[] {
 }
 
 /**
+ * The frost for a bar whose controls all float on pills of their own (see
+ * `headerPill`): nothing in the bar sits on the frost bare, so it only has to
+ * keep the status bar legible. Dense at the screen edge, then thinning steadily
+ * through the bar and out over the tail, so the page shows around the pills.
+ */
+export function pillFrostStops(barHeight: number, tail = FROST_TAIL): FrostStop[] {
+	const bar = barHeight / (barHeight + tail);
+	const fade = (at: number) => bar + (1 - bar) * at;
+	return [
+		[0, FROST_EDGE],
+		[bar * 0.4, 0.84],
+		[bar * 0.7, 0.66],
+		[bar, 0.46],
+		[fade(0.35), 0.22],
+		[fade(0.7), 0.06],
+		[1, 0],
+	];
+}
+
+/**
  * The frost itself, filling `style`'s box. `from` is the screen edge it is
  * densest at; the gradient runs away from it.
  *
