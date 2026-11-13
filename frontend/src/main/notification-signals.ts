@@ -27,6 +27,22 @@ export function shouldSignalAttention(type: string | undefined): boolean {
 }
 
 /**
+ * Whether the person is already looking at what a notification is about, so
+ * its visual signals (toast, dock bounce, taskbar flash) are skipped: the
+ * renderer says it is on screen (`watched`), or the window has focus. A
+ * notification that asks to alert while focused (a cloud mention or aside
+ * reply about a session that is not on screen) counts only `watched`, so it
+ * alerts even while AO's window is focused on another session.
+ */
+export function alreadyLooking(
+	windowFocused: boolean,
+	notification: { watched?: boolean; alertWhenFocused?: boolean },
+): boolean {
+	if (notification.watched === true) return true;
+	return windowFocused && notification.alertWhenFocused !== true;
+}
+
+/**
  * Whether a new macOS dock bounce should replace the pending one. A pending
  * "critical" bounce (agent blocked on the user) is never replaced: a later
  * informational notification must not downgrade it to a one-shot bounce, or

@@ -8,9 +8,10 @@ import { SettingsRow } from "./SettingsRow";
 import { SettingsSection } from "./SettingsSection";
 
 /**
- * Settings › Notifications, on a control plane with mentions: two switches,
- * one for mentions of you and one for mentions of a team you're in. Off stops
- * the desktop alert and the phone push; the bell lists every mention anyway.
+ * Settings › Notifications, on a control plane with mentions: a switch for
+ * mentions of you, one for mentions of a team you're in, and, once the
+ * control plane has asides, one for new replies in asides you're in. Off
+ * stops the desktop alert and the phone push; the bell lists them anyway.
  */
 export function NotificationsSection(_props: { titleHidden: boolean }) {
 	const { t } = useTranslation();
@@ -23,14 +24,17 @@ export function NotificationsSection(_props: { titleHidden: boolean }) {
 		void preferences.save(change).catch(() => setSaveFailed(true));
 	};
 
+	// A control plane with asides answers the third switch; one without leaves it out.
+	const asides = current?.asideReplies !== undefined;
 	const rows: Array<{ key: keyof CloudCpNotificationPreferences; label: string }> = [
 		{ key: "mentions", label: t("settings.notifications.mentionMe") },
 		{ key: "teamMentions", label: t("settings.notifications.mentionTeam") },
+		...(asides ? [{ key: "asideReplies" as const, label: t("settings.notifications.asideReplies") }] : []),
 	];
 
 	return (
 		<>
-			<SettingsSection title={t("settings.notifications.mentions")} sectionId="notifications" grouped>
+			<SettingsSection title={asides ? t("settings.notifications.mentionsAndAsides") : t("settings.notifications.mentions")} sectionId="notifications" grouped>
 				{preferences.isError ? (
 					<SettingsRow label={<span className="text-error" role="alert">{t("settings.notifications.loadFailed")}</span>}>
 						<Button onClick={() => void preferences.refetch()} size="sm" type="button" variant="ghost">{t("settings.notifications.retry")}</Button>
@@ -39,14 +43,14 @@ export function NotificationsSection(_props: { titleHidden: boolean }) {
 					<SettingsRow data-notification-preference={row.key} description={t("settings.notifications.alertTargets")} key={row.key} label={row.label}>
 						<Switch
 							aria-label={row.label}
-							checked={current[row.key]}
+							checked={current[row.key] !== false}
 							onCheckedChange={(checked) => save({ [row.key]: checked })}
 						/>
 					</SettingsRow>
 				)) : null}
 			</SettingsSection>
 			{saveFailed ? <p className="px-(--settings-row-inset) text-control text-error" role="alert">{t("settings.notifications.saveFailed")}</p> : null}
-			{current ? <p className="px-(--settings-row-inset) text-control text-settings-muted">{t("settings.notifications.bellNote")}</p> : null}
+			{current ? <p className="px-(--settings-row-inset) text-control text-settings-muted">{asides ? t("settings.notifications.bellNoteAll") : t("settings.notifications.bellNote")}</p> : null}
 		</>
 	);
 }

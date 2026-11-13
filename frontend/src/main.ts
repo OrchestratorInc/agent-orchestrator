@@ -256,6 +256,7 @@ import { isAllowedAppExternalURL, openAllowedAppExternalURL } from "./main/exter
 import { coercePrivacyGuideRequest, CUA_DRIVER_APP_PATH, PRIVACY_GUIDE_HEIGHT, PrivacyGuide, type PrivacyPane } from "./main/privacy-guide";
 import { watchSettingsWindow } from "./main/settings-window-watch";
 import {
+	alreadyLooking,
 	createTaggedToasts,
 	dockBounceType,
 	shouldReplaceBounce,
@@ -4053,11 +4054,13 @@ const taggedToasts = createTaggedToasts<ElectronNotification>();
 
 ipcMain.handle(
 	"notifications:show",
-	(_event, notification: { id: string; title: string; body?: string; type?: string; watched?: boolean; tag?: string }) => {
+	(_event, notification: { id: string; title: string; body?: string; type?: string; watched?: boolean; tag?: string; alertWhenFocused?: boolean }) => {
 		if (!notification.id || !mainWindow) return;
 		// "Already looking" = the window has focus, or the renderer reports the
 		// prompt itself is on screen (`watched`). Visual signals are skipped then.
-		const looking = mainWindow.isFocused() || notification.watched === true;
+		// A cloud mention or aside reply about a session not on screen alerts
+		// even while the window has focus (`alertWhenFocused`).
+		const looking = alreadyLooking(mainWindow.isFocused(), notification);
 		// On Linux the sound ignores that guess: Wayland gives apps no reliable
 		// visibility, so a window parked on another workspace still reports
 		// focused/visible and would otherwise stay silent. macOS and Windows

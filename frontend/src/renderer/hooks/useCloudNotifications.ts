@@ -6,6 +6,7 @@ import {
 	cloudInboxSupport,
 	cloudInboxSupportConfirmed,
 	cloudInboxUnavailable,
+	ASIDE_REPLY,
 	cloudNotificationsQueryKey,
 	MENTIONED,
 	probeCloudInbox,
@@ -207,10 +208,11 @@ export function useCloudInboxSupport(baseUrl: string) {
 }
 
 /**
- * Reads the mentions a session raised for this person (opening the session
- * reads them). The rows read at once in the cache, so no badge shows while
- * the person is looking; the inbox is read again after the control plane
- * answers.
+ * Reads the mentions and aside replies a session raised for this person
+ * (opening the session reads them; an unseen reply keeps its dot on the
+ * message's aside icon). The rows read at once in the cache, so no badge
+ * shows while the person is looking; the inbox is read again after the
+ * control plane answers.
  */
 export async function readCloudSessionMentions(
 	queryClient: QueryClient,
@@ -221,11 +223,19 @@ export async function readCloudSessionMentions(
 	sessionId: string,
 ): Promise<void> {
 	const key = cloudInboxQueryKey(baseUrl, userId);
-	const unread = (row: CloudCpNotification) => row.sessionId === sessionId && row.orgId === orgId && row.type === MENTIONED && row.status === "unread";
-	if (!orgId || !sessionId || !(queryClient.getQueryData<CloudCpNotificationListResponse>(key)?.items ?? []).some(unread)) return;
-	markReadInCache(queryClient, key, unread);
+	const here = (row: CloudCpNotification) => row.sessionId === sessionId && row.orgId === orgId && row.status === "unread";
+	const unreadMention = (row: CloudCpNotification) => here(row) && row.type === MENTIONED;
+	const unreadReply = (row: CloudCpNotification) => here(row) && row.type === ASIDE_REPLY;
+	const rows = queryClient.getQueryData<CloudCpNotificationListResponse>(key)?.items ?? [];
+	const mentions = rows.some(unreadMention);
+	const replyIds = rows.filter(unreadReply).map((row) => row.id);
+	if (!orgId || !sessionId || (!mentions && replyIds.length === 0)) return;
+	markReadInCache(queryClient, key, (row) => unreadMention(row) || unreadReply(row));
 	try {
-		await client.changeMyNotificationState({ orgId, sessionId, read: true });
+		if (mentions) await client.changeMyNotificationState({ orgId, sessionId, read: true });
+		for (let start = 0; start < replyIds.length; start += MAX_STATE_CHANGE_IDS) {
+			await client.changeMyNotificationState({ ids: replyIds.slice(start, start + MAX_STATE_CHANGE_IDS), read: true });
+		}
 	} finally {
 		await queryClient.invalidateQueries({ queryKey: key });
 	}

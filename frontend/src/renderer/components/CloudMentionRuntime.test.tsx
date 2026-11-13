@@ -3,6 +3,7 @@ import { act, render } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CloudCpNotification, CloudCpNotificationEvent } from "../lib/cloud-cp/types";
 import { clearMentionFocus, peekMentionFocus } from "../lib/cloud-mention-open";
+import { peekOpenAside, resetOpenAsides } from "../lib/cloud-asides";
 import { publishLiveCloudNotificationEvent } from "../lib/cloud-notifications";
 import { CloudMentionRuntime } from "./CloudMentionRuntime";
 
@@ -11,7 +12,7 @@ const mocks = vi.hoisted(() => ({
 	clickListeners: [] as Array<(id: string) => void>,
 	navigate: vi.fn(),
 	params: { sessionId: undefined as string | undefined, hostId: undefined as string | undefined },
-	preferences: undefined as { mentions: boolean; teamMentions: boolean } | undefined,
+	preferences: undefined as { mentions: boolean; teamMentions: boolean; asideReplies?: boolean } | undefined,
 	prefetch: vi.fn(async () => undefined),
 }));
 
@@ -70,7 +71,18 @@ beforeEach(() => {
 	mocks.preferences = undefined;
 	const pending = peekMentionFocus();
 	if (pending) clearMentionFocus(pending.sessionId, pending.nonce);
+	resetOpenAsides();
 	vi.spyOn(document, "hasFocus").mockReturnValue(false);
+});
+
+const replyRow = (overrides: Partial<CloudCpNotification> = {}) => row({
+	id: "n-5",
+	type: "aside_reply",
+	title: "Priya Nair replied in an aside",
+	body: "1 s with jitter looks right. Approved.",
+	eventId: "e-5",
+	metadata: { asideId: "a-1", replyId: "r-3", authorUserId: "u-nair", authorName: "Priya Nair", sequence: 42 },
+	...overrides,
 });
 
 describe("CloudMentionRuntime", () => {
@@ -84,6 +96,7 @@ describe("CloudMentionRuntime", () => {
 			body: "Can you check the retry backoff before we merge?",
 			type: "mentioned",
 			watched: false,
+			alertWhenFocused: true,
 			tag: "cloud-session:session-1",
 		});
 	});
@@ -120,6 +133,55 @@ describe("CloudMentionRuntime", () => {
 		// Another session on screen still alerts (the main process holds toasts while focused).
 		act(() => publishLiveCloudNotificationEvent(event(row({ id: "n-9", eventId: "e-9", sessionId: "session-2" }))));
 		expect(mocks.show).toHaveBeenCalledTimes(1);
+	});
+
+	it("alerts for a reply in an aside, and again for a newer one, following New replies in asides I'm in", () => {
+		const view = renderRuntime();
+		act(() => publishLiveCloudNotificationEvent(event(replyRow())));
+		expect(mocks.prefetch).toHaveBeenCalledWith(expect.anything(), expect.anything(), "https://cp.test", expect.objectContaining({ kind: "aside_reply", asideId: "a-1", sequence: 42 }));
+		expect(mocks.show).toHaveBeenCalledWith(expect.objectContaining({
+			id: "cloud-mention:n-5", title: "Priya Nair replied in an aside", type: "aside_reply", alertWhenFocused: true, tag: "cloud-aside:a-1",
+		}));
+		// One row per aside: a newer reply replaces it and alerts again.
+		act(() => publishLiveCloudNotificationEvent(event(replyRow({ eventId: "e-6", body: "Merging now." }))));
+		expect(mocks.show).toHaveBeenCalledTimes(2);
+		mocks.preferences = { mentions: true, teamMentions: true, asideReplies: false };
+		view.refresh();
+		act(() => publishLiveCloudNotificationEvent(event(replyRow({ eventId: "e-7" }))));
+		expect(mocks.show).toHaveBeenCalledTimes(2);
+		expect(mocks.prefetch).toHaveBeenCalledTimes(3);
+	});
+
+	it("alerts while AO is focused on another session, never for the one on screen", () => {
+		mocks.params = { sessionId: "session-2", hostId: undefined };
+		vi.spyOn(document, "hasFocus").mockReturnValue(true);
+		const view = renderRuntime();
+		act(() => publishLiveCloudNotificationEvent(event(replyRow())));
+		expect(mocks.show).toHaveBeenCalledTimes(1);
+		expect(mocks.show).toHaveBeenLastCalledWith(expect.objectContaining({ watched: false, alertWhenFocused: true }));
+		mocks.params = { sessionId: "session-1", hostId: undefined };
+		view.refresh();
+		act(() => publishLiveCloudNotificationEvent(event(replyRow({ eventId: "e-8" }))));
+		act(() => publishLiveCloudNotificationEvent(event(row({ eventId: "e-9" }))));
+		expect(mocks.show).toHaveBeenCalledTimes(1);
+	});
+
+	it("opens the session with the aside open when a reply's alert is clicked", () => {
+		renderRuntime();
+		act(() => publishLiveCloudNotificationEvent(event(replyRow())));
+		act(() => { for (const listener of mocks.clickListeners) listener("cloud-mention:n-5"); });
+		expect(mocks.navigate).toHaveBeenCalledWith({ to: "/projects/$projectId/sessions/$sessionId", params: { projectId: "project-1", sessionId: "session-1" } });
+		expect(peekOpenAside("session-1")).toMatchObject({ asideId: "a-1", focusKey: expect.any(Number) });
+		expect(peekMentionFocus()).toMatchObject({ sessionId: "session-1", sequence: 42, asideId: "a-1" });
+	});
+
+	it("opens a mention on its aside, with one toast per aside", () => {
+		renderRuntime();
+		act(() => publishLiveCloudNotificationEvent(event(row({ metadata: { authorName: "Chen Li", sequence: 42, asideId: "a-1" } }))));
+		act(() => publishLiveCloudNotificationEvent(event(row({ id: "n-6", eventId: "e-6", metadata: { authorName: "Dana Kim", sequence: 57, asideId: "a-2" } }))));
+		expect(mocks.show.mock.calls.map(([alert]) => alert.tag)).toEqual(["cloud-aside:a-1", "cloud-aside:a-2"]);
+		act(() => { for (const listener of mocks.clickListeners) listener("cloud-mention:n-1"); });
+		expect(peekOpenAside("session-1")?.asideId).toBe("a-1");
 	});
 
 	it("never alerts for other kinds", () => {

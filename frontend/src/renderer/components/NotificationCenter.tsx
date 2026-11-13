@@ -16,6 +16,7 @@ import {
 	LoaderCircle,
 	MessageSquareDiff,
 	MessageSquareDot,
+	MessagesSquare,
 	X,
 } from "@/components/app-icons";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -58,7 +59,7 @@ import { TooltipProvider } from "./ui/tooltip";
 import { useCloudNotifications } from "../hooks/useCloudNotifications";
 import { clearRemoteNotification, clearRemoteNotifications, connectRemoteNotificationStreams, fetchRemoteNotificationsPage, markRemoteNotificationsRead, remoteNotificationsQueryKey, useRemoteNotificationHosts } from "../hooks/useRemoteNotifications";
 import type { CloudCpNotification } from "../lib/cloud-cp/types";
-import { mentionMetadata } from "../lib/cloud-notifications";
+import { sessionRowMetadata } from "../lib/cloud-notifications";
 import { mentionOpenTarget } from "../lib/cloud-mention-open";
 import { CloudMentionRuntime, useOpenMention } from "./CloudMentionRuntime";
 
@@ -560,7 +561,8 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 		navigateToSession(projectId, sessionId);
 	}, [navigateToSession]);
 
-	// A mention opens at its message, drawn from the cache its arrival filled.
+	// A mention or aside reply opens at its message, with the aside open, drawn
+	// from the cache its arrival filled.
 	const openMention = useOpenMention();
 	const openCloudSessionAndDismiss = useCallback((projectId: string, sessionId: string, notification: CloudCpNotification) => {
 		const mention = mentionOpenTarget(notification);
@@ -828,9 +830,9 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 								const cloudTerminated = Boolean(cloudMeta) && Boolean(cloudSessionKey && terminatedIds.has(cloudSessionKey));
 								const cloudOfferRestore = cloudTerminated && cloud.type === "needs_input";
 								const clearingKey = cloudRowKey(cloud.id);
-								// A mention names its own session and project, so it opens (and reads)
-								// before the session lists have it: a guest's session in another workspace.
-								const mention = mentionMetadata(cloud);
+								// A mention or aside reply names its own session and project, so it opens
+								// (and reads) before the session lists have it: a guest's session in another workspace.
+								const mention = sessionRowMetadata(cloud);
 								return (
 									<CloudNotificationItem
 										highlighted={highlightedIds.has(clearingKey) || cloud.status === "unread"}
@@ -1369,6 +1371,8 @@ function notificationIcon(type: string) {
 	switch (type) {
 		case "mentioned":
 			return AtSign;
+		case "aside_reply":
+			return MessagesSquare;
 		case "needs_input":
 			return MessageSquareDot;
 		case "review_feedback":
@@ -1398,6 +1402,8 @@ function notificationIconClass(type: string): string {
 	switch (type) {
 		case "mentioned":
 			return "text-status-needs-you";
+		case "aside_reply":
+			return "text-status-working";
 		case "needs_input":
 		case "review_feedback":
 		case "review_changes_requested":

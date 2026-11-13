@@ -6,11 +6,13 @@ import { useNotificationPreferences } from "../hooks/useNotificationPreferences"
 import { aoBridge } from "../lib/bridge";
 import {
 	cloudAlertKey,
+	cloudSessionWatched,
 	DEFAULT_NOTIFICATION_PREFERENCES,
 	shouldAlertCloudNotification,
 	subscribeLiveCloudNotificationEvents,
 } from "../lib/cloud-notifications";
 import { mentionOpenTarget, prefetchMentionedSession, requestMentionFocus, type MentionOpenTarget } from "../lib/cloud-mention-open";
+import { openAside } from "../lib/cloud-asides";
 import { useNavigateToSession } from "../lib/navigate-to-session";
 import { recordManualWorkerOpen } from "../lib/session-management-telemetry";
 import { captureRendererEvent } from "../lib/telemetry";
@@ -25,15 +27,18 @@ function remember<T>(map: Map<string, T>, key: string, value: T): void {
 }
 
 /**
- * Opens a mention: the session, at the message, from whatever the cache holds.
- * The session view picks the request up, scrolls to the message and gives it
- * a brief glow.
+ * Opens a mention or an aside reply: the session, at the message, from
+ * whatever the cache holds, with the message's aside open beside the
+ * conversation and its reply box focused. The session view picks the request
+ * up and scrolls to the message (a message without an aside also glows).
  */
 export function useOpenMention(): (target: MentionOpenTarget, projectId?: string) => boolean {
 	const navigateToSession = useNavigateToSession();
 	return useCallback((target: MentionOpenTarget, projectId?: string) => {
 		const project = projectId ?? target.projectId;
 		if (!project) return false;
+		// Opened before the session is drawn, so the pane is there in its first frame.
+		if (target.asideId) openAside(target.sessionId, target.asideId);
 		requestMentionFocus(target);
 		recordManualWorkerOpen(target.sessionId);
 		void captureRendererEvent("ao.notifications.opened", { target: "session" });
@@ -43,11 +48,13 @@ export function useOpenMention(): (target: MentionOpenTarget, projectId?: string
 }
 
 /**
- * Mentions as they arrive on the live /me stream: the session each points at
- * is read into the cache at once (so opening it is instant), and a desktop
- * alert shows when the person's preference allows it, unless that session is
- * on screen in the focused window. A newer mention in the same session
- * replaces its alert. Lives in the shell, beside NotificationRuntime.
+ * Mentions and aside replies as they arrive on the live /me stream: the
+ * session each points at, and its aside, are read into the cache at once (so
+ * opening it is instant), and a desktop alert shows when the person's
+ * preference allows it, unless that session is on screen in the focused
+ * window. It alerts even while AO is focused on another session. A newer one
+ * in the same session replaces its alert. Lives in the shell, beside
+ * NotificationRuntime.
  */
 export function CloudMentionRuntime() {
 	const queryClient = useQueryClient();
@@ -71,10 +78,8 @@ export function CloudMentionRuntime() {
 		const key = cloudAlertKey(row);
 		if (alerted.current.has(key)) return;
 		remember(alerted.current, key, true);
-		const { hostId, sessionId } = routeRef.current;
 		// Already looking at it: no alert (and the session reads it at once, so no badge).
-		const watched = !hostId && sessionId === row.sessionId && document.visibilityState === "visible" && document.hasFocus();
-		if (watched) return;
+		if (cloudSessionWatched(routeRef.current, row.sessionId, { visible: document.visibilityState === "visible", focused: document.hasFocus() })) return;
 		const id = `${CLOUD_MENTION_ALERT_PREFIX}${row.id}`;
 		remember(shown.current, id, target);
 		void aoBridge.notifications.show({
@@ -82,8 +87,11 @@ export function CloudMentionRuntime() {
 			title: row.title,
 			body: row.body || undefined,
 			type: row.type,
-			watched,
-			tag: `cloud-session:${row.sessionId}`,
+			watched: false,
+			// The session isn't on screen: alert even while AO is focused on another one.
+			alertWhenFocused: true,
+			// One toast per aside (each has its own row), else per session.
+			tag: target.asideId ? `cloud-aside:${target.asideId}` : `cloud-session:${row.sessionId}`,
 		});
 	}), [baseUrl, client, queryClient]);
 

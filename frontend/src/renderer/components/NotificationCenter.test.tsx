@@ -12,6 +12,7 @@ import {
 import { useUiStore } from "../stores/ui-store";
 import { NotificationCenter, NotificationRuntime } from "./NotificationCenter";
 import { clearMentionFocus, peekMentionFocus } from "../lib/cloud-mention-open";
+import { peekOpenAside, resetOpenAsides } from "../lib/cloud-asides";
 import { TooltipProvider } from "./ui/tooltip";
 
 const {
@@ -1201,5 +1202,89 @@ describe("NotificationCenter mention rows", () => {
 			params: { projectId: "cproj-guest", sessionId: "csess-guest" },
 		});
 		expect(peekMentionFocus()).toMatchObject({ sessionId: "csess-guest", sequence: 42, body: mention.body, authorName: "Chen Li" });
+	});
+});
+
+describe("NotificationCenter aside reply rows", () => {
+	const reply: CloudCpNotification = {
+		id: "n-reply",
+		source: "cloud",
+		orgId: "org-guest",
+		projectId: "cproj-guest",
+		sessionId: "csess-guest",
+		type: "aside_reply",
+		title: "Priya Nair replied in an aside",
+		body: "1 s with jitter looks right. Approved.",
+		status: "unread",
+		metadata: { asideId: "aside-1", replyId: "r-3", authorUserId: "u-nair", authorName: "Priya Nair", sequence: 42, turnId: "turn-2", sessionTitle: "Fix flaky payment retry test", projectName: "checkout-service" },
+		createdAt: "2026-07-21T12:30:00Z",
+		updatedAt: "2026-07-21T12:30:00Z",
+	};
+	const mention: CloudCpNotification = {
+		...reply,
+		id: "n-mention-aside",
+		type: "mentioned",
+		title: "Chen Li mentioned you",
+		body: "Can you check the retry backoff before we merge? @Priya Shah",
+		status: "read",
+		metadata: { authorUserId: "u-chen", authorName: "Chen Li", sequence: 42, asideId: "aside-1", sessionTitle: "Fix flaky payment retry test", projectName: "checkout-service" },
+	};
+
+	beforeEach(() => {
+		const pending = peekMentionFocus();
+		if (pending) clearMentionFocus(pending.sessionId, pending.nonce);
+		resetOpenAsides();
+		cloudNotificationsMock.mockReturnValue(cloudNotificationsResult([reply, mention]));
+	});
+
+	it("lists a reply in an aside with the messages-square icon in blue, the line, and its session and project", async () => {
+		renderNotificationCenter();
+		await clickOpen();
+		const row = screen.getByText("Priya Nair replied in an aside").closest<HTMLElement>("[data-notification-source=cloud]")!;
+		expect(within(row).getByText("1 s with jitter looks right. Approved.")).toBeInTheDocument();
+		expect(within(row).getByText("checkout-service")).toBeInTheDocument();
+		expect(within(row).getByText("Fix flaky payment retry test")).toBeInTheDocument();
+		const icon = row.querySelector(".icon-messages-square");
+		expect(icon).not.toBeNull();
+		expect(icon?.parentElement).toHaveClass("text-status-working");
+		// Both kinds of row sit side by side.
+		expect(screen.getByText("Chen Li mentioned you").closest("[data-notification-source=cloud]")?.querySelector(".icon-at-sign")).not.toBeNull();
+	});
+
+	it("opens the session with the aside open, at the message", async () => {
+		renderNotificationCenter();
+		await clickOpen();
+		await userEvent.click(screen.getByText("Priya Nair replied in an aside"));
+		expect(navigateMock).toHaveBeenCalledWith({
+			to: "/projects/$projectId/sessions/$sessionId",
+			params: { projectId: "cproj-guest", sessionId: "csess-guest" },
+		});
+		expect(peekOpenAside("csess-guest")).toMatchObject({ asideId: "aside-1", focusKey: expect.any(Number) });
+		expect(peekMentionFocus()).toMatchObject({ sessionId: "csess-guest", sequence: 42, kind: "aside_reply" });
+	});
+
+	it("keeps one mention row per aside, each opening onto its own aside", async () => {
+		const second: CloudCpNotification = {
+			...mention, id: "n-mention-aside-2", status: "unread", title: "Dana Kim mentioned you", body: "Who owns the gateway limit now?",
+			metadata: { authorUserId: "u-dana", authorName: "Dana Kim", sequence: 57, asideId: "aside-2", sessionTitle: "Fix flaky payment retry test", projectName: "checkout-service" },
+		};
+		cloudNotificationsMock.mockReturnValue(cloudNotificationsResult([second, reply, mention]));
+		renderNotificationCenter();
+		await clickOpen();
+		await userEvent.click(screen.getByText("Dana Kim mentioned you"));
+		expect(peekOpenAside("csess-guest")?.asideId).toBe("aside-2");
+		expect(peekMentionFocus()).toMatchObject({ sequence: 57, asideId: "aside-2" });
+		await clickOpen();
+		await userEvent.click(screen.getByText("Chen Li mentioned you"));
+		expect(peekOpenAside("csess-guest")?.asideId).toBe("aside-1");
+		expect(peekMentionFocus()).toMatchObject({ sequence: 42, asideId: "aside-1" });
+	});
+
+	it("opens a mention row on its aside too", async () => {
+		renderNotificationCenter();
+		await clickOpen();
+		await userEvent.click(screen.getByText("Chen Li mentioned you"));
+		expect(peekOpenAside("csess-guest")?.asideId).toBe("aside-1");
+		expect(peekMentionFocus()).toMatchObject({ kind: "mention", asideId: "aside-1" });
 	});
 });

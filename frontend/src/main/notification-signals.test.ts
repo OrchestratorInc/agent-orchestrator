@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
 import {
+	alreadyLooking,
 	createTaggedToasts,
 	dockBounceType,
 	osToastChimeControllable,
@@ -24,6 +25,21 @@ describe("shouldToast", () => {
 		expect(shouldToast({ title: "" }, true)).toBe(false);
 		expect(shouldToast({}, true)).toBe(false);
 		expect(shouldToast({ title: "needs input" }, false)).toBe(false);
+	});
+});
+
+describe("alreadyLooking", () => {
+	it("skips visual signals while the window has focus, or the prompt is on screen", () => {
+		expect(alreadyLooking(true, {})).toBe(true);
+		expect(alreadyLooking(false, { watched: true })).toBe(true);
+		expect(alreadyLooking(false, {})).toBe(false);
+	});
+
+	it("alerts while focused for a cloud mention or aside reply about a session not on screen", () => {
+		expect(alreadyLooking(true, { watched: false, alertWhenFocused: true })).toBe(false);
+		expect(alreadyLooking(false, { alertWhenFocused: true })).toBe(false);
+		// The session on screen stays quiet even then.
+		expect(alreadyLooking(true, { watched: true, alertWhenFocused: true })).toBe(true);
 	});
 });
 

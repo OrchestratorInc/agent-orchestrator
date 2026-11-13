@@ -54,6 +54,39 @@ describe("Settings › Notifications", () => {
 	});
 });
 
+describe("Settings › Notifications with asides", () => {
+	beforeEach(() => {
+		client.getMyNotificationPreferences.mockReset().mockResolvedValue({ mentions: true, teamMentions: true, asideReplies: true });
+		client.setMyNotificationPreferences.mockReset().mockImplementation(async (change) => ({ mentions: true, teamMentions: true, asideReplies: true, ...change }));
+	});
+
+	it("adds a third switch for replies in asides, on by default, under Mentions and asides", async () => {
+		renderSection();
+		const replies = await screen.findByRole("switch", { name: "New replies in asides I'm in" });
+		expect(replies).toBeChecked();
+		expect(screen.getAllByRole("switch")).toHaveLength(3);
+		expect(screen.getByText("Mentions and asides")).toBeInTheDocument();
+		expect(screen.getAllByText("Desktop alert and phone")).toHaveLength(3);
+		expect(screen.getByText("These always show in the bell. Turning a switch off only stops the alert.")).toBeInTheDocument();
+	});
+
+	it("saves the replies switch on its own", async () => {
+		renderSection();
+		await userEvent.click(await screen.findByRole("switch", { name: "New replies in asides I'm in" }));
+		await waitFor(() => expect(client.setMyNotificationPreferences).toHaveBeenCalledWith({ asideReplies: false }));
+		await waitFor(() => expect(screen.getByRole("switch", { name: "New replies in asides I'm in" })).not.toBeChecked());
+		expect(screen.getByRole("switch", { name: "Someone mentions me" })).toBeChecked();
+	});
+
+	it("leaves the third switch out for a control plane without asides", async () => {
+		client.getMyNotificationPreferences.mockReset().mockResolvedValue({ mentions: true, teamMentions: true });
+		renderSection();
+		await screen.findByRole("switch", { name: "Someone mentions me" });
+		expect(screen.getAllByRole("switch")).toHaveLength(2);
+		expect(screen.queryByText("Mentions and asides")).toBeNull();
+	});
+});
+
 describe("the Notifications page in the rail", () => {
 	const context = { cloudEnabled: true, diagnostics: false, customCoder: false, selfServeBilling: false };
 
