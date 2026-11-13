@@ -4746,6 +4746,7 @@
 	"settings.cloudProject.workspaceRepositoriesHint": "在会话分支上并排检出到工作区文件夹中，代理在该文件夹中启动。第一个仓库不能移除。",
 	"settings.cloudProject.workspaceRepositories": "工作区仓库",
 	"shortcut.find-in-chat": "在聊天中查找",
+	"shortcut.add-selection-to-chat": "将所选内容添加到聊天",
 	"chat.find.incomplete": "搜索未完成",
 	"chat.find.gap": "中间的消息尚未加载",
 	"chat.find.historyUnavailable": "历史记录不可用。",

@@ -1,4 +1,6 @@
 import { isMacPlatform } from "../../lib/platform";
+import { effectiveShortcutBindings, matchesAppShortcut, shortcutBindingLabel } from "../../../shared/shortcuts";
+import { useKeybindingsStore } from "../../stores/keybindings-store";
 import { isDialogOrMenuOpen } from "../../lib/dom-selectors";
 import { useLatestCallback } from "../../hooks/useStable";
 import { useEffect, useRef, useState, type RefObject } from "react";
@@ -30,6 +32,9 @@ export function ChatSelectionActions({
 	checkingSide?: boolean;
 }) {
 	const { t } = useTranslation();
+	const overrides = useKeybindingsStore((state) => state.overrides);
+	const shortcutHint = effectiveShortcutBindings("add-selection-to-chat", isMacPlatform(), overrides)
+		.map((binding) => shortcutBindingLabel(binding, isMacPlatform())).join(" / ");
 	const translateDraft = useChatDraftTranslation();
 	const buttonRef = useRef<HTMLDivElement>(null);
 	const position = useChatSelectionPosition(
@@ -75,12 +80,11 @@ export function ChatSelectionActions({
 		const onKeyDown = (event: KeyboardEvent) => {
 			if (
 				event.defaultPrevented ||
-				event.key.toLowerCase() !== "l" ||
-				event.shiftKey ||
-				event.altKey ||
-				(isMacPlatform()
-					? !event.metaKey || event.ctrlKey
-					: !event.ctrlKey || event.metaKey) ||
+				event.isComposing ||
+				!matchesAppShortcut("add-selection-to-chat", {
+					key: event.key, code: event.code, ctrl: event.ctrlKey,
+					meta: event.metaKey, shift: event.shiftKey, alt: event.altKey,
+				}, isMacPlatform(), useKeybindingsStore.getState().overrides) ||
 				isDialogOrMenuOpen()
 			)
 				return;
@@ -134,7 +138,7 @@ export function ChatSelectionActions({
 				type="button"
 				variant="quiet"
 				size="sm"
-				title={`${t("sideChat.addToChat")} (${isMacPlatform() ? "⌘L" : "Ctrl+L"})`}
+				title={`${t("sideChat.addToChat")}${shortcutHint ? ` (${shortcutHint})` : ""}`}
 				disabled={pending}
 				onClick={() => void activate(false)}
 			>

@@ -4764,6 +4764,7 @@
 	"settings.cloudProject.workspaceRepositoriesHint": "세션 브랜치로 워크스페이스 폴더에 나란히 체크아웃되며, 에이전트는 그 폴더에서 시작합니다. 첫 번째 저장소는 제거할 수 없습니다.",
 	"settings.cloudProject.workspaceRepositories": "워크스페이스 저장소",
 	"shortcut.find-in-chat": "채팅에서 찾기",
+	"shortcut.add-selection-to-chat": "선택한 내용을 채팅에 추가",
 	"chat.find.incomplete": "검색 미완료",
 	"chat.find.gap": "중간 메시지는 로드되지 않았습니다",
 	"chat.find.historyUnavailable": "기록을 사용할 수 없습니다.",

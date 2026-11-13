@@ -4881,6 +4881,7 @@
 	"settings.cloudProject.workspaceRepositoriesHint": "Feito checkout lado a lado na pasta do workspace, no branch da sessão, e o agente começa nessa pasta. O primeiro não pode ser removido.",
 	"settings.cloudProject.workspaceRepositories": "Repositórios do workspace",
 	"shortcut.find-in-chat": "Buscar no chat",
+	"shortcut.add-selection-to-chat": "Adicionar seleção ao chat",
 	"chat.find.incomplete": "Pesquisa incompleta",
 	"chat.find.gap": "As mensagens intermediárias não foram carregadas",
 	"chat.find.historyUnavailable": "O histórico não está disponível.",
