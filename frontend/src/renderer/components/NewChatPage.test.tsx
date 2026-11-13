@@ -5,7 +5,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { prepareChatComposerDelivery, readChatSessionDraft, writeChatComposerText } from "../lib/chat-drafts";
 import { REPORT_PROBLEM_PROMPT } from "../lib/report-problem";
 import type { ApprovalMode } from "../types/conversation";
-import { STANDALONE_WORKSPACE_ID } from "../types/workspace";
 import { rememberChatSettingsTemplate } from "../lib/chat-settings-template";
 import type { ChatWorkspaceProps } from "./chat/ChatWorkspace";
 import { NewChatPage } from "./NewChatPage";
