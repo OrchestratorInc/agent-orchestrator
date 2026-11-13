@@ -70,13 +70,6 @@ type SettingsEntry = {
 	section: GlobalSettingsSection;
 	label: MessageKey;
 	keywords: string[];
-};
-
-type SettingsEntry = {
-	id: string;
-	section: GlobalSettingsSection;
-	label: MessageKey;
-	keywords: string[];
 	/** Shown only where the settings page shows the row. */
 	when?: "developerMode" | "mac";
 };
