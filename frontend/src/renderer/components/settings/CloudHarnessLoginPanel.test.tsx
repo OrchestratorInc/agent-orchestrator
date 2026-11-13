@@ -3,7 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { appI18n } from "../../i18n";
-import { CloudHarnessLoginPanel, type CloudHarness } from "./CloudHarnessLoginPanel";
+import { CloudHarnessLoginPanel, type CloudHarness, type CloudHarnessLoginAccount } from "./CloudHarnessLoginPanel";
 
 const bridgeMocks = vi.hoisted(() => ({
 	connectProviderAuth: vi.fn(),
@@ -13,6 +13,8 @@ const bridgeMocks = vi.hoisted(() => ({
 
 const cloudMocks = vi.hoisted(() => ({
 	putUserAgentConnection: vi.fn(),
+	addAgentAccount: vi.fn(),
+	replaceAgentAccountCredential: vi.fn(),
 }));
 
 vi.mock("../../lib/bridge", () => ({
@@ -27,7 +29,11 @@ vi.mock("../../lib/bridge", () => ({
 
 vi.mock("../../hooks/useCloudCp", () => ({
 	useCloudCp: () => ({
-		client: { putUserAgentConnection: cloudMocks.putUserAgentConnection },
+		client: {
+			putUserAgentConnection: cloudMocks.putUserAgentConnection,
+			addAgentAccount: cloudMocks.addAgentAccount,
+			replaceAgentAccountCredential: cloudMocks.replaceAgentAccountCredential,
+		},
 		ready: true,
 		baseUrl: "https://cloud.example.test",
 	}),
@@ -48,11 +54,11 @@ function pendingLogin() {
 	});
 }
 
-function renderPanel(agent: CloudHarness = "claude-code") {
+function renderPanel(agent: CloudHarness = "claude-code", account?: CloudHarnessLoginAccount) {
 	const onClose = vi.fn();
 	render(
 		<QueryClientProvider client={new QueryClient()}>
-			<CloudHarnessLoginPanel agent={agent} onClose={onClose} />
+			<CloudHarnessLoginPanel agent={agent} account={account} onClose={onClose} />
 		</QueryClientProvider>,
 	);
 	return { onClose };
@@ -64,6 +70,8 @@ describe("CloudHarnessLoginPanel", () => {
 		bridgeMocks.connectProviderAuth.mockReset();
 		bridgeMocks.cancelProviderAuth.mockReset();
 		cloudMocks.putUserAgentConnection.mockReset();
+		cloudMocks.addAgentAccount.mockReset();
+		cloudMocks.replaceAgentAccountCredential.mockReset();
 		bridgeMocks.openExternal.mockReset();
 	});
 
@@ -167,5 +175,36 @@ describe("CloudHarnessLoginPanel", () => {
 
 		expect(cloudMocks.putUserAgentConnection).toHaveBeenCalledWith("cursor", { credentialType: "api_key", secret: "cursor-key" });
 		await waitFor(() => expect(onClose).toHaveBeenCalled());
+	});
+
+	it("saves a login as another account without changing local sessions' login", async () => {
+		bridgeMocks.connectProviderAuth.mockResolvedValue(undefined);
+		const user = userEvent.setup();
+		const { onClose } = renderPanel("claude-code", { id: "new", isDefault: false });
+		await user.click(screen.getByRole("button", { name: "Log in with Anthropic" }));
+
+		expect(bridgeMocks.connectProviderAuth).toHaveBeenCalledWith({
+			baseUrl: "https://cloud.example.test",
+			provider: "claude-code",
+			persistLocalClaudeToken: false,
+			account: "new",
+		});
+		await waitFor(() => expect(onClose).toHaveBeenCalled());
+	});
+
+	it("adds a pasted key as an account, or signs an account in again with it", async () => {
+		cloudMocks.addAgentAccount.mockResolvedValue({ agentAccount: { validationState: "valid" } });
+		cloudMocks.replaceAgentAccountCredential.mockResolvedValue({ agentAccount: { validationState: "invalid" } });
+		const user = userEvent.setup();
+		const { onClose } = renderPanel("cursor", { id: "new", isDefault: true });
+		await user.type(screen.getByPlaceholderText("Paste your Cursor API key"), "cursor-key{Enter}");
+		expect(cloudMocks.addAgentAccount).toHaveBeenCalledWith({ agent: "cursor", credentialType: "api_key", secret: "cursor-key" });
+		await waitFor(() => expect(onClose).toHaveBeenCalled());
+
+		renderPanel("cursor", { id: "account-2", isDefault: false });
+		await user.type(screen.getAllByPlaceholderText("Paste your Cursor API key").at(-1) as HTMLElement, "other-key{Enter}");
+		expect(cloudMocks.replaceAgentAccountCredential).toHaveBeenCalledWith("account-2", { credentialType: "api_key", secret: "other-key" });
+		expect(await screen.findByRole("alert")).toHaveTextContent("state: invalid");
+		expect(cloudMocks.putUserAgentConnection).not.toHaveBeenCalled();
 	});
 });
