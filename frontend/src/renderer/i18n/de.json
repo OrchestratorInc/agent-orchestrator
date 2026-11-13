@@ -2812,7 +2812,7 @@
 	"settings.sideChats": "Seiten-Chats",
 	"settings.sideChatsHint": "Separate Seitenunterhaltungen im Inspektor öffnen und mit /btw eine Frage stellen.",
 	"settings.splitPanes": "Geteilte Bereiche",
-	"settings.splitPanesHint": "Ziehe einen Tab an einen Rand des mittleren Bereichs, um ihn neben dem aktuellen anzuzeigen. Agenten in deinen Sitzungen können damit auch Bereiche teilen und Befehle in Terminals ausführen (ao pane).",
+	"settings.splitPanesHint": "Ziehe einen Tab an einen Rand des mittleren Bereichs, um ihn neben dem aktuellen anzuzeigen. Wenn du sie darum bittest, können Agenten in deinen Sitzungen auch Bereiche teilen und Befehle in Terminals ausführen (ao pane).",
 	"settings.prView": "PR-Ansicht",
 	"settings.prViewHint": "Einen Pull Request in einem eigenen Tab öffnen, mit Beschreibung, Kommentaren, Checks und Stack.",
 	"settings.chromeAgents.label": "Agenten in meinem Chrome verwenden",

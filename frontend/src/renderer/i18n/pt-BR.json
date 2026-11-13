@@ -2858,7 +2858,7 @@
 	"settings.sideChats": "Chats laterais",
 	"settings.sideChatsHint": "Abra conversas laterais separadas no inspetor e use /btw para fazer uma pergunta.",
 	"settings.splitPanes": "Painéis divididos",
-	"settings.splitPanesHint": "Arraste uma aba para uma borda do painel central para mostrá-la ao lado da atual. Agentes das suas sessões também podem dividir painéis e executar comandos em terminais (ao pane).",
+	"settings.splitPanesHint": "Arraste uma aba para uma borda do painel central para mostrá-la ao lado da atual. Quando você pedir, agentes das suas sessões também podem dividir painéis e executar comandos em terminais (ao pane).",
 	"settings.prView": "Visualização de PR",
 	"settings.prViewHint": "Abra um pull request em uma aba própria, com descrição, comentários, verificações e pilha.",
 	"settings.chromeAgents.label": "Usar agentes no meu Chrome",
