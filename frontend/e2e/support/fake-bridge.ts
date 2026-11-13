@@ -150,6 +150,12 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					fetch: async () => ({ bytes: new Uint8Array(), mimeType: "image/png" }),
 					save: async () => true,
 				},
+				fileDownload: {
+					start: async () => "download-1",
+					append: async () => undefined,
+					finish: async () => undefined,
+					cancel: async () => undefined,
+				},
 				sessionShareUrls: {
 					remember: async () => undefined,
 					recall: async () => ({}),
@@ -1104,6 +1110,12 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 				chatImage: {
 					fetch: async () => ({ bytes: new Uint8Array(), mimeType: "image/png" }),
 					save: async () => true,
+				},
+				fileDownload: {
+					start: async () => "download-1",
+					append: async () => undefined,
+					finish: async () => undefined,
+					cancel: async () => undefined,
 				},
 				sessionShareUrls: {
 					remember: async () => undefined,
