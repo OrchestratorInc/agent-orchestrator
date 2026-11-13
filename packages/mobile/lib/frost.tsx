@@ -43,19 +43,24 @@ export function frostStops(barHeight: number, tail = FROST_TAIL): FrostStop[] {
 /**
  * The frost itself, filling `style`'s box. `from` is the screen edge it is
  * solid at; the gradient runs away from it.
+ *
+ * Drawn in a unit `viewBox` stretched over the box, not as a `100%` rect: on
+ * Android the rect kept the height it first resolved, so a frost that grew once
+ * the safe-area insets arrived stopped short of the screen's bottom edge and
+ * left the rows behind the navigation bar uncovered.
  */
 export function Frost({ stops, from, style }: { stops: readonly FrostStop[]; from: "top" | "bottom"; style?: StyleProp<ViewStyle> }) {
 	const color = useTheme().bgBase;
 	const id = `frost${useId().replace(/:/g, "")}`;
 	return (
 		<View pointerEvents="none" style={style}>
-			<Svg width="100%" height="100%" preserveAspectRatio="none">
+			<Svg width="100%" height="100%" viewBox="0 0 1 1" preserveAspectRatio="none">
 				<Defs>
 					<LinearGradient id={id} x1="0" y1={from === "top" ? "0" : "1"} x2="0" y2={from === "top" ? "1" : "0"}>
 						{stops.map(([offset, opacity]) => <Stop key={offset} offset={offset} stopColor={color} stopOpacity={opacity} />)}
 					</LinearGradient>
 				</Defs>
-				<Rect x="0" y="0" width="100%" height="100%" fill={`url(#${id})`} />
+				<Rect x="0" y="0" width="1" height="1" fill={`url(#${id})`} />
 			</Svg>
 		</View>
 	);
