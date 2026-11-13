@@ -2091,14 +2091,16 @@ textarea,
 	animation: chat-live-label-in 180ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
-/*
- * The usage-limit pill in the model picker. A tint of its status colour with a
- * hairline edge in the same hue, never a solid fill, so it reads as state
- * rather than as a button inside the picker. Text is the status colour pulled
- * toward the foreground: warm and legible in both themes without shouting.
- */
-.quota-pill {
+/* Usage-limit pill (picker) and note (menu Agent row): a tint of the status hue, never a solid fill. */
+.quota-pill,
+.quota-note {
 	--quota-tone: var(--color-status-in-review);
+}
+.quota-pill[data-severity="full"],
+.quota-note[data-severity="full"] {
+	--quota-tone: var(--color-status-exited);
+}
+.quota-pill {
 	display: inline-flex;
 	align-items: center;
 	gap: 5px;
@@ -2106,63 +2108,43 @@ textarea,
 	padding: 0 8px 0 6px;
 	border-radius: 999px;
 	font-size: 11.5px;
-	font-weight: 500;
 	line-height: 1;
 	white-space: nowrap;
-	color: color-mix(in srgb, var(--quota-tone) 80%, var(--color-foreground));
 	background: color-mix(in srgb, var(--quota-tone) 12%, transparent);
 	box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--quota-tone) 24%, transparent);
 }
-.quota-pill[data-severity="full"],
-.quota-note[data-severity="full"] {
-	--quota-tone: var(--color-status-exited);
+.quota-pill,
+.quota-note-label {
+	flex-shrink: 0;
+	font-weight: 500;
+	color: color-mix(in srgb, var(--quota-tone) 80%, var(--color-foreground));
 }
-.quota-pill > svg {
+.quota-pill > svg,
+.quota-note > svg {
+	flex-shrink: 0;
 	color: var(--quota-tone);
 }
-/*
- * The same warning as one quiet line inside the menu's Agent row: the icon and
- * label in the status hue, the reset time muted after a middle dot. No box, so
- * it reads as part of the agent rather than as a banner over the menu.
- */
 .quota-note {
-	--quota-tone: var(--color-status-in-review);
 	display: flex;
 	align-items: center;
 	gap: 5px;
 	min-width: 0;
 	font-size: 11px;
 	line-height: 14px;
+	color: var(--color-muted-foreground);
 }
 .quota-note > svg {
 	width: 12px;
 	height: 12px;
-	flex-shrink: 0;
-	color: var(--quota-tone);
-}
-.quota-note-label {
-	flex-shrink: 0;
-	font-weight: 500;
-	color: color-mix(in srgb, var(--quota-tone) 80%, var(--color-foreground));
 }
 .quota-note-meta {
 	min-width: 0;
 	overflow: hidden;
 	text-overflow: ellipsis;
-	color: var(--color-muted-foreground);
 	font-variant-numeric: tabular-nums;
 }
-.quota-note-meta::before {
-	content: "·";
-	margin-right: 5px;
-}
 
-/*
- * SmoothSwap: an inline label that crossfades to another. The width eases on
- * the same curve the content settles on, the outgoing layer lifts away while
- * the incoming one rises in slightly after it, and a touch of blur blends the
- * two so neither reads as a cut.
- */
+/* SmoothSwap: the width eases while the old label lifts out and the new one rises in, blurred slightly to blend. */
 .smooth-swap {
 	position: relative;
 	display: inline-flex;

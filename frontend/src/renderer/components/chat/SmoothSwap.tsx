@@ -1,11 +1,8 @@
 /**
- * Swaps one inline label for another without a jump.
- *
- * When `swapKey` changes, the outgoing content fades up and out in place while
- * the new content fades in from just below, and the container's width eases
- * from one to the other, so whatever sits beside it slides rather than snaps.
- * Content that changes under the same key (a model loading, a new name) only
- * eases the width. Reduced motion swaps instantly.
+ * Swaps one inline label for another without a jump: when `swapKey` changes the
+ * old content lifts out, the new one rises in, and the width eases between them.
+ * Content changing under the same key only eases the width. Reduced motion swaps
+ * instantly (styles.css).
  */
 
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
@@ -42,15 +39,16 @@ export function SmoothSwap({ swapKey, children, className }: { swapKey: string; 
 	// While the width eases, its trailing edge fades instead of cutting content off.
 	const [moving, setMoving] = useState(false);
 	const lastWidth = useRef<number | undefined>(undefined);
-	useEffect(() => {
-		if (width !== undefined && lastWidth.current !== undefined && width !== lastWidth.current) setMoving(true);
-		lastWidth.current = width;
-	}, [width]);
 	useLayoutEffect(() => {
 		const element = current.current;
 		if (!element) return;
 		// Zero means nothing was laid out (a hidden tab, a test DOM): leave the width natural.
-		const measure = () => setWidth(element.offsetWidth || undefined);
+		const measure = () => {
+			const next = element.offsetWidth || undefined;
+			if (next && lastWidth.current && next !== lastWidth.current) setMoving(true);
+			lastWidth.current = next;
+			setWidth(next);
+		};
 		measure();
 		const observer = new ResizeObserver(measure);
 		observer.observe(element);

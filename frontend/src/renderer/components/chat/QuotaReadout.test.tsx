@@ -1,6 +1,6 @@
 import { act, render, renderHook, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { formatQuotaReset, nearQuotaWindow, QUOTA_FLASH_MS, QuotaMenuNotice, QuotaReadout, tightestQuotaWindow, useQuotaFlash, type QuotaWindow } from "./QuotaReadout";
+import { formatQuotaReset, nearQuotaWindow, QUOTA_FLASH_MS, QuotaMenuNotice, QuotaReadout, useQuotaFlash, type QuotaWindow } from "./QuotaReadout";
 import type { ConversationRateLimits } from "../../types/conversation";
 
 function limits(over: Partial<ConversationRateLimits> = {}): ConversationRateLimits {
@@ -15,9 +15,9 @@ describe("QuotaReadout", () => {
 	});
 
 	it("follows the tighter window and ignores unreported ones", () => {
-		expect(tightestQuotaWindow(limits({ primaryUsedPercent: 30, secondaryUsedPercent: 88 }))?.kind).toBe("weekly");
-		// Negative is the daemon's "not reported"; drawing it would run the bar backwards.
-		expect(tightestQuotaWindow(limits({ primaryUsedPercent: -1, secondaryUsedPercent: -1 }))).toBeUndefined();
+		expect(nearQuotaWindow(limits({ primaryUsedPercent: 30, secondaryUsedPercent: 88 }))?.kind).toBe("weekly");
+		// Negative is the daemon's "not reported"; it must never count as usage.
+		expect(nearQuotaWindow(limits({ primaryUsedPercent: -1, secondaryUsedPercent: -1 }))).toBeUndefined();
 	});
 
 	it("warns without a percentage once close", () => {
