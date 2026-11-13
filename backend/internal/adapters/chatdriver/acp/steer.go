@@ -441,6 +441,20 @@ type promptSteer struct {
 	withdrawn bool
 }
 
+// steerTookLocked settles a steer prompt as taken and starts the reply's next
+// segment in the same critical section, as a drain does. Text the agent
+// streams without a message id from here on then renders after the steer,
+// even if it arrives before Steer has returned. Callers must hold c.mu.
+func (c *conversation) steerTookLocked(w *promptSteer) {
+	if w.settled {
+		return
+	}
+	w.settle(nil)
+	if c.activeTurn == w.turn {
+		c.steerSegment++
+	}
+}
+
 func (w *promptSteer) settle(err error) {
 	if !w.settled {
 		w.settled = true
@@ -564,11 +578,7 @@ func (c *conversation) steerByPrompt(
 		if err != nil {
 			return ports.ChatTurnRef{}, steerPromptError(err)
 		}
-		c.mu.Lock()
-		if c.activeTurn == providerTurnID {
-			c.steerSegment++
-		}
-		c.mu.Unlock()
+		// steerTookLocked has already started the reply's next segment.
 		return ports.ChatTurnRef{ProviderTurnID: providerTurnID}, nil
 	}
 	var gaveUp error
@@ -689,13 +699,13 @@ func (c *conversation) finishTurnPrompt(turnID string, seq int, resp acpsdk.Prom
 		case w.seq == seq && cancelled:
 			w.settle(errSteerCancelled) // stopped before the agent acted on it
 		case w.seq == seq && !acknowledged:
-			w.settle(nil) // it ran inside this turn
+			c.steerTookLocked(w) // it ran inside this turn
 		case w.seq == seq && !w.awaitingAck:
 			// The acknowledgement can trail the answer; let it decide.
 			w.awaitingAck = true
 			go c.awaitSteerAck(w)
 		case w.seq == handoffTo:
-			w.settle(nil) // the earlier prompt handed the work on to it
+			c.steerTookLocked(w) // the earlier prompt handed the work on to it
 		}
 	}
 	final, done := c.turnEndLocked(turnID)
@@ -791,7 +801,7 @@ func (c *conversation) adoptedPromptHandoff(err error) {
 	next := c.nextOutstandingLocked(adoptedPromptSeq)
 	for _, w := range c.promptSteers {
 		if w.turn == c.activeTurn && w.seq == next {
-			w.settle(nil)
+			c.steerTookLocked(w)
 		}
 	}
 }
@@ -833,7 +843,7 @@ func (c *conversation) steerAcknowledgement(turnID, text string) bool {
 		if declined != nil {
 			w.settle(fmt.Errorf("%w: %w", errSteerDeclined, declined))
 		} else {
-			w.settle(nil)
+			c.steerTookLocked(w)
 		}
 		break
 	}
