@@ -2812,7 +2812,7 @@
 	"settings.sideChats": "サイドチャット",
 	"settings.sideChatsHint": "インスペクターで別のサイド会話を開き、/btw で質問します。",
 	"settings.splitPanes": "分割ペイン",
-	"settings.splitPanesHint": "タブを中央ペインの端にドラッグすると、現在のタブと並べて表示します。依頼したときに限り、セッション内のエージェントも 分割を作成し、ターミナルでコマンドを実行できます。",
+	"settings.splitPanesHint": "タブを中央ペインの端にドラッグすると、現在のタブと並べて表示します。依頼したときに限り、セッション内のエージェントも分割を作成し、ターミナルでコマンドを実行できます。",
 	"settings.prView": "PR ビュー",
 	"settings.prViewHint": "プルリクエストを専用のタブで開き、説明、コメント、チェック、スタックを表示します。",
 	"settings.chromeAgents.label": "自分の Chrome でエージェントを使う",
