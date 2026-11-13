@@ -155,14 +155,14 @@ func (s *Service) installed(m modelSpec) bool {
 		py = s.ggufPython()
 		paths = []string{py, s.modelPath(m), s.marker(m), s.vadPath()}
 	}
-	// The runtime writes its own marker last, so a half-built environment never counts as installed.
-	paths = append(paths, filepath.Join(filepath.Dir(filepath.Dir(py)), "ao-ready"))
 	for _, path := range paths {
 		if _, err := os.Stat(path); err != nil {
 			return false
 		}
 	}
-	return true
+	// The runtime writes its own marker last, so a half-built environment never counts as installed.
+	_, err := os.Stat(filepath.Join(filepath.Dir(filepath.Dir(py)), "ao-ready"))
+	return err == nil
 }
 
 // Status derives readiness from completed installations on disk.
