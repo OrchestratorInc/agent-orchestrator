@@ -2387,6 +2387,37 @@ type ListCompactSessionUsageResponse struct {
 	Sessions []CompactSessionUsageResponse `json:"sessions"`
 }
 
+// BackgroundTaskResponse is provider-owned background work, not an OS process.
+type BackgroundTaskResponse struct {
+	ID          string     `json:"id"`
+	RunID       string     `json:"runId,omitempty"`
+	Kind        string     `json:"kind" enum:"shell,agent,other"`
+	Description string     `json:"description"`
+	State       string     `json:"state" enum:"running,paused,completed,failed,stopped"`
+	StartedAt   *time.Time `json:"startedAt,omitempty" description:"When the provider started the task, or else when the daemon first observed it."`
+	EndedAt     *time.Time `json:"endedAt,omitempty"`
+	Stoppable   bool       `json:"stoppable,omitempty" description:"True when this provider can stop this running task."`
+}
+
+// BackgroundTaskIDParam names one provider-owned background task.
+type BackgroundTaskIDParam struct {
+	TaskID string `path:"taskId" description:"Provider-scoped background task identifier."`
+}
+
+// BackgroundTasksResponse distinguishes unavailable reporting from no live tasks.
+type BackgroundTasksResponse struct {
+	SessionID            domain.SessionID         `json:"sessionId"`
+	ControllerGeneration string                   `json:"controllerGeneration"`
+	Availability         string                   `json:"availability" enum:"ready,partial,unavailable"`
+	ObservedAt           *time.Time               `json:"observedAt,omitempty"`
+	Tasks                []BackgroundTaskResponse `json:"tasks"`
+}
+
+// ListBackgroundTasksResponse batches readings for already attached providers.
+type ListBackgroundTasksResponse struct {
+	Sessions []BackgroundTasksResponse `json:"sessions"`
+}
+
 // SessionMemoryProcessResponse is one process in a session's runtime tree.
 type SessionMemoryProcessResponse struct {
 	PID        int     `json:"pid"`

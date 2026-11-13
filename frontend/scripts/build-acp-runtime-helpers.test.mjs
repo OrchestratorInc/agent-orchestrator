@@ -19,6 +19,7 @@ import {
 	patchClaudeContextUsage,
 	patchClaudeFoldedPromptSettlement,
 	patchClaudeHibernationCheck,
+	patchClaudeBackgroundTasks,
 	patchClaudeRetryDetails,
 	patchClaudeStaleIdleDebt,
 	patchClaudeSteerSettlement,
@@ -112,6 +113,136 @@ describe("patchClaudeRetryDetails", () => {
 		expect(patched).toContain("message.retry_delay_ms / 1000");
 		expect(patched).toContain("Trying again in ${retryDelay}.");
 		expect(patched).toContain("details: retryDetails");
+	});
+});
+
+describe("patchClaudeBackgroundTasks", () => {
+	function harness() {
+		const path = join(temporaryDirectory(), "tasks.js");
+		writeFileSync(path, `function dispatch(session, message) { switch(message.subtype) {
+			case "task_started": break; case "task_updated": break;
+			case "task_notification": break; case "background_tasks_changed": break;
+		} }
+		connection.onRequest(GOAL_CONTROL_METHOD, { parse: parseGoalRequest }, (ctx) => agent.goal(ctx.params));`);
+		expect(patchClaudeBackgroundTasks(path)).toBe(true);
+		expect(patchClaudeBackgroundTasks(path)).toBe(false);
+		const handlers = new Map();
+		const connection = { onRequest(method, _parser, handler) { handlers.set(method, handler); return connection; } };
+		const session = {};
+		const dispatch = new Function("connection", "agent", "GOAL_CONTROL_METHOD", "parseGoalRequest", "RequestError", `${readFileSync(path, "utf8")}\nreturn dispatch;`)(
+			connection, { sessions: { native: session } }, "goal", p => p,
+			{ invalidParams: () => new Error("invalid session"), methodNotFound: () => new Error("unavailable") },
+		);
+		return { emit: message => dispatch(session, message), read: () => handlers.get("_ao/session/background_tasks")({ params: { sessionId: "native" } }), session, handlers };
+	}
+
+	it("counts only the complete native background set, not foreground starts", () => {
+		const h = harness();
+		expect(h.read).toThrow("unavailable");
+		h.emit({ subtype: "task_started", task_id: "foreground", task_type: "local_bash" });
+		h.emit({ subtype: "background_tasks_changed", tasks: [{ task_id: "server", task_type: "local_bash", description: "Dev server" }] });
+		expect(h.read().tasks).toMatchObject([{ id: "server", kind: "shell", description: "Dev server", state: "running" }]);
+		h.emit({ subtype: "task_notification", task_id: "foreground", status: "completed" });
+		expect(h.read().tasks).toHaveLength(1);
+		// A missed completion bookend cannot wedge the count.
+		h.emit({ subtype: "background_tasks_changed", tasks: [] });
+		expect(h.read()).toEqual({ tasks: [] });
+	});
+
+	it("keeps completion once, expires history, and rejects an older run", () => {
+		vi.useFakeTimers();
+		try {
+			const h = harness();
+			h.emit({ subtype: "background_tasks_changed", tasks: [{ task_id: "a", run_id: "new", task_type: "local_agent", description: "Review" }] });
+			h.emit({ subtype: "task_notification", task_id: "a", run_id: "old", status: "completed" });
+			expect(h.read().tasks[0].state).toBe("running");
+			vi.advanceTimersByTime(8 * 60_000);
+			h.emit({ subtype: "background_tasks_changed", tasks: [] });
+			h.emit({ subtype: "task_updated", task_id: "a", run_id: "new", patch: { status: "completed" } });
+			h.emit({ subtype: "task_notification", task_id: "a", run_id: "new", status: "completed" });
+			expect(h.read().tasks).toHaveLength(1);
+			expect(h.read().tasks[0]).toMatchObject({ kind: "agent", state: "completed" });
+			vi.advanceTimersByTime(30_000);
+			expect(h.read().tasks).toEqual([]);
+		} finally { vi.useRealTimers(); }
+	});
+
+	it("handles level-before-edge ordering, ambient work, unknown types, and disconnected sessions", () => {
+		const h = harness();
+		h.emit({ subtype: "task_started", task_id: "ambient", skip_transcript: true });
+		h.emit({ subtype: "background_tasks_changed", tasks: [
+			{ task_id: "ambient", task_type: "local_bash" },
+			{ task_id: "a", task_type: "new_native_type", description: "Unknown kind" },
+		] });
+		expect(h.read().tasks).toMatchObject([{ id: "a", kind: "other" }]);
+		h.emit({ subtype: "background_tasks_changed", tasks: [] });
+		h.emit({ subtype: "task_notification", task_id: "a", status: "failed" });
+		expect(h.read().tasks).toMatchObject([{ id: "a", state: "failed" }]);
+		h.session.queryClosed = true;
+		expect(h.read).toThrow("invalid session");
+		expect(() => h.handlers.get("_ao/session/background_tasks")({ params: { sessionId: "__proto__" } })).toThrow("invalid session");
+	});
+
+	it("retains ambient classification while native membership survives idle time", () => {
+		vi.useFakeTimers();
+		try {
+			const h = harness();
+			h.emit({ subtype: "task_started", task_id: "ambient", ambient: true });
+			h.emit({ subtype: "background_tasks_changed", tasks: [{ task_id: "ambient", task_type: "local_bash" }] });
+			// The history cap must not evict a current native task's classification.
+			for (let i = 0; i < 512; i++) h.emit({ subtype: "task_started", task_id: `foreground-${i}` });
+			vi.advanceTimersByTime(31_000);
+			expect(h.read().tasks).toEqual([]);
+			h.emit({ subtype: "background_tasks_changed", tasks: [{ task_id: "ambient", task_type: "local_bash" }] });
+			expect(h.read().tasks).toEqual([]);
+			expect(h.session.aoBackgroundKnown.get("ambient").ambient).toBe(true);
+			h.emit({ subtype: "background_tasks_changed", tasks: [] });
+			vi.advanceTimersByTime(31_000);
+			h.read();
+			expect(h.session.aoBackgroundKnown.has("ambient")).toBe(false);
+		} finally { vi.useRealTimers(); }
+	});
+
+	it("keeps the established run when a native snapshot omits it", () => {
+		const h = harness();
+		h.emit({ subtype: "task_started", task_id: "a", run_id: "new" });
+		h.emit({ subtype: "background_tasks_changed", tasks: [{ task_id: "a", task_type: "local_agent" }] });
+		h.emit({ subtype: "task_notification", task_id: "a", run_id: "old", status: "completed" });
+		expect(h.read().tasks).toMatchObject([{ id: "a", runId: "new", state: "running" }]);
+		h.emit({ subtype: "task_notification", task_id: "a", run_id: "new", status: "completed" });
+		expect(h.read().tasks).toMatchObject([{ id: "a", state: "completed" }]);
+	});
+
+	it("reports start times and lets only live background tasks stop", async () => {
+		vi.useFakeTimers();
+		try {
+			vi.setSystemTime(new Date("2026-11-13T10:00:00Z"));
+			const h = harness();
+			const stopped = [];
+			h.session.query = { stopTask: async (id) => { stopped.push(id); } };
+			h.emit({ subtype: "task_started", task_id: "server", task_type: "local_bash" });
+			vi.advanceTimersByTime(4_000);
+			h.emit({ subtype: "background_tasks_changed", tasks: [
+				{ task_id: "server", task_type: "local_bash", description: "Dev server" },
+				{ task_id: "lint", task_type: "local_bash", description: "Lint" },
+			] });
+			const [server, lint] = h.read().tasks;
+			// The run's own start, not the later snapshot that made it background.
+			expect(server).toMatchObject({ id: "server", startedAt: "2026-11-13T10:00:00.000Z", stoppable: true });
+			expect(lint).toMatchObject({ id: "lint", startedAt: "2026-11-13T10:00:04.000Z", stoppable: true });
+			h.emit({ subtype: "background_tasks_changed", tasks: [{ task_id: "server", task_type: "local_bash", description: "Dev server" }] });
+			h.emit({ subtype: "task_notification", task_id: "lint", status: "failed" });
+			expect(h.read().tasks.find((task) => task.id === "lint")).toMatchObject({ state: "failed", stoppable: false, startedAt: "2026-11-13T10:00:04.000Z" });
+
+			const stop = (taskId, sessionId = "native") => h.handlers.get("_ao/session/stop_background_task")({ params: { sessionId, taskId } });
+			await expect(stop("server")).resolves.toEqual({});
+			expect(stopped).toEqual(["server"]);
+			// Settled, foreground and unknown work can never be stopped from here.
+			h.emit({ subtype: "task_started", task_id: "foreground", task_type: "local_bash" });
+			for (const id of ["lint", "foreground", "missing", 7]) await expect(stop(id)).rejects.toThrow("invalid session");
+			await expect(stop("server", "__proto__")).rejects.toThrow("invalid session");
+			expect(stopped).toEqual(["server"]);
+		} finally { vi.useRealTimers(); }
 	});
 });
 
