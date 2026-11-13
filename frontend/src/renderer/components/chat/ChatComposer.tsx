@@ -1,7 +1,7 @@
 import { excerptSizeError, fitExcerptContext, LOCAL_CHAT_MESSAGE_BYTES } from "../../../shared/chat-excerpt";
 import { upgradeExcerpt } from "../../lib/chat-excerpt-snapshot";
 import { hasCodeSelection } from "../diffs/SelectionStableContent";
-import { isDialogOrMenuOpen } from "../../lib/dom-selectors";
+import { asideReplyBoxHasFocus, isDialogOrMenuOpen } from "../../lib/dom-selectors";
 import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
 /**
  * The Chat composer.
@@ -1012,13 +1012,22 @@ export const ChatComposer = memo(function ChatComposer({
 		editor.current?.focus();
 	}, [autoFocus, disabled]);
 
+	// Taking the caret on its own (the session opening, the composer turning
+	// enabled, the window coming back) leaves it in the aside pane's reply box:
+	// opening a mention or an aside reply focuses that box. A person clicking
+	// back into the conversation still moves it (the focus handle).
+	const autoFocusEditor = useCallback(() => {
+		if (asideReplyBoxHasFocus()) return;
+		focusEditor();
+	}, [focusEditor]);
+
 	const previousAutoFocusKey = useRef(autoFocusKey);
 	useEffect(() => {
 		const changedSession = previousAutoFocusKey.current !== autoFocusKey;
 		previousAutoFocusKey.current = autoFocusKey;
 		if (!changedSession && (window.getSelection()?.isCollapsed === false || hasCodeSelection(document.body))) return;
-		focusEditor();
-	}, [autoFocusKey, focusEditor]);
+		autoFocusEditor();
+	}, [autoFocusKey, autoFocusEditor]);
 
 	const hasQueuedDock = Boolean(queuedDock);
 	const restoreFocusAfterQueueAppears =
@@ -1036,7 +1045,7 @@ export const ChatComposer = memo(function ChatComposer({
 
 		const onWindowFocus = () => {
 			if (isDialogOrMenuOpen() || window.getSelection()?.isCollapsed === false || hasCodeSelection(document.body)) return;
-			focusEditor();
+			autoFocusEditor();
 		};
 		const onVisibilityChange = () => {
 			if (document.visibilityState === "visible") onWindowFocus();
@@ -1048,7 +1057,7 @@ export const ChatComposer = memo(function ChatComposer({
 			window.removeEventListener("focus", onWindowFocus);
 			document.removeEventListener("visibilitychange", onVisibilityChange);
 		};
-	}, [autoFocus, focusEditor]);
+	}, [autoFocus, autoFocusEditor]);
 
 	const clearEditorView = useCallback(() => {
 		editorClears.current += 1;
