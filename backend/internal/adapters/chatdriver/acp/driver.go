@@ -985,7 +985,7 @@ func (d *Driver) initialize(
 	})
 	if err != nil {
 		// Read the exit record before discard can ask the host to shut down.
-		exitDetail := providerExitDetail(ctx, conv, proc)
+		exitDetail := providerExitDetail(ctx, conv, proc, err)
 		conv.discard()
 		if isACPAuthRequired(err) {
 			return nil, acpsdk.InitializeResponse{}, nil, normalizeACPError("ACP initialize", err)
@@ -1131,9 +1131,6 @@ func extensionSupported(meta map[string]any, name string) bool {
 
 func pointer[T any](value T) *T { return &value }
 
-// isACPAuthRequired reports whether err is the agent telling us the credential
-// was refused, so the caller can raise a reauth prompt instead of a generic
-// turn failure.
 // maxExitDetailStderr bounds the stderr excerpt carried in a user-visible
 // error. The host's provider-exit.json keeps a longer tail.
 const maxExitDetailStderr = 1500
@@ -1141,14 +1138,18 @@ const maxExitDetailStderr = 1500
 // providerExitDetail explains a provider that disconnected during a request:
 // its exit state and the tail of its stderr. Without it a crashed adapter is
 // indistinguishable from any other transport loss.
-func providerExitDetail(ctx context.Context, conv *conversation, proc *process) string {
+func providerExitDetail(ctx context.Context, conv *conversation, proc *process, requestErr error) string {
 	if proc.providerExit == nil {
 		return ""
 	}
 	select {
 	case <-conv.conn.Done():
 	default:
-		return "" // The provider answered; it did not disconnect.
+		// A failed write to the gone process can return before the SDK's reader
+		// sees EOF and closes Done.
+		if !isACPPeerDisconnected(requestErr) {
+			return "" // The provider answered; it did not disconnect.
+		}
 	}
 	exit, ok := proc.providerExit(context.WithoutCancel(ctx))
 	if !ok {
@@ -1165,6 +1166,9 @@ func providerExitDetail(ctx context.Context, conv *conversation, proc *process) 
 	return detail
 }
 
+// isACPAuthRequired reports whether err is the agent telling us the credential
+// was refused, so the caller can raise a reauth prompt instead of a generic
+// turn failure.
 func isACPAuthRequired(err error) bool {
 	var requestErr *acpsdk.RequestError
 	if !errors.As(err, &requestErr) {
