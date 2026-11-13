@@ -207,3 +207,24 @@ describe("AO Cloud on the Harness page", () => {
 		expect(within(page).getByRole("button", { name: "Install" })).toBeInTheDocument();
 	});
 });
+
+describe("Cloud harness tab", () => {
+	beforeEach(async () => {
+		await appI18n.changeLanguage("en");
+		cloud.value = cloudHarnessVersions({ editable: true, agents: [] });
+	});
+	afterEach(() => cleanup());
+
+	it("offers no GitHub personal access token: Cloud reaches private repositories through the GitHub App", async () => {
+		const { CloudHarnessContent } = await import("./harness/CloudHarnessContent");
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const view = render(<QueryClientProvider client={client}><TooltipProvider><CloudHarnessContent search="" /></TooltipProvider></QueryClientProvider>);
+		// The Cloud agents are listed as before.
+		expect(await screen.findByText("Codex")).toBeInTheDocument();
+		expect(screen.queryByText("GitHub private repositories")).toBeNull();
+		expect(screen.queryByText("GitHub token")).toBeNull();
+		expect(screen.queryByRole("button", { name: "Save token" })).toBeNull();
+		expect(view.container.querySelector('input[type="password"]')).toBeNull();
+		expect(view.container.querySelector('[placeholder^="github_pat_"]')).toBeNull();
+	});
+});
