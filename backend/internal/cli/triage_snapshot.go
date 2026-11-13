@@ -241,7 +241,8 @@ func triageRecentCrashes(tail string, now time.Time) string {
 			continue
 		}
 		if strings.HasPrefix(line, "panic: ") || strings.HasPrefix(line, "fatal error: ") {
-			line += " (daemon started " + started + ")"
+			// Bracketed, so triageNoise keeps it out of the duplicate-search words.
+			line += " [daemon started " + started + "]"
 		}
 		kept = append(kept, line)
 	}

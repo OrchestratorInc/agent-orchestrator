@@ -340,7 +340,7 @@ func TestTriageSnapshotIncludesOnlyRecentDaemonCrashOutput(t *testing.T) {
 	}
 	snapshot, draft, _ := (&commandContext{deps: deps.withDefaults()}).triageSnapshot(context.Background(), dir, dir, filepath.Join(dir, "running.json"))
 	for name, text := range map[string]string{"snapshot": snapshot, "draft": draft} {
-		if !strings.Contains(text, "- Log excerpt: runtime error: index out of range [5] with length 3 (daemon started 2026-10-19T08:00:00Z)\n") {
+		if !strings.Contains(text, "- Log excerpt: runtime error: index out of range [5] with length 3 [daemon started 2026-10-19T08:00:00Z]\n") {
 			t.Errorf("%s missing the recent daemon panic with its start time: %s", name, text)
 		}
 		for _, stale := range []string{"stale crash from last month", "orphaned crash"} {
@@ -348,6 +348,13 @@ func TestTriageSnapshotIncludesOnlyRecentDaemonCrashOutput(t *testing.T) {
 				t.Errorf("%s reports an undated or old crash %q: %s", name, stale, text)
 			}
 		}
+	}
+}
+
+func TestTriageKeywordsSkipCrashStartTime(t *testing.T) {
+	got := triageKeywords("fatal error: concurrent map writes [daemon started 2026-10-19T08:00:00Z]")
+	if want := []string{"concurrent map writes"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("triageKeywords = %q, want %q", got, want)
 	}
 }
 
