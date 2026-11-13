@@ -7,6 +7,8 @@ const CONFIG = { hostId: "host-a" };
 const fixtures = vi.hoisted(() => ({
 	controls: undefined as unknown,
 	projectAgents: {} as Record<string, string>,
+	projectModels: {} as Record<string, string>,
+	agentModels: {} as Record<string, { id: string; label: string; isDefault?: boolean; efforts?: string[]; defaultEffort?: string }[]>,
 	app: {} as Record<string, unknown>,
 	spawn: vi.fn(),
 	theme: new Proxy({}, { get: () => "#000000" }),
@@ -63,12 +65,16 @@ vi.mock("./api", () => ({
 		return { supported: agents, installed: agents, authorized: agents };
 	}),
 	getSettings: vi.fn(async () => ({ chatHarnesses: ["claude-code", "codex", "cursor"] })),
-	getProject: vi.fn(async (_config: unknown, id: string) => ({ id, agent: fixtures.projectAgents[id] })),
+	getProject: vi.fn(async (_config: unknown, id: string) => ({
+		id,
+		agent: fixtures.projectAgents[id],
+		config: fixtures.projectModels[id] ? { worker: { agent: fixtures.projectAgents[id], agentConfig: { model: fixtures.projectModels[id] } } } : undefined,
+	})),
 	getAgentModels: vi.fn(async (_config: unknown, agentId: string) => ({
 		agentId,
 		selectionMode: "catalog",
 		allowCustom: false,
-		models: [{ id: `${agentId}-large`, label: `${agentId} large` }],
+		models: fixtures.agentModels[agentId] ?? [{ id: `${agentId}-large`, label: `${agentId} large` }],
 	})),
 }));
 vi.mock("./haptics", () => ({ haptics: { error: vi.fn(), success: vi.fn() } }));
@@ -125,7 +131,7 @@ async function openSheet(projects = listed("ao", "scratch")) {
 
 async function startTask() {
 	await settled(() => controls().onSpawn());
-	return fixtures.spawn.mock.calls.at(-1)?.[0] as { projectId?: string; harness?: string; model?: string };
+	return fixtures.spawn.mock.calls.at(-1)?.[0] as { projectId?: string; harness?: string; model?: string; effort?: string };
 }
 
 beforeEach(() => {
@@ -136,6 +142,8 @@ beforeEach(() => {
 		error(...args);
 	});
 	fixtures.projectAgents = {};
+	fixtures.projectModels = {};
+	fixtures.agentModels = {};
 	fixtures.spawn.mockReset();
 	fixtures.spawn.mockResolvedValue({ id: "session-1", projectId: "ao" });
 });
@@ -206,6 +214,58 @@ describe("spawn sheet scope", () => {
 		await settled(() => controls().onSelectProject("scratch"));
 		expect(controls().harness).toBe("cursor");
 		expect(await startTask()).toMatchObject({ projectId: "scratch", harness: "cursor", model: undefined });
+	});
+
+	// The agent menu picks an agent with one of its models, its default included,
+	// so choosing the shown agent's default model still picks that agent.
+	it("keeps an agent picked through its default model in the agent menu", async () => {
+		fixtures.projectAgents = { ao: "codex" };
+		await openSheet();
+		expect(controls().harness).toBe("codex");
+		await settled(() => controls().onSelectAgentModel("codex", "codex-large"));
+		await settled(() => controls().onSelectAgentModel("codex", "__auto__"));
+
+		await settled(() => controls().onSelectProject(STANDALONE_PROJECT));
+
+		expect(controls().harness).toBe("codex");
+		expect(await startTask()).toMatchObject({ projectId: STANDALONE_PROJECT, harness: "codex", model: undefined });
+	});
+
+	// A level belongs to the model it was picked for. With no model picked, the
+	// next scope can run another default model, which starts at its own level.
+	it("drops an effort picked for the old scope's default model", async () => {
+		fixtures.projectAgents = { scratch: "codex" };
+		fixtures.projectModels = { scratch: "codex-mini" };
+		fixtures.agentModels = { codex: [
+			{ id: "codex-large", label: "codex large", isDefault: true, efforts: ["low", "medium", "high"], defaultEffort: "medium" },
+			{ id: "codex-mini", label: "codex mini", efforts: ["low", "medium", "high"], defaultEffort: "low" },
+		] };
+		await openSheet();
+		await settled(() => controls().onSelectHarness("codex"));
+		await settled(() => controls().onSelectEffort("high"));
+		expect(controls().effortChoices.find((choice) => choice.selected)?.value).toBe("high");
+
+		await settled(() => controls().onSelectProject("scratch"));
+
+		expect(controls().harness).toBe("codex");
+		expect(controls().effortChoices.find((choice) => choice.selected)?.value).toBe("low");
+		expect(await startTask()).toMatchObject({ projectId: "scratch", harness: "codex", model: undefined, effort: undefined });
+	});
+
+	it("keeps an effort picked for a picked model, which moves with it", async () => {
+		fixtures.projectAgents = { scratch: "codex" };
+		fixtures.projectModels = { scratch: "codex-mini" };
+		fixtures.agentModels = { codex: [
+			{ id: "codex-large", label: "codex large", isDefault: true, efforts: ["low", "medium", "high"], defaultEffort: "medium" },
+			{ id: "codex-mini", label: "codex mini", efforts: ["low", "medium", "high"], defaultEffort: "low" },
+		] };
+		await openSheet();
+		await settled(() => controls().onSelectAgentModel("codex", "codex-large"));
+		await settled(() => controls().onSelectEffort("high"));
+
+		await settled(() => controls().onSelectProject("scratch"));
+
+		expect(await startTask()).toMatchObject({ projectId: "scratch", harness: "codex", model: "codex-large", effort: "high" });
 	});
 
 	// The sheet moved itself here, onto a project nothing was picked for (#5058).

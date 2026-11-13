@@ -339,6 +339,9 @@ export default function SpawnScreen() {
 		if (agentTouched || modelTouched) {
 			setAgentTouched(true);
 			setModelError(undefined);
+			// A level picked for this scope's default model doesn't follow it:
+			// the next scope can run another one.
+			if (!modelTouched) setEffort(undefined);
 		} else {
 			resetModelSource();
 		}
@@ -378,9 +381,11 @@ export default function SpawnScreen() {
 		}
 		setEffort(nextEffort);
 	};
-	// The agent menu picks an agent and one of its models together.
+	// The agent menu picks an agent and one of its models together, so even its
+	// default model, for the agent already shown, picks that agent.
 	const selectAgentModel = (nextHarness: string, nextModel: string) => {
 		selectAgent(nextHarness);
+		setAgentTouched(true);
 		selectModel(nextModel);
 	};
 	// An agent's whole catalog, searchable, for one too long for its menu.
