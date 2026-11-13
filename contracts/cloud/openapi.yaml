@@ -2556,7 +2556,9 @@ paths:
       description: >-
         Steer a message whose turn is still queued into the session's running
         turn, instead of leaving it to run as a turn of its own. The text
-        steered is the queued message's own. Allowed for whoever may stop the
+        steered is the queued message's own; a steer carries text alone, so a
+        message with files (or with no text) is refused and runs as its own
+        turn. Allowed for whoever may stop the
         queued turn (see deleteQueuedMessage) and, like a steer, only with the
         composer lease. Answers chat.turn_steer_requested naming the queued
         turn (payload.queuedTurnId). The message leaves the queue only once
@@ -2605,7 +2607,9 @@ paths:
             TURN_NOT_QUEUED: the agent started on the message, or it ended.
             TURN_NOT_STEERABLE: no running turn can take guidance (nothing is
             running, or its agent cannot steer); the message stays queued.
-            STEER_IN_PROGRESS: a steer of this message is already in flight.
+            STEER_CONTENT_UNSUPPORTED: the message has files or no text,
+            which a steer cannot carry; it stays queued. STEER_IN_PROGRESS: a
+            steer of this message is already in flight.
             COMPOSER_LOCKED, COMPOSER_LEASE_LOST: someone else holds the
             composer.
           content:
