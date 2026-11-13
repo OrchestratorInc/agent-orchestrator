@@ -48,13 +48,10 @@ index 5b3e528..9368a9e 100644
  import expo.modules.ui.colors.isDynamicColorSupported
  import expo.modules.ui.colors.seedColorScheme
  
-@@ -122,9 +129,112 @@
-       return super.dispatchTouchEvent(ev)
-     } finally {
-       isDispatchingCancelFromParent = false
-+    }
-+  }
-+
+@@ -125,6 +132,110 @@
+     }
+   }
+ 
 +  /**
 +   * A Host that ignores the keyboard's insets keeps the keyboard from its Compose content
 +   * altogether: the insets it passes down have no keyboard in them, and the keyboard's animation
@@ -127,13 +124,14 @@ index 5b3e528..9368a9e 100644
 +
 +  @RequiresApi(Build.VERSION_CODES.R)
 +  override fun dispatchWindowInsetsAnimationPrepare(animation: WindowInsetsAnimation) {
-+    if (props.ignoreSafeAreaKeyboardInsets.value) {
++    // The keyboard's alone: a system bar's animation, with or without the keyboard, still reaches it.
++    if (props.ignoreSafeAreaKeyboardInsets.value && animation.typeMask == android.view.WindowInsets.Type.ime()) {
 +      heldInsetsAnimations.add(animation)
 +      return
-     }
++    }
 +    super.dispatchWindowInsetsAnimationPrepare(animation)
-   }
- 
++  }
++
 +  @RequiresApi(Build.VERSION_CODES.R)
 +  override fun dispatchWindowInsetsAnimationStart(
 +    animation: WindowInsetsAnimation,
@@ -161,7 +159,7 @@ index 5b3e528..9368a9e 100644
    @Composable
    override fun ComposableScope.Content() {
      val context = LocalContext.current
-@@ -137,9 +247,17 @@
+@@ -137,9 +248,17 @@
      val seededScheme = remember(seedArgb, isDark) {
        seedArgb?.let { seedColorScheme(it, isDark) }
      }
@@ -180,7 +178,7 @@ index 5b3e528..9368a9e 100644
      val layoutDirection = props.layoutDirection.value.toLayoutDirection()
  
      // Material3's `MaterialTheme` does not provide `LocalContentColor` — only `Surface` does — so
-@@ -149,7 +267,7 @@
+@@ -149,7 +268,7 @@
        LocalLayoutDirection provides layoutDirection,
        LocalContentColor provides colorScheme.onSurface
      ) {

@@ -59,6 +59,8 @@ export function useChatKeyboard({ underHeader = false, floating = false }: {
 	// The keyboard is on its way down. Only the conversation's padding hears it
 	// (see rootStyle); the composer's own handling waits for the close as before.
 	const [closing, setClosing] = useState(false);
+	// keyboard-controller reported this opening, so the list made its own room.
+	const [controllerOpen, setControllerOpen] = useState(false);
 
 	useEffect(() => {
 		// React Native's reports wait out the keyboard's own animation; see
@@ -76,11 +78,13 @@ export function useChatKeyboard({ underHeader = false, floating = false }: {
 		const subscriptions = [
 			KeyboardEvents.addListener("keyboardWillShow", (event) => {
 				setClosing(false);
+				setControllerOpen(true);
 				dispatch({ kind: "controller-show", height: event.height });
 			}),
 			...(floating ? [] : [KeyboardEvents.addListener("keyboardWillHide", () => setClosing(true))]),
 			KeyboardEvents.addListener("keyboardDidHide", () => {
 				setClosing(false);
+				setControllerOpen(false);
 				dispatch({ kind: "controller-hidden" });
 			}),
 			Keyboard.addListener("keyboardDidShow", (event) => settleThenCorrect({ kind: "platform-shown", height: event.endCoordinates.height, insetsBottom: insetsBottom.current })),
@@ -107,8 +111,9 @@ export function useChatKeyboard({ underHeader = false, floating = false }: {
 		// less the gap the dock closes, less the end gap it gives up.
 		listKeyboardOffset: dockRestingInset(insets.bottom) - KEYBOARD_DOCK_GAP + KEYBOARD_END_GAP_TUCK,
 		// Only when keyboard-controller missed the open (see reduceChatKeyboard):
-		// the list never heard it either, so the root makes the room instead.
-		floatingRootStyle: platform === "android" && state.visible && !state.progressTrusted ? { paddingBottom: state.height } : undefined,
+		// the list never heard it either, so the root makes the room instead. A
+		// height that merely disagrees with an open it reported is the list's.
+		floatingRootStyle: platform === "android" && state.visible && !state.progressTrusted && !controllerOpen ? { paddingBottom: state.height } : undefined,
 		dockRiseOverride: platform === "android" ? chatDockRiseOverride(state) : undefined,
 		// How far the composer stands above the screen's bottom when the keyboard's
 		// own progress cannot be trusted; `undefined` rides it (see KeyboardFollower).

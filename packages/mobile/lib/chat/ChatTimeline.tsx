@@ -413,11 +413,11 @@ function Timeline({
 		// follow) as momentum ending too. Only a drag decides whether to follow;
 		// one of ours that landed short of an end still moving goes again.
 		if (!dragging.current) {
-			if (followsTail.current && !atTail(event.nativeEvent)) requestAnimationFrame(followTail);
+			if (followsTail.current && !atTail(event.nativeEvent, keyboardInset.current)) requestAnimationFrame(followTail);
 			return;
 		}
 		dragging.current = false;
-		followsTail.current = atTail(event.nativeEvent);
+		followsTail.current = atTail(event.nativeEvent, keyboardInset.current);
 		setShowJump(!followsTail.current);
 	};
 	const placement = startupPlacement(groups, openingTurnId, Boolean(startup?.visible));
@@ -476,7 +476,7 @@ function Timeline({
 							onScroll={(event) => {
 								// Only the person's own scrolling stops the follow (see `followsTail`);
 								// passing the end without a drag, as a jump does, resumes it.
-								const tail = atTail(event.nativeEvent);
+								const tail = atTail(event.nativeEvent, keyboardInset.current);
 								if (tail && !dragging.current) followsTail.current = true;
 								setShowJump(!followsTail.current && !tail);
 								notifyRenderViewport();
@@ -1583,7 +1583,9 @@ const makeStyles = (t: Theme) => {
 		partial: { fontFamily: "DMSans_400Regular", color: t.textFaint, fontSize: type.footnote.fontSize },
 		turnWrap: { paddingTop: space.sm, paddingBottom: space.lg, gap: space.sm },
 		// The leading glyph lines up with the reply's text above it.
-		turnActions: { height: TURN_ACTION_SIZE, flexDirection: "row", alignItems: "center", gap: space.xxs, marginLeft: -(TURN_ACTION_SIZE - iconSize.sm) / 2 },
+		// A full touch target, so the controls' slop is inside it; the margins
+		// keep its footprint at the controls' size.
+		turnActions: { height: TURN_ACTION_SIZE + 2 * TURN_ACTION_SLOP, marginVertical: -TURN_ACTION_SLOP, flexDirection: "row", alignItems: "center", gap: space.xxs, marginLeft: -(TURN_ACTION_SIZE - iconSize.sm) / 2 },
 		turnAction: { width: TURN_ACTION_SIZE, height: TURN_ACTION_SIZE, borderRadius: TURN_ACTION_SIZE / 2, alignItems: "center", justifyContent: "center" },
 		turnTime: { fontFamily: "DMSans_400Regular", paddingHorizontal: space.xs, color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontVariant: ["tabular-nums"] },
 		// Full width with a rule under it, matching the desktop's Working / Worked

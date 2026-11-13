@@ -139,6 +139,16 @@ it("pads a floating composer's root only for an open keyboard-controller missed"
 	expect(latest?.floatingRootStyle).toBeUndefined();
 });
 
+// A height that only disagrees with an open keyboard-controller reported: the list already made room.
+it("leaves the room to the list when keyboard-controller saw the open", async () => {
+	await mount();
+	await fire("controller", "keyboardWillShow", { height: 336 });
+	fixture.visible = true;
+	await fire("platform", "keyboardDidShow", { endCoordinates: { height: 312 } });
+	await settle();
+	expect(latest?.floatingRootStyle).toBeUndefined();
+});
+
 // Android drives the keyboard's animation on this app's UI thread, and the
 // screen re-rendering as the close began stalled its first frames.
 it("leaves a floating composer's screen alone as the keyboard starts to close", async () => {

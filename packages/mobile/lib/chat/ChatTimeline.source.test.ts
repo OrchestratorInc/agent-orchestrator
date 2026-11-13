@@ -134,7 +134,7 @@ describe("a turn's action row", () => {
 		expect(actions).toContain("formatReplyTime(reply?.createdAt ?? turn.completedAt)");
 	});
 	it("holds its height from the turn's start and takes its touch out by slop", () => {
-		expect(source).toContain("turnActions: { height: TURN_ACTION_SIZE,");
+		expect(source).toContain("turnActions: { height: TURN_ACTION_SIZE + 2 * TURN_ACTION_SLOP, marginVertical: -TURN_ACTION_SLOP,");
 		expect(actions).toContain("<View style={styles.turnActions}>");
 		expect(actions).toContain("hitSlop={TURN_ACTION_SLOP}");
 	});
@@ -154,7 +154,7 @@ describe("jump to latest", () => {
 	});
 	// iOS ends the list's own scrolls with onMomentumScrollEnd; that must not stop the follow.
 	it("lets only a drag stop following the newest message", () => {
-		expect(source).toContain("if (followsTail.current && !atTail(event.nativeEvent)) requestAnimationFrame(followTail);");
+		expect(source).toContain("if (followsTail.current && !atTail(event.nativeEvent, keyboardInset.current)) requestAnimationFrame(followTail);");
 	});
 	// Under a floating composer the list keeps its size and moves its content with the keyboard.
 	it("moves its own content with the keyboard under a floating composer", () => {

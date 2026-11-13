@@ -677,6 +677,9 @@ function Composer({
 	// How much shorter the pill is than open. The closed pill stands on a floor
 	// (COMPOSER_HEIGHT) the controls row fills first.
 	const pillShown = !requestCard;
+	// A request card unmounts the field row, which then no longer reports its
+	// growth; the row's layout restores it when the card goes.
+	useEffect(() => { if (!pillShown && fieldGrowth && fieldGrowth.value !== 0) fieldGrowth.value = 0; }, [pillShown, fieldGrowth]);
 	useAnimatedReaction(() => {
 		const base = pillBase.value;
 		const floor = Math.max(COMPOSER_HEIGHT, base);
