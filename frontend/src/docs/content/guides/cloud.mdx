@@ -25,7 +25,7 @@ Open the session to use Chat, inspect activity, and follow its terminal when ava
 
 ### Switch the agent
 
-When your Cloud deployment supports it, a running session can switch to another agent you are signed in to, in the same workspace. In Chat, pick the agent in the composer; your next message switches the session and goes to the new agent. In the terminal, pick it from the session tab's menu and choose **Switch**. The switch waits for the running turn to finish. The new agent gets a summary of the conversation in its instructions, plus a file with the full conversation it can read. If the session ran that agent before, it continues its own earlier conversation. A switch that cannot start the new agent leaves the session on its previous agent and says why.
+When your Cloud deployment supports it, a running session can switch to another agent you are signed in to, in the same workspace. In Chat, pick the agent in the composer; your next message switches the session and goes to the new agent. In the terminal, pick it from the session tab's menu and choose **Switch** once the agent is idle; the terminal stays open and shows the new agent. In Chat, the switch waits for the running turn to finish. The new agent starts a new conversation with a summary of every turn so far in its instructions, plus a file with the full conversation it can read, as a local switch does. A switch that cannot start the new agent leaves the session on its previous agent and says why.
 
 Cloud stores project, session, conversation, and event records in its hosted control plane. Workspace persistence belongs to the selected remote sandbox provider.
 
