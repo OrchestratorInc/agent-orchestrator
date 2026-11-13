@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -98,6 +99,10 @@ func (r *reading) failedOnItsOwn() bool {
 	return transient(r.identityProblem) || transient(r.limitsProblem)
 }
 
+// httpStatus429 matches an HTTP 429 named as a status, not any "429" digits
+// (a port such as 127.0.0.1:42901 is not a rate limit).
+var httpStatus429 = regexp.MustCompile(`\b(?:status|http|code)\W{0,3}429\b`)
+
 // problemKind sorts a failed check by what failed, not by the error's text.
 func problemKind(err error) domain.AgentAccountProblemKind {
 	switch {
@@ -111,7 +116,7 @@ func problemKind(err error) domain.AgentAccountProblemKind {
 	if strings.Contains(text, "deadline exceeded") || strings.Contains(text, "timed out") {
 		return domain.AgentAccountProblemSlow
 	}
-	if strings.Contains(text, "rate limit") || strings.Contains(text, "rate_limit") || strings.Contains(text, "too many requests") || strings.Contains(text, "429") {
+	if strings.Contains(text, "rate limit") || strings.Contains(text, "rate_limit") || strings.Contains(text, "too many requests") || httpStatus429.MatchString(text) {
 		return domain.AgentAccountProblemRateLimited
 	}
 	return domain.AgentAccountProblemUnavailable
@@ -317,11 +322,13 @@ func (s *Service) needsReading(id string, refresh bool) bool {
 		return true
 	}
 	ttl := freshFor
-	if r.limits != nil && len(r.limits.Windows) == 0 {
+	switch {
+	case r.failedOnItsOwn():
+		// Before the empty-windows case: a failed read can keep earlier limits with no windows.
+		ttl = min(freshFor, retryFailedAfter<<min(max(r.failures-1, 0), 8))
+	case r.limits != nil && len(r.limits.Windows) == 0:
 		// A plan that never reports windows is then read on every poll, one CLI call a minute.
 		ttl = retryEmptyAfter
-	} else if r.failedOnItsOwn() {
-		ttl = min(freshFor, retryFailedAfter<<min(max(r.failures-1, 0), 8))
 	}
 	return s.now().Sub(r.at) > ttl
 }

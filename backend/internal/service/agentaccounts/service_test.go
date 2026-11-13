@@ -827,6 +827,11 @@ func TestProblemKindSortsFailuresByWhatFailed(t *testing.T) {
 		{errors.New("claude get_usage: 429 Too Many Requests"), domain.AgentAccountProblemRateLimited},
 		{errors.New("claude get_usage: rate_limit_error"), domain.AgentAccountProblemRateLimited},
 		{errors.New("claude ended without answering get_usage"), domain.AgentAccountProblemUnavailable},
+		{errors.New("claude get_usage: API error: status 429"), domain.AgentAccountProblemRateLimited},
+		{errors.New("claude get_usage: HTTP 429"), domain.AgentAccountProblemRateLimited},
+		// Digits in a port are not a status.
+		{errors.New("dial tcp 127.0.0.1:42901: connect: connection refused"), domain.AgentAccountProblemUnavailable},
+		{errors.New("dial tcp 127.0.0.1:429: connect: connection refused"), domain.AgentAccountProblemUnavailable},
 	} {
 		if got := problemKind(tc.err); got != tc.want {
 			t.Errorf("problemKind(%q) = %q, want %q", tc.err, got, tc.want)
@@ -902,5 +907,32 @@ func TestACLIThatStaysSlowIsAskedLessOften(t *testing.T) {
 		if _, err := svc.List(ctx, false); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+// A failed read can keep earlier limits with no windows; the failure backoff
+// still applies instead of the 30-second empty-windows retry.
+func TestASlowCheckOnAPlanWithoutWindowsStillBacksOff(t *testing.T) {
+	ctx := context.Background()
+	claude := &fakeClaude{signedInAs: map[string]string{"": "a@example.com"}}
+	svc := New(&memStore{defaults: map[domain.AgentAccountProvider]string{}, bindings: map[domain.SessionID]string{}},
+		[]ports.AgentAccountProviderCLI{claude}, t.TempDir(), fakeTerminals{}, nil)
+	now := time.Now()
+	svc.now = func() time.Time { return now }
+	id := domain.DeviceAgentAccountID(domain.AgentAccountProviderClaude)
+	if _, err := svc.List(ctx, true); err != nil { // limits with no windows
+		t.Fatal(err)
+	}
+	claude.limitsErr = fmt.Errorf("claude get_usage: %w", context.DeadlineExceeded)
+	if view, err := svc.List(ctx, true); err != nil || view[0].Limits == nil || len(view[0].Limits.Windows) != 0 {
+		t.Fatalf("slow check = %+v, %v; want the earlier empty limits kept", view, err)
+	}
+	now = now.Add(retryEmptyAfter + time.Second)
+	if svc.needsReading(id, false) {
+		t.Fatal("a slow check was read again after 30 seconds")
+	}
+	now = now.Add(retryFailedAfter)
+	if !svc.needsReading(id, false) {
+		t.Fatal("a slow check was not read again after a minute")
 	}
 }
