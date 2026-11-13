@@ -104,6 +104,145 @@ paths:
           description: The personal coding-agent credential was disconnected.
         default:
           $ref: "#/components/responses/Error"
+  /api/cloud/v1/me/agent-accounts:
+    get:
+      operationId: listAgentAccounts
+      tags: [Providers]
+      description: >-
+        The authenticated user's coding-agent accounts: every login or key
+        they saved for Claude Code, Codex, Cursor and opencode. Present only
+        on a control plane whose CurrentAccount reports agentAccounts.
+      responses:
+        "200":
+          description: The user's coding-agent accounts.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [agentAccounts]
+                properties:
+                  agentAccounts:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/CloudAgentAccount"
+        default:
+          $ref: "#/components/responses/Error"
+    post:
+      operationId: addAgentAccount
+      tags: [Providers]
+      description: >-
+        Validates, encrypts and saves another account for an agent. The
+        first account of an agent becomes its default. 409
+        AGENT_ACCOUNT_DUPLICATE when the user already saved the same login.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AddAgentAccountInput"
+      responses:
+        "201":
+          description: The account was saved.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [agentAccount]
+                properties:
+                  agentAccount:
+                    $ref: "#/components/schemas/CloudAgentAccount"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/me/agent-accounts/{accountId}:
+    parameters:
+      - $ref: "#/components/parameters/AgentAccountId"
+    patch:
+      operationId: renameAgentAccount
+      tags: [Providers]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RenameAgentAccountInput"
+      responses:
+        "200":
+          description: The account was renamed.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [agentAccount]
+                properties:
+                  agentAccount:
+                    $ref: "#/components/schemas/CloudAgentAccount"
+        default:
+          $ref: "#/components/responses/Error"
+    delete:
+      operationId: removeAgentAccount
+      tags: [Providers]
+      description: >-
+        Removes an account. 409 AGENT_ACCOUNT_IN_USE while a live session
+        runs on it: move or end those sessions first. Removing an agent's
+        default makes its most recently checked other account the default.
+      responses:
+        "204":
+          description: The account was removed.
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/me/agent-accounts/{accountId}/default:
+    parameters:
+      - $ref: "#/components/parameters/AgentAccountId"
+    post:
+      operationId: makeAgentAccountDefault
+      tags: [Providers]
+      description: >-
+        Makes the account its agent's default, the one new sessions run on.
+        Sessions already running keep their own account.
+      responses:
+        "200":
+          description: The account is its agent's default.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [agentAccount]
+                properties:
+                  agentAccount:
+                    $ref: "#/components/schemas/CloudAgentAccount"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/me/agent-accounts/{accountId}/credential:
+    parameters:
+      - $ref: "#/components/parameters/AgentAccountId"
+    put:
+      operationId: replaceAgentAccountCredential
+      tags: [Providers]
+      description: >-
+        Signs an account in again. The credential must be the same kind
+        (subscription login or key) and, where the login names one, the same
+        account: 409 AGENT_ACCOUNT_MISMATCH otherwise, since sessions running
+        on the account were set up for it. Save a different login with
+        addAgentAccount.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PutAgentProviderConnectionInput"
+      responses:
+        "200":
+          description: The account's credential was replaced.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [agentAccount]
+                properties:
+                  agentAccount:
+                    $ref: "#/components/schemas/CloudAgentAccount"
+        default:
+          $ref: "#/components/responses/Error"
   /api/cloud/v1/me/artifact-shares:
     get:
       operationId: listArtifactShares
@@ -1394,6 +1533,53 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/SessionPinResponse"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/agent-account:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+    get:
+      operationId: getSessionAgentAccount
+      tags: [Sessions]
+      responses:
+        "200":
+          description: The account the session's agent runs on.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionAgentAccount"
+        default:
+          $ref: "#/components/responses/Error"
+    put:
+      operationId: switchSessionAgentAccount
+      tags: [Sessions]
+      description: >-
+        Moves the session's agent to another of its creator's accounts for
+        the same agent, through the session's interface transition: the
+        agent stops (after its turn with drain, at once with interrupt) and
+        resumes the same conversation on the new account, or stays on the
+        old one if that fails. Only the session's creator may move it. 409
+        AGENT_ACCOUNT_UNCHANGED for the account it runs on, 422
+        AGENT_ACCOUNT_UNUSABLE for an account that is not signed in or is
+        another agent's.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SwitchSessionAgentAccountInput"
+      responses:
+        "202":
+          description: The move was accepted; the transition reports its progress.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [transition]
+                properties:
+                  transition:
+                    $ref: "#/components/schemas/SessionInterfaceTransition"
         default:
           $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/interface-transition:
@@ -4436,6 +4622,13 @@ components:
         `worker:transport` for workspace and terminal transport, and
         `worker:notification` for durable agent notification intake.
   parameters:
+    AgentAccountId:
+      name: accountId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
     CueId:
       name: cueId
       in: path
@@ -5366,6 +5559,12 @@ components:
             a control plane that cannot switch a session's agent.
           items:
             $ref: "#/components/schemas/CloudAgentHarness"
+        agentAccounts:
+          type: boolean
+          description: >-
+            The control plane keeps several accounts per coding agent
+            (listAgentAccounts) and moves a session between them
+            (switchSessionAgentAccount). Absent or false otherwise.
     AgentCapability:
       type: string
       enum:
@@ -8147,6 +8346,16 @@ components:
         targetReasoningEffort:
           type: string
           description: The effort the switched-to agent starts at.
+        sourceAccountId:
+          type: string
+          format: uuid
+          description: The account the session ran on before an account move. Set only on an account move.
+        targetAccountId:
+          type: string
+          format: uuid
+          description: >-
+            The account an account move moves the session to. Set only on an
+            account move; the session runs on it once the move commits.
         createdAt:
           type: string
           format: date-time
@@ -8186,8 +8395,8 @@ components:
             Switches the session's coding agent to this harness (one of the
             current account's agentSwitchHarnesses), in the same sandbox and
             checkout. targetMode may then be the session's current mode. The
-            new agent receives a handoff note of the conversation so far, or
-            resumes its own conversation when the session ran it before.
+            new agent starts a new conversation with a handoff note of the
+            conversation so far, even when the session ran it before.
             Messages sent while the switch runs reach the new agent. A
             control plane without agent switching refuses the field.
         model:
@@ -9137,6 +9346,13 @@ components:
           type: string
           minLength: 1
           maxLength: 120
+        agentAccountId:
+          type: string
+          format: uuid
+          description: >-
+            The creator's account for harness the session runs on; the
+            harness's default account when omitted. Accepted only by a
+            control plane whose CurrentAccount reports agentAccounts.
         displayName:
           type: string
           minLength: 1
@@ -10710,6 +10926,97 @@ components:
         expiresAt:
           type: string
           format: date-time
+    CloudAgentAccount:
+      type: object
+      additionalProperties: false
+      required: [id, agent, name, credentialType, isDefault, validationState, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        agent:
+          $ref: "#/components/schemas/CloudAgentHarness"
+        name:
+          type: string
+          description: The name the user gave the account; empty when they gave none.
+        credentialType:
+          type: string
+          enum: [oauth_token, api_key, access_token, auth_json, opencode_api_key, anthropic_api_key, openai_api_key, openrouter_api_key]
+        isDefault:
+          type: boolean
+          description: New sessions of the agent run on it.
+        validationState:
+          type: string
+          enum: [pending, valid, invalid]
+        invalidReason:
+          type: string
+          description: Why the account stopped working, when validationState is invalid.
+        email:
+          type: string
+          description: The login's email, when the login names one.
+        plan:
+          type: string
+          description: The login's plan (such as plus or pro), when it names one.
+        validatedAt:
+          type: string
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    AddAgentAccountInput:
+      type: object
+      additionalProperties: false
+      required: [agent, credentialType, secret]
+      properties:
+        agent:
+          $ref: "#/components/schemas/CloudAgentHarness"
+        name:
+          type: string
+          maxLength: 80
+        credentialType:
+          type: string
+          enum: [oauth_token, api_key, access_token, auth_json, opencode_api_key, anthropic_api_key, openai_api_key, openrouter_api_key]
+        secret:
+          type: string
+          minLength: 1
+          maxLength: 65536
+          writeOnly: true
+    RenameAgentAccountInput:
+      type: object
+      additionalProperties: false
+      required: [name]
+      properties:
+        name:
+          type: string
+          maxLength: 80
+    SessionAgentAccount:
+      type: object
+      additionalProperties: false
+      required: [agent]
+      properties:
+        agent:
+          $ref: "#/components/schemas/CloudAgentHarness"
+        accountId:
+          type: string
+          format: uuid
+          description: The account the session's agent runs on; absent when the account was removed.
+        boundAt:
+          type: string
+          format: date-time
+          description: When the session started running on it.
+    SwitchSessionAgentAccountInput:
+      type: object
+      additionalProperties: false
+      required: [accountId]
+      properties:
+        accountId:
+          type: string
+          format: uuid
+        policy:
+          $ref: "#/components/schemas/SessionInterfaceTransitionPolicy"
     RedactedProviderConnection:
       type: object
       additionalProperties: false

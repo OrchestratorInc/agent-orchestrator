@@ -54,6 +54,81 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/me/agent-accounts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The authenticated user's coding-agent accounts: every login or key they saved for Claude Code, Codex, Cursor and opencode. Present only on a control plane whose CurrentAccount reports agentAccounts. */
+        get: operations["listAgentAccounts"];
+        put?: never;
+        /** @description Validates, encrypts and saves another account for an agent. The first account of an agent becomes its default. 409 AGENT_ACCOUNT_DUPLICATE when the user already saved the same login. */
+        post: operations["addAgentAccount"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/me/agent-accounts/{accountId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                accountId: components["parameters"]["AgentAccountId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** @description Removes an account. 409 AGENT_ACCOUNT_IN_USE while a live session runs on it: move or end those sessions first. Removing an agent's default makes its most recently checked other account the default. */
+        delete: operations["removeAgentAccount"];
+        options?: never;
+        head?: never;
+        patch: operations["renameAgentAccount"];
+        trace?: never;
+    };
+    "/api/cloud/v1/me/agent-accounts/{accountId}/default": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                accountId: components["parameters"]["AgentAccountId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Makes the account its agent's default, the one new sessions run on. Sessions already running keep their own account. */
+        post: operations["makeAgentAccountDefault"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/me/agent-accounts/{accountId}/credential": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                accountId: components["parameters"]["AgentAccountId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Signs an account in again. The credential must be the same kind (subscription login or key) and, where the login names one, the same account: 409 AGENT_ACCOUNT_MISMATCH otherwise, since sessions running on the account were set up for it. Save a different login with addAgentAccount. */
+        put: operations["replaceAgentAccountCredential"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/me/artifact-shares": {
         parameters: {
             query?: never;
@@ -800,6 +875,26 @@ export interface paths {
         /** @description Pins the session in the caller's sidebar. A pin is one person's: nobody else sees the session move. Pinning a pinned session keeps its first pin time. */
         post: operations["pinSession"];
         delete: operations["unpinSession"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/agent-account": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get: operations["getSessionAgentAccount"];
+        /** @description Moves the session's agent to another of its creator's accounts for the same agent, through the session's interface transition: the agent stops (after its turn with drain, at once with interrupt) and resumes the same conversation on the new account, or stays on the old one if that fails. Only the session's creator may move it. 409 AGENT_ACCOUNT_UNCHANGED for the account it runs on, 422 AGENT_ACCOUNT_UNUSABLE for an account that is not signed in or is another agent's. */
+        put: operations["switchSessionAgentAccount"];
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -3130,6 +3225,8 @@ export interface components {
             chatHarnesses?: string[];
             /** @description Harnesses a running session can switch its coding agent to (startSessionInterfaceTransition with targetHarness). Absent from a control plane that cannot switch a session's agent. */
             agentSwitchHarnesses?: components["schemas"]["CloudAgentHarness"][];
+            /** @description The control plane keeps several accounts per coding agent (listAgentAccounts) and moves a session between them (switchSessionAgentAccount). Absent or false otherwise. */
+            agentAccounts?: boolean;
         };
         /** @enum {string} */
         AgentCapability: "interface.chat" | "interface.tui" | "model.catalog" | "model.custom" | "attachments" | "browser.preview" | "review.execute" | "session.resume";
@@ -4467,6 +4564,16 @@ export interface components {
             targetModel?: string;
             /** @description The effort the switched-to agent starts at. */
             targetReasoningEffort?: string;
+            /**
+             * Format: uuid
+             * @description The account the session ran on before an account move. Set only on an account move.
+             */
+            sourceAccountId?: string;
+            /**
+             * Format: uuid
+             * @description The account an account move moves the session to. Set only on an account move; the session runs on it once the move commits.
+             */
+            targetAccountId?: string;
             /** Format: date-time */
             createdAt: string;
             /** Format: date-time */
@@ -4484,7 +4591,7 @@ export interface components {
         StartSessionInterfaceTransitionInput: {
             targetMode: components["schemas"]["SessionInterfaceMode"];
             policy: components["schemas"]["SessionInterfaceTransitionPolicy"];
-            /** @description Switches the session's coding agent to this harness (one of the current account's agentSwitchHarnesses), in the same sandbox and checkout. targetMode may then be the session's current mode. The new agent receives a handoff note of the conversation so far, or resumes its own conversation when the session ran it before. Messages sent while the switch runs reach the new agent. A control plane without agent switching refuses the field. */
+            /** @description Switches the session's coding agent to this harness (one of the current account's agentSwitchHarnesses), in the same sandbox and checkout. targetMode may then be the session's current mode. The new agent starts a new conversation with a handoff note of the conversation so far, even when the session ran it before. Messages sent while the switch runs reach the new agent. A control plane without agent switching refuses the field. */
             targetHarness?: components["schemas"]["CloudAgentHarness"];
             /** @description The model the terminal agent starts with, as the Chat ran it. Chat to terminal handoff only; validated as a Chat turn's model. With targetHarness, the model the new agent starts with (any target mode); its default model when omitted. */
             model?: string;
@@ -4910,6 +5017,11 @@ export interface components {
             projectId: string;
             kind: components["schemas"]["SessionKind"];
             harness: string;
+            /**
+             * Format: uuid
+             * @description The creator's account for harness the session runs on; the harness's default account when omitted. Accepted only by a control plane whose CurrentAccount reports agentAccounts.
+             */
+            agentAccountId?: string;
             displayName: string;
             prompt: string;
             /** @default trusted */
@@ -5664,6 +5776,59 @@ export interface components {
             /** Format: date-time */
             expiresAt: string;
         };
+        CloudAgentAccount: {
+            /** Format: uuid */
+            id: string;
+            agent: components["schemas"]["CloudAgentHarness"];
+            /** @description The name the user gave the account; empty when they gave none. */
+            name: string;
+            /** @enum {string} */
+            credentialType: "oauth_token" | "api_key" | "access_token" | "auth_json" | "opencode_api_key" | "anthropic_api_key" | "openai_api_key" | "openrouter_api_key";
+            /** @description New sessions of the agent run on it. */
+            isDefault: boolean;
+            /** @enum {string} */
+            validationState: "pending" | "valid" | "invalid";
+            /** @description Why the account stopped working, when validationState is invalid. */
+            invalidReason?: string;
+            /** @description The login's email, when the login names one. */
+            email?: string;
+            /** @description The login's plan (such as plus or pro), when it names one. */
+            plan?: string;
+            /** Format: date-time */
+            validatedAt?: string;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        AddAgentAccountInput: {
+            agent: components["schemas"]["CloudAgentHarness"];
+            name?: string;
+            /** @enum {string} */
+            credentialType: "oauth_token" | "api_key" | "access_token" | "auth_json" | "opencode_api_key" | "anthropic_api_key" | "openai_api_key" | "openrouter_api_key";
+            secret: string;
+        };
+        RenameAgentAccountInput: {
+            name: string;
+        };
+        SessionAgentAccount: {
+            agent: components["schemas"]["CloudAgentHarness"];
+            /**
+             * Format: uuid
+             * @description The account the session's agent runs on; absent when the account was removed.
+             */
+            accountId?: string;
+            /**
+             * Format: date-time
+             * @description When the session started running on it.
+             */
+            boundAt?: string;
+        };
+        SwitchSessionAgentAccountInput: {
+            /** Format: uuid */
+            accountId: string;
+            policy?: components["schemas"]["SessionInterfaceTransitionPolicy"];
+        };
         RedactedProviderConnection: {
             id: string;
             provider: components["schemas"]["ProviderName"];
@@ -5738,6 +5903,7 @@ export interface components {
         };
     };
     parameters: {
+        AgentAccountId: string;
         CueId: string;
         ReviewRunId: string;
         /** @description The machine's stable identity, `h_` followed by a UUID. */
@@ -5868,6 +6034,160 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listAgentAccounts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The user's coding-agent accounts. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        agentAccounts: components["schemas"]["CloudAgentAccount"][];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    addAgentAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AddAgentAccountInput"];
+            };
+        };
+        responses: {
+            /** @description The account was saved. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        agentAccount: components["schemas"]["CloudAgentAccount"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    removeAgentAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                accountId: components["parameters"]["AgentAccountId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The account was removed. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    renameAgentAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                accountId: components["parameters"]["AgentAccountId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RenameAgentAccountInput"];
+            };
+        };
+        responses: {
+            /** @description The account was renamed. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        agentAccount: components["schemas"]["CloudAgentAccount"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    makeAgentAccountDefault: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                accountId: components["parameters"]["AgentAccountId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The account is its agent's default. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        agentAccount: components["schemas"]["CloudAgentAccount"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    replaceAgentAccountCredential: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                accountId: components["parameters"]["AgentAccountId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutAgentProviderConnectionInput"];
+            };
+        };
+        responses: {
+            /** @description The account's credential was replaced. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        agentAccount: components["schemas"]["CloudAgentAccount"];
+                    };
+                };
             };
             default: components["responses"]["Error"];
         };
@@ -7332,6 +7652,60 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SessionPinResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getSessionAgentAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The account the session's agent runs on. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionAgentAccount"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    switchSessionAgentAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SwitchSessionAgentAccountInput"];
+            };
+        };
+        responses: {
+            /** @description The move was accepted; the transition reports its progress. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        transition: components["schemas"]["SessionInterfaceTransition"];
+                    };
                 };
             };
             default: components["responses"]["Error"];
