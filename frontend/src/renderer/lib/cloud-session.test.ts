@@ -44,4 +44,36 @@ describe("useCloudSession", () => {
     expect(second.result.current.session).toEqual(account);
     vi.doUnmock("./bridge");
   });
+
+  it("shares one bridge read and one change listener across every consumer", async () => {
+    vi.resetModules();
+    const account = { authProvider: "workos", user: { id: "user-1" } };
+    const getSession = vi.fn(() => Promise.resolve({ ...account }));
+    const changeListeners = new Set<(s: unknown) => void>();
+    const onSessionChanged = vi.fn((listener: (s: unknown) => void) => {
+      changeListeners.add(listener);
+      return () => changeListeners.delete(listener);
+    });
+    vi.doMock("./bridge", () => ({
+      aoBridge: { cloud: { getSession, onSessionChanged, signIn: () => undefined, signOut: () => Promise.resolve() } },
+    }));
+    const { useCloudSession } = await import("./cloud-session");
+    // A page of artifact cards mounts together.
+    const cards = Array.from({ length: 50 }, () => renderHook(() => useCloudSession()));
+    await waitFor(() => expect(cards[0].result.current.status).toBe("authenticated"));
+    expect(getSession).toHaveBeenCalledTimes(1);
+    expect(onSessionChanged).toHaveBeenCalledTimes(1);
+
+    // Main re-sending the same user (a token refresh) re-renders no card.
+    const before = cards[0].result.current.session;
+    changeListeners.forEach((listener) => listener({ ...account }));
+    expect(cards[0].result.current.session).toBe(before);
+
+    // Signing out reaches every card through the one listener.
+    changeListeners.forEach((listener) => listener(null));
+    await waitFor(() => expect(cards[49].result.current.status).toBe("unauthenticated"));
+    cards.forEach((card) => card.unmount());
+    expect(changeListeners.size).toBe(0);
+    vi.doUnmock("./bridge");
+  });
 });
