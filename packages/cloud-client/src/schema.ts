@@ -3128,6 +3128,8 @@ export interface components {
             sandboxProviders?: components["schemas"]["SandboxProviders"];
             /** @description Harnesses a session can start in, or switch to, Chat with. */
             chatHarnesses?: string[];
+            /** @description Harnesses a running session can switch its coding agent to (startSessionInterfaceTransition with targetHarness). Absent from a control plane that cannot switch a session's agent. */
+            agentSwitchHarnesses?: components["schemas"]["CloudAgentHarness"][];
         };
         /** @enum {string} */
         AgentCapability: "interface.chat" | "interface.tui" | "model.catalog" | "model.custom" | "attachments" | "browser.preview" | "review.execute" | "session.resume";
@@ -4455,6 +4457,16 @@ export interface components {
             errorDetail?: string;
             /** Format: date-time */
             noticeAcknowledgedAt?: string;
+            /** @description The agent the session ran before an agent switch. Set only on an agent switch. */
+            sourceHarness?: components["schemas"]["CloudAgentHarness"];
+            /** @description The agent an agent switch moves the session to. Set only on an agent switch; the session's harness becomes it once the switch commits, and goes back to sourceHarness if it fails. */
+            targetHarness?: components["schemas"]["CloudAgentHarness"];
+            /** @description The model the session ran before an agent switch. */
+            sourceModel?: string;
+            /** @description The model the switched-to agent starts with. */
+            targetModel?: string;
+            /** @description The effort the switched-to agent starts at. */
+            targetReasoningEffort?: string;
             /** Format: date-time */
             createdAt: string;
             /** Format: date-time */
@@ -4472,10 +4484,12 @@ export interface components {
         StartSessionInterfaceTransitionInput: {
             targetMode: components["schemas"]["SessionInterfaceMode"];
             policy: components["schemas"]["SessionInterfaceTransitionPolicy"];
-            /** @description The model the terminal agent starts with, as the Chat ran it. Chat to terminal handoff only; validated as a Chat turn's model. */
+            /** @description Switches the session's coding agent to this harness (one of the current account's agentSwitchHarnesses), in the same sandbox and checkout. targetMode may then be the session's current mode. The new agent receives a handoff note of the conversation so far, or resumes its own conversation when the session ran it before. Messages sent while the switch runs reach the new agent. A control plane without agent switching refuses the field. */
+            targetHarness?: components["schemas"]["CloudAgentHarness"];
+            /** @description The model the terminal agent starts with, as the Chat ran it. Chat to terminal handoff only; validated as a Chat turn's model. With targetHarness, the model the new agent starts with (any target mode); its default model when omitted. */
             model?: string;
             /**
-             * @description The effort the terminal agent starts at, as the Chat ran it. Chat to terminal handoff only; validated as a Chat turn's effort.
+             * @description The effort the terminal agent starts at, as the Chat ran it. Chat to terminal handoff only; validated as a Chat turn's effort. With targetHarness, the effort the new agent starts at.
              * @enum {string}
              */
             reasoningEffort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
@@ -5488,7 +5502,28 @@ export interface components {
             /** Format: date-time */
             createdAt: string;
         };
-        ClientEvent: components["schemas"]["UserMessageEvent"] | components["schemas"]["AssistantDeltaEvent"] | components["schemas"]["TurnStartedEvent"] | components["schemas"]["TurnCompletedEvent"] | components["schemas"]["TurnInterruptedEvent"] | components["schemas"]["TurnAbortedEvent"] | components["schemas"]["InterruptRequestedEvent"] | components["schemas"]["TurnSteeredEvent"] | components["schemas"]["ScriptStepEvent"];
+        /** @description The session's coding agent changed (an agent switch committed). Turns after it are answered by targetHarness. */
+        AgentSwitchedEvent: {
+            sessionId: string;
+            /** Format: int64 */
+            sequence: number;
+            /** @constant */
+            type: "chat.agent_switched";
+            payload: {
+                /** Format: uuid */
+                transitionId: string;
+                sourceHarness: components["schemas"]["CloudAgentHarness"];
+                targetHarness: components["schemas"]["CloudAgentHarness"];
+                sourceModel?: string;
+                targetModel?: string;
+                targetReasoningEffort?: string;
+                /** @description The new agent resumed its own earlier conversation in this session instead of starting a new one. */
+                resumed?: boolean;
+            };
+            /** Format: date-time */
+            createdAt: string;
+        };
+        ClientEvent: components["schemas"]["UserMessageEvent"] | components["schemas"]["AssistantDeltaEvent"] | components["schemas"]["TurnStartedEvent"] | components["schemas"]["TurnCompletedEvent"] | components["schemas"]["TurnInterruptedEvent"] | components["schemas"]["TurnAbortedEvent"] | components["schemas"]["InterruptRequestedEvent"] | components["schemas"]["TurnSteeredEvent"] | components["schemas"]["ScriptStepEvent"] | components["schemas"]["AgentSwitchedEvent"];
         ClientEventPage: {
             events: components["schemas"]["ClientEvent"][];
             hasMore: boolean;
