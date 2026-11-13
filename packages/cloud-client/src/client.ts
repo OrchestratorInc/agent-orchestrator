@@ -51,6 +51,7 @@ import type {
   TerminalKind,
   TerminalTicket,
   TurnSteeredEvent,
+  TurnSteerRequestedEvent,
   UpdateProjectInput,
   UserMessageEvent,
   UserMessageEditedEvent,
@@ -791,6 +792,33 @@ export class CloudClient {
       ),
       {
         method: "POST",
+        signal: options.signal,
+      },
+    );
+  }
+
+  /**
+   * Steer a message whose turn is still queued into the running turn
+   * (offered when offering.features lists queued-steer). Answers the steer
+   * request; the message leaves the queue on chat.turn_steered and stays
+   * queued on chat.turn_steer_failed. 409 TURN_NOT_QUEUED once the agent took
+   * it, TURN_NOT_STEERABLE when no running turn can take guidance.
+   */
+  steerQueuedMessage(
+    orgId: string,
+    sessionId: string,
+    turnId: string,
+    options: IdempotentRequestOptions & { composerEpoch?: number },
+  ): Promise<{ event: TurnSteerRequestedEvent }> {
+    return this.request(
+      this.orgPath(
+        orgId,
+        `/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/steer-queued`,
+      ),
+      {
+        method: "POST",
+        body: options.composerEpoch !== undefined ? { composerEpoch: options.composerEpoch } : {},
+        idempotencyKey: options.idempotencyKey,
         signal: options.signal,
       },
     );

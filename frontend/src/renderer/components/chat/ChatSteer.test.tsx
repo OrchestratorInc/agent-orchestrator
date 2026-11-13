@@ -581,6 +581,42 @@ describe("ChatWorkspace steering", () => {
 		expect(within(screen.getByTestId("queued-message-dock")).getByText("second queued")).toBeVisible();
 	});
 
+	// A chat that cannot steer a queued message (a Cloud control plane without
+	// queued-steer) offers no Steer on its queue. The button once called nothing
+	// there, yet hid the message and drew it as steered until the next remount
+	// put it back in the queue.
+	it("offers no queued Steer where the chat cannot steer a queued message, and shows a recorded failure on its row", async () => {
+		const snapshot = {
+			...chatFixture,
+			turns: [...chatFixture.turns, { id: "queued-mine", state: "queued" as const, requestedAt: "2026-08-11T10:01:00Z" }],
+			items: [
+				...chatFixture.items,
+				{
+					kind: "message" as const, id: "queued-mine-message", turnId: "queued-mine", sequence: 100, revision: 0,
+					role: "user" as const, origin: "human" as const, text: "my follow-up", streaming: false, createdAt: "2026-08-11T10:01:00Z",
+				},
+			],
+		};
+		const { rerender } = render(<ChatWorkspace snapshot={snapshot} onSteer={vi.fn()} onCancelQueuedTurn={vi.fn()} />);
+		const row = screen.getByTestId("queued-message-queued-mine");
+		expect(within(row).getByText("my follow-up")).toBeVisible();
+		expect(within(row).queryByRole("button", { name: "Steer this queued message into the running turn" })).not.toBeInTheDocument();
+
+		rerender(
+			<ChatWorkspace
+				snapshot={snapshot}
+				onSteer={vi.fn()}
+				onPromoteQueuedTurn={vi.fn().mockResolvedValue(undefined)}
+				onCancelQueuedTurn={vi.fn()}
+				queuedSteerErrors={{ "queued-mine": "Not steered: the agent finished first. It stays in the queue." }}
+			/>,
+		);
+		const failed = screen.getByTestId("queued-message-queued-mine");
+		expect(within(failed).getByText("my follow-up")).toBeVisible();
+		expect(within(failed).getByText("Not steered: the agent finished first. It stays in the queue.")).toBeVisible();
+		expect(within(failed).getAllByRole("button", { name: "Steer this queued message into the running turn" }).length).toBeGreaterThan(0);
+	});
+
 	it("lets the user steer or delete a queued browser annotation, but not edit it", async () => {
 		const annotationText = [
 			"<browser_annotations>",
