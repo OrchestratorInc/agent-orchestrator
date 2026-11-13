@@ -81,6 +81,7 @@ type Options struct {
 var (
 	ErrScanRequired    = apierr.Conflict("STORAGE_SCAN_REQUIRED", "Storage has not been measured yet; a scan has started, try again when it finishes.", nil)
 	ErrCleanInProgress = apierr.Conflict("STORAGE_CLEAN_IN_PROGRESS", "A storage cleanup is already running.", nil)
+	ErrStopping        = apierr.Conflict("STORAGE_STOPPING", "Orchestrator is shutting down; try the cleanup again after it restarts.", nil)
 )
 
 // staleSnapshot is how old a scan may be before a scheduled pass rescans.
@@ -396,6 +397,9 @@ type cleanJob struct {
 	done    time.Time
 	actions []domain.StorageAction
 	freed   int64
+
+	// finished closes once the job has ended, so shutdown can wait for it.
+	finished chan struct{}
 }
 
 func (j *cleanJob) result() CleanResult {
@@ -504,7 +508,12 @@ func (s *Service) beginJob() (*cleanJob, error) {
 	if s.job != nil {
 		return nil, ErrCleanInProgress
 	}
-	s.job = &cleanJob{started: s.now()}
+	// Checked under s.mu, where waitJob reads s.job: once shutdown has
+	// looked for a job to wait on, no new one can start.
+	if s.bg.Err() != nil {
+		return nil, ErrStopping
+	}
+	s.job = &cleanJob{started: s.now(), finished: make(chan struct{})}
 	return s.job, nil
 }
 
@@ -515,6 +524,7 @@ func (s *Service) endJob(job *cleanJob) {
 	s.mu.Lock()
 	s.job, s.lastJob = nil, job
 	s.mu.Unlock()
+	close(job.finished)
 	// What is on disk changed; measure again.
 	s.StartScan()
 }
@@ -881,6 +891,7 @@ func (s *Service) Start(ctx context.Context) <-chan struct{} {
 			select {
 			case <-ctx.Done():
 				timer.Stop()
+				s.waitJob()
 				return
 			case <-s.wake:
 				timer.Stop()
@@ -890,6 +901,18 @@ func (s *Service) Start(ctx context.Context) <-chan struct{} {
 		}
 	}()
 	return done
+}
+
+// waitJob blocks until the running cleanup, if any, has ended. A cleanup
+// started from the app or CLI runs outside the schedule, and shutdown must
+// not close the store under it.
+func (s *Service) waitJob() {
+	s.mu.Lock()
+	job := s.job
+	s.mu.Unlock()
+	if job != nil {
+		<-job.finished
+	}
 }
 
 func passInterval(level domain.DiskPressureLevel) time.Duration {
