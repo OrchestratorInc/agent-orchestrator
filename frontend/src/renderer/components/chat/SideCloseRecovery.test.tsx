@@ -79,6 +79,160 @@ function trackRecovery() {
 	return { recovery, record, snapshot };
 }
 
+function paginatedHistory() {
+	const rows = ["side", "other"].map(id => ({ id, sessionId: "session", state: "ready", label: id === "side" ? "Side" : "Other" }));
+	const page = (id: string, older: boolean) => {
+		const turn = older ? "old" : "latest";
+		const createdAt = older ? "2026-01-01T00:00:00Z" : "2026-01-02T00:00:00Z";
+		return { data: { snapshot: {
+			side: rows.find(row => row.id === id), hasMore: !older, activities: [],
+			turns: [{ id: turn, state: "completed", createdAt }],
+			messages: [{ id: turn, turnId: turn, role: "assistant", text: older ? "Loaded older history" : "Latest history", sequence: older ? 1 : 2, revision: 1, createdAt }],
+		} } };
+	};
+	get.mockImplementation(async (path: string, options?: { params?: { path?: { sideId?: string }; query?: { before?: string } } }) => {
+		if (path.endsWith("/side-chats")) return { data: { sides: rows } };
+		if (path.endsWith("/draft")) return { data: { contentJson: "" } };
+		return page(options?.params?.path?.sideId ?? "side", Boolean(options?.params?.query?.before));
+	});
+	return page;
+}
+
+it.each(["inactive", "rejected"])("preserves loaded history during an %s close", async mode => {
+	paginatedHistory();
+	const deletion = deferred<object>(); remove.mockReturnValueOnce(deletion.promise);
+	render(<Panel />); await screen.findByText("Latest history");
+	await userEvent.click(screen.getByRole("button", { name: "Load earlier messages" }));
+	await screen.findByText("Loaded older history");
+	await userEvent.click(screen.getByRole("button", { name: mode === "inactive" ? "Close Other" : "Close Side" }));
+	await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+	expect(screen.getByText("Loaded older history")).toBeInTheDocument();
+	await act(async () => deletion.resolve(mode === "rejected" ? { error: {}, response: { status: 409 } } : {}));
+	await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+	expect(screen.getByText("Loaded older history")).toBeInTheDocument();
+	expect(screen.getByRole("tab", { name: "Side" })).toHaveAttribute("aria-selected", "true");
+	if (mode === "rejected") expect(screen.getByLabelText("Side chat question")).toBeInTheDocument();
+});
+
+it.each(["rejected", "closed"])("ignores late older messages after closing starts (%s) and releases pagination", async outcome => {
+	const page = paginatedHistory(); const normal = get.getMockImplementation()!;
+	const older = deferred<object>(); const deletion = deferred<object>();
+	get.mockImplementation((path: string, options: { params?: { query?: { before?: string } } }) => options?.params?.query?.before ? older.promise : normal(path, options));
+	remove.mockReturnValueOnce(deletion.promise);
+	render(<Panel />); await screen.findByText("Latest history");
+	await userEvent.click(screen.getByRole("button", { name: "Load earlier messages" }));
+	await deleteFromPanel();
+	await act(async () => older.resolve(page("side", true)));
+	expect(screen.queryByText("Loaded older history")).not.toBeInTheDocument();
+	await act(async () => deletion.resolve(outcome === "rejected" ? { error: {}, response: { status: 409 } } : {}));
+	await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+	expect(screen.queryByText("Loaded older history")).not.toBeInTheDocument();
+	if (outcome === "rejected") {
+		expect(screen.getByRole("button", { name: "Load earlier messages" })).toBeEnabled();
+		await userEvent.click(screen.getByRole("button", { name: "Load earlier messages" }));
+		await screen.findByText("Loaded older history");
+	}
+});
+
+it("allows an active pagination request to finish while an inactive chat closes", async () => {
+	const page = paginatedHistory(); const normal = get.getMockImplementation()!;
+	const older = deferred<object>(); const deletion = deferred<object>();
+	get.mockImplementation((path: string, options: { params?: { query?: { before?: string } } }) => options?.params?.query?.before ? older.promise : normal(path, options));
+	remove.mockReturnValueOnce(deletion.promise);
+	render(<Panel />); await screen.findByText("Latest history");
+	await userEvent.click(screen.getByRole("button", { name: "Load earlier messages" }));
+	await userEvent.click(screen.getByRole("button", { name: "Close Other" }));
+	await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+	await act(async () => older.resolve(page("side", true)));
+	await screen.findByText("Loaded older history");
+	await act(async () => deletion.resolve({}));
+	await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+	expect(screen.getByText("Loaded older history")).toBeInTheDocument();
+});
+
+it.each(["response", "network", "pending"])("applies shutdown proof independently of a %s list failure", async failure => {
+	const { recovery, record, snapshot } = trackRecovery();
+	const hook = await setup(); remove.mockResolvedValueOnce({}); confirmClose.mockResolvedValueOnce("unconfirmed");
+	await act(async () => { await expect(hook.result.current.close("side")).rejects.toThrow(); });
+	recovery.remember(snapshot([{ ...record, cleanupOnly: true, hostStopped: true }]));
+	const normal = get.getMockImplementation()!;
+	get.mockImplementation((path: string, ...args: unknown[]) => {
+		if (!path.endsWith("/side-chats")) return normal(path, ...args);
+		if (failure === "network") return Promise.reject(new Error("Network lost"));
+		return failure === "pending" ? new Promise(() => {}) : { error: { code: "TEMPORARILY_UNAVAILABLE" } };
+	});
+	await changed();
+	expect(hook.result.current.sides).toEqual([]);
+	expect(hook.result.current.activeId).toBeUndefined();
+	if (failure !== "pending") expect(hook.result.current.error).toBe("Close failed");
+});
+
+it("keeps unknown close locks when close-state lookup fails but the list succeeds", async () => {
+	const hook = await setup(); remove.mockRejectedValueOnce(new Error("Lost reply"));
+	await act(async () => { await expect(hook.result.current.close("side")).rejects.toThrow(); });
+	getState.mockRejectedValue(new Error("IPC unavailable"));
+	const normal = get.getMockImplementation()!;
+	get.mockImplementation((path: string, ...args: unknown[]) => path.endsWith("/side-chats") ? { data: { sides: [] } } : normal(path, ...args));
+	await changed();
+	expect(hook.result.current.activeId).toBe("side");
+	await act(async () => hook.result.current.send("side", "blocked"));
+	expect(post).not.toHaveBeenCalled();
+});
+
+it("ignores an older close-state response after newer shutdown proof and selection", async () => {
+	const hook = await setup(); const oldState = deferred<SideCloseState>();
+	getState.mockReturnValueOnce(oldState.promise); await changed();
+	closedIds.push("side");
+	get.mockResolvedValueOnce({ data: { sides: [{ id: "new", sessionId: "session", label: "New" }] } });
+	await changed();
+	expect(hook.result.current.activeId).toBe("new");
+	await act(async () => oldState.resolve({ pending: [{ id: "side", sessionId: "session", label: "Side", phase: "unconfirmed" }], closedIds: [] }));
+	expect(hook.result.current.sides.map(side => side.id)).toEqual(["new"]);
+	expect(hook.result.current.activeId).toBe("new");
+});
+
+it("does not apply an older pending-close summary after a newer summary", async () => {
+	const hook = await setup(); const oldState = deferred<SideCloseState>();
+	getState.mockReturnValueOnce(oldState.promise); await changed();
+	await changed();
+	await act(async () => oldState.resolve({ pending: [{ id: "side", sessionId: "session", label: "Side", phase: "unconfirmed" }], closedIds: [] }));
+	post.mockResolvedValueOnce({});
+	await act(async () => hook.result.current.send("side", "still usable"));
+	expect(post).toHaveBeenCalledOnce();
+});
+
+it("ignores close-state evidence from a replaced daemon attachment", async () => {
+	const hook = await setup();
+	await act(async () => { for (const listener of daemonListeners) listener({ state: "ready", pid: 1, port: 3002 }); });
+	const oldState = deferred<SideCloseState>(); getState.mockReturnValueOnce(oldState.promise); await changed();
+	await act(async () => { for (const listener of daemonListeners) listener({ state: "ready", pid: 2, port: 3002 }); });
+	await act(async () => oldState.resolve({ pending: [], closedIds: ["side"] }));
+	expect(hook.result.current.activeId).toBe("side");
+});
+
+it.each(["cancelled", "pending", "unavailable", "closed"])("reconciles a rejected delete when cancellation bookkeeping fails (%s)", async state => {
+	const normal = capture.getMockImplementation()!;
+	capture.mockImplementation(async (id?: string, cancel?: boolean) => {
+		if (!cancel) return normal(id, cancel);
+		if (state === "cancelled" || state === "closed") pending.length = 0;
+		if (state === "closed") closedIds.push(id!);
+		if (state === "unavailable") getState.mockRejectedValue(new Error("IPC unavailable"));
+		throw new Error("Cancellation snapshot failed");
+	});
+	remove.mockResolvedValueOnce({ error: {}, response: { status: 409 } });
+	render(<Panel />); await screen.findByLabelText("Side chat question"); await deleteFromPanel();
+	await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+	if (state === "closed") {
+		await screen.findByText("No side chat opened.");
+	} else if (state === "cancelled") {
+		expect(screen.getByRole("alert")).toHaveTextContent("You can keep using it");
+		expect(screen.getByLabelText("Side chat question")).toBeInTheDocument();
+	} else {
+		expect(screen.getByRole("alert")).toHaveTextContent("temporarily read-only");
+		expect(screen.queryByLabelText("Side chat question")).not.toBeInTheDocument();
+	}
+});
+
 it.each(["host_stopped", "cleanup_gone"])("removes an unconfirmed tab after %s without observing cleanup pending", async completion => {
 	const { recovery, record, snapshot } = trackRecovery();
 	confirmClose.mockResolvedValueOnce("unconfirmed"); remove.mockResolvedValueOnce({});

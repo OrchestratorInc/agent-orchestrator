@@ -449,6 +449,7 @@ export function useIndependentSideChats(
 	const [closeRevision, setCloseRevision] = useState(0);
 	const lifecycleRevision = useRef(0);
 	const listRequests = useRef(0);
+	const appliedCloseStateRequest = useRef(0);
 	const appliedListRequest = useRef(0);
 	const localCreates = useRef(new Map<string, Side>());
 	const sideRevisions = useRef(new Map<string, number>());
@@ -461,7 +462,10 @@ export function useIndependentSideChats(
 		olderGeneration.current++;
 		loadingOlderRef.current = false;
 	}
-	useEffect(() => setLoadingOlder(false), [sessionId, activeId, enabled]);
+	useEffect(() => {
+		setOlderPages([]);
+		setLoadingOlder(false);
+	}, [sessionId, activeId, enabled]);
 	const baseUrl = useSyncExternalStore(subscribeApiBaseUrl, getApiBaseUrl, getApiBaseUrl);
 	const [attachmentRevision, setAttachmentRevision] = useState(0);
 	const sessionRef = useRef(sessionId);
@@ -477,6 +481,9 @@ export function useIndependentSideChats(
 	useEffect(() => {
 		creationScope.active = true;
 		setPending(false);
+		olderGeneration.current++;
+		loadingOlderRef.current = false;
+		setLoadingOlder(false);
 		return () => { creationScope.active = false; };
 	}, [creationScope]);
 	useEffect(() => {
@@ -557,9 +564,33 @@ export function useIndependentSideChats(
 	const refreshList = useCallback(async (reportErrors = true) => {
 		if (!enabled) return;
 		const scope = creationScopeRef.current;
-		const revision = lifecycleRevision.current;
+		let revision = lifecycleRevision.current;
 		const request = ++listRequests.current;
-		const current = () => scope.active && creationScopeRef.current === scope && sessionRef.current === sessionId && revision === lifecycleRevision.current && request > appliedListRequest.current;
+		const scopeCurrent = () => scope.active && creationScopeRef.current === scope && sessionRef.current === sessionId && revision === lifecycleRevision.current;
+		// Shutdown proof must not depend on a successful (or completed) HTTP list.
+		let closeState: SideCloseState | undefined;
+		try { closeState = await aoBridge.sideChats.getCloseState(sessionId); } catch { /* retain existing close locks */ }
+		if (!scopeCurrent() || request <= appliedCloseStateRequest.current) return;
+		if (closeState) {
+			appliedCloseStateRequest.current = request;
+			for (const id of closeState.closedIds) if (!closedSidesRef.current.has(id)) removeSide(id);
+			const closes = closeState.pending.filter(side => !closedSidesRef.current.has(side.id));
+			setPendingCloses(closes);
+			setCloseWarnings(warnings => {
+				const next = { ...warnings };
+				for (const side of closes) if (!closeRequests.current.has(side.id)) next[side.id] = side.phase;
+				return next;
+			});
+			closingSidesRef.current = new Set([...closes.map(side => side.id), ...closeRequests.current, ...Object.keys(closeWarningsRef.current).filter(id => closeWarningsRef.current[id] !== "open" && !closedSidesRef.current.has(id))]);
+			setSides(current => {
+				const next = [...current];
+				for (const side of closes) if (!next.some(current => current.id === side.id)) next.push({ ...side, state: "closing", mainConversationId: "", contextMode: "", hasWork: false, createdAt: "", updatedAt: "" });
+				return next;
+			});
+			// Our own confirmed removals advance the lifecycle revision.
+			revision = lifecycleRevision.current;
+		}
+		const current = () => scopeCurrent() && request > appliedListRequest.current;
 		try {
 			const { data, error: requestError } = await apiClient.GET("/api/v1/sessions/{sessionId}/conversation/side-chats", {
 				params: { path: { sessionId } },
@@ -570,27 +601,12 @@ export function useIndependentSideChats(
 				if (reportErrors) setListError(apiErrorMessage(requestError));
 				return;
 			}
-			const { pending: closes, closedIds } = await aoBridge.sideChats.getCloseState(sessionId);
-			if (!current()) return;
 			appliedListRequest.current = request;
 			setListError(undefined);
-			// Completion is remembered by Electron; a refresh may miss every
-			// intermediate cleanup state and may still carry an older open list.
-			for (const id of closedIds) if (!closedSidesRef.current.has(id)) removeSide(id);
-			setPendingCloses(closes);
-			setCloseWarnings(warnings => {
-				const next = { ...warnings };
-				for (const side of closes) if (!closeRequests.current.has(side.id)) next[side.id] = side.phase;
-				return next;
-			});
-			closingSidesRef.current = new Set([...closes.map((side) => side.id), ...closeRequests.current, ...Object.keys(closeWarningsRef.current).filter(id => closeWarningsRef.current[id] !== "open" && !closedSidesRef.current.has(id))]);
 			const nextSides = Array.isArray(data?.sides) ? data.sides.filter((side) => !closedSidesRef.current.has(side.id)) : [];
 			for (const [id, side] of localCreates.current) {
 				if (nextSides.some(current => current.id === id)) localCreates.current.delete(id);
 				else if (!closedSidesRef.current.has(id)) nextSides.push(side);
-			}
-			for (const side of closes) {
-				if (!closedSidesRef.current.has(side.id) && !nextSides.some((current) => current.id === side.id)) nextSides.push(sidesRef.current.find(current => current.id === side.id) ?? { ...side, state: "closing", mainConversationId: "", contextMode: "", hasWork: false, createdAt: "", updatedAt: "" });
 			}
 			for (const id of closingSidesRef.current) {
 				const retained = sidesRef.current.find(side => side.id === id);
@@ -627,9 +643,6 @@ export function useIndependentSideChats(
 	}, [liveSnapshot, olderPages, activeId]);
 
 	useEffect(() => {
-		setOlderPages([]);
-		loadingOlderRef.current = false;
-		setLoadingOlder(false);
 		if (!enabled || !activeId) {
 			setSnapshot(undefined);
 			return;
@@ -1267,6 +1280,11 @@ export function useIndependentSideChats(
 			const current = () => scope.active && creationScopeRef.current === scope && sessionRef.current === sessionId;
 			closeRequests.current.add(sideId);
 			closingSidesRef.current.add(sideId);
+			if (activeIdRef.current === sideId) {
+				olderGeneration.current++;
+				loadingOlderRef.current = false;
+				setLoadingOlder(false);
+			}
 			sideRevisions.current.set(sideId, (sideRevisions.current.get(sideId) ?? 0) + 1);
 			lifecycleRevision.current++;
 			setError(undefined);
@@ -1295,8 +1313,8 @@ export function useIndependentSideChats(
 						outcome = await aoBridge.sideChats.confirmClose(sideId, true);
 					} else {
 						if ([400, 401, 403, 405, 409, 422].includes(response.status)) {
-							await aoBridge.sideChats.capture(sideId, true);
 							rejected = true;
+							await aoBridge.sideChats.capture(sideId, true);
 						} else await aoBridge.sideChats.capture().catch(() => undefined);
 						throw apiErrorException(requestError);
 					}
