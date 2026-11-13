@@ -250,16 +250,33 @@ func (m *Manager) ApplyPRObservation(ctx context.Context, id domain.SessionID, o
 	// and re-polls.
 	var blockedCheckErr error
 	if o.Mergeability == domain.MergeConflicting {
-		// Only the bottom of a stack is eligible for the rebase nudge. A PR
-		// stacked on an open parent is expected to report conflicts against its
-		// parent branch until the parent merges and it retargets, so nudging the
-		// agent to rebase it now would be noise. Mergeability UNKNOWN (the brief
-		// post-retarget recompute window) never reaches here.
-		blocked, err := m.prBlockedByOpenParent(ctx, id, o.URL)
+		// The session's "Automatically fix CI failures" switch also covers merge
+		// conflicts, so a session reviewing someone else's PR with the switch off
+		// is never told to rebase it. Fail closed: an unreadable policy skips
+		// this nudge and is surfaced below, like the parent-stack check.
+		pr, prFound, prErr := m.store.GetPR(ctx, o.URL)
+		var skip bool
+		var err error
+		switch {
+		case prErr != nil:
+			err = fmt.Errorf("load CI injection policy for %s: %w", o.URL, prErr)
+		case !prFound:
+			err = fmt.Errorf("load CI injection policy for %s: PR not found", o.URL)
+		case !pr.AutoInjectCI:
+			skip = true
+		default:
+			// Only the bottom of a stack is eligible for the rebase nudge. A PR
+			// stacked on an open parent is expected to report conflicts against
+			// its parent branch until the parent merges and it retargets, so
+			// nudging the agent to rebase it now would be noise. Mergeability
+			// UNKNOWN (the brief post-retarget recompute window) never reaches
+			// here.
+			skip, err = m.prBlockedByOpenParent(ctx, id, o.URL)
+		}
 		switch {
 		case err != nil:
 			blockedCheckErr = err
-		case !blocked:
+		case !skip:
 			msg := "There are merge conflicts on " + ident + ". Rebase onto the base branch and resolve them."
 			if o.URL != "" {
 				msg += "\nPR: " + domain.SanitizeControlChars(o.URL)

@@ -894,7 +894,7 @@
 	"inspector.artifacts": "Artefactos ({{count}})",
 	"inspector.branch": "Rama",
 	"inspector.ci.autoInject": "Automatically fix CI failures",
-	"inspector.ci.autoInjectDescription": "Envía los fallos de CI de los pull requests de esta sesión al agente de trabajo.",
+	"inspector.ci.autoInjectDescription": "Envía los fallos de CI y los conflictos de fusión de los pull requests de esta sesión al agente de trabajo.",
 	"inspector.ci.autoInjectError": "No se pudo actualizar la inyección automática de CI ({{status}})",
 	"inspector.ci.notInjected": "Fallos de CI no enviados",
 	"inspector.browser": "Navegador",

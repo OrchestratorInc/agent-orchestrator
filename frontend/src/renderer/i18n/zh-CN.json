@@ -888,7 +888,7 @@
 	"inspector.artifacts": "工件（{{count}}）",
 	"inspector.branch": "分支",
 	"inspector.ci.autoInject": "Automatically fix CI failures",
-	"inspector.ci.autoInjectDescription": "将此会话的拉取请求 CI 失败发送给 worker 代理。",
+	"inspector.ci.autoInjectDescription": "将此会话的拉取请求 CI 失败和合并冲突发送给 worker 代理。",
 	"inspector.ci.autoInjectError": "无法更新 CI 自动注入设置（{{status}}）",
 	"inspector.ci.notInjected": "CI 失败未注入",
 	"inspector.browser": "浏览器",

@@ -35,7 +35,7 @@ type BusyAction = { kind: "reviewer" | "rerequest" | "resolve" | "send"; id: str
 const POLICIES: readonly { key: ReviewPolicyKey; title: string; description: string; fallback: boolean }[] = [
 	{ key: "autoReviewEnabled", title: "Auto review", description: "When enabled, PRs will get auto-reviewed. When disabled, you can manually trigger the reviews.", fallback: false },
 	{ key: "autoInjectReview", title: "Automatically fix review comments", description: "Sends review comments to the worker.", fallback: true },
-	{ key: "autoInjectCI", title: "Automatically fix CI failures", description: "Sends CI failures to the worker for this session's PRs.", fallback: true },
+	{ key: "autoInjectCI", title: "Automatically fix CI failures", description: "Sends CI failures and merge conflicts to the worker for this session's PRs.", fallback: true },
 ];
 
 export default function ReviewActionsRoute() {

@@ -1915,7 +1915,7 @@ describe("SessionInspector PR section", () => {
     }
     expect(
       screen.getByRole("button", {
-        name: "Sends CI failures to the worker for this session's PRs.",
+        name: "Sends CI failures and merge conflicts to the worker for this session's PRs.",
       }),
     ).toBeInTheDocument();
     expect(

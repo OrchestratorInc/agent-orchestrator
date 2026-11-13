@@ -888,7 +888,7 @@
 	"inspector.artifacts": "Artefakte ({{count}})",
 	"inspector.branch": "Branch",
 	"inspector.ci.autoInject": "Automatically fix CI failures",
-	"inspector.ci.autoInjectDescription": "Sendet CI-Fehler für die Pull Requests dieser Sitzung an den Worker-Agenten.",
+	"inspector.ci.autoInjectDescription": "Sendet CI-Fehler und Merge-Konflikte für die Pull Requests dieser Sitzung an den Worker-Agenten.",
 	"inspector.ci.autoInjectError": "Automatische CI-Übertragung konnte nicht aktualisiert werden ({{status}})",
 	"inspector.ci.notInjected": "CI-Fehler wurden nicht gesendet",
 	"inspector.browser": "Browser",

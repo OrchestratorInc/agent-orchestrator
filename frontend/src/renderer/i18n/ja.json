@@ -888,7 +888,7 @@
 	"inspector.artifacts": "アーティファクト ({{count}})",
 	"inspector.branch": "ブランチ",
 	"inspector.ci.autoInject": "Automatically fix CI failures",
-	"inspector.ci.autoInjectDescription": "このセッションのプルリクエストの CI 失敗をワーカーエージェントへ送信します。",
+	"inspector.ci.autoInjectDescription": "このセッションのプルリクエストの CI 失敗とマージコンフリクトをワーカーエージェントへ送信します。",
 	"inspector.ci.autoInjectError": "CI の自動注入を更新できませんでした ({{status}})",
 	"inspector.ci.notInjected": "CI 失敗は注入されていません",
 	"inspector.browser": "ブラウザ",
