@@ -1037,7 +1037,7 @@ func (f *fakePRRefresher) FindBranchPRs(context.Context, domain.SessionID) (Bran
 	return BranchPRs{Own: f.branchPRs, OtherAuthor: f.otherAuthorPRs}, f.findErr
 }
 
-func (f *fakePRRefresher) RefreshPR(_ context.Context, _ domain.SessionID, prURL string) error {
+func (f *fakePRRefresher) RefreshPR(_ context.Context, _ domain.SessionID, prURL string, _ bool) error {
 	f.calls = append(f.calls, prURL)
 	if f.order != nil {
 		*f.order = append(*f.order, "refresh "+prURL)
@@ -1218,7 +1218,7 @@ func TestTriggerRequestedTellsTheEngineWhetherTheBranchLookupFoundNone(t *testin
 // namedPRRefresher refreshes named PRs but cannot look up a branch's PRs.
 type namedPRRefresher struct{}
 
-func (namedPRRefresher) RefreshPR(context.Context, domain.SessionID, string) error { return nil }
+func (namedPRRefresher) RefreshPR(context.Context, domain.SessionID, string, bool) error { return nil }
 
 // A session whose tracked PR was closed or merged may have opened a new PR on
 // the same branch. With no open tracked PR, the branch lookup still runs and

@@ -45,9 +45,12 @@ func TestReviewPRRefresherClaimsWithoutTakeoverAndTranslatesErrors(t *testing.T)
 	}
 	for _, tc := range cases {
 		claimer := &fakeClaimer{err: tc.err}
-		err := reviewPRRefresher{sessions: claimer}.RefreshPR(context.Background(), "mer-1", "https://github.com/o/r/pull/1")
+		err := reviewPRRefresher{sessions: claimer}.RefreshPR(context.Background(), "mer-1", "https://github.com/o/r/pull/1", false)
 		if claimer.opts.AllowTakeover {
 			t.Fatal("refresh must never take a PR over from an active session")
+		}
+		if !claimer.opts.PreserveOwnership {
+			t.Fatal("refresh must preserve ownership")
 		}
 		if tc.want == nil {
 			if err != nil {
@@ -58,6 +61,16 @@ func TestReviewPRRefresherClaimsWithoutTakeoverAndTranslatesErrors(t *testing.T)
 		if !errors.Is(err, tc.want) || !strings.Contains(err.Error(), tc.text) {
 			t.Fatalf("claim err %v -> %v, want %v containing %q", tc.err, err, tc.want, tc.text)
 		}
+	}
+}
+
+func TestReviewPRRefresherClaimsNamedPR(t *testing.T) {
+	claimer := &fakeClaimer{}
+	if err := (reviewPRRefresher{sessions: claimer}).RefreshPR(context.Background(), "mer-1", "https://github.com/o/r/pull/1", true); err != nil {
+		t.Fatal(err)
+	}
+	if claimer.opts.PreserveOwnership || claimer.opts.AllowTakeover {
+		t.Fatalf("named PR claim options=%+v", claimer.opts)
 	}
 }
 
