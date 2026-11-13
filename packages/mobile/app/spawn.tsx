@@ -52,7 +52,7 @@ export default function SpawnScreen() {
 	const router = useRouter();
 	const navigation = useNavigation();
 	const { projectId: routeProjectId, hostId: routeHostId } = useLocalSearchParams<{ projectId?: string; hostId?: string }>();
-	const { hostStates, cloud, activeProjectId, currentHostId, configForHost, switchHost, setActiveProject, spawn } = useApp();
+	const { hostStates, cloud, activeProjectId, currentHostId, configForHost, switchHost, setActiveProject, spawn, configResolved } = useApp();
 	const cloudState = useCloud();
 	// Orchestrator Cloud is the picker's last choice, after the connected machines, while signed in.
 	const machineHosts = useMemo(() => connectedSpawnHosts(hostStates), [hostStates]);
@@ -96,10 +96,13 @@ export default function SpawnScreen() {
 		if (hostSelectionInitialized.current) return;
 		const routed = routeHostId ? hostStates.find((host) => host.hostId === routeHostId) : undefined;
 		// A machine still connecting is waited for before Cloud can become the default.
+		// So is one the store has not read from the phone yet: the page can open
+		// before the pairings load (reopened after the app was closed, a link).
+		if (routeHostId && !routed && !configResolved) return;
 		if ((routeHostId && routed?.loading) || (!routeHostId && machineHosts.length === 0 && hostStates.some((host) => host.loading))) return;
 		hostSelectionInitialized.current = true;
 		setSelectedHostId(initialSpawnHostId({ routeHostId, currentHostId: currentHostId ?? undefined, hosts: connectedHosts }));
-	}, [connectedHosts, currentHostId, hostStates, machineHosts, routeHostId]);
+	}, [configResolved, connectedHosts, currentHostId, hostStates, machineHosts, routeHostId]);
 
 	const [projectId, setProjectId] = useState<string | null>(null);
 	// Only a session the plan pays for is the plan's to stop: Coder the
