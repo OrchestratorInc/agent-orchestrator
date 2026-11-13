@@ -186,6 +186,7 @@ import type { ComposerPromptSuggestion } from "./ComposerEditor";
 import { ChatTokenSkills } from "./sentComposerTokens";
 import { ChatComposer, type ChatComposerHandle, type StoredComposerAttachment } from "./ChatComposer";
 import { ContextMeter } from "./ContextMeter";
+import { nearQuotaWindow, QuotaBar, quotaTitle } from "./QuotaBar";
 import { stagedAttachmentParts, attachmentName } from "./messageAttachments";
 import type { QueuedMessageEditOptions } from "../../types/conversation";
 import { QueuedMessageDock, type QueuedMessage } from "./QueuedMessageDock";
@@ -1698,6 +1699,13 @@ function ChatWorkspaceContent({
 	// Claude Code compacts at the window picked for it, well before its model's full context.
 	const compactsAt = snapshot.harness === "claude-code" ? snapshot.settings?.autoCompactWindow : undefined;
 	const stableUsage = useStableValue(snapshot.usage);
+	const { t } = useTranslation();
+	// Near the account's usage limit, the model picker shows the limit in its place.
+	const nearQuota = useStableValue(nearQuotaWindow(snapshot.rateLimits));
+	const pickerOverride = useMemo(
+		() => (nearQuota ? { label: <QuotaBar quota={nearQuota} />, title: quotaTitle(nearQuota, t) } : undefined),
+		[nearQuota, t],
+	);
 	// A reroute describes the model it was recorded against; once the user picks a
 	// different model it no longer says anything about the next turn.
 	const currentModelReroute =
@@ -1716,6 +1724,7 @@ function ChatWorkspaceContent({
 				<TurnSettingsBar
 					agentSwitch={agentSwitch}
 					beforePicker={agentSwitch ? <ContextMeter usage={stableUsage} compactsAt={compactsAt} /> : undefined}
+					pickerOverride={pickerOverride}
 					// While the agent wakes or starts; a chat reads "hibernated" until ready.
 					modelsLoading={settingsLoading}
 					lastModel={lastModel}
@@ -1762,6 +1771,7 @@ function ChatWorkspaceContent({
 			models,
 			agentSwitch,
 			stableUsage,
+			pickerOverride,
 			newWorkDisabled,
 			session?.provisionState,
 			onChooseConfigOption,
@@ -1902,7 +1912,6 @@ function ChatWorkspaceContent({
 	const openingStarting = Boolean(openingStartedAt) && startupState !== "failed" && !openingTurnSettled(snapshot, controllerStopped) &&
 		!(turn?.state === "running" && snapshot.controller.state !== "connecting");
 	const conversationEmpty = !arrivingWithHistory && snapshot.items.length === 0 && !turn && (localEchos?.length ?? 0) === 0 && (!hasStartup || sessionRole === "orchestrator");
-	const { t } = useTranslation();
 	const [emptyChatPlaceholder] = useState(
 		() => sessionRole === "orchestrator"
 			? "Ask anything about this project"

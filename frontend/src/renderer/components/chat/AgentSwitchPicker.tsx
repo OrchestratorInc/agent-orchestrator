@@ -109,6 +109,13 @@ export interface AgentSwitchProps {
 	harnessView?: "local" | "cloud";
 }
 
+/** Something to show in the picker's place for now, such as the usage limit near its end. */
+export interface PickerOverride {
+	label: ReactNode;
+	/** Leads the hover title, ahead of the model the picker still opens to. */
+	title: string;
+}
+
 export interface PickerModel {
 	id: string;
 	label: string;
@@ -203,8 +210,11 @@ export function AgentModelPicker({
 	extras,
 	terminal = false,
 	pendingFooter,
+	override,
 	onCloseAutoFocus,
 }: {
+	/** Shown in place of the agent, model and effort; the menu is unchanged. */
+	override?: PickerOverride;
 	/** Shown under the settings of the agent picked to switch to, such as its Switch and Cancel buttons. */
 	pendingFooter?: ReactNode;
 	currentHarness: string;
@@ -404,11 +414,14 @@ export function AgentModelPicker({
 				onPointerEnter={warmCatalogs}
 				onFocus={warmCatalogs}
 				aria-label={terminal ? t("agentSwitch.terminalAgent") : t("agentSwitch.pickerLabel")}
-				title={title ?? (terminal ? t("agentSwitch.switchAnother") : t("agentSwitch.pickerLabel"))}
+				title={override && !terminal
+					? `${override.title}\n${[shownModel, shownEffort].filter(Boolean).join(" ")}`
+					: title ?? (terminal ? t("agentSwitch.switchAnother") : t("agentSwitch.pickerLabel"))}
 				className={cn(TRIGGER_CLASS, terminal ? "w-full justify-start" : undefined)}
 				showCaret={false}
 				data-shortcut-target={terminal ? undefined : "model-picker"}
 			>
+				{override && !terminal ? override.label : <>
 				<ProviderMark provider={terminal ? currentHarness : shownHarness} className="size-3.5" />
 				{loadingModels && !savedLabel && !pending && !terminal ? (
 					<span className="flex items-center gap-1.5 text-muted-foreground">
@@ -427,6 +440,7 @@ export function AgentModelPicker({
 						{mark}
 					</>
 				)}
+				</>}
 				</>}
 			</OptionMenuTrigger>
 			{/* Pinned to the trigger's left edge, which stays put while its label changes width. */}
