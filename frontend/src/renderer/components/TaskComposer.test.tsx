@@ -4246,7 +4246,24 @@ describe("useTaskLaunch Cloud start on send", () => {
 			outcome = await task.launch("Look at this", { clientRequestId: "req-f1", interfaceMode: "tui", attachments: [{ mimeType: "image/png", data: "aGk=", name: "shot.png" }] })
 				.catch((error: unknown) => error);
 		});
-		expect(outcome).toMatchObject({ name: "TaskCreateError", code: "CLOUD_ATTACHMENTS_NEED_CHAT", message: "Files can start a Cloud task in Chat only. Start it in Chat, or remove the files." });
+		// The page has no interface switch: the default session interface in Settings decides it.
+		expect(outcome).toMatchObject({ name: "TaskCreateError", code: "CLOUD_ATTACHMENTS_NEED_CHAT", message: "Files can start a Cloud task only in Chat. Set the default session interface to Chat in Settings > General, or remove the files." });
+		expect(h.cloudCreateSession).not.toHaveBeenCalled();
+	});
+
+	// An agent Cloud runs only in the terminal starts there whatever the default says.
+	it("says to choose another agent when the task's agent has no Chat on Cloud", async () => {
+		const queryClient = freestyleFixture();
+		h.cloudMaxAttachmentBytes = 25 * 1024 * 1024;
+		h.cloudChatHarnesses = [];
+		render(<Wrap queryClient={queryClient}><Launcher /></Wrap>);
+		await screen.findByText("ready");
+		let outcome: unknown;
+		await act(async () => {
+			outcome = await task.launch("Look at this", { clientRequestId: "req-f6", interfaceMode: "tui", attachments: [{ mimeType: "image/png", data: "aGk=", name: "shot.png" }] })
+				.catch((error: unknown) => error);
+		});
+		expect(outcome).toMatchObject({ name: "TaskCreateError", code: "CLOUD_ATTACHMENTS_NEED_CHAT", message: "Files can start a Cloud task only in Chat, which Codex doesn't run in on Cloud. Choose another agent, or remove the files." });
 		expect(h.cloudCreateSession).not.toHaveBeenCalled();
 	});
 

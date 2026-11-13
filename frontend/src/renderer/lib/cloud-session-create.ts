@@ -64,12 +64,15 @@ export interface CloudTaskFile {
 	name?: string;
 }
 
-/** Why a task with files cannot start: they ride a Chat session's first message. */
+/**
+ * Why a task with files cannot start: they ride a Chat session's first
+ * message, and the control plane started the session in the terminal.
+ */
 export class CloudTaskFilesNeedChatError extends Error {
 	/** A refusal a retry cannot change: the composer keeps the task to change and send again. */
 	readonly code = "CLOUD_ATTACHMENTS_NEED_CHAT";
 	constructor() {
-		super("Files can start a Cloud task in Chat only. Start it in Chat, or remove the files.");
+		super("Orchestrator Cloud started this task in the terminal, where files can't go. Remove the files to start it.");
 		this.name = "CloudTaskFilesNeedChatError";
 	}
 }

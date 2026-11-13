@@ -241,7 +241,6 @@ export function useTaskLaunch({ projectId, hostId }: {
 	}).current;
 	const createCloudTask = useCallback(
 		async (input: CreateTaskInput): Promise<string> => {
-			const cloudFilesNeedChat = () => t("newTask.cloudAttachmentsNeedChat", { defaultValue: "Files can start a Cloud task in Chat only. Start it in Chat, or remove the files." });
 			try {
 				const files = input.attachments ?? [];
 				// Files ride the first message of a Chat session (createCloudChatSessionWithFiles),
@@ -253,7 +252,13 @@ export function useTaskLaunch({ projectId, hostId }: {
 					throw new TaskCreateError(t("newTask.cloudAttachmentsUnsupported", { defaultValue: "File attachments are not supported for cloud tasks yet." }), "CLOUD_ATTACHMENTS_UNSUPPORTED");
 				}
 				if (files.length > 0 && input.mode !== "chat") {
-					throw new TaskCreateError(cloudFilesNeedChat(), "CLOUD_ATTACHMENTS_NEED_CHAT");
+					// No switch on the page picks the interface: an agent Cloud runs
+					// only in the terminal starts there, any other as the default
+					// session interface in Settings says.
+					throw new TaskCreateError(input.agent && !cloudOffering.chatHarnesses.includes(input.agent)
+						? t("newTask.cloudAttachmentsNeedChatAgent", { agent: agentLabel(input.agent), defaultValue: "Files can start a Cloud task only in Chat, which {{agent}} doesn't run in on Cloud. Choose another agent, or remove the files." })
+						: t("newTask.cloudAttachmentsNeedChatDefault", { defaultValue: "Files can start a Cloud task only in Chat. Set the default session interface to Chat in Settings > General, or remove the files." }),
+					"CLOUD_ATTACHMENTS_NEED_CHAT");
 				}
 				if (!cloudOrg?.id) throw new Error(t("newTask.unableToStart"));
 				// The agent is always the one the picker shows; with none there is nothing to start.
@@ -321,12 +326,12 @@ export function useTaskLaunch({ projectId, hostId }: {
 				// The code drives the same fallbacks a local create error does ("Create as Terminal").
 				if (err instanceof CloudCpError) throw new TaskCreateError(err.message, err.code, undefined, err.status);
 				// A task with files that left nothing behind is refused as final, to send again.
-				if (err instanceof CloudTaskFilesNeedChatError) throw new TaskCreateError(cloudFilesNeedChat(), err.code);
+				if (err instanceof CloudTaskFilesNeedChatError) throw new TaskCreateError(t("newTask.cloudAttachmentsStartedInTerminal", { defaultValue: err.message }), err.code);
 				if (err instanceof CloudTaskFilesUndeliveredError) throw new TaskCreateError(err.message, err.code);
 				throw err instanceof Error ? err : new Error(t("newTask.unableToStart"));
 			}
 		},
-		[cloudBaseUrl, cloudClient, cloudOffering.maxAttachmentBytes, cloudOrg, cloudUserId, isCloudStandalone, queryClient, t],
+		[cloudBaseUrl, cloudClient, cloudOffering.chatHarnesses, cloudOffering.maxAttachmentBytes, cloudOrg, cloudUserId, isCloudStandalone, queryClient, t],
 	);
 
 	const createDaemonTask = useCallback(
