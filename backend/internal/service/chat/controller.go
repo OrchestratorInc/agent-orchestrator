@@ -3141,6 +3141,7 @@ func (c *Controller) project(flushInterval time.Duration) {
 	if !pumpProviderEvents(c.conv.Events(), c.flushRequests, flushInterval, func(unit []ports.ChatEvent) bool {
 		return c.projectUnit(ctx, unit, acknowledger, persistent)
 	}) {
+		c.reportExitedOnceStored(ctx)
 		return
 	}
 
@@ -3266,6 +3267,40 @@ func (c *Controller) projectUnit(
 		c.sendMu.Unlock()
 	}
 	return true
+}
+
+// reportExitedOnceStored marks the session exited after a failed projection
+// detached it, retrying until the store accepts the write. Opening an exited
+// chat resumes it, and the resumed controller replays the retained provider.
+func (c *Controller) reportExitedOnceStored(ctx context.Context) {
+	c.mu.Lock()
+	suppress := c.suppressStoppedActivity
+	c.mu.Unlock()
+	if suppress || c.activity == nil || c.reviewID != "" {
+		return
+	}
+	report := func() error {
+		return c.activity.ApplyActivitySignal(ctx, c.sessionID, ports.ActivitySignal{
+			Valid:                true,
+			State:                domain.ActivityExited,
+			Timestamp:            c.now(),
+			Event:                "chat.controller.stopped",
+			ControllerGeneration: c.generation,
+		})
+	}
+	if report() == nil {
+		return
+	}
+	go func() {
+		for delay := 250 * time.Millisecond; ; delay = min(2*delay, 10*time.Second) {
+			time.Sleep(delay)
+			err := report()
+			if err == nil || errors.Is(err, ports.ErrSessionNotFound) {
+				return
+			}
+			c.log.Debug("chat exit report waiting for the store", "session", c.sessionID, "error", err)
+		}
+	}()
 }
 
 func (c *Controller) cleanupOwnedControllerWork(ctx context.Context, now time.Time) error {

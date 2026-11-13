@@ -484,8 +484,9 @@ func (r fakeRegistry) Driver(domain.AgentHarness) (ports.ChatDriver, error) { re
 func (r fakeRegistry) SupportsChat(domain.AgentHarness) bool                { return true }
 
 type recordingActivity struct {
-	mu      sync.Mutex
-	signals []ports.ActivitySignal
+	mu         sync.Mutex
+	signals    []ports.ActivitySignal
+	failExited int
 }
 
 func (r *recordingActivity) ApplyActivitySignal(
@@ -495,8 +496,18 @@ func (r *recordingActivity) ApplyActivitySignal(
 ) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if signal.State == domain.ActivityExited && r.failExited > 0 {
+		r.failExited--
+		return errors.New("database or disk is full")
+	}
 	r.signals = append(r.signals, signal)
 	return nil
+}
+
+func (r *recordingActivity) failNextExited(n int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.failExited = n
 }
 
 func (r *recordingActivity) snapshot() []ports.ActivitySignal {
