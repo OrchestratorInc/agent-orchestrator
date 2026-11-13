@@ -8,7 +8,9 @@ WITH claims AS (
     WHERE kind = 'ao_action' AND status = 'completed'
       AND NOT EXISTS (
           SELECT 1 FROM conversation_messages
-          WHERE conversation_messages.turn_id = conversation_activities.turn_id
+          LEFT JOIN conversation_turns ON conversation_turns.id = conversation_messages.turn_id
+          WHERE (conversation_messages.turn_id = conversation_activities.turn_id
+              OR conversation_turns.promoted_to_turn_id = conversation_activities.turn_id)
             AND conversation_messages.role = 'user'
             AND conversation_messages.origin = 'automation'
             AND conversation_messages.authored_by_user = 0

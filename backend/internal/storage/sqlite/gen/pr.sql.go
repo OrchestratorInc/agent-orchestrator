@@ -1258,6 +1258,10 @@ INSERT INTO pr (
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
     COALESCE((SELECT auto_inject_ci FROM sessions WHERE id = ?), TRUE))
 ON CONFLICT (url) DO UPDATE SET
+    ownership_source = CASE
+        WHEN pr.session_id = excluded.session_id AND excluded.ownership_source = 'claimed' THEN 'claimed'
+        ELSE pr.ownership_source
+    END,
     number = excluded.number,
     -- A successful merge is authoritative and irreversible. A poll that
     -- fetched the old open state before that merge must not roll it back.

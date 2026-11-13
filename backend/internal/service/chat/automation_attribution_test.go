@@ -2,11 +2,13 @@ package chat_test
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/store"
 )
 
@@ -80,6 +82,25 @@ func TestQueuedAutomationPreservesAuthorship(t *testing.T) {
 			items := parseDeliveredBatch(t, text)
 			if len(items) != 2 || !items[0].AuthoredByUser || items[1].AuthoredByUser {
 				t.Fatalf("batch authorship lost: %+v", items)
+			}
+		})
+	}
+}
+
+func TestSteerCannotChangeAuthorshipWithTheSameHandle(t *testing.T) {
+	for _, authored := range []bool{false, true} {
+		t.Run(map[bool]string{false: "automation first", true: "user first"}[authored], func(t *testing.T) {
+			h, provider := steerHarness(t)
+			msg := ports.ChatUserMessage{Text: "Check the PR", Origin: domain.MessageOriginAutomation, AuthoredByUser: authored, ClientMessageID: "authorship-key"}
+			if _, err := h.svc.Steer(context.Background(), testSession, msg); err != nil {
+				t.Fatal(err)
+			}
+			msg.AuthoredByUser = !authored
+			if _, err := h.svc.Steer(context.Background(), testSession, msg); !errors.Is(err, chatsvc.ErrSteerIdempotencyConflict) {
+				t.Fatalf("changed authorship error=%v", err)
+			}
+			if got := len(provider.steers()); got != 1 {
+				t.Fatalf("provider calls=%d, want 1", got)
 			}
 		})
 	}

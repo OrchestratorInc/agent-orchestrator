@@ -119,7 +119,7 @@ func (m *Manager) ApplyPRObservation(ctx context.Context, id domain.SessionID, o
 		if rec.Activity.State == domain.ActivityActive {
 			return nil
 		}
-		done, err := m.sessionComplete(ctx, id)
+		done, err := m.sessionComplete(ctx, rec)
 		if err != nil {
 			return err
 		}
@@ -316,16 +316,17 @@ func (m *Manager) terminateCompletedSession(ctx context.Context, id domain.Sessi
 	return nil
 }
 
-// sessionComplete reports whether the session has reached the multi-PR
-// completion bar: at least one PR merged and no PR still open. A session with no
-// PRs, or with any open PR, is not complete.
-func (m *Manager) sessionComplete(ctx context.Context, id domain.SessionID) (bool, error) {
-	prs, err := m.store.ListPRsBySession(ctx, id)
+// sessionComplete requires an owned merged PR and no owned open PRs.
+func (m *Manager) sessionComplete(ctx context.Context, session domain.SessionRecord) (bool, error) {
+	prs, err := m.store.ListPRsBySession(ctx, session.ID)
 	if err != nil {
 		return false, err
 	}
 	merged := false
 	for _, pr := range prs {
+		if !pr.AllowsAutomaticWork(session) {
+			continue
+		}
 		if !pr.Merged && !pr.Closed {
 			return false, nil
 		}

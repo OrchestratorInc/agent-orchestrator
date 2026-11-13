@@ -32,3 +32,21 @@ func TestPRObservation_OlderOwnershipCannotStartWork(t *testing.T) {
 		})
 	}
 }
+
+func TestSessionCompletionIgnoresUncertainAssociations(t *testing.T) {
+	for _, ownedMerged := range []bool{false, true} {
+		t.Run(map[bool]string{false: "unowned merge cannot complete", true: "unowned open cannot block"}[ownedMerged], func(t *testing.T) {
+			m, st, _ := newManager()
+			rec := working("mer-1")
+			rec.CreatedAt = time.Date(2026, 1, 20, 12, 0, 0, 0, time.UTC)
+			st.prs[rec.ID] = []domain.PullRequest{
+				{URL: "owned", SessionID: rec.ID, CreatedAtProvider: rec.CreatedAt, Merged: ownedMerged, Closed: !ownedMerged},
+				{URL: "uncertain", SessionID: rec.ID, CreatedAtProvider: rec.CreatedAt.Add(-18 * 24 * time.Hour), Merged: !ownedMerged},
+			}
+			complete, err := m.sessionComplete(ctx, rec)
+			if err != nil || complete != ownedMerged {
+				t.Fatalf("complete=%v err=%v, want %v", complete, err, ownedMerged)
+			}
+		})
+	}
+}
