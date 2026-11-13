@@ -655,6 +655,14 @@ function SharePanel({
 	// number. A full list (a read, or an invite's answer) is shown only if
 	// nothing started after it, so an older answer never replaces a newer one.
 	const grantsSeq = useRef(0);
+	// Every action taken in the panel (publish, unpublish, access, people)
+	// takes the next number. The refresh behind an opening from a cached list
+	// only applies while none started since: it never overwrites what an
+	// action's answer put in the panel, such as a publish's newer version.
+	const actions = useRef(0);
+	const startAction = () => {
+		actions.current += 1;
+	};
 	const loadGrants = (share: CloudShareLink) => {
 		const seq = ++grantsSeq.current;
 		setPhase((current) => current.kind === "published" && current.share.id === share.id ? { ...current, grantsError: undefined } : current);
@@ -770,6 +778,7 @@ function SharePanel({
 		// behind it, and a different answer decides the panel again.
 		const cached = freshShareLinks(scope);
 		const openedRevision = shareLinksRevision;
+		const openedActions = actions.current;
 		Promise.all([aoBridge.cloudShare.inspect({ ...file, baseUrl }), cached ?? readShareLinks(scope)])
 			.then(([inspection, links]) => {
 				if (cancelled) return;
@@ -777,9 +786,11 @@ function SharePanel({
 				if (!cached) return;
 				void readShareLinks(scope)
 					.then((fresh) => {
-						// A publish this opening started is not second-guessed: its answer settles the panel.
-						// Nor is a change made in the panel since: that read predates it.
-						if (cancelled || pendingShares.has(key) || shareLinksRevision !== openedRevision || decisionKey(inspection, fresh) === decisionKey(inspection, links)) return;
+						// Any action started since, finished or not (a publish this opening
+						// started, one whose answer was "changed", an access change), and any
+						// change made elsewhere in the app: its answer settles the panel, and
+						// this read predates it.
+						if (cancelled || actions.current !== openedActions || pendingShares.has(key) || shareLinksRevision !== openedRevision || decisionKey(inspection, fresh) === decisionKey(inspection, links)) return;
 						decide(inspection, fresh, false, links);
 					})
 					.catch(() => undefined);
@@ -804,6 +815,7 @@ function SharePanel({
 	// access and who it is shared with kept. A new link starts as set up here:
 	// private and shared with nobody yet, unless the person chose otherwise.
 	const publish = async (inspection: CloudShareInspection, links: CloudShareLinks, share?: CloudShareLink, startsWith?: { access: CloudShareAccess; emails: string[] }) => {
+		startAction();
 		const access = share ? (isPrivateShare(share) ? "restricted" : "anyone")
 			: links.privateLinks ? startsWith?.access ?? "restricted" : "anyone";
 		const emails = !share && links.privateLinks ? startsWith?.emails ?? [] : [];
@@ -836,6 +848,7 @@ function SharePanel({
 	};
 
 	const unpublish = async (shown: Extract<Phase, { kind: "published" }>) => {
+		startAction();
 		setPhase({ ...shown, unpublishing: "busy" });
 		try {
 			await aoBridge.cloudShare.unpublish(baseUrl, shown.share.id);
@@ -849,6 +862,7 @@ function SharePanel({
 	};
 
 	const changeAccess = async (shown: Extract<Phase, { kind: "published" }>, access: CloudShareAccess) => {
+		startAction();
 		setChangingAccess(true);
 		try {
 			const share = await aoBridge.cloudShare.setAccess(baseUrl, shown.share.id, access);
@@ -866,6 +880,7 @@ function SharePanel({
 
 	// The link is live: Invite gives access at once.
 	const invite = async (shown: Extract<Phase, { kind: "published" }>, emails: string[]): Promise<boolean> => {
+		startAction();
 		setInviting(true);
 		const seq = ++grantsSeq.current;
 		try {
@@ -884,6 +899,7 @@ function SharePanel({
 
 	const removePerson = async (shown: Extract<Phase, { kind: "published" }>, person: ArtifactPerson) => {
 		if (!person.id) return;
+		startAction();
 		setRemoving(person.email);
 		// A list read or invited before this is out of date once it lands.
 		++grantsSeq.current;

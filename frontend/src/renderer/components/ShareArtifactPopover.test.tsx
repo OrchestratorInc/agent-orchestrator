@@ -443,6 +443,29 @@ describe("ShareArtifactButton on a file on this computer", () => {
 		expect(publishSpy).toHaveBeenCalledExactlyOnceWith({ ...localFile, baseUrl: "https://cp.test", fingerprint: "fp-1", access: "anyone" });
 	});
 
+	it("never lets the opening's background list read undo a publish that answered changed", async () => {
+		// Opened on the list the button read; the refresh behind it answers late.
+		const revoked = { ...share, revokedAt: "2026-11-01T00:00:00Z" };
+		const { listSpy, publishSpy } = stub({ ...inspection, shareId: SHARE_ID }, { ...links, shares: [revoked] }, {
+			status: "changed",
+			inspection: { ...inspection, shareId: SHARE_ID, fingerprint: "fp-2" },
+		});
+		renderButton(localFile);
+		const button = await screen.findByRole("button", { name: "Publish: report.html" });
+		await waitFor(() => expect(listSpy).toHaveBeenCalledTimes(1));
+		let answer: (value: CloudShareLinks) => void = () => undefined;
+		listSpy.mockReturnValue(new Promise((resolve) => { answer = resolve; }));
+		await userEvent.click(button);
+		await userEvent.click(await screen.findByRole("button", { name: "Publish" }));
+		expect(await screen.findByText("This file changed while it was being published. Check it and publish again.")).toBeTruthy();
+		// The late answer differs, but the publish's answer stands.
+		await act(async () => answer({ ...links, used: 2, shares: [revoked] }));
+		expect(screen.getByText("This file changed while it was being published. Check it and publish again.")).toBeTruthy();
+		publishSpy.mockResolvedValue({ status: "published", replaced: false, share });
+		await userEvent.click(screen.getByRole("button", { name: "Publish" }));
+		expect(publishSpy).toHaveBeenLastCalledWith(expect.objectContaining({ fingerprint: "fp-2" }));
+	});
+
 	it("says Publishing while it uploads, with Cancel, and keeps going when the popover closes", async () => {
 		stub(inspection, links);
 		let finish: (result: CloudSharePublishResult) => void = () => undefined;
