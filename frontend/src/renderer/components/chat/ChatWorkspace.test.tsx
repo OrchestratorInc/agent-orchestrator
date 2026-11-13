@@ -959,14 +959,11 @@ describe("ChatWorkspace timeline", () => {
 	});
 
 	// The meter can warn about the account's quota, but only if it is handed it.
-	it("warns beside the composer once the account's quota passes 75%", () => {
-		const reported = { ...idleSnapshot(chatFixture), rateLimits: { primaryUsedPercent: 40, secondaryUsedPercent: -1 } };
-		const view = render(<ChatWorkspace snapshot={reported} />);
+	it("shows no quota badge beside the composer, even near the account's limit", () => {
+		const reported = { ...idleSnapshot(chatFixture), rateLimits: { primaryUsedPercent: 100, secondaryUsedPercent: 95 } };
+		render(<ChatWorkspace snapshot={reported} />);
 		const composer = screen.getByLabelText("Message the agent").closest("form") as HTMLElement;
 		expect(within(composer).queryByText(/% used/)).not.toBeInTheDocument();
-
-		view.rerender(<ChatWorkspace snapshot={{ ...reported, rateLimits: { primaryUsedPercent: 40, secondaryUsedPercent: 82 } }} />);
-		expect(within(composer).getByText("Weekly 82% used")).toBeInTheDocument();
 	});
 
 	it("refreshes the owning workspace after renaming the primary chat tab", async () => {
