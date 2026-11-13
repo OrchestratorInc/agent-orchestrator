@@ -629,8 +629,8 @@ gets a turn of its own, so the agent answers each one before the next is sent.
 Agent and Orchestrator messages waiting next to each other (agent messages,
 review comments, conflict notices) go together as one provider input, stopping
 before the next typed message. A steer claims the whole waiting queue and
-appends its guidance to one active turn input. Each source message keeps its own transcript row, origin,
-sender, and delivery handle. Messages arriving after the claim wait for the next
+appends its guidance to one active turn input. Each source message keeps its
+own transcript row, origin, sender, and delivery handle. Messages arriving after the claim wait for the next
 turn. AO does not truncate a batch or impose a provider input size limit;
 provider limits and refusals are surfaced as delivery failures. An uncertain
 provider result closes the claimed receipts without automatically replaying

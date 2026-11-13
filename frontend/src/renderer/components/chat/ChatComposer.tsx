@@ -191,10 +191,10 @@ type HeldSubmit = {
 };
 
 /**
- * How long after a send a bare Enter in the empty box is ignored instead of
+ * How long after a send Cmd/Ctrl+Enter in the empty box is ignored instead of
  * steering the next queued message. A send clears the box at once and lands in
- * milliseconds, so a double-tapped Enter would otherwise steer the message it
- * just queued.
+ * milliseconds, so a double-tapped Cmd/Ctrl+Enter would otherwise steer the
+ * message it just queued.
  */
 const STEER_NEXT_AFTER_SEND_MS = 1000;
 
