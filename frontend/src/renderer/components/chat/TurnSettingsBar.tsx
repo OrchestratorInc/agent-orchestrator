@@ -938,6 +938,7 @@ function ClubbedConfigPicker({
 				onChange={(value) => onChange(option.id, value)}
 				groupClaude={groupClaude}
 				align="start"
+				header={notice}
 			/>
 		);
 	}
@@ -1211,6 +1212,7 @@ function ConfigOptionPicker({
 	title,
 	onChange,
 	disabled,
+	header,
 	footer,
 	leadIcon,
 	showCaret,
@@ -1218,6 +1220,8 @@ function ConfigOptionPicker({
 	align,
 }: {
 	option: ChatConfigOption;
+	/** A line above the choices, such as the usage warning. */
+	header?: ReactNode;
 	label?: string;
 	title?: string;
 	onChange: (value: ChatConfigOptionValue) => void;
@@ -1239,6 +1243,7 @@ function ConfigOptionPicker({
 			showCaret={showCaret}
 			onFocus={isModelOption(option) ? focusModelSearch : undefined}
 		>
+			{header ? <div className="px-2 py-1.5">{header}</div> : null}
 			{isModelOption(option) ? (
 				<ConfigModelChoices option={option} onChange={onChange} groupClaude={groupClaude} />
 			) : leadIcon && option.type === "select" ? (

@@ -1047,7 +1047,7 @@ function ChatWorkspaceContent({
 		// The focusable context tooltip must not redirect focus to the composer.
 		if (
 			target.closest(
-				"button, a, input, textarea, select, [contenteditable='true'], [role='button'], [role='option'], [data-context-meter], [role='menuitem'], [role='dialog'], [data-testid='session-terminal'], .xterm, .terminal-surface",
+				"button, a, input, textarea, select, [contenteditable='true'], [role='button'], [role='option'], [data-context-meter], [data-quota-pill], [role='menuitem'], [role='dialog'], [data-testid='session-terminal'], .xterm, .terminal-surface",
 			)
 		)
 			return;

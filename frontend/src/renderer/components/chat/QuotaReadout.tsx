@@ -88,7 +88,7 @@ export function QuotaPill({ quota }: { quota: QuotaWindow }) {
 	const { t } = useTranslation();
 	return (
 		<TooltipProvider><Tooltip>
-			<TooltipTrigger asChild><span tabIndex={0} className="inline-flex rounded-full focus-visible:outline-2 focus-visible:outline-ring"><QuotaReadout quota={quota} /></span></TooltipTrigger>
+			<TooltipTrigger asChild><span data-quota-pill="" tabIndex={0} className="inline-flex rounded-full focus-visible:outline-2 focus-visible:outline-ring"><QuotaReadout quota={quota} /></span></TooltipTrigger>
 			<TooltipContent><QuotaTip {...quotaTitle(quota, t)} /></TooltipContent>
 		</Tooltip></TooltipProvider>
 	);
