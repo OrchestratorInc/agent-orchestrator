@@ -254,6 +254,7 @@ vi.mock("./ChatWorkspace", async () => {
 	};
 });
 
+import { sessionUiKey } from "../../lib/hosts";
 import { SessionChatSurface } from "./SessionChatSurface";
 import {
 	peekSessionSearchReveal,
@@ -508,6 +509,30 @@ describe("SessionChatSurface search reveal", () => {
 		await waitFor(() => expect(screen.getByTestId("annotation-request")).toHaveTextContent("msg-2"));
 		expect(screen.getByTestId("annotation-text")).toHaveTextContent("timeout");
 		expect(peekSessionSearchReveal("sess-1")).toBeUndefined();
+	});
+
+	// A match on another machine is keyed by host and id. This machine's open
+	// session with the same id must not take it, and that machine's session must.
+	it("takes only its own machine's search target", async () => {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const remoteKey = sessionUiKey("sess-1", "h_air");
+		requestSessionSearchReveal(remoteKey, { messageId: "msg-remote", text: "flaky", find: true });
+		const local = render(
+			<Wrapper client={client}>
+				<SessionChatSurface session={session} />
+			</Wrapper>,
+		);
+		expect(screen.getByTestId("annotation-request")).not.toHaveTextContent("msg-remote");
+		expect(peekSessionSearchReveal(remoteKey)).toMatchObject({ messageId: "msg-remote" });
+		local.unmount();
+
+		render(
+			<Wrapper client={client}>
+				<SessionChatSurface session={session} hostId="h_air" />
+			</Wrapper>,
+		);
+		await waitFor(() => expect(screen.getByTestId("annotation-request")).toHaveTextContent("msg-remote"));
+		expect(peekSessionSearchReveal(remoteKey)).toBeUndefined();
 	});
 
 	// Main's find in chat (useChatFind) searches the whole history; a result
