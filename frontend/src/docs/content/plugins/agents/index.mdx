@@ -109,10 +109,13 @@ Chat registration does not imply interface handoff support. Use the switch actio
 
 Grok Build Chat uses the installed `grok agent stdio` and its existing cached
 login. Model and reasoning effort come from the live ACP session. Default
-permissions surface tool approvals in Chat; auto and bypass-permissions both
-launch Grok with `--always-approve`. Accept-edits is unsupported, and changing
-permissions on a running Grok Chat requires restarting it. Native session
-history is loaded when the session is reopened.
+permissions surface tool approvals in Chat. Auto enables Grok's native command
+reviewer through ACP metadata; only bypass-permissions launches Grok with
+`--always-approve`. Standing instructions are passed as native system rules.
+Accept-edits is unsupported, and changing permissions on a running Grok Chat
+requires restarting it. Native session history is loaded when the session is
+reopened. Restart existing Grok Chat providers after updating to apply these
+session-creation settings.
 
 ```bash
 ao spawn --project my-app --name auth-fix --agent claude-code --mode chat

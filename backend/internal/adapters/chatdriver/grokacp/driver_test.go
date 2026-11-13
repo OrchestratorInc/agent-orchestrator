@@ -6,8 +6,6 @@ import (
 	"reflect"
 	"testing"
 
-	acpsdk "github.com/coder/acp-go-sdk"
-
 	acpdriver "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -55,7 +53,7 @@ func TestConfigureLaunchArguments(t *testing.T) {
 	}{
 		{"", []string{"agent", "stdio"}},
 		{ports.PermissionModeDefault, []string{"agent", "stdio"}},
-		{ports.PermissionModeAuto, []string{"agent", "--always-approve", "stdio"}},
+		{ports.PermissionModeAuto, []string{"agent", "stdio"}},
 		{ports.PermissionModeBypassPermissions, []string{"agent", "--always-approve", "stdio"}},
 	} {
 		t.Run(string(tc.mode), func(t *testing.T) {
@@ -117,13 +115,26 @@ func TestSessionOptions(t *testing.T) {
 	}
 }
 
-func TestSessionPreamble(t *testing.T) {
-	if got := sessionPreamble(acpdriver.LaunchConfig{SystemPrompt: " \n "}); got != nil {
-		t.Fatalf("empty preamble = %v", got)
-	}
-	got := sessionPreamble(acpdriver.LaunchConfig{SystemPrompt: " AO standing instructions \n"})
-	want := []acpsdk.ContentBlock{acpdriver.StandingInstructionsBlock("AO standing instructions")}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("preamble = %#v, want %#v", got, want)
+func TestSessionMetaPreservesNativeReviewAndSystemRules(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mode   ports.PermissionMode
+		prompt string
+		want   map[string]any
+	}{
+		{name: "default without rules"},
+		{name: "whitespace rules", prompt: " \n "},
+		{name: "auto", mode: ports.PermissionModeAuto, want: map[string]any{"autoMode": true}},
+		{name: "default rules", mode: ports.PermissionModeDefault, prompt: " AO rules \n", want: map[string]any{"rules": "AO rules"}},
+		{name: "auto rules", mode: ports.PermissionModeAuto, prompt: "AO rules", want: map[string]any{"autoMode": true, "rules": "AO rules"}},
+		{name: "bypass", mode: ports.PermissionModeBypassPermissions},
+		{name: "bypass rules", mode: ports.PermissionModeBypassPermissions, prompt: "AO rules", want: map[string]any{"rules": "AO rules"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := sessionMeta(acpdriver.LaunchConfig{Permissions: tc.mode, SystemPrompt: tc.prompt})
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("metadata = %#v, want %#v", got, tc.want)
+			}
+		})
 	}
 }

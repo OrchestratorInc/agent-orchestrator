@@ -7,8 +7,6 @@ import (
 	"log/slog"
 	"strings"
 
-	acpsdk "github.com/coder/acp-go-sdk"
-
 	acpdriver "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/nativeacp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -25,7 +23,7 @@ func New(plugin nativeacp.Plugin, log *slog.Logger) ports.ChatDriver {
 		},
 		Configure:            configure,
 		SessionOptions:       sessionOptions,
-		SessionPreamble:      sessionPreamble,
+		SessionMeta:          sessionMeta,
 		ValidateTurnSettings: validateTurnSettings,
 	}, log)
 }
@@ -35,11 +33,9 @@ func configure(_ context.Context, cfg acpdriver.LaunchConfig) ([]string, map[str
 		return nil, nil, err
 	}
 	args := []string{"agent"}
-	switch ports.NormalizePermissionMode(cfg.Permissions) {
-	case ports.PermissionModeAuto, ports.PermissionModeBypassPermissions:
-		// The TUI uses --permission-mode auto/bypassPermissions. Grok's ACP
-		// command has no session modes or risk-based auto selector: both map to
-		// its process-wide --always-approve flag, before the stdio subcommand.
+	if ports.NormalizePermissionMode(cfg.Permissions) == ports.PermissionModeBypassPermissions {
+		// Only explicit bypass disables Grok's command review. Auto uses the
+		// native reviewer via session metadata, matching the TUI's auto mode.
 		args = append(args, "--always-approve")
 	}
 	return append(args, "stdio"), nil, nil
@@ -76,11 +72,18 @@ func sessionOptions(settings ports.ChatTurnSettings) []acpdriver.SessionOption {
 	return options
 }
 
-// Grok's stdio command has no --rules flag. The transport sends this on the
-// first prompt and recognizes it in loaded history to avoid repeating it.
-func sessionPreamble(cfg acpdriver.LaunchConfig) []acpsdk.ContentBlock {
-	if standing := strings.TrimSpace(cfg.SystemPrompt); standing != "" {
-		return []acpsdk.ContentBlock{acpdriver.StandingInstructionsBlock(standing)}
+// Grok reads these ACP extensions for native command review and system rules.
+// The transport also sends them when loading or resuming a native session.
+func sessionMeta(cfg acpdriver.LaunchConfig) map[string]any {
+	var meta map[string]any
+	if ports.NormalizePermissionMode(cfg.Permissions) == ports.PermissionModeAuto {
+		meta = map[string]any{"autoMode": true}
 	}
-	return nil
+	if rules := strings.TrimSpace(cfg.SystemPrompt); rules != "" {
+		if meta == nil {
+			meta = make(map[string]any)
+		}
+		meta["rules"] = rules
+	}
+	return meta
 }
