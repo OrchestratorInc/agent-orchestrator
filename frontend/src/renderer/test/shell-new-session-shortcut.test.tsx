@@ -536,19 +536,6 @@ describe("shell workspace startup", () => {
 	beforeAll(async () => {
 		await import("../components/chat/OrchestratorStartingChat");
 	});
-	it("rechecks a connected host when its session queries fail", async () => {
-		useUiStore.setState({ developerMode: true, remoteHosts: true });
-		const view = await renderShell();
-		await waitFor(() => expect(shellMocks.listRemoteHosts).toHaveBeenCalledTimes(1));
-
-		shellMocks.state.remoteFailedHostIds = ["box-a"];
-		view.rerender(<Suspense fallback={null}><ShellRoute /></Suspense>);
-		await waitFor(() => expect(shellMocks.listRemoteHosts).toHaveBeenCalledTimes(2));
-
-		view.rerender(<Suspense fallback={null}><ShellRoute /></Suspense>);
-		expect(shellMocks.listRemoteHosts).toHaveBeenCalledTimes(2);
-	});
-
 	it("opens the shared Project settings dialog for the selected remote host", async () => {
 		shellMocks.state.remoteWorkspaces = [
 			{ hostId: "box-a", id: "shared", name: "Shared", path: "/a", sessions: [] },

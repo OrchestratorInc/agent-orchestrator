@@ -823,7 +823,8 @@ vi.mock("./SessionInspector", () => ({
 		);
 	},
 }));
-vi.mock("../lib/shell-context", () => ({
+vi.mock("../lib/shell-context", async (importOriginal) => ({
+	...await importOriginal<typeof import("../lib/shell-context")>(),
 	useShell: () => ({ daemonStatus: { state: "ready" } }),
 }));
 vi.mock("../hooks/useWorkspaceQuery", () => ({
