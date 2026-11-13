@@ -3715,6 +3715,7 @@
 	"remote.loadHostsFailed": "Gespeicherte Hosts konnten nicht geladen werden.",
 	"remote.hostOffline": "Der Host ist offline. Prüfen Sie Adresse und Passwort.",
 	"remote.offlineCopy": "Die zuletzt gespeicherte Kopie wird angezeigt, bis der Host verbunden ist.",
+	"remote.sendWhenConnected": "Der Host ist offline. Senden ist möglich, sobald er verbunden ist.",
 	"remote.hostIncompatible": "Die Orchestrator-Versionen sind nicht kompatibel. Aktualisieren Sie Orchestrator auf diesem Computer und dem Remote-Host.",
 	"remote.updateAO": "Orchestrator aktualisieren",
 	"remote.hostUnauthorized": "Der Host hat dieses Gerät abgelehnt. Koppeln Sie es mit einem neuen Kopplungscode vom Host erneut.",

@@ -3715,6 +3715,7 @@
 	"remote.loadHostsFailed": "저장된 호스트를 불러올 수 없습니다.",
 	"remote.hostOffline": "호스트가 오프라인입니다. 주소와 비밀번호를 확인하세요.",
 	"remote.offlineCopy": "호스트가 연결될 때까지 마지막으로 저장된 사본을 표시합니다.",
+	"remote.sendWhenConnected": "호스트가 오프라인입니다. 연결되면 보낼 수 있습니다.",
 	"remote.hostIncompatible": "Orchestrator 버전이 호환되지 않습니다. 이 컴퓨터와 원격 호스트의 Orchestrator를 업데이트하세요.",
 	"remote.updateAO": "Orchestrator 업데이트",
 	"remote.hostUnauthorized": "호스트가 이 기기를 거부했습니다. 호스트에서 새 페어링 코드를 받아 다시 페어링하세요.",

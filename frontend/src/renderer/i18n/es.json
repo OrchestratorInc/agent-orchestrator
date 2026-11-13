@@ -3784,6 +3784,7 @@
 	"remote.loadHostsFailed": "No se pudieron cargar los equipos guardados.",
 	"remote.hostOffline": "El equipo está desconectado. Comprueba su dirección y contraseña.",
 	"remote.offlineCopy": "Se muestra la última copia guardada hasta que el equipo se conecte.",
+	"remote.sendWhenConnected": "El equipo está desconectado. Podrás enviar cuando se conecte.",
 	"remote.hostIncompatible": "Las versiones de Orchestrator no son compatibles. Actualiza Orchestrator en este equipo y en el host remoto.",
 	"remote.updateAO": "Actualizar Orchestrator",
 	"remote.hostUnauthorized": "El host rechazó este dispositivo. Vuelve a emparejarlo con un nuevo código de emparejamiento del host.",

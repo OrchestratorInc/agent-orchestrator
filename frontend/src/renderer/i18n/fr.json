@@ -3784,6 +3784,7 @@
 	"remote.loadHostsFailed": "Impossible de charger les hôtes enregistrés.",
 	"remote.hostOffline": "L’hôte est hors ligne. Vérifiez son adresse et son mot de passe.",
 	"remote.offlineCopy": "Affichage de la dernière copie enregistrée jusqu’à la connexion de l’hôte.",
+	"remote.sendWhenConnected": "L’hôte est hors ligne. L’envoi sera possible dès sa connexion.",
 	"remote.hostIncompatible": "Les versions d’Orchestrator sont incompatibles. Mettez à jour Orchestrator sur cet ordinateur et sur l’hôte distant.",
 	"remote.updateAO": "Mettre Orchestrator à jour",
 	"remote.hostUnauthorized": "L’hôte a refusé cet appareil. Appairez-le de nouveau avec un nouveau code d’appairage de l’hôte.",
