@@ -5,6 +5,8 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDesktopLogWriter, initializeDesktopLog } from "./desktop-log";
 
+// Windows reports no separate owner, group and other permission bits.
+const posix = process.platform !== "win32";
 const dirs: string[] = [];
 const dataDir = () => { const dir = mkdtempSync(path.join(os.tmpdir(), "desktop-log-test-")); dirs.push(dir); return dir; };
 afterEach(() => { vi.restoreAllMocks(); for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
@@ -13,7 +15,7 @@ describe("desktop.log", () => {
 		const dir = dataDir(); const write = createDesktopLogWriter(dir);
 		write("warn", ["problem %s", "details", { reason: 1 }]);
 		expect(readFileSync(path.join(dir, "desktop.log"), "utf8")).toContain("[warn] problem details { reason: 1 }");
-		expect(statSync(path.join(dir, "desktop.log")).mode & 0o777).toBe(0o600);
+		if (posix) expect(statSync(path.join(dir, "desktop.log")).mode & 0o777).toBe(0o600);
 	});
 	it("caps entries at 5 MiB and keeps exactly one backup", () => {
 		const dir = dataDir(); const write = createDesktopLogWriter(dir);
@@ -24,14 +26,14 @@ describe("desktop.log", () => {
 		expect(readFileSync(path.join(dir, "desktop.log.1"), "utf8")).toContain("second");
 		for (const file of readdirSync(dir)) {
 			expect(statSync(path.join(dir, file)).size).toBeLessThanOrEqual(5 * 1024 * 1024);
-			expect(statSync(path.join(dir, file)).mode & 0o777).toBe(0o600);
+			if (posix) expect(statSync(path.join(dir, file)).mode & 0o777).toBe(0o600);
 		}
 	});
 	it("rotates an existing full log and tightens existing permissions", () => {
 		const dir = dataDir(); const file = path.join(dir, "desktop.log");
 		writeFileSync(file, Buffer.alloc(5 * 1024 * 1024)); chmodSync(file, 0o644);
 		createDesktopLogWriter(dir)("log", ["next"]);
-		expect(statSync(`${file}.1`).mode & 0o777).toBe(0o600);
+		if (posix) expect(statSync(`${file}.1`).mode & 0o777).toBe(0o600);
 		expect(readFileSync(file, "utf8")).toContain("next");
 	});
 	it("records console output and uncaught errors while retaining the original console", () => {
