@@ -111,15 +111,25 @@ func (c *conversation) observeBackgroundNotification(n notification) {
 			runID = params.Item.ID
 		}
 		for id, agent := range params.Item.AgentsStates {
+			var state string
 			switch agent.Status {
 			case "running", "pendingInit":
-				c.backgroundObserved.Update(ports.ChatBackgroundTask{ID: "agent:" + id, RunID: runID, Kind: "agent", Description: "Subagent " + id, State: "running"}, now)
+				state = "running"
 			case "completed":
-				c.backgroundObserved.Finish("agent:"+id, "completed", now)
+				state = "completed"
 			case "errored":
-				c.backgroundObserved.Finish("agent:"+id, "failed", now)
+				state = "failed"
 			case "shutdown", "interrupted":
-				c.backgroundObserved.Finish("agent:"+id, "stopped", now)
+				state = "stopped"
+			default:
+				continue
+			}
+			if state == "running" || runID != "" {
+				// Dispatch outcomes belong to their execution, not whichever
+				// execution of this child happens to be current when replayed.
+				c.backgroundObserved.Update(ports.ChatBackgroundTask{ID: "agent:" + id, RunID: runID, Kind: "agent", Description: "Subagent " + id, State: state}, now)
+			} else {
+				c.backgroundObserved.Finish("agent:"+id, state, now)
 			}
 		}
 	}

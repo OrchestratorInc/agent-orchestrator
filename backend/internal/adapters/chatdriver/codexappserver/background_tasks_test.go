@@ -100,6 +100,16 @@ func TestBackgroundTasksCodexSubagentCanRunAgainAfterCompletion(t *testing.T) {
 			observe("item/started", "wait-2", "wait", "running")
 			// The second run must survive expiry of the first run's recent outcome.
 			assertTask("next-run", "running", time.Now().Add(time.Minute))
+			// A terminal dispatch replay from the previous run cannot settle
+			// this run or poison its subsequent running updates.
+			for _, state := range []string{"completed", "errored", "shutdown", "interrupted"} {
+				observe("item/completed", "spawn", "spawnAgent", state)
+				assertTask("next-run", "running", time.Now())
+				observe("item/completed", "next-run", tool, "running")
+				assertTask("next-run", "running", time.Now())
+			}
+			observe("item/completed", "next-run", tool, "completed")
+			assertTask("next-run", "completed", time.Now())
 			observe("item/completed", "wait-2", "wait", "completed")
 			observe("item/completed", "next-run", tool, "running")
 			assertTask("next-run", "completed", time.Now())

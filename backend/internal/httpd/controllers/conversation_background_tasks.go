@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/url"
 
 	"github.com/go-chi/chi/v5"
 
@@ -58,7 +59,19 @@ func (c *ConversationsController) stopBackgroundTask(w http.ResponseWriter, r *h
 		apispec.NotImplemented(w, r, http.MethodPost, "/api/v1/sessions/{sessionId}/background-tasks/{taskId}/stop")
 		return
 	}
-	err := svc.StopBackgroundTask(r.Context(), sessionID(r), chi.URLParam(r, "taskId"))
+	taskID := chi.URLParam(r, "taskId")
+	// Chi routes on RawPath when present. Otherwise Path is already decoded
+	// by net/http; unescaping it again would corrupt literal percent escapes.
+	if r.URL.RawPath != "" {
+		var err error
+		taskID, err = url.PathUnescape(taskID)
+		if err != nil {
+			envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation",
+				"BACKGROUND_TASK_ID_INVALID", "background task identifier is invalid", nil)
+			return
+		}
+	}
+	err := svc.StopBackgroundTask(r.Context(), sessionID(r), taskID)
 	if errors.Is(err, ports.ErrBackgroundTaskNotStoppable) {
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "BACKGROUND_TASK_NOT_STOPPABLE", "this background task cannot be stopped", nil)
 		return

@@ -83,3 +83,36 @@ func TestStopBackgroundTaskRouteMapsOutcomes(t *testing.T) {
 		t.Fatalf("missing session=%d %s", r.Code, r.Body)
 	}
 }
+
+func TestStopBackgroundTaskRouteDecodesTaskID(t *testing.T) {
+	for _, tc := range []struct{ path, want string }{
+		{"bash-1", "bash-1"},
+		{"bash%2D1", "bash-1"},
+		{"native%2Ftask", "native/task"},
+		{"bash%252D1", "bash%2D1"},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			svc := &backgroundTasksService{}
+			router := chi.NewRouter()
+			(&controllers.ConversationsController{Svc: svc}).Register(router)
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/sessions/s/background-tasks/"+tc.path+"/stop", nil))
+			if response.Code != http.StatusNoContent || len(svc.stopped) != 1 || svc.stopped[0] != tc.want {
+				t.Fatalf("status=%d stopped=%q, want %q", response.Code, svc.stopped, tc.want)
+			}
+		})
+	}
+}
+
+func TestStopBackgroundTaskRouteRejectsMalformedEscape(t *testing.T) {
+	svc := &backgroundTasksService{}
+	router := chi.NewRouter()
+	(&controllers.ConversationsController{Svc: svc}).Register(router)
+	request := httptest.NewRequest(http.MethodPost, "/sessions/s/background-tasks/task/stop", nil)
+	request.URL.RawPath = "/sessions/s/background-tasks/bad%ZZ/stop"
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest || len(svc.stopped) != 0 {
+		t.Fatalf("status=%d stopped=%q body=%s", response.Code, svc.stopped, response.Body)
+	}
+}

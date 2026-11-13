@@ -19,7 +19,7 @@ const queued = [
 	"and update the changelog",
 ];
 
-async function openWorker(page: Page, tasks: () => Task[], stops: string[] = []) {
+async function openWorker(page: Page, fixture: { tasks: Task[] }, stops: string[] = []) {
 	await page.emulateMedia({ reducedMotion: "reduce" });
 	await installFakeAgent(page, {
 		projectId,
@@ -28,13 +28,17 @@ async function openWorker(page: Page, tasks: () => Task[], stops: string[] = [])
 	});
 	await page.route("http://127.0.0.1:8080/api/v1/**", async (route) => {
 		const path = new URL(route.request().url()).pathname;
-		const reading = { sessionId, availability: "ready", controllerGeneration: "g1", observedAt: new Date().toISOString(), tasks: tasks() };
+		const reading = { sessionId, availability: "ready", controllerGeneration: "g1", observedAt: new Date().toISOString(), tasks: fixture.tasks };
 		if (path === "/api/v1/sessions/background-tasks") {
 			await route.fulfill({ json: { sessions: [reading] } });
 		} else if (path === `/api/v1/sessions/${sessionId}/background-tasks`) {
 			await route.fulfill({ json: reading });
 		} else if (path.startsWith(`/api/v1/sessions/${sessionId}/background-tasks/`) && path.endsWith("/stop")) {
-			stops.push(decodeURIComponent(path.split("/").at(-2) ?? ""));
+			const taskId = decodeURIComponent(path.split("/").at(-2) ?? "");
+			fixture.tasks = fixture.tasks.map((task) => task.id === taskId
+				? { ...task, state: "stopped", endedAt: new Date().toISOString(), stoppable: false }
+				: task);
+			stops.push(taskId);
 			await route.fulfill({ status: 204 });
 		} else if (path === `/api/v1/sessions/${sessionId}/conversation`) {
 			await route.fulfill({
@@ -101,16 +105,17 @@ async function setQueue(page: Page, open: boolean) {
 }
 
 test("the board shows background work as plain text @T0", async ({ page }) => {
-	await openWorker(page, () => [{ id: "shell-1", kind: "shell", description: "Start the settings dev server", state: "running", startedAt: ago(3) }]);
+	await openWorker(page, { tasks: [{ id: "shell-1", kind: "shell", description: "Start the settings dev server", state: "running", startedAt: ago(3) }] });
 	await page.goto(`/#/projects/${projectId}`);
+	await expect(page.getByTestId("board")).toBeVisible({ timeout: 15_000 });
 	await expect(page.getByText("1 shell still running")).toBeVisible();
 	await expect(page.getByRole("button", { name: /shell still running/ })).toHaveCount(0);
 });
 
 test("one task rides the composer with a stop, beside a queue it never covers @T0", async ({ page }, testInfo) => {
-	let tasks: Task[] = [{ id: "shell-1", kind: "shell", description: "Start the settings dev server", state: "running", startedAt: ago(12), stoppable: true }];
+	const fixture: { tasks: Task[] } = { tasks: [{ id: "shell-1", kind: "shell", description: "Start the settings dev server", state: "running", startedAt: ago(12), stoppable: true }] };
 	const stops: string[] = [];
-	await openWorker(page, () => tasks, stops);
+	await openWorker(page, fixture, stops);
 	await page.goto(`/#/projects/${projectId}/sessions/${sessionId}`);
 	const tab = page.getByRole("region", { name: "Background tasks" });
 	await expect(tab).toContainText("Start the settings dev server");
@@ -131,7 +136,6 @@ test("one task rides the composer with a stop, beside a queue it never covers @T
 
 	await tab.getByRole("button", { name: "Stop Start the settings dev server" }).click();
 	await expect.poll(() => stops).toEqual(["shell-1"]);
-	tasks = [{ ...tasks[0], state: "stopped", endedAt: new Date().toISOString(), stoppable: false }];
 	// The stop rereads at once; a stopped task needs no attention and leaves.
 	await expect(tab).toHaveCount(0);
 });
@@ -143,7 +147,7 @@ test("several tasks fold to a count and open in place without moving into the qu
 		{ id: "lint", kind: "shell", description: "Run the Go linter", state: "failed", startedAt: ago(5), endedAt: ago(3) },
 		{ id: "audit", kind: "agent", description: "Audit the catalogs", state: "running", startedAt: ago(1) },
 	];
-	await openWorker(page, () => tasks);
+	await openWorker(page, { tasks });
 	await page.goto(`/#/projects/${projectId}/sessions/${sessionId}`);
 	const tab = page.getByRole("region", { name: "Background tasks" });
 	const toggle = tab.getByRole("button", { name: /2 running/ });
