@@ -7864,6 +7864,8 @@ export interface components {
             previousPaths?: string[];
             rawUrl?: string;
             registered?: boolean;
+            /** @enum {string} */
+            shareAccess?: "restricted" | "anyone";
             shareUrl?: string;
             /** Format: int64 */
             size: number;

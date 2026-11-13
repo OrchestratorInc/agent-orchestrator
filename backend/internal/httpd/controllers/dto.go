@@ -634,6 +634,9 @@ type SessionArtifactView struct {
 	// unlike PreviewURL the page cannot call the daemon. HTML only.
 	InlineURL string `json:"inlineUrl,omitempty"`
 	ShareURL  string `json:"shareUrl,omitempty"`
+	// ShareAccess is who ShareURL opens for, as last recorded: restricted or
+	// anyone. Empty when not recorded; the link list then says.
+	ShareAccess string `json:"shareAccess,omitempty" enum:"restricted,anyone"`
 }
 
 // RegisterArtifactsRequest is the body of POST

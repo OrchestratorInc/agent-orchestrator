@@ -2058,6 +2058,12 @@ const artifact = (
   ...overrides,
 });
 
+const shareAccessMock = vi.hoisted(() => ({ current: new Map<string, "restricted" | "anyone">() }));
+vi.mock("./ShareArtifactPopover", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./ShareArtifactPopover")>()),
+  useReconciledShareLinks: () => shareAccessMock.current,
+}));
+
 describe("SessionInspector Artifacts section", () => {
   beforeEach(() => {
     vi.stubGlobal("IntersectionObserver", class {
@@ -2093,6 +2099,23 @@ describe("SessionInspector Artifacts section", () => {
 
     fireEvent.click(screen.getByTitle("file-0.md"));
     expect(onOpenArtifact).toHaveBeenCalledWith({ path: "file-0.md" });
+  });
+
+  it("marks published previews and rows by who their link opens for, as on the Artifacts page", () => {
+    shareAccessMock.current = new Map([["https://viewer.test/artifact/a", "restricted"], ["https://viewer.test/artifact/d", "anyone"]]);
+    const files = ["a", "b", "c", "d"].map((name, index) =>
+      artifact({ path: `${name}.md`, name: `${name}.md`, kind: "markdown", updatedAt: `2026-06-${20 - index}T00:00:00Z`, ...(name === "a" || name === "d" ? { shareUrl: `https://viewer.test/artifact/${name}` } : {}) }),
+    );
+    renderWithQuery(<SessionInspector session={session([], { outputType: "artifact", artifactFiles: files })} />);
+    // a.md is a preview tile, d.md a row under them.
+    const privateMark = within(screen.getByTitle("a.md")).getByRole("img", { name: "Shared privately" });
+    expect(privateMark).toHaveClass("text-status-in-review");
+    expect(privateMark.querySelector("svg")).toHaveClass("icon-link");
+    const publicMark = within(screen.getByTitle("d.md")).getByRole("img", { name: "Published" });
+    expect(publicMark).toHaveClass("text-success");
+    expect(publicMark.querySelector("svg")).toHaveClass("icon-globe");
+    expect(within(screen.getByTitle("b.md")).queryByRole("img")).toBeNull();
+    shareAccessMock.current = new Map();
   });
 
   it("shows an artifact list, not the empty PR state, when the session output is artifacts", () => {

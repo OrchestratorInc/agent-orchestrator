@@ -2,6 +2,8 @@ import { apiErrorException } from "../lib/api-error-exception";
 import { BrowserIcon } from "./icons";
 import { GitHubIcon } from "./GitHubIcon";
 import { artifactFileIcon } from "./artifact-file-icon";
+import { ArtifactShareMark } from "./ArtifactShareMark";
+import { useReconciledShareLinks, type ShareAccessByUrl } from "./ShareArtifactPopover";
 import { Chat, CheckWaves, Folder, List, Package } from "@/components/app-icons";
 import { AppLink } from "./AppLink";
 import { ArtifactThumbnail } from "./ArtifactThumbnail";
@@ -1389,6 +1391,8 @@ function ArtifactSummaryList({
 	session: WorkspaceSession;
 }) {
 	const { t } = useTranslation();
+	// Who each published file's link opens for, marked as on the Artifacts page.
+	const shareAccess = useReconciledShareLinks();
 	const container = useRef<HTMLDivElement>(null);
 	const [columns, setColumns] = useState(3);
 	const [expanded, setExpanded] = useState(false);
@@ -1414,14 +1418,14 @@ function ArtifactSummaryList({
 		<div className="flex min-w-0 flex-col" ref={container}>
 			<div className="grid" style={{ gap: ARTIFACT_PREVIEW_GAP, gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}>
 				{previews.map((artifact) => (
-					<ArtifactPreviewTile artifact={artifact} key={artifact.path} onOpenArtifact={onOpenArtifact} previewLive={previewLive} session={session} />
+					<ArtifactPreviewTile artifact={artifact} key={artifact.path} onOpenArtifact={onOpenArtifact} previewLive={previewLive} session={session} shareAccess={shareAccess} />
 				))}
 			</div>
 			{rest.length > 0 ? (
 				<ul className="mt-2 flex min-w-0 flex-col border-t border-border pt-1">
 					{rows.map((artifact) => (
 						<li key={artifact.path}>
-							<ArtifactSummaryRow artifact={artifact} onOpenArtifact={onOpenArtifact} />
+							<ArtifactSummaryRow artifact={artifact} onOpenArtifact={onOpenArtifact} shareAccess={shareAccess} />
 						</li>
 					))}
 					{rest.length > ARTIFACT_ROWS_COLLAPSED ? (
@@ -1441,19 +1445,21 @@ function ArtifactSummaryList({
 	);
 }
 
-/** One Summary preview: a small thumbnail with the file's name and last update. */
+/** One Summary preview: a small thumbnail with the file's name, how it is shared and last update. */
 function ArtifactPreviewTile({
 	artifact,
 	onOpenArtifact,
 	previewLive,
 	session,
+	shareAccess,
 }: {
 	artifact: SessionArtifact;
 	onOpenArtifact?: (target: { feedback?: boolean; path: string }) => void;
 	previewLive: boolean;
 	session: WorkspaceSession;
+	shareAccess: ShareAccessByUrl;
 }) {
-	const row: ArtifactRow = { ...artifact, sessionId: session.id, sessionTitle: session.title ?? "", cloud: session.cloud };
+	const row: ArtifactRow = { ...artifact, sessionId: session.id, sessionTitle: session.title ?? "", cloud: session.cloud, shareAccess: artifact.shareUrl ? shareAccess.get(artifact.shareUrl) ?? artifact.shareAccess : undefined };
 	return (
 		<Pressable
 			className="group flex min-w-0 flex-col gap-1.5 rounded-md focus-visible:ring-1 focus-visible:ring-ring"
@@ -1465,27 +1471,34 @@ function ArtifactPreviewTile({
 			</span>
 			<span className="flex min-w-0 flex-col">
 				<span className="truncate text-caption font-medium leading-4 text-foreground">{artifact.name}</span>
-				{artifact.updatedAt ? (
-					<time
-						className="truncate text-caption leading-4 tabular-nums text-passive"
-						dateTime={artifact.updatedAt}
-						title={new Date(artifact.updatedAt).toLocaleString()}
-					>
-						{formatTimeCompact(artifact.updatedAt)}
-					</time>
+				{artifact.updatedAt || artifact.shareUrl ? (
+					<span className="flex min-w-0 items-center gap-1">
+						<ArtifactShareMark row={row} iconClassName="size-3" />
+						{artifact.updatedAt ? (
+							<time
+								className="truncate text-caption leading-4 tabular-nums text-passive"
+								dateTime={artifact.updatedAt}
+								title={new Date(artifact.updatedAt).toLocaleString()}
+							>
+								{formatTimeCompact(artifact.updatedAt)}
+							</time>
+						) : null}
+					</span>
 				) : null}
 			</span>
 		</Pressable>
 	);
 }
 
-/** One Summary row: icon, name and last update. */
+/** One Summary row: icon, name, how it is shared and last update. */
 function ArtifactSummaryRow({
 	artifact,
 	onOpenArtifact,
+	shareAccess,
 }: {
 	artifact: SessionArtifact;
 	onOpenArtifact?: (target: { feedback?: boolean; path: string }) => void;
+	shareAccess: ShareAccessByUrl;
 }) {
 	const KindIcon = artifactFileIcon(artifact);
 	return (
@@ -1496,6 +1509,7 @@ function ArtifactSummaryRow({
 		>
 			<KindIcon aria-hidden="true" className="size-icon-sm shrink-0 text-settings-muted" />
 			<span className="min-w-0 flex-1 truncate">{artifact.name}</span>
+			<ArtifactShareMark row={{ shareUrl: artifact.shareUrl, shareAccess: artifact.shareUrl ? shareAccess.get(artifact.shareUrl) ?? artifact.shareAccess : undefined }} iconClassName="size-icon-sm" />
 			{artifact.updatedAt ? (
 				<time
 					className="shrink-0 text-caption tabular-nums text-settings-muted"

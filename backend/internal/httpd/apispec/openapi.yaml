@@ -22423,6 +22423,11 @@ components:
           type: string
         registered:
           type: boolean
+        shareAccess:
+          enum:
+          - restricted
+          - anyone
+          type: string
         shareUrl:
           type: string
         size:
