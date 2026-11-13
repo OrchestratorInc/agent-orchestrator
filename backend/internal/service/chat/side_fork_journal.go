@@ -263,12 +263,6 @@ func (m *sideManager) recoverForkRecordsLocked(ctx context.Context, runID string
 	return nil
 }
 
-func (m *sideManager) removeForkRecord(ctx context.Context, side domain.SideConversation, id string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.removeForkRecordLocked(ctx, side, id)
-}
-
 func (m *sideManager) completeForkCleanup(ctx context.Context, side domain.SideConversation, id string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
