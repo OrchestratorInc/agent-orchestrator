@@ -253,7 +253,7 @@ import { planDaemonAutoRestart, daemonExitWasUngraceful } from "./main/daemon-au
 import { readProcessStartMs } from "./main/process-start";
 import { claimFirstRunExperimentExposure, markFirstRunProjectPromptSeen, readFirstRunProjectPrompt, readMigrationState, updateMigration, writeAppStateMarker, type MigrationState } from "./main/app-state";
 import { isAllowedAppExternalURL, openAllowedAppExternalURL } from "./main/external-open";
-import { coercePrivacyGuideRequest, CUA_DRIVER_APP_PATH, PRIVACY_GUIDE_HEIGHT, PrivacyGuide, type PrivacyGuideApp, type PrivacyPane } from "./main/privacy-guide";
+import { coercePrivacyGuideRequest, CUA_DRIVER_APP_PATH, isPrivacyGuideTarget, PRIVACY_GUIDE_HEIGHT, PrivacyGuide, type PrivacyGuideApp, type PrivacyPane } from "./main/privacy-guide";
 import { appBundlePath, readAppPrivacy, requestAppPrivacy, type AppPrivacyGrants } from "./main/app-privacy";
 import { watchSettingsWindow } from "./main/settings-window-watch";
 import {
@@ -3358,9 +3358,10 @@ ipcMain.handle("app:showPrivacyGuide", async (event, input: unknown) => {
 	if (!request) throw new Error("Invalid privacy guide request.");
 	await privacyGuide.show(request);
 });
-ipcMain.handle("app:updatePrivacyGuide", async (event, granted: Partial<Record<PrivacyPane, unknown>>) => {
+ipcMain.handle("app:updatePrivacyGuide", async (event, target: unknown, granted: Partial<Record<PrivacyPane, unknown>>) => {
 	if (event.sender !== getShellWebContents()) throw new Error("Untrusted privacy guide request.");
-	return privacyGuide.update({ accessibility: granted?.accessibility === true, screenRecording: granted?.screenRecording === true });
+	if (!isPrivacyGuideTarget(target)) throw new Error("Invalid privacy guide request.");
+	return privacyGuide.update(target, { accessibility: granted?.accessibility === true, screenRecording: granted?.screenRecording === true });
 });
 ipcMain.handle("app:closePrivacyGuide", (event) => {
 	if (event.sender !== getShellWebContents()) throw new Error("Untrusted privacy guide request.");

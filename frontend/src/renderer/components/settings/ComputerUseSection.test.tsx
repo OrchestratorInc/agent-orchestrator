@@ -123,7 +123,7 @@ describe("Orchestrator's own permissions", () => {
 		}));
 
 		grants = { accessibility: true, screenRecording: true };
-		await waitFor(() => expect(bridgeMocks.updatePrivacyGuide).toHaveBeenLastCalledWith({ accessibility: true, screenRecording: true }), { timeout: 4_000 });
+		await waitFor(() => expect(bridgeMocks.updatePrivacyGuide).toHaveBeenLastCalledWith("orchestrator", { accessibility: true, screenRecording: true }), { timeout: 4_000 });
 	});
 
 	it("says when they cannot be checked", async () => {
@@ -244,7 +244,7 @@ describe("ComputerUseSection", () => {
 		// While macOS waits on the user, the gear spins and cannot be pressed again.
 		await waitFor(() => expect(screen.getByRole("button", { name: "Open in System Settings" })).toHaveAttribute("aria-busy", "true"));
 		expect(screen.getByRole("button", { name: "Open in System Settings" })).toBeDisabled();
-		await waitFor(() => expect(bridgeMocks.updatePrivacyGuide).toHaveBeenCalledWith({ accessibility: true, screenRecording: false }));
+		await waitFor(() => expect(bridgeMocks.updatePrivacyGuide).toHaveBeenCalledWith("cuaDriver", { accessibility: true, screenRecording: false }));
 	});
 
 	it("opens the guide from the gear when everything is granted", async () => {
@@ -260,7 +260,7 @@ describe("ComputerUseSection", () => {
 			text: expect.objectContaining({ allowed: "CuaDriver is allowed here", allowedHint: "Turn off its switch to revoke access." }),
 		}));
 		// Still followed: a revoke made from the strip reaches it.
-		await waitFor(() => expect(bridgeMocks.updatePrivacyGuide).toHaveBeenCalledWith({ accessibility: true, screenRecording: true }));
+		await waitFor(() => expect(bridgeMocks.updatePrivacyGuide).toHaveBeenCalledWith("cuaDriver", { accessibility: true, screenRecording: true }));
 	});
 
 	it("sends AO's resolved theme, not the OS appearance", async () => {

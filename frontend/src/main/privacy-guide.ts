@@ -96,7 +96,7 @@ export function isPrivacyPane(value: unknown): value is PrivacyPane {
 	return value === "accessibility" || value === "screenRecording";
 }
 
-function isPrivacyGuideTarget(value: unknown): value is PrivacyGuideTarget {
+export function isPrivacyGuideTarget(value: unknown): value is PrivacyGuideTarget {
 	return value === "cuaDriver" || value === "orchestrator";
 }
 
@@ -354,14 +354,17 @@ export class PrivacyGuide {
 	}
 
 	/**
-	 * Updates what is granted; closes once the last missing permission is
-	 * granted. A guide opened to review grants that were all already on stays,
+	 * Updates what is granted for the app shown; grants for another app are
+	 * ignored. Closes once the last missing permission is granted. A guide opened to review grants that were all already on stays,
 	 * and follows a revoke made from it. Resolves to whether the strip is still
 	 * open, so the renderer stops following grants once it is gone.
 	 */
-	async update(granted: Record<PrivacyPane, boolean>): Promise<boolean> {
+	async update(target: PrivacyGuideTarget, granted: Record<PrivacyPane, boolean>): Promise<boolean> {
 		const request = this.request;
 		if (!request) return false;
+		// Grants for another app, polled while the strip was switching apps:
+		// they say nothing about the app shown, and the strip stays open.
+		if (target !== request.target) return this.isOpen();
 		if (PRIVACY_PANES.every((pane) => granted[pane])) {
 			if (!PRIVACY_PANES.every((pane) => request.granted[pane])) {
 				this.close();

@@ -205,7 +205,7 @@ export function ComputerUseSection({ titleHidden }: { titleHidden?: boolean }) {
 			granted = { accessibility: appAccessibility, screenRecording: appScreenRecording };
 		} else return;
 		let current = true;
-		void aoBridge.app.updatePrivacyGuide(granted).then((open) => {
+		void aoBridge.app.updatePrivacyGuide(guiding, granted).then((open) => {
 			if (current && !open) {
 				guideOpened.current = false;
 				setGuiding(null);
