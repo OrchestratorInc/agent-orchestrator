@@ -56,12 +56,13 @@ describe("ui-settings", () => {
 	});
 
 	it("merges the terminal shell without resetting other UI settings", async () => {
-		await writeUiSettings(dir, { locale: "ja", soundNotificationsEnabled: false });
+		await writeUiSettings(dir, { locale: "ja", soundNotificationsEnabled: false, webLinkTarget: "system" });
 		await writeUiSettings(dir, { terminalShell: { kind: "git-bash" } });
 		expect(await readUiSettings(dir)).toEqual({
 			locale: "ja",
 			soundNotificationsEnabled: false,
 			terminalShell: { kind: "git-bash" },
+			webLinkTarget: "system",
 		});
 	});
 

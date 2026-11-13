@@ -4,9 +4,13 @@ import userEvent from "@testing-library/user-event";
 import { AppBrowserLinkContext, AppLink } from "./AppLink";
 import { ProductExternalLink } from "./ProductExternalLink";
 import { aoBridge } from "../lib/bridge";
+import { useWebLinkTargetStore } from "../stores/web-link-target-store";
 
 const url = "https://github.com/aoagents/agent-orchestrator/pull/42";
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+	vi.restoreAllMocks();
+	useWebLinkTargetStore.setState({ target: "aoBrowser" });
+});
 
 describe("AppLink", () => {
 	it("opens PR links in ao even when the product link stops propagation", () => {
@@ -18,6 +22,23 @@ describe("AppLink", () => {
 		fireEvent.click(screen.getByRole("link"));
 		expect(open).toHaveBeenCalledExactlyOnceWith(url);
 		expect(external).not.toHaveBeenCalled();
+	});
+
+	it("opens a plain click externally and a modifier click in ao when the setting picks the system browser", () => {
+		useWebLinkTargetStore.setState({ target: "system" });
+		const open = vi.fn();
+		const external = vi.spyOn(aoBridge.app, "openExternal").mockResolvedValue(undefined);
+		render(<AppBrowserLinkContext.Provider value={open}><AppLink href={url}>PR</AppLink></AppBrowserLinkContext.Provider>);
+		const link = screen.getByRole("link");
+
+		fireEvent.click(link);
+		expect(external).toHaveBeenCalledExactlyOnceWith(url);
+		expect(open).not.toHaveBeenCalled();
+
+		fireEvent.click(link, { metaKey: true });
+		fireEvent.click(link, { altKey: true });
+		expect(open).toHaveBeenCalledTimes(2);
+		expect(external).toHaveBeenCalledTimes(1);
 	});
 
 	it("offers ao, external, and copy actions without opening on right-click", async () => {

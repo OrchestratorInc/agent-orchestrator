@@ -6,6 +6,8 @@ import type { TerminalMux } from "../lib/terminal-mux";
 import { markTerminalHandleFresh } from "../lib/fresh-terminal-handles";
 import { useTerminalSession, type AttachableTerminal } from "../hooks/useTerminalSession";
 import { useUiStore } from "../stores/ui-store";
+import { useWebLinkTargetStore } from "../stores/web-link-target-store";
+import { aoBridge } from "../lib/bridge";
 import { safeTerminalFind } from "./TerminalSearch";
 import { XtermTerminal } from "./XtermTerminal";
 
@@ -2868,6 +2870,26 @@ describe("XtermTerminal", () => {
 		expect(onLinkOpen).toHaveBeenCalledWith("https://example.com");
 		expect(open).not.toHaveBeenCalled();
 		open.mockRestore();
+	});
+
+	it("opens web links in the system browser when the setting picks it, and in ao on Cmd/Alt-click", () => {
+		useWebLinkTargetStore.setState({ target: "system" });
+		const external = vi.spyOn(aoBridge.app, "openExternal").mockResolvedValue(undefined);
+		const onLinkOpen = vi.fn();
+		try {
+			render(<XtermTerminal onLinkOpen={onLinkOpen} theme="dark" />);
+
+			state.linkHandler!({} as MouseEvent, "https://example.com");
+			expect(external).toHaveBeenCalledExactlyOnceWith("https://example.com");
+			expect(onLinkOpen).not.toHaveBeenCalled();
+
+			state.linkHandler!({ altKey: true } as MouseEvent, "https://example.com");
+			expect(onLinkOpen).toHaveBeenCalledExactlyOnceWith("https://example.com");
+			expect(external).toHaveBeenCalledTimes(1);
+		} finally {
+			external.mockRestore();
+			useWebLinkTargetStore.setState({ target: "aoBrowser" });
+		}
 	});
 
 	it("routes OSC 8 web links to the AO browser without a system-browser window", () => {

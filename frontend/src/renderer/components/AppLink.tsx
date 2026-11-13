@@ -3,7 +3,7 @@ import { createContext, useContext, useEffect, useImperativeHandle, useRef, useS
 import { Copy, ExternalLink, FileText, } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
 import { aoBridge } from "../lib/bridge";
-import { isSystemBrowserLink, isWebLink, openLinkInSystemBrowser } from "../lib/external-link-policy";
+import { clickOpensSystemBrowser, isSystemBrowserLink, isWebLink, openLinkInSystemBrowser } from "../lib/external-link-policy";
 import { useLinkPreview } from "../hooks/useLinkPreview";
 import { observeLinkForPreload } from "../lib/link-preload";
 import { LinkPreviewHoverCard } from "./LinkPreviewCard";
@@ -67,7 +67,7 @@ export function AppLink({ href, onClick, onAuxClick, onBrowserOpen, inAppLink, s
 				}
 				if (!browserLink) return;
 				event.preventDefault();
-				if (openBrowser && (!webLink || (!event.ctrlKey && !event.metaKey && !event.altKey))) openBrowser(href);
+				if (openBrowser && (!webLink || !clickOpensSystemBrowser(event.ctrlKey || event.metaKey || event.altKey))) openBrowser(href);
 				else void openLinkInSystemBrowser(href);
 			}}
 			onAuxClick={(event) => {

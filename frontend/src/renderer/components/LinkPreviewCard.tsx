@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import { measureFaviconTone, type FaviconTone } from "../lib/favicon-tone";
 import { cn } from "../lib/utils";
 import { useResolvedTheme } from "../stores/ui-store";
-import { openLinkInSystemBrowser } from "../lib/external-link-policy";
+import { clickOpensSystemBrowser, openLinkInSystemBrowser } from "../lib/external-link-policy";
 import type { LinkPreview } from "../hooks/useLinkPreview";
 import { HoverCardContent } from "./ui/hover-card";
 import { Skeleton } from "./ui/skeleton";
@@ -160,7 +160,7 @@ function openLinkProps(url: string, onBrowserOpen?: (url: string) => void): Open
 		href: url,
 		onClick: (event) => {
 			event.preventDefault();
-			if (onBrowserOpen && !event.ctrlKey && !event.metaKey && !event.altKey) onBrowserOpen(url);
+			if (onBrowserOpen && !clickOpensSystemBrowser(event.ctrlKey || event.metaKey || event.altKey)) onBrowserOpen(url);
 			else void openLinkInSystemBrowser(url);
 		},
 	};

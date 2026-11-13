@@ -1,5 +1,6 @@
 import { aoBridge } from "./bridge";
 import { decodePath } from "./workspace-file-path";
+import { useWebLinkTargetStore } from "../stores/web-link-target-store";
 
 export function isWebLink(url: string): boolean {
 	try {
@@ -76,6 +77,16 @@ export function isPotentialWorkspaceFileLink(url: string): boolean {
 	if (/^[a-z][a-z\d+.-]*:/i.test(path) && !/^[a-z]:\//i.test(path)) return false;
 
 	return path.includes("/") || /^\.[^/]+$/.test(path) || /\.[a-z\d][a-z\d._-]*$/i.test(path);
+}
+
+/**
+ * Whether a user's click on a web link opens the system browser rather than
+ * the AO Browser. The modifier click always opens the target the setting did
+ * not choose.
+ */
+export function clickOpensSystemBrowser(modifierClick: boolean): boolean {
+	const systemByDefault = useWebLinkTargetStore.getState().target === "system";
+	return modifierClick ? !systemByDefault : systemByDefault;
 }
 
 export async function openLinkInSystemBrowser(url: string): Promise<void> {

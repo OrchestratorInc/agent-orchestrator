@@ -3,7 +3,9 @@ import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { BrowserProfileUsage } from "../../../shared/browser-profiles";
 import type { AoBridge } from "../../../preload";
+import type { WebLinkTarget } from "../../../shared/ui-locale";
 import { aoBridge } from "../../lib/bridge";
+import { useWebLinkTargetStore } from "../../stores/web-link-target-store";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { Button } from "../ui/button";
 import {
@@ -13,6 +15,7 @@ import {
 	DropdownMenuSeparator,
 	DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
+import { SettingsOptionMenu, type SettingsOption } from "./SettingsOptionMenu";
 import { SettingsRow } from "./SettingsRow";
 import { SettingsSection } from "./SettingsSection";
 import { BrowserImportDialog } from "./BrowserImportDialog";
@@ -44,6 +47,14 @@ export function BrowserProfilesSection({ titleHidden }: { titleHidden?: boolean 
 	const [usageError, setUsageError] = useState("");
 	const [usageRevision, setUsageRevision] = useState(0);
 	const [importOpen, setImportOpen] = useState(false);
+	const webLinkTarget = useWebLinkTargetStore((state) => state.target);
+	const setWebLinkTarget = useWebLinkTargetStore((state) => state.setTarget);
+	const webLinkTargetSaving = useWebLinkTargetStore((state) => state.saving);
+	const webLinkTargetSaveError = useWebLinkTargetStore((state) => state.saveError);
+	const webLinkTargetOptions = [
+		{ value: "aoBrowser", label: t("settings.webLinkTarget.aoBrowser") },
+		{ value: "system", label: t("settings.webLinkTarget.system") },
+	] satisfies SettingsOption<WebLinkTarget>[];
 
 	const refresh = async () => {
 		if (!bridge) return;
@@ -175,6 +186,20 @@ export function BrowserProfilesSection({ titleHidden }: { titleHidden?: boolean 
 				titleHidden={titleHidden}
 				grouped
 			>
+				<SettingsRow
+					label={t("settings.webLinkTarget")}
+					description={webLinkTargetSaveError
+						? <span role="alert" className="text-error">{t("settings.webLinkTarget.saveFailed")}</span>
+						: t("settings.webLinkTarget.description")}
+				>
+					<SettingsOptionMenu
+						aria-label={t("settings.webLinkTarget")}
+						value={webLinkTarget}
+						options={webLinkTargetOptions}
+						disabled={webLinkTargetSaving}
+						onChange={(next) => void setWebLinkTarget(next)}
+					/>
+				</SettingsRow>
 				<SettingsRow label={t("settings.browserImport.rowLabel")}>
 					<Button
 						disabled={!bridge}

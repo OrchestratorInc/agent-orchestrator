@@ -35,7 +35,7 @@ import type {
 import { aoBridge } from "../lib/bridge";
 import { isDialogOrMenuOpenOutside } from "../lib/dom-selectors";
 import { TERMINAL_FONT_SIZE_DEFAULT } from "../lib/design-tokens";
-import { isWebLink, openLinkInSystemBrowser } from "../lib/external-link-policy";
+import { clickOpensSystemBrowser, isWebLink, openLinkInSystemBrowser } from "../lib/external-link-policy";
 import { findSessionLinks } from "../lib/session-links";
 import { droppedPathsText } from "../lib/terminal-drop";
 import {
@@ -830,13 +830,12 @@ export function XtermTerminal(props: XtermTerminalProps) {
 				callbacksRef.current.onSessionLinkOpen?.(uri);
 				return;
 			}
-			// Left-click on a web link opens it inside the AO Browser panel (the
-			// parent decides how). Non-web schemes (mailto:, etc.) still go to the OS
-			// via the main process's window-open handler. Right-click to open a web
-			// link in the system browser instead — see the context menu below. Cmd-click
-			// follows the same escape hatch as links in the Chat surface.
+			// A web link opens where the user's link setting says (the parent decides
+			// how for the AO Browser), and Cmd/Alt-click opens the other target, like
+			// links in Chat. Non-web schemes (mailto:, etc.) still go to the OS via the
+			// main process's window-open handler.
 			if (isWebLink(uri)) {
-				if (event.altKey || event.metaKey) {
+				if (clickOpensSystemBrowser(event.altKey || event.metaKey)) {
 					void openLinkInSystemBrowser(uri);
 					return;
 				}

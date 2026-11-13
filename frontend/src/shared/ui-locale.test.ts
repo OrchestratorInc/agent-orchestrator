@@ -38,6 +38,7 @@ describe("shared UI locale schema", () => {
 			locale: "en",
 			soundNotificationsEnabled: true,
 			terminalShell: { kind: "auto" },
+			webLinkTarget: "aoBrowser",
 		});
 		expect(coerceUiSettings({ locale: "en", soundNotificationsEnabled: false })).toEqual({
 			...DEFAULT_UI_SETTINGS,
@@ -57,6 +58,12 @@ describe("shared UI locale schema", () => {
 		expect(coerceUiSettings({ locale: "en", soundNotificationsEnabled: null })).toEqual({
 			...DEFAULT_UI_SETTINGS,
 		});
+	});
+
+	it("keeps a persisted web link target and coerces anything else to the AO Browser", () => {
+		expect(coerceUiSettings({ webLinkTarget: "system" }).webLinkTarget).toBe("system");
+		expect(coerceUiSettings({ webLinkTarget: "chrome" }).webLinkTarget).toBe("aoBrowser");
+		expect(coerceUiSettings({}).webLinkTarget).toBe("aoBrowser");
 	});
 
 	it("accepts supported terminal shells and normalizes custom paths", () => {

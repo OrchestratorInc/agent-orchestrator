@@ -1,7 +1,9 @@
 import { fireEvent } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { aoBridge } from "./bridge";
+import { useWebLinkTargetStore } from "../stores/web-link-target-store";
 import {
+	clickOpensSystemBrowser,
 	handleModifierLinkClick,
 	isPotentialWorkspaceFileLink,
 	openLinkInSystemBrowser,
@@ -17,6 +19,18 @@ describe("external link policy", () => {
 		document.removeEventListener("click", handleModifierLinkClick);
 		document.body.replaceChildren();
 		vi.restoreAllMocks();
+	});
+
+	it("sends a click to the browser the setting chose and a modifier click to the other", () => {
+		expect(clickOpensSystemBrowser(false)).toBe(false);
+		expect(clickOpensSystemBrowser(true)).toBe(true);
+		useWebLinkTargetStore.setState({ target: "system" });
+		try {
+			expect(clickOpensSystemBrowser(false)).toBe(true);
+			expect(clickOpensSystemBrowser(true)).toBe(false);
+		} finally {
+			useWebLinkTargetStore.setState({ target: "aoBrowser" });
+		}
 	});
 
 	it("opens Option/Alt-clicked anchors externally after their own handlers run", () => {

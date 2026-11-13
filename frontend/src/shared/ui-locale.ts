@@ -18,12 +18,18 @@ export interface TerminalShellPreference {
 	path?: string;
 }
 
+export const WEB_LINK_TARGETS = ["aoBrowser", "system"] as const;
+
+/** Where a plain click on a web link opens; a modifier click opens the other one. */
+export type WebLinkTarget = (typeof WEB_LINK_TARGETS)[number];
+
 export interface UiSettings {
 	locale: AppLocale;
 	/** Whether attention-worthy notifications (needs input, ready to merge) also play a sound. */
 	soundNotificationsEnabled: boolean;
 	/** Shell used for newly opened standalone terminal panes. */
 	terminalShell: TerminalShellPreference;
+	webLinkTarget: WebLinkTarget;
 }
 
 export const DEFAULT_TERMINAL_SHELL: TerminalShellPreference = { kind: "auto" };
@@ -32,6 +38,7 @@ export const DEFAULT_UI_SETTINGS: UiSettings = {
 	locale: DEFAULT_LOCALE,
 	soundNotificationsEnabled: true,
 	terminalShell: DEFAULT_TERMINAL_SHELL,
+	webLinkTarget: "aoBrowser",
 };
 
 /** Normalize an unknown value to a supported UI locale. */
@@ -66,5 +73,8 @@ export function coerceUiSettings(raw: unknown): UiSettings {
 		locale: coerceLocale(record.locale),
 		soundNotificationsEnabled,
 		terminalShell: coerceTerminalShell(record.terminalShell),
+		webLinkTarget: (WEB_LINK_TARGETS as readonly unknown[]).includes(record.webLinkTarget)
+			? (record.webLinkTarget as WebLinkTarget)
+			: DEFAULT_UI_SETTINGS.webLinkTarget,
 	};
 }
