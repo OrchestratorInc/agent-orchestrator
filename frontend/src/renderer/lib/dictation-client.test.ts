@@ -199,3 +199,33 @@ it("releases permission granted after stop without switching back to listening",
 	expect(Socket.instances[0].send).toHaveBeenCalledExactlyOnceWith('{"type":"stop"}');
 	off();
 });
+
+it("refuses native dictation when there is no desktop bridge, instead of hanging", async () => {
+	mocks.get.mockResolvedValue({
+		data: { selected: "native-macos", models: [{ id: "native-macos", installed: true }] },
+	});
+	const bridge = window.ao;
+	window.ao = undefined;
+	try {
+		await expect(dictationClient.start()).rejects.toThrow(/needs the desktop app/);
+		expect(mocks.nativeStart).not.toHaveBeenCalled();
+	} finally {
+		window.ao = bridge;
+	}
+});
+it("finishes a local recording when the window loses focus, and stops listening for that once it ends", async () => {
+	const events: DictationEvent[] = [];
+	const off = dictationClient.onEvent((event) => events.push(event));
+	await dictationClient.start();
+	const socket = Socket.instances[0];
+	await socket.emit({ type: "listening" });
+	await vi.waitFor(() => expect(events).toContainEqual({ type: "listening" }));
+	window.dispatchEvent(new Event("blur"));
+	await vi.waitFor(() => expect(socket.send).toHaveBeenCalledWith('{"type":"stop"}'));
+	expect(events).toContainEqual({ type: "finishing" });
+	await socket.emit({ type: "end", text: "Done." });
+	socket.send.mockClear();
+	window.dispatchEvent(new Event("blur"));
+	expect(socket.send).not.toHaveBeenCalled();
+	off();
+});

@@ -6,7 +6,16 @@ import { DictationSection } from "./DictationSection";
 
 const api = vi.hoisted(() => ({ GET: vi.fn(), POST: vi.fn() }));
 vi.mock("../../lib/api-client", () => ({ apiClient: api }));
-vi.mock("../../lib/dictation-client", () => ({ dictationClient: { onEvent: () => () => {}, cancel: async () => {} } }));
+const client = vi.hoisted(() => ({ start: vi.fn(async () => undefined), stop: vi.fn(async () => undefined) }));
+vi.mock("../../lib/dictation-client", () => ({
+	dictationClient: {
+		onEvent: () => () => {},
+		cancel: async () => {},
+		authorize: async () => ({ granted: true }),
+		start: client.start,
+		stop: client.stop,
+	},
+}));
 const initial = {
 	selected: "native-macos",
 	installing: "",
@@ -66,17 +75,54 @@ it("shows failed installs and allows retry", async () => {
 });
 
 it("filters the expanded catalog by model name and language", async () => {
- api.GET.mockResolvedValue({data: {...initial, models: [...initial.models,
- {id: "handy-computer/whisper-tiny.en-gguf", name: "Whisper Tiny English", description: "English", languages: ["en"], installed: false, available: true, downloadBytes: 45904544},
- {id: "handy-computer/parakeet-tdt-0.6b-v3-gguf", name: "Parakeet v3", languages: ["de", "fr"], installed: false, available: true, downloadBytes: 600000000}]}});
- show();
- await screen.findByText("Whisper Tiny English");
- const search = screen.getByRole("textbox", {name: "Search models or languages"});
- await userEvent.type(search, "whisper");
- expect(screen.getByText("Whisper Tiny English")).toBeInTheDocument();
- expect(screen.queryByText("Parakeet v3")).not.toBeInTheDocument();
- await userEvent.clear(search);
- await userEvent.type(search, "fr");
- expect(screen.getByText("Parakeet v3")).toBeInTheDocument();
- expect(screen.queryByText("Whisper Tiny English")).not.toBeInTheDocument();
+	api.GET.mockResolvedValue({
+		data: {
+			...initial,
+			models: [
+				...initial.models,
+				{
+					id: "handy-computer/whisper-tiny.en-gguf",
+					name: "Whisper Tiny English",
+					description: "English",
+					languages: ["en"],
+					installed: false,
+					available: true,
+					downloadBytes: 45904544,
+				},
+				{
+					id: "handy-computer/parakeet-tdt-0.6b-v3-gguf",
+					name: "Parakeet v3",
+					languages: ["de", "fr"],
+					installed: false,
+					available: true,
+					downloadBytes: 600000000,
+				},
+			],
+		},
+	});
+	show();
+	await screen.findByText("Whisper Tiny English");
+	const search = screen.getByRole("textbox", { name: "Search models or languages" });
+	await userEvent.type(search, "whisper");
+	expect(screen.getByText("Whisper Tiny English")).toBeInTheDocument();
+	expect(screen.queryByText("Parakeet v3")).not.toBeInTheDocument();
+	await userEvent.clear(search);
+	await userEvent.type(search, "fr");
+	expect(screen.getByText("Parakeet v3")).toBeInTheDocument();
+	expect(screen.queryByText("Whisper Tiny English")).not.toBeInTheDocument();
+});
+
+it("tests the selected model directly, without reopening the first-use chooser", async () => {
+	const installed = {
+		...initial,
+		selected: "phonon-2.5",
+		models: initial.models.map((model) => ({ ...model, installed: true })),
+	};
+	api.GET.mockResolvedValue({ data: installed });
+	show();
+	const test = await screen.findByRole("button", { name: "Test microphone" });
+	await waitFor(() => expect(test).toBeEnabled());
+	await userEvent.click(test);
+	await waitFor(() => expect(client.start).toHaveBeenCalledOnce());
+	expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 });

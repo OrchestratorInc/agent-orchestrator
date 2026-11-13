@@ -156,6 +156,24 @@ it("shows an install that is already running as that row's progress, without sta
 	expect(api.POST).not.toHaveBeenCalled();
 	expect(start).not.toHaveBeenCalled();
 });
+it("does not start dictation when the chooser is closed while a selection is still pending", async () => {
+	api.GET.mockResolvedValue({ data: { ...installed, selected: model.id } });
+	let reply!: (value: { data: typeof installed }) => void;
+	api.POST.mockImplementation(
+		() =>
+			new Promise((resolve) => {
+				reply = resolve;
+			}),
+	);
+	render(<Harness />);
+	await userEvent.click(screen.getByText("Dictate"));
+	await userEvent.click(await screen.findByRole("button", { name: "Use recommended model" }));
+	await userEvent.click(screen.getByRole("button", { name: "Close" }));
+	await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+	reply({ data: { ...installed, selected: model.id } });
+	await new Promise((resolve) => setTimeout(resolve, 20));
+	expect(start).not.toHaveBeenCalled();
+});
 it("starts straight away with an already installed recommendation, without downloading", async () => {
 	api.GET.mockResolvedValue({ data: { ...installed, selected: model.id } });
 	render(<Harness />);

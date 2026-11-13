@@ -11,6 +11,11 @@ const emit = (event: DictationEvent) => {
 	for (const listener of listeners) listener(event);
 };
 
+/** Native macOS dictation runs in the desktop app's helper; a plain browser has no bridge to it. */
+export function nativeDictationAvailable(): boolean {
+	return typeof window !== "undefined" && Boolean(window.ao);
+}
+
 export const dictationClient = {
 	/**
 	 * Asks macOS for the speech and microphone access native dictation needs,
@@ -41,6 +46,8 @@ export const dictationClient = {
 		if (started !== generation) return;
 		if (error || !data) throw new Error("Could not load dictation settings.");
 		if (data.selected === "native-macos") {
+			if (!nativeDictationAvailable())
+				throw new Error("macOS dictation needs the desktop app. Choose a downloaded model in Settings → Dictation.");
 			active = {
 				native: true,
 				stop: () => aoBridge.dictation.stop(),
@@ -75,6 +82,7 @@ export const dictationClient = {
 		let flush: (() => void) | undefined;
 		const timer = window.setTimeout(() => fail("Dictation timed out. Try again."), 7 * 60_000);
 		let recordTimer: number | undefined;
+		let onBlur: (() => void) | undefined;
 		const releaseMicrophone = () => {
 			stream?.getTracks().forEach((track) => track.stop());
 			stream = undefined;
@@ -86,6 +94,8 @@ export const dictationClient = {
 		};
 		const cleanup = () => {
 			finished = true;
+			if (onBlur) window.removeEventListener("blur", onBlur);
+			onBlur = undefined;
 			flush?.();
 			window.clearTimeout(timer);
 			window.clearTimeout(pumpTimer);
@@ -209,6 +219,10 @@ export const dictationClient = {
 			recordTimer = window.setTimeout(() => {
 				void session.stop().catch((error) => fail(error.message));
 			}, 299_000);
+			// Leaving the app finishes dictation, as it does for the native helper (see main.ts). Armed only now,
+			// so the system's first-use microphone prompt, which takes focus, cannot end it.
+			onBlur = () => void session.stop().catch((error) => fail(error.message));
+			window.addEventListener("blur", onBlur);
 			emit({ type: "listening" });
 		};
 		if (finishRequested) void session.stop().catch((error) => fail(error.message));

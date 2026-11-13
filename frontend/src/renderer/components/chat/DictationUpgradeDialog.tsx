@@ -5,7 +5,7 @@ import { apiClient } from "../../lib/api-client";
 import { useUiStore } from "../../stores/ui-store";
 import { Button } from "../ui/button";
 import { Pressable } from "../ui/pressable";
-import { dictationClient } from "../../lib/dictation-client";
+import { dictationClient, nativeDictationAvailable } from "../../lib/dictation-client";
 import { DictationProgressBar, useDictationProgressText } from "./DictationProgress";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogOverlay, DialogTitle } from "../ui/dialog";
 import { CloseButton } from "../ui/close-button";
@@ -181,7 +181,7 @@ export function useDictationUpgrade(ownerKey?: string) {
 					};
 			}
 			const next = {
-				native: data.models.some((model) => model.id === nativeModel && model.available),
+				native: nativeDictationAvailable() && data.models.some((model) => model.id === nativeModel && model.available),
 				models,
 				downloading: data.installing ?? "",
 			};
@@ -287,7 +287,12 @@ export function useDictationUpgrade(ownerKey?: string) {
 		) : (
 			<Download className="size-6" aria-hidden="true" strokeWidth={1.6} />
 		);
-	const busy = phase !== "choose";
+\1const busy = phase !== "choose";
+		// Closing the chooser abandons a choice still waiting on the daemon, so a late reply cannot start dictation.
+		const dismiss = () => {
+			operation.current += 1;
+			setOpen(false);
+		};
 	const installingProps = (model: string) => {
 		if (active !== model) return undefined;
 		// macOS dictation has nothing to download; its row waits on the system's permission prompts.
@@ -306,7 +311,7 @@ export function useDictationUpgrade(ownerKey?: string) {
 			<Dialog
 				open={open}
 				onOpenChange={(next) => {
-					if (!next && !busy) setOpen(false);
+					if (!next && !busy) dismiss();
 				}}
 			>
 				<DialogContent
@@ -382,7 +387,7 @@ export function useDictationUpgrade(ownerKey?: string) {
 								disabled={busy}
 								onClick={() => {
 									acknowledge();
-									setOpen(false);
+									dismiss();
 									useUiStore.getState().openGlobalSettings("dictation");
 								}}
 							/>

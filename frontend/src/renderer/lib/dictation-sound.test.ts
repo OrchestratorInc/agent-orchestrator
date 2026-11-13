@@ -78,6 +78,27 @@ describe("dictation sounds", () => {
 		expect(tones).toHaveLength(4);
 	});
 
+	it("keeps the choice for this session when storage cannot hold it", () => {
+		const write = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+			throw new Error("storage blocked");
+		});
+		const read = vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+			throw new Error("storage blocked");
+		});
+		try {
+			setDictationSoundsEnabled(false);
+			expect(dictationSoundsEnabled()).toBe(false);
+			playDictationSound("on");
+			expect(tones).toHaveLength(0);
+			setDictationSoundsEnabled(true);
+			expect(dictationSoundsEnabled()).toBe(true);
+		} finally {
+			write.mockRestore();
+			read.mockRestore();
+			// Storage works again: record a saved choice so no in-memory override lingers into other tests.
+			setDictationSoundsEnabled(true);
+		}
+	});
 	it("does nothing, without an error, when there is no audio support", () => {
 		vi.stubGlobal("AudioContext", undefined);
 		expect(() => playDictationSound("on")).not.toThrow();

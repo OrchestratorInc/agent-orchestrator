@@ -5,8 +5,13 @@ import type { DictationEvent } from "../../../shared/dictation";
 
 export type DictationPhase = "idle" | "starting" | "listening" | "finishing";
 
+/** How long a recording that is finishing may hold up the next composer's start. */
+const HANDOFF_TIMEOUT_MS = 8000;
+
+type Owner = { end(keep: boolean): void; finish(): Promise<boolean> | null };
+
 /** The composer whose dictation is running. Starting another one finishes it first. */
-let owner: { end(keep: boolean): void } | null = null;
+let owner: Owner | null = null;
 
 type DictationTarget = {
 	ownerKey?: string;
@@ -28,7 +33,9 @@ export function useDictation(target: DictationTarget) {
 	const [error, setError] = useState<string>();
 	const targetRef = useRef(target);
 	targetRef.current = target;
-	const self = useRef<{ end(keep: boolean): void }>(null!);
+	const self = useRef<Owner>(null!);
+	/** Set while this composer waits for another one's recording to deliver its words. */
+	const pendingStart = useRef(false);
 	const owns = () => owner === self.current;
 	// Listening only while this composer owns a dictation.
 	const unsubscribe = useRef<(() => void) | null>(null);
@@ -46,7 +53,7 @@ export function useDictation(target: DictationTarget) {
 		for (const resolve of waiting.current) resolve(completed);
 		waiting.current.clear();
 	}, []);
-	self.current ??= { end };
+	self.current ??= { end, finish: () => null };
 
 	const onEvent = useCallback(
 		(event: DictationEvent) => {
@@ -98,6 +105,7 @@ export function useDictation(target: DictationTarget) {
 		setPhase("idle");
 		const onEnd = targetRef.current.onEnd;
 		return () => {
+			pendingStart.current = false;
 			if (!owns()) return;
 			generation.current += 1;
 			for (const resolve of waiting.current) resolve(false);
@@ -109,9 +117,7 @@ export function useDictation(target: DictationTarget) {
 		};
 	}, [target.ownerKey]);
 
-	const start = useCallback(() => {
-		// The main process replaces the running helper; the composer it belonged to keeps its words.
-		owner?.end(true);
+	const begin = useCallback(() => {
 		owner = self.current;
 		stopRequested.current = false;
 		const started = ++generation.current;
@@ -126,6 +132,32 @@ export function useDictation(target: DictationTarget) {
 			end(true);
 		});
 	}, [onEvent, end]);
+
+	const start = useCallback(() => {
+		if (pendingStart.current) return;
+		const previous = owner;
+		if (previous && previous !== self.current) {
+			// Another composer is still recording or finishing. Let it deliver its words first, so
+			// they are not lost, then take over.
+			const done = previous.finish();
+			if (done) {
+				pendingStart.current = true;
+				setPhase("starting");
+				const proceed = () => {
+					if (!pendingStart.current) return;
+					pendingStart.current = false;
+					window.clearTimeout(fallback);
+					if (owner === previous) previous.end(true);
+					begin();
+				};
+				const fallback = window.setTimeout(proceed, HANDOFF_TIMEOUT_MS);
+				void done.then(proceed);
+				return;
+			}
+			previous.end(true);
+		}
+		begin();
+	}, [begin]);
 
 	/** Ends the audio and waits for the recognizer's final wording. */
 	const stop = useCallback(() => {
@@ -153,6 +185,8 @@ export function useDictation(target: DictationTarget) {
 		stop();
 		return completion;
 	}, [stop]);
+
+	self.current.finish = finish;
 
 	useEffect(() => {
 		if (phase === "idle") return;

@@ -614,6 +614,10 @@ export const ChatComposer = memo(function ChatComposer({
 	const dictation = useDictation({
 		ownerKey: attachmentScopeKey,
 		onSubmit: (event) => {
+			// Enter belongs to whatever else has it: an open dialog or menu, or a control outside this composer.
+			if (isDialogOrMenuOpen()) return false;
+			const origin = event.target;
+			if (origin instanceof Element && origin !== document.body && !formRef.current?.contains(origin)) return false;
 			if (event.shiftKey || (!enterSends && !event.metaKey && !event.ctrlKey)) return false;
 			void submit(undefined, enterSends && (event.metaKey || event.ctrlKey) && canSteerDraft);
 			return true;
