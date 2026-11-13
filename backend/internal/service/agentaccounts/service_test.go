@@ -55,8 +55,9 @@ type fakeClaude struct {
 	signedInAs map[string]string
 	unshared   bool
 	onIdentity func(home string) // runs as a folder's identity is read
-	apiKey     map[string]bool   // folders logged in with an API key
-	failing    map[string]bool   // folders whose check fails (a timeout)
+	onLimits   func()
+	apiKey     map[string]bool // folders logged in with an API key
+	failing    map[string]bool // folders whose check fails (a timeout)
 	windows    []domain.AgentAccountLimitWindow
 	limitsErr  error
 	orgOf      map[string]string
@@ -79,6 +80,10 @@ func (f *fakeClaude) Identity(_ context.Context, home string) (domain.AgentAccou
 	return domain.AgentAccountIdentityCheck{SignedIn: ok, LoggedIn: ok, Email: email, OrgID: f.orgOf[home], OrgName: f.orgNameOf[home]}, nil
 }
 func (f *fakeClaude) Limits(context.Context, string) (domain.AgentAccountLimits, error) {
+	if hook := f.onLimits; hook != nil {
+		f.onLimits = nil
+		hook()
+	}
 	if f.limitsErr != nil {
 		return domain.AgentAccountLimits{}, f.limitsErr
 	}
@@ -987,5 +992,33 @@ func TestConfirmedLoginsFollowTheIdentityWithoutALimitReading(t *testing.T) {
 	delete(claude.signedInAs, "")
 	if got, ok := read()[device]; !ok || got.SignedIn {
 		t.Fatalf("after signing out = %+v (known %v), want known and signed out", got, ok)
+	}
+}
+
+func TestAnOlderReadDoesNotReplaceANewerOne(t *testing.T) {
+	ctx := context.Background()
+	claude := &fakeClaude{
+		signedInAs: map[string]string{"": "a@example.com"},
+		windows:    []domain.AgentAccountLimitWindow{{ID: "seven_day", UsedPercent: 40}},
+	}
+	store := &memStore{defaults: map[domain.AgentAccountProvider]string{}, bindings: map[domain.SessionID]string{}}
+	svc := New(store, []ports.AgentAccountProviderCLI{claude}, t.TempDir(), fakeTerminals{}, nil)
+	claude.onLimits = func() {
+		claude.signedInAs[""] = "b@example.com"
+		if _, err := svc.List(ctx, true); err != nil {
+			t.Error(err)
+		}
+		claude.limitsErr = errors.New("claude could not fetch its usage limits")
+	}
+	views, err := svc.List(ctx, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	device := domain.DeviceAgentAccountID(domain.AgentAccountProviderClaude)
+	if got := svc.ConfirmedLogins()[device]; got.Email != "b@example.com" {
+		t.Fatalf("confirmed = %+v, want b@ from the read that started later", got)
+	}
+	if views[0].Account.Email != "b@example.com" || views[0].Limits == nil {
+		t.Fatalf("view = %+v, want b@ with its limits", views[0])
 	}
 }

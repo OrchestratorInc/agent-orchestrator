@@ -65,6 +65,7 @@ type Service struct {
 
 	mu       sync.Mutex
 	readings map[string]*reading
+	readSeq  uint64
 	logins   map[string]*login
 	// removing holds accounts being removed. No launch resolves to one, so an
 	// agent cannot start on a login AO is about to delete.
@@ -88,6 +89,7 @@ type reading struct {
 	// failures counts checks in a row that failed on their own.
 	failures  int
 	at        time.Time
+	seq       uint64
 	confirmed *domain.AgentAccountIdentityCheck
 }
 
@@ -343,7 +345,10 @@ func (s *Service) read(ctx context.Context, account domain.AgentAccount) *readin
 	caller := ctx
 	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
-	r := &reading{at: s.now()}
+	s.mu.Lock()
+	s.readSeq++
+	r := &reading{at: s.now(), seq: s.readSeq}
+	s.mu.Unlock()
 	identity, err := provider.Identity(ctx, account.Home)
 	r.identity = identity
 	if err != nil {
@@ -410,6 +415,10 @@ func (s *Service) read(ctx context.Context, account domain.AgentAccount) *readin
 		return r
 	}
 	s.mu.Lock()
+	if prev := s.readings[account.ID]; prev != nil && prev.seq > r.seq {
+		s.mu.Unlock()
+		return prev
+	}
 	if r.failedOnItsOwn() {
 		r.failures = 1
 		if prev := s.readings[account.ID]; prev != nil && prev.failedOnItsOwn() {
