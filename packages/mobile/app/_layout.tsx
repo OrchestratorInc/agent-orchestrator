@@ -11,6 +11,7 @@ import { Platform, View } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import { SafeAreaProvider } from "react-native-safe-area-context";
+import { KeyboardResumeResync } from "../lib/KeyboardResumeResync";
 import { OnboardingGate } from "../lib/OnboardingGate";
 import { TelemetryManager } from "../lib/TelemetryManager";
 import { rootTouchStart } from "../lib/touchOutside";
@@ -130,6 +131,7 @@ export default function RootLayout() {
 			    Android only fires `keyboardDidShow` once the keyboard has finished
 			    animating, so every dock and composer arrived a beat late. */}
 			<KeyboardProvider>
+				<KeyboardResumeResync />
 				<SafeAreaProvider>
 					<ThemeProvider initial={themeSettings}>
 						{/* Orchestrator Cloud outside the machines' store: the store lists cloud rows beside each machine's. */}
