@@ -25,7 +25,7 @@ func TestHandoffHeadroomSelectsRequestBucket(t *testing.T) {
 		{"claude opus counts its own meter", claude, AgentAccountProviderClaude, "claude-opus-5", false, 0},
 		{"claude alias matches a display scope", AgentAccountLimits{Windows: []AgentAccountLimitWindow{{UsedPercent: 5}, {UsedPercent: 95, Scope: "Claude Opus 5"}}}, AgentAccountProviderClaude, "opus", true, 5},
 		{"claude default model counts every meter", claude, AgentAccountProviderClaude, "", false, 0},
-		{"codex default model counts the overall bucket", codex, AgentAccountProviderCodex, "", true, 70},
+		{"an unknown codex model counts every bucket, so a full spark default rules it out", codex, AgentAccountProviderCodex, "", false, 0},
 		{"codex model bucket counts for its model", codex, AgentAccountProviderCodex, "gpt-5.3-codex-spark", false, 0},
 		{"codex other model ignores the spark bucket", codex, AgentAccountProviderCodex, "gpt-5.5", true, 70},
 		{"codex model ignores a longer sibling bucket", codex, AgentAccountProviderCodex, "gpt-5.3-codex", true, 70},

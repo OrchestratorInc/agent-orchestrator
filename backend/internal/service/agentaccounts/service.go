@@ -1128,6 +1128,11 @@ func (s *Service) HandoffTarget(ctx context.Context, id domain.SessionID, harnes
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
+	if after, err := s.boundAccount(ctx, id, p); err != nil {
+		return "", err
+	} else if after.ID != current.ID {
+		return "", ports.ErrAgentAccountChanged
+	}
 	best := -1
 	for i, room := range headroom {
 		if room > 0 && (best < 0 || room > headroom[best]) {

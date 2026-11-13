@@ -2,7 +2,9 @@ package agentaccounts
 
 import (
 	"context"
+	"errors"
 	"maps"
+	"sync"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -11,10 +13,14 @@ import (
 
 type handoffLimitsProvider struct {
 	*fakeClaude
-	used map[string]float64
+	used     map[string]float64
+	onLimits func()
 }
 
 func (p *handoffLimitsProvider) Limits(_ context.Context, home string) (domain.AgentAccountLimits, error) {
+	if p.onLimits != nil {
+		p.onLimits()
+	}
 	return domain.AgentAccountLimits{Windows: []domain.AgentAccountLimitWindow{
 		{ID: "five_hour", UsedPercent: p.used[home]},
 		{ID: "seven_day_opus", UsedPercent: 100, Scope: "opus"},
@@ -66,5 +72,10 @@ func TestHandoffTargetPicksMostVerifiedRoomForTheModel(t *testing.T) {
 	}
 	if _, err := svc.HandoffTarget(ctx, "session", domain.HarnessCodex, ""); err == nil {
 		t.Fatal("a harness without this provider picked a target")
+	}
+	var moved sync.Once
+	provider.onLimits = func() { moved.Do(func() { store.bindings["session"] = "b" }) }
+	if got, err := svc.HandoffTarget(ctx, "session", domain.HarnessClaudeCode, "claude-sonnet-5"); !errors.Is(err, ports.ErrAgentAccountChanged) {
+		t.Fatalf("a move during the probes: target %q, err %v", got, err)
 	}
 }
