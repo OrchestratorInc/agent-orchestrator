@@ -2687,12 +2687,8 @@ func TestPoll_IncrementalDiscovery_OnlyUpdatedMRsRefreshed(t *testing.T) {
 	}
 	cursor := obs.Cache.LastSyncCursor[prKey(testRepo, 0)]
 
-	// Poll 2: ETag changed (repo2), but only PR 2 is in the updated set.
-	// PRs #1 and #3 are tracked open but absent from the listing, so they
-	// trigger terminal-state reconciliation fetches (Item 2). With durable
-	// hashes matching their observations, the reconciled fetches are no-op
-	// persists (no writes, no ETag/cursor advance) — but they still issue
-	// detail fetches.
+	// Quiet tracked PRs omitted from the updated set still get reconciliation
+	// reads. Matching hashes need no write before the cursor can advance.
 	provider.mu.Lock()
 	provider.repoGuards[prKey(testRepo, 0)] = ports.SCMGuardResult{ETag: "repo2"}
 	provider.openPRs[prKey(testRepo, 0)] = []ports.SCMPRObservation{
@@ -3055,16 +3051,11 @@ func TestPoll_CommitCheckETagChange_PromotesIndependentOfListing(t *testing.T) {
 	}
 }
 
-// TestPoll_GitHubTerminalReconciliation_StillOpenNoOp (Item 2) verifies that a
-// tracked open GitHub PR not in the current listing triggers a terminal-
-// reconciliation detail fetch, and that a "still open" result is a no-op
-// persistence that does NOT advance any cursor or ETag.
-func TestPoll_GitHubTerminalReconciliation_StillOpenNoOp(t *testing.T) {
+func TestPoll_GitHubTerminalReconciliation_StillOpenAcknowledgesRefresh(t *testing.T) {
 	store := testStoreWithSession()
 	stillOpen := testObs(1)
 	local := knownPR(1)
-	// Compute durable hashes from the observation so the "still open" result
-	// is semantically a no-op (unchanged hashes → no write, no ETag advance).
+	// Matching hashes let a successful read acknowledge the refresh without a write.
 	local.MetadataHash = metadataSemanticHash(stillOpen)
 	local.CIHash = ciSemanticHash(stillOpen.CI)
 	local.ReviewHash = reviewSemanticHash(stillOpen.Review)
@@ -3089,13 +3080,14 @@ func TestPoll_GitHubTerminalReconciliation_StillOpenNoOp(t *testing.T) {
 	if len(provider.fetchBatches) != 1 || len(provider.fetchBatches[0]) != 1 || provider.fetchBatches[0][0].Number != 1 {
 		t.Fatalf("reconciliation must fetch the missing PR; batches=%#v", provider.fetchBatches)
 	}
-	// The repo ETag must NOT advance — the "still open" result is a no-op.
-	if got := obs.Cache.RepoPRListETag[prKey(testRepo, 0)]; got == "repo2" {
-		t.Fatalf("repo ETag advanced to %q on still-open reconciliation; durable state must not advance", got)
+	if got := obs.Cache.RepoPRListETag[prKey(testRepo, 0)]; got != "repo2" {
+		t.Fatalf("repo ETag = %q, want repo2 after a successful read", got)
 	}
-	// The sync cursor must NOT advance.
-	if cursor := obs.Cache.LastSyncCursor[prKey(testRepo, 0)]; cursor.Equal(now) {
-		t.Fatalf("sync cursor advanced to %v on still-open reconciliation; durable state must not advance", cursor)
+	if cursor := obs.Cache.LastSyncCursor[prKey(testRepo, 0)]; !cursor.Equal(now) {
+		t.Fatalf("sync cursor = %v, want %v after a successful read", cursor, now)
+	}
+	if len(store.writes) != 0 || len(lc.observed) != 0 {
+		t.Fatalf("unchanged reconciliation wrote PRs or triggered lifecycle: writes=%d, observations=%d", len(store.writes), len(lc.observed))
 	}
 }
 
@@ -3150,12 +3142,6 @@ func TestPoll_GitHubTerminalReconciliation_TerminalTransition(t *testing.T) {
 	}
 }
 
-// TestPoll_GitHubTerminalReconciliation_SecondPollNoReconcile (Item 2)
-// verifies the reviewer's explicit multi-poll requirement: after a PR is
-// reconciled on poll N (still-open, no-op), poll N+1 does NOT re-reconcile it
-// unnecessarily when the listing is unchanged. Once the terminal
-// reconciliation finds the PR is still open, the repo ETag has not advanced,
-// so a subsequent 304 poll skips reconciliation entirely.
 func TestPoll_GitHubTerminalReconciliation_SecondPollNoReconcile(t *testing.T) {
 	store := testStoreWithSession()
 	local := knownPR(1)
@@ -3246,12 +3232,6 @@ func TestPoll_CooldownSkip_MarksRepoRefreshIncomplete(t *testing.T) {
 	}
 }
 
-// TestPoll_RepoRefreshMonotonicity_OneRefFailsOneSucceeds (finding #1) verifies
-// that when two MRs share a repo and one fetch fails while the other succeeds,
-// the repo ETag and LastSyncCursor do NOT advance. Without per-ref tracking,
-// markRepoRefreshOK (called after the successful PR persistence) would clear
-// the repo-level failure set by markRepoRefreshFailed for the failed PR,
-// making the failed update unrecoverable.
 func TestPoll_RepoRefreshMonotonicity_OneRefFailsOneSucceeds(t *testing.T) {
 	store := testStoreWithSession()
 	// Two tracked PRs in the same repo with durable hashes.
@@ -3476,16 +3456,6 @@ func TestPoll_AllFail_ScopedPerProviderError(t *testing.T) {
 	}
 }
 
-// TestPoll_RepoRefreshMonotonicity_ListingFailsButPRSucceeds (finding #1)
-// verifies that when ListPRsByRepo fails for a repo but a tracked PR in that
-// repo is still fetched and persisted successfully (via the commit-check ETag
-// path), the repo ETag and LastSyncCursor do NOT advance. Without the
-// repoListFailed monotonicity guard, markRepoRefreshOK (called after the
-// successful PR persistence) would flip the repo back to OK. The per-ref
-// monotonicity check would then see an empty repoCandidateKeys (because the
-// listing failed, the PR never entered candidateKeys through the listing path)
-// and allRefsOK would be vacuously true, advancing the ETag/cursor and making
-// the failed listing unrecoverable on the next poll.
 func TestPoll_RepoRefreshMonotonicity_ListingFailsButPRSucceeds(t *testing.T) {
 	store := testStoreWithSession()
 	// A tracked PR with durable hashes.

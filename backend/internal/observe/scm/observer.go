@@ -502,50 +502,16 @@ func (o *Observer) Poll(ctx context.Context) (pollErr error) {
 
 	repoGuards := o.guardRepos(ctx, sessionRepos)
 	repoRefreshOK := pendingRepoRefreshes(repoGuards)
-	// repoListFailed records repos whose PR listing (ListPRsByRepo) failed
-	// during this poll. markRepoRefreshOK checks this set and refuses to
-	// flip a repo back to OK when the listing itself failed — without this,
-	// a successful PR write for a different PR in the same repo would clear
-	// the listing failure and advance the ETag/cursor, making the failed
-	// listing unrecoverable on the next poll.
-	repoListFailed := map[string]bool{}
 	markRepoRefreshFailed := func(repo ports.SCMRepo) {
 		key := prKey(repo, 0)
 		if _, ok := repoRefreshOK[key]; ok {
 			repoRefreshOK[key] = false
 		}
 	}
-	// markRepoListFailed marks incomplete discovery (a failed listing or missing
-	// human identity). It sets repoListFailed so
-	// markRepoRefreshOK cannot clear it within the same poll, and also
-	// marks the repo refresh-incomplete via markRepoRefreshFailed.
-	markRepoListFailed := func(repo ports.SCMRepo) {
-		repoListFailed[prKey(repo, 0)] = true
-		markRepoRefreshFailed(repo)
-	}
-	// markRepoRefreshOK un-marks a repo as refresh-incomplete. It is used by
-	// the terminal-reconciliation path: a reconciled PR that turns out to be
-	// a terminal transition (merged/closed) is persisted normally, and the
-	// repo ETag/cursor may advance. A "still open" no-op result does NOT
-	// call this, so the ETag/cursor stay pinned (cross-cutting durable-state
-	// preservation rule).
-	//
-	// Monotonicity guard: if the repo's listing failed this poll
-	// (repoListFailed), do NOT flip it back to OK. A successful PR write for
-	// a different PR must not clear a listing-level failure.
-	markRepoRefreshOK := func(repo ports.SCMRepo) {
-		key := prKey(repo, 0)
-		if repoListFailed[key] {
-			return
-		}
-		if g, ok := repoGuards[key]; ok && g.err == nil && g.result.ETag != "" {
-			repoRefreshOK[key] = true
-		}
-	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	listedPRs, listedRepos := o.discoverNewPRs(ctx, sessionRepos, subjects, repoGuards, now, markRepoListFailed)
+	listedPRs, listedRepos := o.discoverNewPRs(ctx, sessionRepos, subjects, repoGuards, now, markRepoRefreshFailed)
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -557,9 +523,7 @@ func (o *Observer) Poll(ctx context.Context) (pollErr error) {
 	// fetch per reconciled PR so terminal transitions are not permanently
 	// missed. The pass runs only when the repo-list guard is not a 304,
 	// and only for GitHub (asymmetry — see reconcileTerminalGitHubPRs).
-	// Terminal observations are routed through the normal persistence path;
-	// "still open" results are no-op persists that mark the repo
-	// refresh-incomplete so the ETag/cursor do not advance.
+	// Successful reads of open PRs can acknowledge the listing without a write.
 	reconciledObs := o.reconcileTerminalGitHubPRs(ctx, subjects, repoGuards, listedPRs, &selection, now, markRepoRefreshFailed)
 	observations := map[string]ports.SCMObservation{}
 	for key, obs := range reconciledObs {
@@ -772,13 +736,6 @@ func (o *Observer) Poll(ctx context.Context) (pollErr error) {
 				continue
 			}
 		}
-		// If this observation came from terminal reconciliation, a successful
-		// terminal persistence (merged/closed transition observed and
-		// persisted) un-marks the repo refresh-incomplete so the repo
-		// ETag/cursor may advance. A "still open" no-op result never reaches
-		// this branch (it returns at the unchanged-hashes check above), so
-		// its repo stays refresh-incomplete and the ETag/cursor stay pinned.
-		markRepoRefreshOK(subj.repo)
 		prRefreshOK[key] = !prepared.PR.DetailsPending
 	}
 	for key, ok := range prRefreshOK {
@@ -1597,12 +1554,8 @@ func (o *Observer) selectRefreshCandidates(ctx context.Context, subjects map[str
 // reconciled PR and routes the result through the normal observation/persistence
 // machinery.
 //
-// The pass runs on every poll where the GitHub repo-list guard is NOT a 304
-// (i.e. the listing changed). A "still open" detail result is a no-op
-// persistence: the observation is returned but the repository is marked
-// refresh-incomplete so the repo ETag and sync cursor do not advance (cross-
-// cutting durable-state preservation rule). A terminal (merged/closed) result
-// is persisted normally so the terminal transition is observed.
+// A successful read of an open PR can acknowledge its omission from an incremental list.
+// Failed reads keep the repository ETag and cursor unchanged for a retry.
 //
 // The pass is unbounded — no per-poll cap on reconciliation fetches. The worst
 // case (one PR updated, 49 others reconciled) is bounded by the tracked-open-
@@ -1755,15 +1708,6 @@ func (o *Observer) reconcileTerminalGitHubPRs(ctx context.Context, subjects map[
 			// persistence succeeds.
 			selection.subjectsByPR[key] = r.s
 			selection.candidateKeys[key] = true
-			// Pre-mark the repo refresh-incomplete for every reconciled
-			// observation. A "still open" result is a no-op persistence that
-			// must NOT advance the repo ETag or sync cursor (cross-cutting
-			// durable-state preservation rule): the persistence loop treats
-			// unchanged hashes as a no-op and never clears this mark. If the
-			// result IS a terminal transition (hashes changed), a successful
-			// write sets prRefreshOK[key]=true, which un-marks the repo so
-			// the ETag/cursor can advance on a real terminal transition only.
-			markRepoFailed(r.ref.Repo)
 		}
 	}
 	return out
