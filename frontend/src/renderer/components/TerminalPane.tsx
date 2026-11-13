@@ -1427,19 +1427,20 @@ function AttachedTerminal({
 	if (hasVisibleContent || state === "exited" || state === "error") switchingHeldRef.current = undefined;
 	const coverLabel = switchingLabel ?? switchingHeldRef.current;
 	const switchingCover = Boolean(coverLabel) && !hasVisibleContent && state !== "exited" && state !== "error";
-	// A Cloud session's terminated row is explained by the session view's own
-	// Cloud notice, and its socket also closes for a pause, a handoff or a
-	// reviewer whose verdict is still landing, so the strip shows there only
-	// for the exit the control plane recorded: the agent process gone in a
-	// live session.
-	const cloudEnded = Boolean(session?.cloud) && terminalTarget?.kind !== "reviewer" && terminalTarget?.kind !== "shell" && sessionAgentExited(session);
+	// A Cloud session's socket also closes for a pause, a handoff or a reviewer
+	// whose verdict is still landing, so the strip shows there only for an end
+	// the control plane recorded: the agent process gone in a live session, or
+	// the session archived, which Restore brings back through the control plane
+	// as it does locally.
+	const cloudEnded = Boolean(session?.cloud) && terminalTarget?.kind !== "reviewer" && terminalTarget?.kind !== "shell" &&
+		(sessionAgentExited(session) || !isSessionActive);
 	const showEndedState = showEndedStatePreview && (!session?.cloud || cloudEnded) && !isBoxComingUp && !booting && !coverLabel;
 
 	return (
 		<div className="terminal-surface flex h-full min-h-0 flex-col" data-testid="session-terminal">
 			{showEndedState && (
 				<TerminalEndedStrip
-					canRestore={canRestoreSession && !session?.cloud}
+					canRestore={canRestoreSession}
 					error={restoreError}
 					isRestoring={isRestoring}
 					onRestore={restoreSession}
