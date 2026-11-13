@@ -39,7 +39,9 @@ export async function readPendingSend(key: string): Promise<PendingSendRecord | 
 	const saved = JSON.parse(raw) as PendingSendRecord;
 	if (!saved.id || typeof saved.draftText !== "string" || typeof saved.text !== "string" || typeof saved.hasAttachments !== "boolean" ||
 		(saved.kind !== undefined && saved.kind !== "send" && saved.kind !== "steer") ||
-		(saved.excerpts !== undefined && (!Array.isArray(saved.excerpts) || saved.excerpts.length > 8 || !saved.excerpts.every(isChatExcerpt)))) {
+		(saved.excerpts !== undefined && (!Array.isArray(saved.excerpts) || saved.excerpts.length > 8 || !saved.excerpts.every(isChatExcerpt))) ||
+		(saved.providerSwitch !== undefined && (typeof saved.providerSwitch?.targetHarness !== "string" ||
+			(saved.providerSwitch.model !== undefined && typeof saved.providerSwitch.model !== "string")))) {
 		throw new Error("The previous message's retry record is damaged. Discard it before sending another message.");
 	}
 	return saved;
@@ -54,6 +56,12 @@ export async function reservePendingSend(key: string, candidate: PendingSendReco
 		if (existing.draftText !== candidate.draftText) {
 			throw new Error("Resolve the previous message before sending another one.");
 		}
+		// The same text sent to another agent or model is a different request:
+		// reusing the record would deliver the earlier switch while the composer
+		// shows the new pick. Retry keeps the original; a new send must not.
+		if (switchTarget(existing.providerSwitch) !== switchTarget(candidate.providerSwitch)) {
+			throw new Error("Resolve the previous message first. It was sent to a different agent or model.");
+		}
 		if (candidate.hasAttachments) {
 			throw new Error("Resolve the previous message first. Retrying with new attachments could silently discard them.");
 		}
@@ -61,6 +69,11 @@ export async function reservePendingSend(key: string, candidate: PendingSendReco
 	}
 	await AsyncStorage.setItem(key, JSON.stringify(candidate));
 	return candidate;
+}
+
+/** A switch's target and model as one comparable value; none for a plain send. */
+function switchTarget(providerSwitch: ProviderSwitchInput | undefined): string {
+	return providerSwitch ? `${providerSwitch.targetHarness}\u0000${providerSwitch.model ?? ""}` : "";
 }
 
 export async function clearPendingSend(key: string, id: string): Promise<void> {
