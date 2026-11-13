@@ -1216,7 +1216,7 @@ export function CloudSessionChatSurface({
 		// instead of keeping an answer from a worker that is gone.
 		queryKey: ["cloud-chat-models", cloud?.orgId ?? "", session.id, session.terminalGeneration ?? ""],
 		enabled: Boolean(cloud && ready && workerConnected && session.isTerminated !== true &&
-			(session.provider === "codex" || session.provider === "claude-code")),
+			(session.provider === "codex" || session.provider === "claude-code" || session.provider === "cursor")),
 		// The TUI may change its native model while Chat is unmounted.
 		staleTime: 0,
 		refetchOnMount: "always",

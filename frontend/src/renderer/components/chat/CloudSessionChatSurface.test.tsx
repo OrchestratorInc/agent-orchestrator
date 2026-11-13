@@ -621,6 +621,28 @@ describe("CloudSessionChatSurface", () => {
 		await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["cloud-agent-models", cloudSetup.baseUrl, "user-1", "org-1", "claude-code"] }));
 	});
 
+	it("asks the worker for a Cursor session's chat models and invalidates the account catalog", async () => {
+		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
+		cloudMocks.listChatModels.mockResolvedValue({ accountListed: true, cliVersion: "2026.11.05-86047df", models: [
+			{ id: "auto", displayName: "Auto", default: true },
+			{ id: "grok-4.7-medium", displayName: "Grok 4.7 Medium", default: false },
+		] });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+		render(
+			<QueryClientProvider client={queryClient}>
+				<CloudSessionChatSurface session={{ ...session, provider: "cursor", cloud: { orgId: "org-1", permissionMode: "trusted" } }} />
+			</QueryClientProvider>,
+		);
+		await waitFor(() => expect(cloudMocks.listChatModels).toHaveBeenCalledWith("org-1", session.id, expect.anything()));
+		await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["cloud-agent-models", cloudSetup.baseUrl, "user-1", "org-1", "cursor"] }));
+		const props = () => cloudMocks.chatProps.mock.lastCall?.[0];
+		await waitFor(() => expect(props().models).toEqual(expect.arrayContaining([
+			expect.objectContaining({ id: "auto" }),
+			expect.objectContaining({ id: "grok-4.7-medium" }),
+		])));
+	});
+
 	it("leaves the Cloud model lists alone when the session's list is the CLI's built-in one", async () => {
 		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
 		cloudMocks.listChatModels.mockResolvedValue({ accountListed: false, models: [{ id: "gpt-6.1-sol", displayName: "GPT-6.1-Sol", default: true }] });
