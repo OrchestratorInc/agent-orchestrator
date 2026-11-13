@@ -4,7 +4,7 @@ import { createElement, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CloudCpNotification } from "../lib/cloud-cp/types";
 import { CloudCpError } from "../lib/cloud-cp/errors";
-import { cloudInboxQueryKey, resetCloudInboxSupport, subscribeLiveCloudNotificationEvents } from "../lib/cloud-notifications";
+import { activeCloudNotification, cloudInboxQueryKey, resetCloudInboxSupport, subscribeLiveCloudNotificationEvents } from "../lib/cloud-notifications";
 import { isCleared, readCloudSessionMentions, useCloudNotifications } from "./useCloudNotifications";
 
 const { cloudCpMock, subscribeNotificationsMock, subscribeMyNotificationsMock } = vi.hoisted(() => ({
@@ -322,6 +322,40 @@ describe("the personal inbox (/me)", () => {
 		expect(changeMyNotificationState).toHaveBeenCalledWith({ orgId: "org-guest", sessionId: "session-9", read: true });
 		finish();
 		await reading;
+	});
+
+	it("drops a mention or aside reply from the bell once it is resolved, at once from its event", async () => {
+		const first = mention({ metadata: { authorName: "Chen Li", sequence: 42, asideId: "a-1" } });
+		const reply = mention({ id: "cntf_reply", type: "aside_reply", title: "Dana Kim replied in an aside", metadata: { asideId: "a-1", replyId: "r-1", authorName: "Dana Kim", sequence: 42 } });
+		const second = mention({ id: "cntf_mention_2", metadata: { authorName: "Marco Rossi", sequence: 57, asideId: "a-2" } });
+		const rows = [first, second, reply, cloudRow({ id: "kept", resolvedAt: "2026-07-21T10:05:00Z" })];
+		const listMyNotifications = vi.fn(async () => page(rows, 41));
+		let deliver!: (event: unknown) => void;
+		subscribeMyNotificationsMock.mockImplementation(async (options) => {
+			deliver = (event) => options?.onEvent(event);
+			await new Promise<void>((resolve) => options?.signal?.addEventListener("abort", () => resolve()));
+		});
+		const hook = renderInbox({ listMyNotifications }, { live: true });
+		await waitFor(() => expect(hook.result.current.items.map((row) => row.id)).toEqual(["cntf_mention", "cntf_mention_2", "cntf_reply", "kept"]));
+		await waitFor(() => expect(subscribeMyNotificationsMock).toHaveBeenCalled());
+		// The person replied in aside a-1: that aside's mention and reply rows resolve; a-2's stays.
+		const resolvedAt = "2026-07-21T10:06:00Z";
+		// The list is not read again in time: the events alone take the rows out.
+		listMyNotifications.mockImplementation(() => new Promise(() => undefined));
+		act(() => {
+			deliver({ sequence: 42, orgId: "org-guest", recipientUserId: "user-1", kind: "notification_resolved", notification: { ...first, resolvedAt }, createdAt: resolvedAt });
+			deliver({ sequence: 43, orgId: "org-guest", recipientUserId: "user-1", kind: "notification_resolved", notification: { ...reply, resolvedAt }, createdAt: resolvedAt });
+		});
+		await waitFor(() => expect(hook.result.current.items.map((row) => row.id)).toEqual(["cntf_mention_2", "kept"]));
+		// The badge loses the two unread rows that left.
+		expect(hook.result.current.data?.unreadCount).toBe(1);
+		hook.unmount();
+	});
+
+	it("keeps other kinds in the bell after they resolve", () => {
+		expect(activeCloudNotification({ type: "needs_input", resolvedAt: "2026-07-21T10:06:00Z" })).toBe(true);
+		expect(activeCloudNotification({ type: "mentioned", resolvedAt: "2026-07-21T10:06:00Z" })).toBe(false);
+		expect(activeCloudNotification({ type: "aside_reply", resolvedAt: undefined })).toBe(true);
 	});
 
 	it("streams /me events after the inbox's sequence and publishes them for alerts", async () => {

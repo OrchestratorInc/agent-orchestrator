@@ -2,11 +2,12 @@ import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
 import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { subscribeCloudNotificationHints } from "../lib/cloud-notification-hints";
 import {
+	activeCloudNotification,
+	ASIDE_REPLY,
 	cloudInboxQueryKey,
 	cloudInboxSupport,
 	cloudInboxSupportConfirmed,
 	cloudInboxUnavailable,
-	ASIDE_REPLY,
 	cloudNotificationsQueryKey,
 	MENTIONED,
 	probeCloudInbox,
@@ -98,7 +99,8 @@ export function useCloudNotifications(
 	const clears = useSyncExternalStore(subscribeClears, () => readClearsRaw(storageKey));
 	const items = useMemo(() => {
 		const state = parseClears(clears);
-		return (loaded ?? EMPTY).filter((item) => !isCleared(item, state));
+		// A resolved mention or aside reply is done: it leaves the bell.
+		return (loaded ?? EMPTY).filter((item) => !isCleared(item, state) && activeCloudNotification(item));
 	}, [clears, loaded]);
 
 	// A cleared row the control plane re-raises (in place: status back to unread,
@@ -245,6 +247,17 @@ function retryInboxRead(failureCount: number, error: unknown): boolean {
 	return !cloudInboxUnavailable(error) && failureCount < 3;
 }
 
+function resolveInCache(queryClient: QueryClient, key: readonly unknown[], resolved: CloudCpNotification): void {
+	queryClient.setQueryData<CloudCpNotificationListResponse>(key, (page) => {
+		const current = page?.items.find((row) => row.id === resolved.id);
+		if (!page || !current || current.resolvedAt) return page;
+		const resolvedAt = resolved.resolvedAt ?? new Date().toISOString();
+		const items = page.items.map((row) => row.id === resolved.id ? { ...row, resolvedAt } : row);
+		const dropped = current.status === "unread" && !activeCloudNotification({ type: current.type, resolvedAt });
+		return { ...page, items, unreadCount: dropped ? Math.max(0, page.unreadCount - 1) : page.unreadCount };
+	});
+}
+
 function markReadInCache(queryClient: QueryClient, key: readonly unknown[], match: (row: CloudCpNotification) => boolean): void {
 	queryClient.setQueryData<CloudCpNotificationListResponse>(key, (page) => {
 		if (!page) return page;
@@ -309,6 +322,8 @@ function useInboxStream(enabled: boolean, client: CloudCpClient, base: string, u
 						after,
 						signal: controller.signal,
 						onEvent: (event) => {
+							// A resolved row leaves the bell at once, before the list is read again.
+							if (event.kind === "notification_resolved") resolveInCache(queryClient, key, event.notification);
 							refresh();
 							void queryClient.invalidateQueries({ queryKey: cloudSessionsQueryKey });
 							void queryClient.invalidateQueries({ queryKey: sharedCloudWorkspacesQueryKey });

@@ -148,6 +148,15 @@ export function mentionMetadata(row: Pick<CloudCpNotification, "type" | "metadat
 	};
 }
 
+/**
+ * Whether a row stays in the bell. A mention or aside reply someone resolved
+ * (they wrote in the session, or replied in the aside) is done and leaves it;
+ * every other kind stays as before.
+ */
+export function activeCloudNotification(row: Pick<CloudCpNotification, "type" | "resolvedAt">): boolean {
+	return !row.resolvedAt || (row.type !== MENTIONED && row.type !== ASIDE_REPLY);
+}
+
 /** An aside reply notification's metadata, read defensively like a mention's. */
 export function asideReplyMetadata(row: Pick<CloudCpNotification, "type" | "metadata">): CloudCpAsideReplyNotificationMetadata | undefined {
 	if (row.type !== ASIDE_REPLY) return undefined;
