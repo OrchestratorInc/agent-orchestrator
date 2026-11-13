@@ -29,10 +29,14 @@ const cloudMocks = vi.hoisted(() => ({
 	listUserAgentModels: vi.fn(),
 	resumeSession: vi.fn(),
 	requestWorkspaceCheckout: vi.fn(),
+	listUserProviderConnections: vi.fn(),
+	getSession: vi.fn(),
+	getInterfaceTransition: vi.fn(),
+	startInterfaceTransition: vi.fn(),
 	chatProps: vi.fn(),
 }));
 // The control plane's base URL and attachment limit, for the tests that attach files.
-const cloudSetup = vi.hoisted(() => ({ baseUrl: "", maxAttachmentBytes: undefined as number | undefined }));
+const cloudSetup = vi.hoisted(() => ({ baseUrl: "", maxAttachmentBytes: undefined as number | undefined, agentSwitchHarnesses: [] as string[] }));
 vi.mock("../../hooks/useCloudCp", () => ({
 	useCloudCp: () => ({ ready: true, client: cloudMocks, baseUrl: cloudSetup.baseUrl, userId: "user-1" }),
 }));
@@ -40,6 +44,8 @@ vi.mock("../../hooks/useCloudOffering", () => ({
 	useCloudOffering: () => ({
 		features: cloudSetup.maxAttachmentBytes === undefined ? [] : ["attachments"],
 		maxAttachmentBytes: cloudSetup.maxAttachmentBytes,
+		agentSwitchHarnesses: cloudSetup.agentSwitchHarnesses,
+		chatHarnesses: ["claude-code", "codex", "cursor"],
 	}),
 }));
 vi.mock("./ChatWorkspace", () => ({
@@ -97,6 +103,84 @@ describe("CloudSessionChatSurface", () => {
 		cloudMocks.listUserAgentModels.mockReset().mockResolvedValue({ models: [] });
 		cloudSetup.baseUrl = "";
 		cloudSetup.maxAttachmentBytes = undefined;
+		cloudSetup.agentSwitchHarnesses = [];
+	});
+
+	describe("switching the session's agent", () => {
+		const cloudSession = { ...session, cloud: { orgId: "org-1" } };
+		const transition = {
+			id: "transition-1", sessionId: session.id, sourceMode: "chat", targetMode: "chat", policy: "drain", phase: "requested",
+			sourceHarness: "codex", targetHarness: "claude-code", createdAt: session.updatedAt, updatedAt: session.updatedAt,
+		};
+		beforeEach(() => {
+			cloudSetup.agentSwitchHarnesses = ["claude-code", "codex", "cursor", "opencode"];
+			cloudMocks.listChatEvents.mockReset().mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
+			cloudMocks.listChatModels.mockReset().mockResolvedValue({ models: [] });
+			// Signed in to Claude Code and Cursor; not to opencode, which has no Chat anyway.
+			cloudMocks.listUserProviderConnections.mockReset().mockResolvedValue({ providerConnections: [
+				{ provider: "claude-code", label: "default", validationState: "valid" },
+				{ provider: "cursor", label: "default", validationState: "valid" },
+			] });
+			cloudMocks.getSession.mockReset().mockResolvedValue({ session: { interfaceMode: "chat" } });
+			cloudMocks.getInterfaceTransition.mockReset().mockResolvedValue({ supported: true, targetMode: "tui" });
+			cloudMocks.startInterfaceTransition.mockReset().mockResolvedValue({ transition });
+			cloudMocks.sendSessionMessage.mockReset().mockResolvedValue({ event: {} });
+			cloudMocks.chatProps.mockClear();
+		});
+
+		function renderSurface() {
+			const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+			return render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={cloudSession} /></QueryClientProvider>);
+		}
+
+		it("offers the agents the control plane can switch to that the person is signed in to", async () => {
+			renderSurface();
+			await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].agentSwitch.agents.map((agent: { id: string }) => agent.id))
+				.toEqual(["claude-code", "codex", "cursor"]));
+			expect(cloudMocks.chatProps.mock.lastCall?.[0].agentSwitch).toMatchObject({ disabled: false, cloudOrgId: "org-1", harnessView: "cloud" });
+		});
+
+		it("keeps the session's agent where the control plane cannot switch it", async () => {
+			cloudSetup.agentSwitchHarnesses = [];
+			renderSurface();
+			await waitFor(() => expect(cloudMocks.chatProps).toHaveBeenCalled());
+			expect(cloudMocks.chatProps.mock.lastCall?.[0].agentSwitch).toMatchObject({ agents: [{ id: "codex" }], disabled: true });
+		});
+
+		it("switches with the next message, which goes to the new agent without the old agent's picks", async () => {
+			localStorage.setItem(`cloud-chat-settings:org-1:${session.id}:codex`, JSON.stringify({ model: "gpt-5-codex", reasoningEffort: "high" }));
+			renderSurface();
+			await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].agentSwitch.agents.length).toBeGreaterThan(1));
+			act(() => cloudMocks.chatProps.mock.lastCall?.[0].agentSwitch.onPendingChange({ harness: "claude-code", model: "claude-opus-4-5", effort: "high" }));
+			await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].agentSwitch.pending).toMatchObject({ harness: "claude-code" }));
+			await act(async () => { await cloudMocks.chatProps.mock.lastCall?.[0].onSend("now with Claude", undefined, "switch-1"); });
+			expect(cloudMocks.startInterfaceTransition).toHaveBeenCalledWith("org-1", session.id,
+				{ targetMode: "chat", policy: "drain", targetHarness: "claude-code", model: "claude-opus-4-5", reasoningEffort: "high" });
+			expect(cloudMocks.sendSessionMessage).toHaveBeenCalledTimes(1);
+			expect(cloudMocks.startInterfaceTransition.mock.invocationCallOrder[0]).toBeLessThan(cloudMocks.sendSessionMessage.mock.invocationCallOrder[0]);
+			const request = cloudMocks.sendSessionMessage.mock.calls[0][2];
+			expect(request.text).toBe("now with Claude");
+			expect(request).not.toHaveProperty("model");
+			expect(request).not.toHaveProperty("reasoningEffort");
+			await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].agentSwitch.pending).toBeUndefined());
+		});
+
+		it("keeps the draft and says why when the switch is refused", async () => {
+			cloudMocks.startInterfaceTransition.mockReset().mockRejectedValue(
+				new CloudCpError("The session's owner has no valid cursor login.", { status: 409, code: "AGENT_LOGIN_REQUIRED" }));
+			renderSurface();
+			await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].agentSwitch.agents.length).toBeGreaterThan(1));
+			act(() => cloudMocks.chatProps.mock.lastCall?.[0].agentSwitch.onPendingChange({ harness: "cursor" }));
+			await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].agentSwitch.pending).toMatchObject({ harness: "cursor" }));
+			let failure: unknown;
+			await act(async () => {
+				failure = await cloudMocks.chatProps.mock.lastCall?.[0].onSend("hi", undefined, "switch-2").catch((error: unknown) => error);
+			});
+			expect(failure).toMatchObject({ code: "AGENT_SWITCH_FAILED" });
+			expect(cloudMocks.sendSessionMessage).not.toHaveBeenCalled();
+			await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].composerNotice).toBeTruthy());
+			expect(cloudMocks.chatProps.mock.lastCall?.[0].agentSwitch.pending).toBeUndefined();
+		});
 	});
 
 	it("lists the session's agent's models from Cloud's list for the account, not this computer's", async () => {
@@ -2421,5 +2505,20 @@ describe("Cloud excerpt display snapshots", () => {
 			payload: { text: "Explain", content: [{ ...display, snapshot: original.snapshot }] }, createdAt: session.updatedAt }]);
 		expect(projected.items[0]).toMatchObject({ content: [{ text: excerpt.text, snapshot: original.snapshot }] });
 		expect(excerpt).toEqual(original);
+	});
+});
+
+describe("toSnapshot agent switches", () => {
+	it("draws chat.agent_switched as the Switched line a local switch draws", () => {
+		const events = [
+			{ sessionId: session.id, sequence: 1, type: "chat.user_message", payload: { text: "hi", turnId: "turn-1" }, createdAt: session.updatedAt },
+			{ sessionId: session.id, sequence: 2, type: "chat.agent_switched", createdAt: session.updatedAt,
+				payload: { transitionId: "t-1", sourceHarness: "codex", targetHarness: "claude-code", sourceModel: "gpt-5", targetModel: "claude-opus-4-5", targetReasoningEffort: "high", resumed: false } },
+		] as CloudCpClientEvent[];
+		const marker = toSnapshot(session, events).items.find((item) => item.kind === "activity" && item.detail?.event === "provider_switch");
+		expect(marker).toMatchObject({
+			sequence: 2,
+			detail: { event: "provider_switch", sourceHarness: "codex", targetHarness: "claude-code", sourceModel: "gpt-5", targetModel: "claude-opus-4-5", targetEffort: "high" },
+		});
 	});
 });

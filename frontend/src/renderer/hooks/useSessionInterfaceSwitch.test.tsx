@@ -215,6 +215,25 @@ describe("useSessionInterfaceSwitch Cloud handoff", () => {
 		expect(result.current.switchAction).toBeFalsy();
 	});
 
+	// An agent switch keeps the interface: Chat stays on screen with its
+	// "Switching" line, and the terminal is covered while the worker restarts.
+	it.each([["chat", false], ["tui", true]] as const)("covers a %s session during an agent switch: %s", (mode, covered) => {
+		mocks.status = {
+			supported: true,
+			targetMode: mode === "chat" ? "tui" : "chat",
+			transition: {
+				id: "agent-switch", sessionId: "session-1", sourceMode: mode, targetMode: mode, policy: "drain",
+				historyPolicy: "strict", phase: "target_starting",
+				createdAt: "2026-10-01T00:00:00Z", updatedAt: "2026-10-01T00:00:01Z",
+				...{ sourceHarness: "codex", targetHarness: "claude-code" },
+			} as SessionInterfaceTransition,
+		};
+		const { result } = renderHook(() => useSessionInterfaceSwitch("session-1", { ...cloudSession, mode }, { orgId: "org-1" }));
+		expect(result.current.agentSwitchTo).toBe("claude-code");
+		expect(result.current.cloudLoader).toBe(covered);
+		expect(result.current.renderedMode).toBe(mode);
+	});
+
 	it("keeps source Chat visible while a Cloud drain waits and scopes transition to its org", () => {
 		mocks.status = {
 			supported: true,
