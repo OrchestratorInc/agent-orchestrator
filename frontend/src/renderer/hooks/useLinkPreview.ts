@@ -1,6 +1,6 @@
 import { apiErrorException } from "../lib/api-error-exception";
 import { QueryObserver } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import type { components } from "../../api/schema";
 import { apiClient } from "../lib/api-client";
 import { queryClient } from "../lib/query-client";
@@ -108,4 +108,50 @@ export function useLinkPreview(url: string, enabled: boolean) {
 		isPending: enabled && current.data === undefined && !settledEmpty,
 		isError: settledEmpty,
 	};
+}
+
+/**
+ * The site root of a web link (`https://host/`), whose preview names the site's
+ * icon. Carries none of the link's path, query or credentials.
+ */
+export function linkOrigin(url: string): string | undefined {
+	try {
+		const parsed = new URL(url);
+		if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return undefined;
+		return `${parsed.protocol}//${parsed.host}/`;
+	} catch {
+		return undefined;
+	}
+}
+
+function cachedFavicons(url: string): LinkPreview | undefined {
+	const read = (key: string) => {
+		const preview = queryClient.getQueryData<LinkPreview>(linkPreviewQueryKey(key));
+		return preview?.faviconUrl ? preview : undefined;
+	};
+	const origin = linkOrigin(url);
+	return read(url) ?? (origin ? read(origin) : undefined);
+}
+
+function subscribeLinkPreviews(onChange: () => void) {
+	return queryClient.getQueryCache().subscribe((event) => {
+		if (event.query.queryKey[0] === "link-preview") onChange();
+	});
+}
+
+/**
+ * The preview naming a link's site icons: the link's own (a hover loaded it)
+ * or its site root's. Reads the cache only; updates in place when either
+ * preview arrives.
+ */
+export function useCachedLinkFavicons(url: string): LinkPreview | undefined {
+	return useSyncExternalStore(subscribeLinkPreviews, () => cachedFavicons(url));
+}
+
+/** Whether asking for the link's site root preview failed, so no icon is coming. */
+export function useLinkFaviconFailed(url: string): boolean {
+	return useSyncExternalStore(subscribeLinkPreviews, () => {
+		const origin = linkOrigin(url);
+		return origin ? queryClient.getQueryState(linkPreviewQueryKey(origin))?.status === "error" : false;
+	});
 }

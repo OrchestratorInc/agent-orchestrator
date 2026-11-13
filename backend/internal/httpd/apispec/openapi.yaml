@@ -20197,6 +20197,8 @@ components:
       properties:
         description:
           type: string
+        faviconDarkUrl:
+          type: string
         faviconUrl:
           type: string
         imageUrl:

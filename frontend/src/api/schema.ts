@@ -7019,6 +7019,7 @@ export interface components {
         };
         LinkPreviewResponse: {
             description?: string;
+            faviconDarkUrl?: string;
             faviconUrl?: string;
             imageUrl?: string;
             siteName?: string;
