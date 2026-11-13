@@ -4888,6 +4888,7 @@
 	"settings.cloudProject.workspaceRepositoriesHint": "Extraits côte à côte dans le dossier de l'espace de travail, sur la branche de la session, et l'agent démarre dans ce dossier. Le premier ne peut pas être retiré.",
 	"settings.cloudProject.workspaceRepositories": "Dépôts de l'espace de travail",
 	"shortcut.find-in-chat": "Rechercher dans le chat",
+	"shortcut.add-selection-to-chat": "Ajouter la sélection au chat",
 	"chat.find.incomplete": "Recherche incomplète",
 	"chat.find.gap": "Les messages intermédiaires ne sont pas chargés",
 	"chat.find.historyUnavailable": "L'historique est indisponible.",

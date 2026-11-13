@@ -183,6 +183,36 @@ test.beforeEach(async ({ page }) => {
 });
 
 test.describe("Add to chat from highlighted code", () => {
+	for (const mode of ["file", "diff", "chat"] as const) test(mode + ": remapped selection shortcut replaces Ctrl+L @P0", async ({ page }) => {
+		const { inspector } = await openChatSession(page, after, filePath, "Highlight this chat sentence to add its text to the draft.");
+		if (mode === "chat") {
+			const body = page.getByRole("log", { name: "Conversation" }).locator("[data-chat-message-body]");
+			const box = (await body.boundingBox())!;
+			await page.mouse.move(box.x + 4, box.y + 10);
+			await page.mouse.down();
+			await page.mouse.move(box.x + 180, box.y + 10, { steps: 12 });
+			await page.mouse.up();
+		} else {
+			await inspector.getByRole("button", { name: mode === "file" ? "Open full file" : "Open diff in center" }).click();
+			await selectText(page, row(page, CENTER, 3), row(page, CENTER, 6));
+			await page.getByTestId("session-file-scroll").focus();
+		}
+		const toolbar = page.locator(mode === "chat" ? "[data-chat-selection-actions]" : "[data-selection-ask]");
+		await expect(toolbar).toBeVisible();
+		await page.evaluate(async () => {
+			const modulePath = "/src/renderer/stores/keybindings-store.ts";
+			const { useKeybindingsStore } = await import(/* @vite-ignore */ modulePath);
+			await useKeybindingsStore.getState().setBindings("add-selection-to-chat", [{ key: "j", ctrl: true, meta: false, shift: true, alt: true }]);
+		});
+		await expect(toolbar.getByRole("button", { name: "Add to chat", exact: true })).toHaveAttribute("title", "Add to chat (Ctrl+Alt+Shift+J)");
+		await page.keyboard.press("ControlOrMeta+L");
+		await expect(page.getByRole("button", { name: "1 annotation" })).toHaveCount(0);
+		await expect(toolbar).toBeVisible();
+		await page.keyboard.press("Control+Alt+Shift+J");
+		await expect(page.getByRole("button", { name: "1 annotation" })).toBeVisible();
+		await expect(toolbar).toBeHidden();
+	});
+
 	test("unsupported filename is refused before changing the draft or selection", async ({ page }) => {
 		const {composer,sentToChat}=await openChatSession(page,after,"src/notes:v2.ts");
 		await composer.fill("keep my question");

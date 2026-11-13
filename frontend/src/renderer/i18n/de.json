@@ -4771,6 +4771,7 @@
 	"settings.cloudProject.workspaceRepositoriesHint": "Nebeneinander im Workspace-Ordner auf dem Sitzungs-Branch ausgecheckt; der Agent startet in diesem Ordner. Das erste kann nicht entfernt werden.",
 	"settings.cloudProject.workspaceRepositories": "Workspace-Repositorys",
 	"shortcut.find-in-chat": "Im Chat suchen",
+	"shortcut.add-selection-to-chat": "Auswahl zum Chat hinzufügen",
 	"chat.find.incomplete": "Suche unvollständig",
 	"chat.find.gap": "Nachrichten dazwischen sind nicht geladen",
 	"chat.find.historyUnavailable": "Verlauf ist nicht verfügbar.",

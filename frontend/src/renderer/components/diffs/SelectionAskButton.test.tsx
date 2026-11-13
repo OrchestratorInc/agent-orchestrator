@@ -3,9 +3,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SelectionAskButton } from "./SelectionAskButton";
 import type { CodeSelection, CodeSelectionSource } from "./useCodeSelection";
 import { isMacPlatform } from "../../lib/platform";
+import { useKeybindingsStore } from "../../stores/keybindings-store";
 
 vi.mock("../../lib/platform", () => ({ isMacPlatform: vi.fn(() => false) }));
-beforeEach(() => vi.mocked(isMacPlatform).mockReturnValue(false));
+beforeEach(() => {
+	vi.mocked(isMacPlatform).mockReturnValue(false);
+	useKeybindingsStore.setState({ overrides: {} });
+});
 afterEach(() => {
 	document.querySelectorAll("[data-test-selection-scope]").forEach(element => element.remove());
 	vi.restoreAllMocks();
@@ -47,6 +51,27 @@ function keyboardSelection({ outerViewport = false } = {}) {
 }
 
 describe("SelectionAskButton", () => {
+	it.each([false, true])("uses live bindings and hints, including unassign and reset (Mac: %s)", isMac => {
+		vi.mocked(isMacPlatform).mockReturnValue(isMac);
+		const selected = keyboardSelection(), onAsk = vi.fn(() => false);
+		render(<SelectionAskButton onAsk={onAsk} source={selected.store} />);
+		const button = screen.getByRole("button", { name: "Add to chat" });
+		const primary = { ctrlKey: !isMac, metaKey: isMac };
+		expect(button).toHaveAttribute("title", isMac ? "Add to chat (⌘L)" : "Add to chat (Ctrl+L)");
+		act(() => useKeybindingsStore.setState({ overrides: { "add-selection-to-chat": [{ key: "j", ctrl: !isMac, meta: isMac, shift: true, alt: true }] } }));
+		expect(button).toHaveAttribute("title", isMac ? "Add to chat (⌥⇧⌘J)" : "Add to chat (Ctrl+Alt+Shift+J)");
+		expect(fireEvent.keyDown(selected.host, { key: "l", ...primary })).toBe(true);
+		expect(fireEvent.keyDown(selected.host, { key: "j", ...primary, shiftKey: true, altKey: true, isComposing: true })).toBe(true);
+		expect(fireEvent.keyDown(selected.host, { key: "j", ...primary, shiftKey: true, altKey: true })).toBe(false);
+		expect(onAsk).toHaveBeenCalledTimes(1);
+		act(() => useKeybindingsStore.setState({ overrides: { "add-selection-to-chat": [] } }));
+		expect(button).toHaveAttribute("title", "Add to chat");
+		expect(fireEvent.keyDown(selected.host, { key: "l", ...primary })).toBe(true);
+		expect(fireEvent.keyDown(selected.host, { key: "j", ...primary, shiftKey: true, altKey: true })).toBe(true);
+		act(() => useKeybindingsStore.setState({ overrides: {} }));
+		expect(fireEvent.keyDown(selected.host, { key: "l", ...primary })).toBe(false);
+		expect(onAsk).toHaveBeenCalledTimes(2);
+	});
 	it("reports a rejected click and keyboard request without discarding the selection", () => {
 		const onAsk = vi.fn(() => false);
 		const selected = keyboardSelection();

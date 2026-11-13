@@ -5010,5 +5010,6 @@
 	"chat.find.wrappedFirst": "Возврат к первому совпадению.",
 	"chat.find.wrappedLast": "Переход к последнему совпадению.",
 	"chat.find.notRevealed": "Не удалось показать это совпадение. Повторите поиск.",
-	"shortcut.find-in-chat": "Найти в чате"
+	"shortcut.find-in-chat": "Найти в чате",
+	"shortcut.add-selection-to-chat": "Добавить выделенное в чат"
 }

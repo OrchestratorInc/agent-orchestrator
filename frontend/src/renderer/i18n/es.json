@@ -4888,6 +4888,7 @@
 	"settings.cloudProject.workspaceRepositoriesHint": "Se descargan uno junto a otro en la carpeta del espacio de trabajo, en la rama de la sesión, y el agente empieza en esa carpeta. El primero no se puede quitar.",
 	"settings.cloudProject.workspaceRepositories": "Repositorios del espacio de trabajo",
 	"shortcut.find-in-chat": "Buscar en el chat",
+	"shortcut.add-selection-to-chat": "Añadir selección al chat",
 	"chat.find.incomplete": "Búsqueda incompleta",
 	"chat.find.gap": "Los mensajes intermedios no están cargados",
 	"chat.find.historyUnavailable": "El historial no está disponible.",
