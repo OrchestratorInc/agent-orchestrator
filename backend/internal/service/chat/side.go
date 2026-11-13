@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -617,7 +618,7 @@ func (s *Service) validateSideReferences(ctx context.Context, session domain.Ses
 	result := make([]domain.SideReference, 0, len(excerpts))
 	total, rawTotal, contextBytes := 0, 0, 0
 	for _, ref := range excerpts {
-		if ref.MessageID == "" || (ref.Text == "" && !isFlowchartOnlySnapshot(ref.Snapshot)) || ref.Revision < 0 || len(ref.Comment) > maxExcerptCommentBytes {
+		if ref.MessageID == "" || (ref.Text == "" && !isFlowchartOnlySnapshot(ref.Snapshot)) || ref.Revision < 0 || utf8.RuneCountInString(ref.Comment) > maxExcerptCommentRunes {
 			return nil, ErrExcerptInvalid
 		}
 		total += len(ref.Text)

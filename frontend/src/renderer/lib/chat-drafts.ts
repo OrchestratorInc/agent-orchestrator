@@ -1665,7 +1665,7 @@ export function clearAcceptedChatComposer(
 				attachments: current.composer.delivery.draft
 					? current.composer.attachments
 					: current.composer.attachments.filter((attachment) => !acceptedAttachmentIds.includes(attachment.id)),
-				excerpts: current.composer.excerpts?.filter(ref => !current.composer.delivery?.excerpts?.some(sent => sent.id === ref.id)),
+				excerpts: current.composer.excerpts?.filter(ref => !current.composer.delivery?.excerpts?.some(sent => sent.id === ref.id && sent.comment === ref.comment)),
 				fileReferences: current.composer.fileReferences?.filter(ref => !current.composer.delivery?.fileReferences?.some(sent => sent.id === ref.id)),
 			},
 		};
@@ -1685,7 +1685,7 @@ export function clearAcceptedChatComposer(
 			revision: current.composer.revision + 1,
 			text: "",
 			attachments: [],
-			excerpts: sent ? current.composer.excerpts?.filter(ref => !sent.excerpts?.some(item => item.id === ref.id)) ?? [] : [],
+			excerpts: sent ? current.composer.excerpts?.filter(ref => !sent.excerpts?.some(item => item.id === ref.id && item.comment === ref.comment)) ?? [] : [],
 			fileReferences: [],
 		},
 	};

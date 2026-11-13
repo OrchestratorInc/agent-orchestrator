@@ -1079,12 +1079,14 @@ export function useIndependentSideChats(
 				const d = draftsRef.current[sideId];
 				if (d?.pendingDelivery === frozen) {
 					const { pendingDelivery: _, ...rest } = d;
-					const unchanged =
+					const sentTextUnchanged =
 						d.text === frozen.submitted.text &&
-						JSON.stringify(d.attachments) === JSON.stringify(frozen.submitted.attachments) &&
-						JSON.stringify(d.references) === JSON.stringify(frozen.submitted.references);
+						JSON.stringify(d.attachments) === JSON.stringify(frozen.submitted.attachments);
+					const unsentReferences = d.references.filter((reference) =>
+						!frozen.submitted.references.some((submitted) => JSON.stringify(submitted) === JSON.stringify(reference)));
 					const next: SideChatDraft = {
-						...(unchanged ? emptySideChatDraft() : rest),
+						...(sentTextUnchanged ? emptySideChatDraft() : rest),
+						references: unsentReferences,
 						lastHandoffDelivery: handoffClientMessageId ? frozen : d.lastHandoffDelivery,
 					};
 					draftsRef.current = { ...draftsRef.current, [sideId]: next };

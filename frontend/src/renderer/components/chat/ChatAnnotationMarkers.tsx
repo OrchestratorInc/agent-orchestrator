@@ -15,7 +15,7 @@ import { Button } from "../ui/button";
 const HIGHLIGHT = "chat-annotations";
 const BADGE_SIZE = 24;
 
-type HighlightApi = { Highlight?: new (...ranges: Range[]) => unknown; CSS?: { highlights?: Map<string, unknown> } };
+type HighlightApi = { Highlight?: new (...ranges: Range[]) => Set<Range>; CSS?: { highlights?: Map<string, Set<Range>> } };
 
 export interface ChatAnnotationMarker {
 	number: number;
@@ -83,11 +83,10 @@ export function ChatAnnotationMarkers({
 			return;
 		}
 		let frame: number | undefined;
-		let painted = "";
+		let painted: Range[] = [];
 		const resolve = ({ reference }: ChatAnnotationMarker) => {
 			const cached = resolved.get(reference.id);
-			if (cached?.startContainer.isConnected && cached.endContainer.isConnected) return cached;
-			resolved.delete(reference.id);
+			if (cached) return cached;
 			const source = content.querySelector<HTMLElement>(`[data-chat-message-id="${CSS.escape(reference.messageId)}"]`);
 			if (!source) return undefined;
 			let range = annotationReferenceRange(source, reference);
@@ -117,10 +116,13 @@ export function ChatAnnotationMarkers({
 				const left = Math.min(line.right - 2, bounds.right - BADGE_SIZE) - surface.left;
 				next.push({ id: marker.reference.id, number: marker.number, left, top: Math.max(bounds.top, line.top - BADGE_SIZE + 2) - surface.top });
 			}
-			const keys = [...resolved.keys()].join();
-			if (registry && api.Highlight && keys !== painted) {
-				painted = keys;
-				registry.set(HIGHLIGHT, new api.Highlight(...resolved.values()));
+			const current = [...resolved.values()];
+			if (registry && api.Highlight && (current.length !== painted.length || current.some((range, index) => range !== painted[index]))) {
+				let highlight = registry.get(HIGHLIGHT);
+				if (!highlight) registry.set(HIGHLIGHT, (highlight = new api.Highlight()));
+				for (const range of painted) if (!current.includes(range)) highlight.delete(range);
+				for (const range of current) highlight.add(range);
+				painted = current;
 			}
 			setPlaced((previous) => (JSON.stringify(previous) === JSON.stringify(next) ? previous : next));
 		};
@@ -131,7 +133,10 @@ export function ChatAnnotationMarkers({
 		const resize = new ResizeObserver(schedule);
 		resize.observe(viewport);
 		resize.observe(content);
-		const mutation = new MutationObserver(schedule);
+		const mutation = new MutationObserver(() => {
+			resolved.clear();
+			schedule();
+		});
 		mutation.observe(content, { subtree: true, childList: true, characterData: true });
 		document.addEventListener("scroll", onScroll, true);
 		window.addEventListener("resize", schedule);
@@ -142,7 +147,9 @@ export function ChatAnnotationMarkers({
 			mutation.disconnect();
 			document.removeEventListener("scroll", onScroll, true);
 			window.removeEventListener("resize", schedule);
-			registry?.delete(HIGHLIGHT);
+			const highlight = registry?.get(HIGHLIGHT);
+			for (const range of painted) highlight?.delete(range);
+			if (highlight?.size === 0) registry?.delete(HIGHLIGHT);
 		};
 	}, [ownKey, contentRef, viewportRef]);
 	if (own.length === 0) return null;

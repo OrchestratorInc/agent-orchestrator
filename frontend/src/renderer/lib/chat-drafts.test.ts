@@ -75,18 +75,19 @@ it("keeps an annotation added while an annotated send is in flight, without rese
 	const scope = "annotate-during-delivery";
 	const sent = { id: "sent", conversationId: "c", messageId: "m", revision: 1, role: "assistant" as const, text: "first", comment: "shorter" };
 	const added = { ...sent, id: "added", text: "second", comment: undefined };
+	const edited = { ...sent, comment: "much shorter" };
 	writeChatComposerText(scope, "question", storage);
 	writeChatExcerptReferences(scope, [sent], storage);
 	const prepared = prepareChatComposerDelivery(scope, { kind: "send", optimistic: true, composerText: "question", requestText: "question", attachments: [], excerpts: [sent], clientMessageId: "annotated" }, storage);
 	expect(prepared.ok && prepared.mutation.draft).toBeUndefined();
 	const delivery = prepared.ok ? prepared.mutation : undefined;
-	expect(writeChatExcerptReferences(scope, [sent, added], storage).ok).toBe(true);
+	expect(writeChatExcerptReferences(scope, [edited, added], storage).ok).toBe(true);
 	expect(readChatSessionDraft(scope, storage).composer.revision).toBe(delivery?.revision);
 	markChatComposerDeliveryAccepted(scope, "annotated", delivery!.revision, storage);
 	expect(clearAcceptedChatComposer(scope, delivery!.revision, storage).cleared).toBe(true);
 	const composer = readChatSessionDraft(scope, storage).composer;
 	expect(composer.text).toBe("");
-	expect(composer.excerpts).toEqual([added]);
+	expect(composer.excerpts).toEqual([edited, added]);
 	expect(readChatSessionDraft(scope, storage).composer.delivery).toBeUndefined();
 });
 
