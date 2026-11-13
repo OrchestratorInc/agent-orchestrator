@@ -690,7 +690,10 @@ vi.mock("./SessionFileWorkspace", () => ({
 vi.mock("./CloudWorkspaceDiff", () => ({
 	CloudFileContentPane: ({ path }: { path: string }) => <div data-testid="cloud-file-workspace">{path}</div>,
 	CloudWorkspaceDiff: ({ onOpenFile }: { onOpenFile?: (path: string) => void }) => (
-		<button onClick={() => onOpenFile?.("src/cloud.ts")} type="button">open cloud file</button>
+		<>
+			<button onClick={() => onOpenFile?.("src/cloud.ts")} type="button">open cloud file</button>
+			<button onClick={() => onOpenFile?.("src/other.ts")} type="button">open other cloud file</button>
+		</>
 	),
 }));
 const { browserDestroy, browserViewOptions, browserViewState } = vi.hoisted(() => ({
@@ -6276,6 +6279,29 @@ describe("SessionView", () => {
 
 		expect(screen.getByRole("tab", { name: "cloud.ts" })).toHaveAttribute("aria-selected", "true");
 		expect(screen.getByTestId("cloud-file-workspace")).toHaveTextContent("src/cloud.ts");
+	});
+
+	it("keeps each open Cloud file's view mounted behind the others, as local file tabs do", () => {
+		workerSession("sess-1").cloud = { orgId: "cloud-org", sandboxProvider: "docker" };
+		act(() => useUiStore.getState().setInspectorOpen("sess-1", true));
+		render(<SessionView sessionId="sess-1" />);
+
+		fireEvent.click(screen.getByRole("button", { name: "open files" }));
+		fireEvent.click(screen.getByRole("button", { name: "open cloud file" }));
+		const first = screen.getByTestId("cloud-file-workspace");
+		fireEvent.click(screen.getByRole("button", { name: "open other cloud file" }));
+
+		expect(screen.getByRole("tab", { name: "other.ts" })).toHaveAttribute("aria-selected", "true");
+		const views = screen.getAllByTestId("cloud-file-workspace");
+		expect(views.map((view) => view.textContent)).toEqual(["src/cloud.ts", "src/other.ts"]);
+		// The first file is hidden, not unmounted, so it keeps its mode, scroll and edit.
+		expect(views[0]).toBe(first);
+		expect(first.closest("[inert]")).not.toBeNull();
+		expect(views[1].closest("[inert]")).toBeNull();
+
+		fireEvent.click(screen.getByRole("tab", { name: "cloud.ts" }));
+		expect(screen.getAllByTestId("cloud-file-workspace")[0]).toBe(first);
+		expect(first.closest("[inert]")).toBeNull();
 	});
 
 	it("opens a selected tree file in a center tab while retaining the right-side tree", () => {
