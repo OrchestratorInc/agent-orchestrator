@@ -183,3 +183,29 @@ func TestMergeOffloadFactsKeepsEarlierPaths(t *testing.T) {
 		t.Fatalf("merged = %+v, want both paths, summed bytes and the earlier template key", merged)
 	}
 }
+
+func TestShutdownWaitsForRunningCleanup(t *testing.T) {
+	svc, _ := newTestService(t, newFakeStore(), nil, nil, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := svc.Start(ctx)
+	job, err := svc.beginJob()
+	if err != nil {
+		t.Fatalf("begin job: %v", err)
+	}
+	cancel()
+	select {
+	case <-done:
+		t.Fatal("the schedule stopped while a cleanup was still running")
+	case <-time.After(100 * time.Millisecond):
+	}
+	svc.endJob(job)
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the schedule did not stop after the cleanup ended")
+	}
+	if _, err := svc.beginJob(); !errors.Is(err, ErrStopping) {
+		t.Fatalf("err = %v, want ErrStopping", err)
+	}
+	waitIdle(t, svc)
+}

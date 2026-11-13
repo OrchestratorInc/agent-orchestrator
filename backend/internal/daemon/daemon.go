@@ -1574,8 +1574,9 @@ func Run(buildVersion string) (retErr error) {
 	if usageLimitResumeDone != nil {
 		<-usageLimitResumeDone
 	}
-	// A storage pass stops between actions; one large delete may still be
-	// finishing, so shutdown waits for it only so long.
+	// storageDone closes once the schedule and any cleanup started from the
+	// app or CLI have ended. A cleanup stops between actions; one large
+	// delete may still be finishing, so shutdown waits for it only so long.
 	select {
 	case <-storageDone:
 	case <-time.After(cfg.ShutdownTimeout):
