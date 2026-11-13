@@ -314,6 +314,17 @@ it("removes a confirmed shutdown even if confirmation IPC fails", async () => {
 	expect(hook.result.current.sides).toEqual([]);
 });
 
+it("keeps an already-closed response read-only when confirmation is unavailable", async () => {
+	const hook = await setup();
+	remove.mockResolvedValueOnce({ error: {}, response: { status: 404 } });
+	confirmClose.mockRejectedValueOnce(new Error("Desktop close confirmation is unavailable."));
+	await act(async () => { await expect(hook.result.current.close("side")).rejects.toThrow(); });
+	expect(hook.result.current.activeId).toBe("side");
+	expect(capture).not.toHaveBeenCalledWith("side", true);
+	await act(async () => hook.result.current.send("side", "blocked"));
+	expect(post).not.toHaveBeenCalled();
+});
+
 it("preserves a tab created and selected while an older deletion finishes", async () => {
 	const hook = await setup(); const deletion = deferred<object>(); remove.mockReturnValueOnce(deletion.promise);
 	let closing!: Promise<void>; act(() => { closing = hook.result.current.close("side"); });

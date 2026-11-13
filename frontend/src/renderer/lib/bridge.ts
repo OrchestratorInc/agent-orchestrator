@@ -166,7 +166,7 @@ export const aoBridge: AoBridge =
 			onStatus: () => () => undefined,
 		},
 		agentLogin: { request: async () => null },
-		sideChats: { capture: async () => undefined, confirmClose: async () => "unconfirmed", getCloseState: async () => ({ pending: [], closedIds: [] }), onPendingClosesChanged: () => () => {} },
+		sideChats: { capture: async () => undefined, confirmClose: async () => { throw new Error("Desktop close confirmation is unavailable."); }, getCloseState: async () => ({ pending: [], closedIds: [] }), onPendingClosesChanged: () => () => {} },
 		editorHandoff: {
 			pathAction: async () => { throw new Error("Desktop app is required to open local paths."); },
 			getState: async () => ({
