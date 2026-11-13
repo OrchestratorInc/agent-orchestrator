@@ -274,7 +274,7 @@ export function useMobileConversation(
 		if (!cfg || unavailable || !hasConversation) return { models, configOptions };
 		if (options?.ifMissing) {
 			await turnOptionsInFlight.current?.catch(() => {});
-			if (turnOptionsLoaded.current) return rememberedTurnOptions(cacheKey) ?? { models, configOptions };
+			if (turnOptionsLoaded.current) return rememberedTurnOptions(cacheKey, harnessRef.current) ?? { models, configOptions };
 		}
 		const request = ++turnOptionsRequest.current;
 		if (options?.refresh) turnOptionsCache.delete(cacheKey);
@@ -297,10 +297,12 @@ export function useMobileConversation(
 			if (turnOptionsInFlight.current === loading) turnOptionsInFlight.current = undefined;
 		}
 		const empty = isEmptyTurnOptionCatalog(catalog);
-		const shown = empty ? rememberedTurnOptions(cacheKey) ?? catalog : catalog;
+		// Only the same agent's: after an agent switch the outgoing agent's
+		// models would be wrong, so an empty catalog then shows empty.
+		const shown = empty ? rememberedTurnOptions(cacheKey, harnessRef.current) ?? catalog : catalog;
 		if (request !== turnOptionsRequest.current) return shown;
 		turnOptionsLoaded.current = !empty;
-		if (!empty) rememberTurnOptions(cacheKey, catalog);
+		if (!empty) rememberTurnOptions(cacheKey, catalog, harnessRef.current);
 		if (mounted.current) {
 			setModels(shown.models);
 			setConfigOptions(shown.configOptions);
