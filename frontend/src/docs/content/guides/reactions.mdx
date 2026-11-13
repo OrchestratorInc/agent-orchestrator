@@ -27,7 +27,7 @@ ao session auto-fix --ci off --reviews off --auto-review off
 ao session claim-pr <pr-number-or-url> --no-takeover
 ```
 
-Turn them back on with `ao session auto-fix --ci on --reviews on` to take the PR over.
+The session already holds the claim, so taking the PR over needs no second claim: turn the switches back on with `ao session auto-fix --ci on --reviews on`. If the claim was refused because another session owns the PR, a plain `ao session claim-pr <pr-number-or-url>` without `--no-takeover` moves it to this session.
 
 ## Avoid duplicate nudges
 

@@ -723,7 +723,7 @@ func writeClaimPRResult(cmd *cobra.Command, res claimPRResponse) error {
 			return err
 		}
 	}
-	_, err := fmt.Fprintln(out, "  Only reviewing someone else's PR? It is not the user's: run `ao session auto-fix --ci off --reviews off --auto-review off` and do not change it unless the user asks.")
+	_, err := fmt.Fprintf(out, "  Only reviewing someone else's PR? It is not the user's: run `ao session auto-fix %s --ci off --reviews off --auto-review off` and do not change it unless the user asks.\n", res.SessionID)
 	return err
 }
 

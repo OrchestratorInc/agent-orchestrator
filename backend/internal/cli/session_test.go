@@ -938,6 +938,10 @@ func TestSessionClaimPR_UsesCurrentSessionFromEnv(t *testing.T) {
 	if !strings.Contains(out, "claimed PR #142") {
 		t.Fatalf("unexpected output: %s", out)
 	}
+	// The reviewer hint names the claimed session, so it works from any shell.
+	if !strings.Contains(out, "`ao session auto-fix demo-1 --ci off --reviews off --auto-review off`") {
+		t.Fatalf("claim output missing session-specific auto-fix hint: %s", out)
+	}
 	want := []string{
 		"GET /api/v1/sessions/demo-1",
 		"GET /api/v1/projects/demo",
