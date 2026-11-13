@@ -10,8 +10,10 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -280,6 +282,11 @@ func (f *fakeConversationService) Skills(context.Context, domain.SessionID) ([]p
 // way a client sees it.
 func conversationSnapshotBody(t *testing.T, snapshot chatsvc.Snapshot) map[string]any {
 	t.Helper()
+	return conversationSnapshotBodyQuery(t, snapshot, "")
+}
+
+func conversationSnapshotBodyQuery(t *testing.T, snapshot chatsvc.Snapshot, query string) map[string]any {
+	t.Helper()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	srv := httptest.NewServer(httpd.NewRouterWithControl(config.Config{}, log, nil, httpd.APIDeps{
 		Sessions:      newFakeSessionService(),
@@ -287,7 +294,7 @@ func conversationSnapshotBody(t *testing.T, snapshot chatsvc.Snapshot) map[strin
 	}, httpd.ControlDeps{}))
 	t.Cleanup(srv.Close)
 
-	resp, err := http.Get(srv.URL + "/api/v1/sessions/p1-1/conversation")
+	resp, err := http.Get(srv.URL + "/api/v1/sessions/p1-1/conversation" + query)
 	if err != nil {
 		t.Fatalf("GET conversation: %v", err)
 	}
@@ -769,6 +776,49 @@ func TestSnapshotPrefersStreamedOutputOverAggregate(t *testing.T) {
 	}
 }
 
+// outputLimit keeps the head and tail of a long output on rune boundaries and
+// reports the full size; a short output is untouched.
+func TestSnapshotOutputLimitKeepsHeadAndTail(t *testing.T) {
+	long := "spawned session w-1\n" + strings.Repeat("é", 100) + "\nresult: ok\n"
+	body := conversationSnapshotBodyQuery(t, chatsvc.Snapshot{
+		SessionID: domain.SessionID("p1-1"),
+		Mode:      domain.SessionModeChat,
+		Activities: []domain.ConversationActivity{
+			{ID: "long", Kind: domain.ActivityKindCommand, Status: domain.ActivityStatusCompleted, CommandOutput: long, CreatedAt: time.Now().UTC()},
+			{ID: "short", Kind: domain.ActivityKindCommand, Status: domain.ActivityStatusCompleted, CommandOutput: "ok\n", CreatedAt: time.Now().UTC()},
+		},
+	}, "?outputLimit=64")
+	activities := body["activities"].([]any)
+	cut := activities[0].(map[string]any)["detail"].(map[string]any)
+	output, _ := cut["output"].(string)
+	if !utf8.ValidString(output) || !strings.HasPrefix(output, "spawned session w-1\n") || !strings.HasSuffix(output, "\nresult: ok\n") || !strings.Contains(output, "\n…\n") {
+		t.Fatalf("cut output = %q", output)
+	}
+	if len(output) > 64+len("\n…\n") || cut["outputBytes"] != float64(len(long)) {
+		t.Fatalf("cut output is %d bytes, outputBytes = %#v, want <= 64 and %d", len(output), cut["outputBytes"], len(long))
+	}
+	short := activities[1].(map[string]any)["detail"].(map[string]any)
+	if short["output"] != "ok\n" || short["outputBytes"] != nil {
+		t.Fatalf("short detail = %#v", short)
+	}
+
+	for _, bad := range []string{"?outputLimit=1", "?afterSequence=0"} {
+		log := slog.New(slog.NewTextHandler(io.Discard, nil))
+		srv := httptest.NewServer(httpd.NewRouterWithControl(config.Config{}, log, nil, httpd.APIDeps{
+			Sessions: newFakeSessionService(), Conversations: &fakeConversationService{},
+		}, httpd.ControlDeps{}))
+		resp, err := http.Get(srv.URL + "/api/v1/sessions/p1-1/conversation" + bad)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		srv.Close()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("%s status = %d, want 400", bad, resp.StatusCode)
+		}
+	}
+}
+
 // With no streamed output at all the aggregate stands, labelled as such.
 func TestSnapshotKeepsAggregateWhenNoStreamArrived(t *testing.T) {
 	aggregate, err := json.Marshal(map[string]any{
@@ -799,6 +849,55 @@ func TestSnapshotKeepsAggregateWhenNoStreamArrived(t *testing.T) {
 	}
 	if _, present := detail["outputTruncated"]; present {
 		t.Error("untruncated output still carried the truncation flag")
+	}
+}
+
+func TestSnapshotOutputTruncationFollowsSelectedSource(t *testing.T) {
+	aggregateOutput := strings.Repeat("a", 64*1024)
+	aggregate, err := json.Marshal(map[string]any{
+		"output":          aggregateOutput,
+		"outputSource":    "aggregate",
+		"outputTruncated": true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name            string
+		stream          string
+		streamTruncated bool
+		wantSource      string
+		wantTruncated   bool
+	}{
+		{"uncut stream replaces capped aggregate", strings.Repeat("s", 60*1024), false, "stream", false},
+		{"capped stream replaces capped aggregate", strings.Repeat("s", 64*1024), true, "stream", true},
+		{"no stream keeps capped aggregate", "", false, "aggregate", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := conversationSnapshotBody(t, chatsvc.Snapshot{
+				SessionID: domain.SessionID("p1-1"),
+				Mode:      domain.SessionModeChat,
+				Activities: []domain.ConversationActivity{{
+					ID: "act-1", Kind: domain.ActivityKindCommand,
+					Status: domain.ActivityStatusCompleted, Summary: "run tests",
+					Detail: aggregate, CommandOutput: tc.stream,
+					CommandOutputTruncated: tc.streamTruncated,
+					CreatedAt:              time.Now().UTC(),
+				}},
+			})
+			detail := body["activities"].([]any)[0].(map[string]any)["detail"].(map[string]any)
+			wantOutput := aggregateOutput
+			if tc.stream != "" {
+				wantOutput = tc.stream
+			}
+			if detail["output"] != wantOutput || detail["outputSource"] != tc.wantSource {
+				t.Fatalf("output did not come from %s", tc.wantSource)
+			}
+			truncated, present := detail["outputTruncated"]
+			if tc.wantTruncated && truncated != true || !tc.wantTruncated && present {
+				t.Errorf("outputTruncated = %#v (present=%v), want truncated=%v", truncated, present, tc.wantTruncated)
+			}
+		})
 	}
 }
 
@@ -850,5 +949,40 @@ func TestContinuationUnavailableIsAConflict(t *testing.T) {
 	mustJSON(t, body, &response)
 	if status != http.StatusConflict || response.Code != "CHAT_CONTINUATION_UNAVAILABLE" {
 		t.Fatalf("stale Continue response: %d %s", status, body)
+	}
+}
+
+func TestConversationFileAnnotationsRoundTripAndValidateOwnership(t *testing.T) {
+	service := &fakeConversationService{}
+	server := conversationTestServer(t, service)
+	input := map[string]any{"text": "why?", "fileReferences": []any{map[string]any{"id": "file-one", "order": 2, "sessionId": "p1-1", "path": "src/a.ts", "side": "file", "line": 1, "endLine": 1, "source": map[string]any{"kind": "workspace"}, "lines": []any{map[string]any{"kind": "context", "oldNo": 1, "newNo": 1, "text": "captured();"}}}}}
+	encoded, _ := json.Marshal(input)
+	response, err := http.Post(server.URL+"/api/v1/sessions/p1-1/conversation/messages", "application/json", bytes.NewReader(encoded))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusAccepted {
+		body, _ := io.ReadAll(response.Body)
+		t.Fatalf("status %d: %s", response.StatusCode, body)
+	}
+	if service.sent.Text != "why?" || len(service.sent.Content) != 1 || service.sent.Content[0].FileReference.Lines[0].Text != "captured();" {
+		t.Fatalf("lost annotation: %+v", service.sent)
+	}
+	content, _ := json.Marshal(service.sent.Content)
+	body := conversationSnapshotBody(t, chatsvc.Snapshot{Conversation: domain.ConversationRecord{ID: "c"}, SessionID: "p1-1", Messages: []domain.ConversationMessage{{ID: "m", Role: domain.MessageRoleUser, Origin: domain.MessageOriginHuman, Text: "why?", DeliveryContentJSON: string(content)}}})
+	messages := body["messages"].([]any)
+	summary := messages[0].(map[string]any)["content"].([]any)[0].(map[string]any)
+	if summary["type"] != "file_reference" || summary["fileReference"].(map[string]any)["path"] != "src/a.ts" {
+		t.Fatalf("summary: %+v", summary)
+	}
+	wrong := bytes.Replace(encoded, []byte(`"p1-1"`), []byte(`"other"`), 1)
+	rejected, err := http.Post(server.URL+"/api/v1/sessions/p1-1/conversation/messages", "application/json", bytes.NewReader(wrong))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rejected.Body.Close()
+	if rejected.StatusCode != http.StatusBadRequest {
+		t.Fatalf("cross-session status %d", rejected.StatusCode)
 	}
 }

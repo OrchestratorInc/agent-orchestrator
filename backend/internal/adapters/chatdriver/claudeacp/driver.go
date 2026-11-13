@@ -19,6 +19,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	acpsdk "github.com/coder/acp-go-sdk"
@@ -93,6 +94,9 @@ func New(plugin claudePlugin, log *slog.Logger, onAuthRejected func()) ports.Cha
 		PromptResponseFailure: claudePromptResponseFailure,
 		CanHibernate:          claudeCanHibernate,
 		HistoryNotice:         claudeTranscriptNotice,
+		// claude-agent-acp keeps one TaskCreate/TaskUpdate list for the session
+		// and re-sends it at the start of every prompt while a task is unfinished.
+		PlansSpanTurns: true,
 		Capabilities: ports.ChatCapabilities{
 			ports.ChatCapabilityStreaming:    true,
 			ports.ChatCapabilityTools:        true,
@@ -130,16 +134,23 @@ func New(plugin claudePlugin, log *slog.Logger, onAuthRejected func()) ports.Cha
 			if err := validateClaudeACPExecutable(claudeBinary, runtime.GOOS); err != nil {
 				return acpdriver.Launch{}, fmt.Errorf("%w: %w", ports.ErrChatDriverUnavailable, err)
 			}
+			authStarted := time.Now()
 			if err := validateClaudeLaunchAuth(ctx, plugin, cfg.WorkspacePath, cfg.Env, log); err != nil {
 				return acpdriver.Launch{}, err
 			}
+			authDuration := time.Since(authStarted)
 			var models []ports.AgentModelInfo
+			modelsStarted := time.Now()
 			if _, preserve := claudeACPModelConfig(cfg.Env); !preserve {
 				var modelErr error
 				models, modelErr = claudecode.ProviderModels(ctx, claudeBinary, cfg.WorkspacePath, cfg.Env)
 				if modelErr != nil && log != nil {
 					log.Debug("Claude provider model discovery unavailable; using ACP defaults", "error", modelErr)
 				}
+			}
+			if log != nil {
+				log.Debug("Claude launch prepared", "sessionID", cfg.SessionID,
+					"authDuration", authDuration, "modelsDuration", time.Since(modelsStarted))
 			}
 			env := claudeACPLaunchEnv(cfg.Env, claudeBinary, cfg.Model, models)
 			return acpdriver.Launch{
@@ -148,10 +159,62 @@ func New(plugin claudePlugin, log *slog.Logger, onAuthRejected func()) ports.Cha
 				Env:     env,
 			}, nil
 		},
+		ServedModel:    claudeServedModel,
 		SessionMeta:    claudeSessionMeta,
 		SessionMode:    claudeSessionMode,
 		SessionOptions: claudeSessionOptions,
+		ValidateModel: func(ctx context.Context, _ acpdriver.LaunchConfig, model string) error {
+			return claudeValidateModel(ctx, plugin, model)
+		},
+		ReadOnly: claudeReadOnlySession,
 	}, log)}
+}
+
+// claudeReadOnlySession runs a review-owned Chat the way AO runs a reviewer
+// pane: claudeSessionMeta sends the reviewer tool lists, the mode is pinned to
+// "default" so every call outside them reaches AO, and AO answers those calls
+// in place of a human. Not "auto": its classifier approves shell commands no
+// rule names. Not "dontAsk": it would also refuse the review POST, and newer
+// adapters drop it from their mode list.
+func claudeReadOnlySession(cfg acpdriver.LaunchConfig) acpdriver.ReadOnlySession {
+	return acpdriver.ReadOnlySession{
+		Mode:             "default",
+		PermissionPolicy: reviewerPermissionPolicy(strings.TrimSpace(cfg.Env["AO_REVIEW_WORKER_SESSION_ID"])),
+	}
+}
+
+// reviewerPermissionPolicy allows once the exact submit commands the review
+// prompt dictates and rejects every other request, as the reviewer pane's
+// PermissionRequest hook does. It handles every request, so none waits for a
+// human: without a usable option it cancels. Bash is the only tool Claude's ACP
+// adapter reports as an execute call.
+func reviewerPermissionPolicy(workerSessionID string) acpdriver.PermissionPolicy {
+	return func(_ ports.PermissionMode, params acpsdk.RequestPermissionRequest) (acpsdk.PermissionOptionId, bool) {
+		if params.ToolCall.Kind != nil && *params.ToolCall.Kind == acpsdk.ToolKindExecute {
+			input, _ := params.ToolCall.RawInput.(map[string]any)
+			if command, _ := input["command"].(string); claudecode.ReviewerSubmitCommandAllowed(command, workerSessionID) {
+				if id, ok := permissionOption(params.Options, acpsdk.PermissionOptionKindAllowOnce); ok {
+					return id, true
+				}
+			}
+		}
+		for _, kind := range []acpsdk.PermissionOptionKind{acpsdk.PermissionOptionKindRejectOnce, acpsdk.PermissionOptionKindRejectAlways} {
+			if id, ok := permissionOption(params.Options, kind); ok {
+				return id, true
+			}
+		}
+		// Nothing to select: cancel rather than park the request for a human.
+		return acpdriver.CancelPermission, true
+	}
+}
+
+func permissionOption(options []acpsdk.PermissionOption, kind acpsdk.PermissionOptionKind) (acpsdk.PermissionOptionId, bool) {
+	for _, option := range options {
+		if option.Kind == kind {
+			return option.OptionId, true
+		}
+	}
+	return "", false
 }
 
 func claudeCanHibernate(ctx context.Context, conn *acpsdk.ClientSideConnection, id acpsdk.SessionId) (bool, error) {
@@ -204,7 +267,7 @@ func claudeAuthRejected(notifyDaemon func()) func() {
 	}
 }
 
-func claudePromptResponseFailure(response acpsdk.PromptResponse) error {
+func claudePromptResponseFailure(response acpsdk.PromptResponse, model string) error {
 	if response.StopReason != acpsdk.StopReasonEndTurn {
 		return nil
 	}
@@ -217,6 +280,9 @@ func claudePromptResponseFailure(response acpsdk.PromptResponse) error {
 		return nil
 	}
 	details, _ := failure["details"].(string)
+	if tooOld := claudeVersionTooOldFailure(title, details, model); tooOld != nil {
+		return tooOld
+	}
 	var cause error
 	if actions, ok := failure["actions"].([]any); ok {
 		for _, action := range actions {
@@ -227,6 +293,68 @@ func claudePromptResponseFailure(response acpsdk.PromptResponse) error {
 		}
 	}
 	return ports.NewChatProviderFailure(strings.TrimSpace(title), strings.TrimSpace(details), cause)
+}
+
+// claudeVersionTooOldFailure recognizes the API rejecting a model the installed
+// Claude Code predates. It records the reported minimum for the model so the
+// catalog marks it unavailable from now on, and replaces the raw
+// "API Error: 400 {json}" with the remedy.
+func claudeVersionTooOldFailure(title, details, model string) error {
+	text := title + "\n" + details
+	parsed, ok := claudecode.ParseVersionTooOld(text)
+	if !ok {
+		if !claudecode.IsVersionTooOld(text) {
+			return nil
+		}
+		return ports.NewChatProviderFailure(
+			"The installed Claude Code is too old for this model. Run `claude update`, then try again.",
+			"", ports.ErrAgentVersionTooOld)
+	}
+	model = strings.TrimSpace(model)
+	if model != "" && !isClaudeNativeModelAlias(model) {
+		// Aliases resolve differently per CLI version, so only a concrete model
+		// ID carries a stable requirement.
+		_ = claudecode.DefaultModelVersionRequirements().Record(model, parsed.Required)
+	}
+	subject := "this model"
+	if model != "" {
+		subject = model
+	}
+	return ports.NewChatProviderFailure(
+		fmt.Sprintf("Claude Code %s does not support %s; version %s or newer is required.",
+			parsed.Installed, subject, parsed.Required),
+		"Run `claude update` (or update the Claude desktop app), then try again.",
+		ports.ErrAgentVersionTooOld)
+}
+
+// claudeValidateModel refuses a model the installed Claude Code is known to be
+// too old for, so a running chat cannot switch to what its next turn would
+// fail on. An alias always passes: each CLI resolves it to a model it supports.
+func claudeValidateModel(ctx context.Context, plugin claudePlugin, model string) error {
+	if isClaudeNativeModelAlias(model) {
+		return nil
+	}
+	// A binary AO cannot resolve has no known version, so the model may be tried.
+	if binary, err := plugin.ResolveBinary(ctx); err == nil {
+		if reason := claudecode.UnsupportedModelReason(ctx, binary, model); reason != "" {
+			return fmt.Errorf("%w: model %q: %s", ports.ErrAgentVersionTooOld, model, reason)
+		}
+	}
+	return nil
+}
+
+// claudeServedModel reports what a Claude alias actually resolved to. The ACP
+// adapter does not surface the answering model, but Claude's own transcript
+// records it on every assistant message.
+func claudeServedModel(ctx context.Context, cfg acpdriver.LaunchConfig, sessionID, selected string) (string, string) {
+	if !isClaudeNativeModelAlias(selected) {
+		return "", ""
+	}
+	served, err := claudecode.LastAssistantModel(ctx, cfg.Env, sessionID)
+	if err != nil || served == "" {
+		return "", ""
+	}
+	return served, fmt.Sprintf("The installed Claude Code resolves %q to %s", selected, served)
 }
 
 func claudeNestedMap(meta map[string]any, key string) map[string]any {
@@ -366,7 +494,7 @@ func validateClaudeACPExecutable(binary, goos string) error {
 func claudeSessionMeta(cfg acpdriver.LaunchConfig) map[string]any {
 	meta := map[string]any{}
 	standing := strings.TrimSpace(cfg.SystemPrompt)
-	if claudeTodoToolsEnabled(cfg.Env) {
+	if !cfg.DisableTools && claudeTodoToolsEnabled(cfg.Env) {
 		if standing != "" {
 			standing += "\n\n"
 		}
@@ -379,12 +507,30 @@ func claudeSessionMeta(cfg acpdriver.LaunchConfig) map[string]any {
 			"type": "preset", "preset": "claude_code", "append": standing,
 		}
 	}
-	// Also per session, so a choice made after the adapter started still applies.
-	if window := cfg.Env[claudeAutoCompactWindowEnv]; window != "" {
-		meta["claudeCode"] = map[string]any{"options": map[string]any{"env": map[string]string{claudeAutoCompactWindowEnv: window}}}
+	// Claude Code starts cycles on its own after an AO turn, for example to answer
+	// a finished background task. AO has no turn for those, so the SDK's own
+	// running/idle report is the only sign that the agent is working.
+	claudeCode := map[string]any{
+		"emitRawSDKMessages": []map[string]string{{"type": "system", "subtype": "session_state_changed"}},
 	}
-	if len(meta) == 0 {
-		return nil
+	meta["claudeCode"] = claudeCode
+	// Also per session, so a choice made after the adapter started still applies.
+	options := map[string]any{}
+	if window := cfg.Env[claudeAutoCompactWindowEnv]; window != "" {
+		options["env"] = map[string]string{claudeAutoCompactWindowEnv: window}
+	}
+	if cfg.DisableTools {
+		options["tools"] = []string{}
+		options["strictMcpConfig"] = true
+		options["disallowedTools"] = []string{"mcp__*"}
+	} else if cfg.ReadOnly {
+		// The adapter passes these to Claude Code as --allowedTools and
+		// --disallowedTools; deny rules hold in every permission mode.
+		options["allowedTools"] = claudecode.ReviewerAllowedTools
+		options["disallowedTools"] = claudecode.ReviewerDisallowedTools
+	}
+	if len(options) > 0 {
+		claudeCode["options"] = options
 	}
 	return meta
 }
@@ -462,7 +608,7 @@ func resolveRuntime(ctx context.Context) (runtimeLaunch, error) {
 		runtimeDir = runtimeDirectoryBesideExecutable()
 	}
 	if runtimeDir == "" {
-		return runtimeLaunch{}, errors.New("AO ACP runtime is not installed")
+		return runtimeLaunch{}, errors.New("the Orchestrator ACP runtime is not installed")
 	}
 	node := filepath.Join(runtimeDir, "node", "bin", "node")
 	if runtime.GOOS == "windows" {
@@ -476,6 +622,12 @@ func resolveRuntime(ctx context.Context) (runtimeLaunch, error) {
 		return runtimeLaunch{}, err
 	}
 	if err := requireNodeVersion(ctx, node); err != nil {
+		return runtimeLaunch{}, err
+	}
+	// The entry stays in the packaged runtime, so module resolution is
+	// unchanged even when an Intel Mac launches a re-signed copy of Node.
+	node, err := jitCapableNode(ctx, node)
+	if err != nil {
 		return runtimeLaunch{}, err
 	}
 	return runtimeLaunch{command: node, args: []string{entry}}, nil
@@ -509,7 +661,15 @@ func requireFile(path, label string) error {
 	return nil
 }
 
+// nodeVersionsChecked remembers which Node executables already passed the
+// version check. The packaged runtime does not change while the daemon runs,
+// and running `node --version` for every chat start cost a process spawn each.
+var nodeVersionsChecked sync.Map
+
 func requireNodeVersion(ctx context.Context, node string) error {
+	if _, ok := nodeVersionsChecked.Load(node); ok {
+		return nil
+	}
 	// node is the explicit AO override or the validated executable inside AO's
 	// packaged resources, never prompt/provider input.
 	out, err := aoprocess.CommandContext(ctx, node, "--version").Output() //nolint:gosec // Resolved local executable, not provider input.
@@ -522,5 +682,6 @@ func requireNodeVersion(ctx context.Context, node string) error {
 	if err != nil || major < minimumNodeMajor {
 		return fmt.Errorf("claude-agent-acp requires Node %d+; found %q", minimumNodeMajor, strings.TrimSpace(string(out)))
 	}
+	nodeVersionsChecked.Store(node, struct{}{})
 	return nil
 }

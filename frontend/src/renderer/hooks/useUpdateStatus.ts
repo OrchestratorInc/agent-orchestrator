@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { UpdateStatus } from "../../main/update-settings";
+import { displayableUpdateError } from "../../shared/update-error-message";
 import { aoBridge } from "../lib/bridge";
 
 let current: UpdateStatus = { state: "idle" };
@@ -17,7 +18,13 @@ const WAITING_STATES = ["available", "downloaded", "error"];
 const POLL_MS = 3_000;
 const WAITING_POLL_EVERY = 10; // every 30s
 
-function receive(status: UpdateStatus) {
+/** Labels add their own "v"; a tag-shaped "v1.2.3" would render "vv1.2.3". */
+function withBareVersion(status: UpdateStatus): UpdateStatus {
+	return /^v\d/i.test(status.version ?? "") ? { ...status, version: status.version!.slice(1) } : status;
+}
+
+function receive(raw: UpdateStatus) {
+	const status = withBareVersion(raw);
 	current = status;
 	revision += 1;
 	for (const listener of listeners) listener(status);
@@ -39,7 +46,7 @@ function connect() {
 		pending = true;
 		const requestedRevision = revision;
 		try {
-			const next = await aoBridge.updates.getStatus();
+			const next = withBareVersion(await aoBridge.updates.getStatus());
 			// An unchanged poll result would re-render every subscriber (the Sidebar).
 			if (live && requestedRevision === revision && !sameUpdateStatus(next, current)) receive(next);
 		} catch {
@@ -97,7 +104,7 @@ export async function requestUpdateDownload(requestId?: string): Promise<void> {
 		await aoBridge.updates.download(requestId);
 	} catch (error) {
 		if (["downloading"].includes(current.state)) {
-			receive({ ...current, state: "error", message: error instanceof Error ? error.message : "Download failed. Try again." });
+			receive({ ...current, state: "error", message: displayableUpdateError(error instanceof Error ? error.message : undefined, "Download failed. Try again.") });
 		}
 	} finally {
 		downloadPending = false;

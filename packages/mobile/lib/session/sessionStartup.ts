@@ -21,9 +21,11 @@ export type SessionStartupView = {
 	namingBranch: boolean;
 	/** The turn carrying the opening brief, which reads as sent while setup runs. */
 	openingTurnId?: string;
+	/** Step names other than the local ones, for a start with other stages (a cloud sandbox). */
+	labels?: Partial<Record<SessionProvisionStep["id"], string>>;
 };
 
-type StartupSession = Partial<Pick<DashboardSession, "provisionState" | "provisionSteps" | "provisionError" | "branch" | "isTerminated">>;
+type StartupSession = Partial<Pick<DashboardSession, "provisionState" | "provisionSteps" | "provisionError" | "branch" | "branchNaming" | "isTerminated">>;
 
 export const STEP_LABELS: Record<SessionProvisionStep["id"], string> = {
 	fetch: "Fetch base branch",
@@ -59,6 +61,8 @@ export function startupAgentName(harness: string | undefined | null): string {
 export function sessionStartupView(session: StartupSession, snapshot: Pick<ConversationSnapshot, "harness" | "turns" | "hasMoreBefore" | "controller"> | undefined): SessionStartupView | undefined {
 	const state = session.provisionState === "provisioning" || session.provisionState === "failed" ? session.provisionState : undefined;
 	const steps = session.provisionSteps ?? [];
+	// The task's generated branch name is on the way.
+	const namingAfterLaunch = Boolean(session.branchNaming) && !session.isTerminated && state !== "failed";
 	// Mobile pages history in, so the first loaded turn is only the opening one
 	// when nothing older exists.
 	const opening = snapshot && !snapshot.hasMoreBefore ? snapshot.turns[0] : undefined;
@@ -74,8 +78,8 @@ export function sessionStartupView(session: StartupSession, snapshot: Pick<Conve
 		error: session.provisionError,
 		agentName: startupAgentName(snapshot?.harness),
 		// Keep the provisional branch private until the worktree step lands, as the desktop does.
-		branch: worktreeUnfinished ? undefined : session.branch ?? undefined,
-		namingBranch: worktreeUnfinished && state === "provisioning" && !session.isTerminated,
+		branch: worktreeUnfinished || namingAfterLaunch ? undefined : session.branch ?? undefined,
+		namingBranch: (worktreeUnfinished && state === "provisioning" && !session.isTerminated) || namingAfterLaunch,
 		// While a start is in progress or failed, the first turn hosts the
 		// checklist whatever its state, as on the desktop: a provider rejection
 		// fails that turn too, and the failed start's Retry must still render.

@@ -1,5 +1,5 @@
 import { CloudCpError } from "./cloud-cp";
-import type { CloudCpClient, CloudCpCreateSessionRequest, CloudCpInterfaceMode, CloudCpSessionResponse } from "./cloud-cp";
+import type { CloudCpClient, CloudCpCreateSessionRequest, CloudCpInterfaceMode, CloudCpMutationOptions, CloudCpSessionResponse } from "./cloud-cp";
 import type { Settings } from "../hooks/useSettings";
 import { reportCloudSessionCreateRequested } from "./cloud-telemetry";
 
@@ -32,19 +32,23 @@ export async function createCloudSession(
 	client: Pick<CloudCpClient, "createSession">,
 	orgId: string,
 	body: CloudCpCreateSessionRequest,
+	options?: CloudCpMutationOptions,
 ): Promise<CloudCpSessionResponse> {
 	try {
 		reportCloudSessionCreateRequested(body);
 	} catch {
 		// Telemetry must never break the create.
 	}
+	const send = (request: CloudCpCreateSessionRequest, sendOptions = options) =>
+		sendOptions ? client.createSession(orgId, request, sendOptions) : client.createSession(orgId, request);
 	const { interfaceMode, defaultInterfaceMode, ...withoutInterface } = body;
-	if (interfaceMode === undefined && defaultInterfaceMode === undefined) return client.createSession(orgId, body);
+	if (interfaceMode === undefined && defaultInterfaceMode === undefined) return send(body);
 	try {
-		return await client.createSession(orgId, body);
+		return await send(body);
 	} catch (error) {
 		if (!isUnknownInterfaceFieldRefusal(error)) throw error;
-		return client.createSession(orgId, withoutInterface);
+		// A different body, so its own key: a retry still replays it, but never collides with the refused one.
+		return send(withoutInterface, options?.idempotencyKey ? { ...options, idempotencyKey: `${options.idempotencyKey}:tui` } : options);
 	}
 }
 

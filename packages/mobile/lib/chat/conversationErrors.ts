@@ -62,8 +62,20 @@ export function conversationActionError(error: unknown): string {
 		case "CHAT_DRIVER_INCOMPATIBLE": return "The installed agent CLI is not compatible with Orchestrator Chat. Update it, then resume this session.";
 		case "CHAT_RESUME_FAILED": return "Orchestrator could not resume this agent. The conversation and worktree are preserved.";
 		case "CHAT_PROVIDER_REFUSED": return daemonDetail(error) ?? "The provider refused this action.";
+		case "CHAT_EDIT_BUSY": return "Stop the current turn before editing an earlier message.";
+		case "CHAT_EDIT_UNSUPPORTED": return "This agent cannot branch an earlier message.";
+		case "CHAT_EDIT_TURN_INVALID": return "That message can no longer be edited. Refresh the conversation.";
+		case "CHAT_EDIT_REJECTED": return "Your machine did not accept the edit. Nothing was sent.";
+		case "CHAT_EDIT_IDEMPOTENCY_CONFLICT": return "That send was tied to a different edit. Send again to retry.";
+		case "CHAT_EDIT_UNCERTAIN": return "Your machine may already have the edit. Send again to check safely; it will not be sent twice.";
 		default: return userFacingError(error);
 	}
+}
+
+/** Refusals after which a fresh edit attempt cannot duplicate the one refused. */
+export function editRefusedDefinitively(code: string | undefined): boolean {
+	return code === "CHAT_EDIT_REJECTED" || code === "CHAT_EDIT_UNSUPPORTED" || code === "CHAT_EDIT_BUSY" ||
+		code === "CHAT_EDIT_TURN_INVALID" || code === "CHAT_EDIT_IDEMPOTENCY_CONFLICT";
 }
 
 export function conversationActionUnsupported(action: "steer" | "compact" | "mcp", code?: string): boolean {

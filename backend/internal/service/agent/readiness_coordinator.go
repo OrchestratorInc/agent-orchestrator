@@ -43,6 +43,7 @@ const (
 )
 
 type readinessCoordinatorConfig struct {
+	DataDir             string
 	Agents              []agentregistry.HarnessAgent
 	Factory             func() []agentregistry.HarnessAgent
 	Context             context.Context
@@ -87,6 +88,7 @@ type readinessCallKey struct {
 }
 
 type readinessCoordinator struct {
+	dataDir             string
 	ctx                 context.Context
 	factory             func() []agentregistry.HarnessAgent
 	logger              *slog.Logger
@@ -146,7 +148,8 @@ func newReadinessCoordinator(cfg readinessCoordinatorConfig) *readinessCoordinat
 		}
 	}
 	c := &readinessCoordinator{
-		ctx: cfg.Context, factory: cfg.Factory, logger: cfg.Logger, now: cfg.Now,
+		dataDir: cfg.DataDir,
+		ctx:     cfg.Context, factory: cfg.Factory, logger: cfg.Logger, now: cfg.Now,
 		displayTTL: cfg.DisplayTTL, launchTTL: cfg.LaunchTTL,
 		installTimeout: cfg.InstallTimeout, authTimeout: cfg.AuthTimeout,
 		retryDelays: cfg.RetryDelays, workers: cfg.Workers,
@@ -569,7 +572,11 @@ func (c *readinessCoordinator) checkInstallation(item agentregistry.HarnessAgent
 	}
 	var incompatibleVersion *opencode.IncompatibleVersionError
 	if errors.As(err, &incompatibleVersion) {
-		return successfulInstallation(attempted, domain.AgentInstallationNotInstalled, domain.AgentReadinessReasonNotInstalled, item.Manifest.Name+" is not installed."), false
+		message := item.Manifest.Name + " is not installed."
+		if replaced := incompatibleVersion.ReplacedOpenCode1Message(); replaced != "" {
+			message = replaced
+		}
+		return successfulInstallation(attempted, domain.AgentInstallationNotInstalled, domain.AgentReadinessReasonNotInstalled, message), false
 	}
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return failedInstallation(attempted, domain.AgentReadinessReasonInstallCheckTimeout, "Installation check timed out."), true
@@ -612,6 +619,9 @@ func (c *readinessCoordinator) checkAuthentication(item agentregistry.HarnessAge
 			timeout = opencodeV2MigrationTimeout
 		case domain.HarnessHermes:
 			timeout = hermesAuthCheckTimeout
+		case domain.HarnessMiMoCode:
+			// Allow separate 20-second credential detection and verification budgets.
+			timeout = 40 * time.Second
 		}
 	}
 	ctx, cancel := context.WithTimeout(evidenceCtx, timeout)
@@ -619,7 +629,11 @@ func (c *readinessCoordinator) checkAuthentication(item agentregistry.HarnessAge
 	var status ports.AgentAuthStatus
 	var account domain.AgentAccountIdentity
 	var err error
-	if authChecker, ok := item.Agent.(ports.AgentAuthDiagnosticsChecker); ok {
+	if runtimeChecker, ok := item.Agent.(ports.AgentRuntimeAuthChecker); ok && c.dataDir != "" {
+		// Verify the credential local session launch will use, including a
+		// login AO saved itself (Claude's setup token).
+		status, account, diagnostics, err = runtimeChecker.AuthStatusForRuntime(ctx, c.dataDir)
+	} else if authChecker, ok := item.Agent.(ports.AgentAuthDiagnosticsChecker); ok {
 		status, account, diagnostics, err = authChecker.AuthStatusWithDiagnostics(ctx)
 	} else {
 		status, err = checker.AuthStatus(ctx)
@@ -644,7 +658,7 @@ func (c *readinessCoordinator) checkAuthentication(item agentregistry.HarnessAge
 		// A definite observation — a credential exists — but not a verified
 		// one. It is recorded as a success so the coordinator does not retry
 		// it as a failure, and it derives to unknown readiness, not ready.
-		reason := item.Manifest.Name + " has credentials configured, but AO could not verify them."
+		reason := item.Manifest.Name + " has credentials configured, but Orchestrator could not verify them."
 		if slices.ContainsFunc(diagnostics, func(d domain.AgentAuthDiagnostic) bool { return d.Code == "token_renewal_pending" }) {
 			reason = item.Manifest.Name + " is signed in; its access token renews the next time it runs."
 		}

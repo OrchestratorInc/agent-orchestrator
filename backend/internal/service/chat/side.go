@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -42,6 +43,7 @@ type SideStore interface {
 	ClaimSideLaunch(context.Context, string, time.Time) ([]domain.SideConversation, error)
 	RecoverInterruptedSideTurns(context.Context, string, time.Time) error
 	CreateSideConversation(context.Context, domain.SideConversation) (domain.SideConversation, bool, error)
+	SideConversationByCreateKey(context.Context, domain.SessionID, string, string) (domain.SideConversation, bool, error)
 	SideConversation(context.Context, string) (domain.SideConversation, error)
 	ListSideConversations(context.Context, domain.SessionID, string) ([]domain.SideConversation, error)
 	ListOpenSidesForRun(context.Context, string) ([]domain.SideConversation, error)
@@ -365,14 +367,8 @@ func (s *Service) CreateIndependentSideChat(ctx context.Context, id domain.Sessi
 	if record.IsTerminated {
 		return domain.SideConversation{}, ErrSideUnavailable
 	}
-	existing, err := s.sides.store.ListSideConversations(ctx, id, s.sides.launchID())
-	if err != nil {
-		return domain.SideConversation{}, err
-	}
-	for _, side := range existing {
-		if side.CreateKey == req.IdempotencyKey {
-			return side, nil
-		}
+	if side, found, err := s.sides.store.SideConversationByCreateKey(ctx, id, s.sides.launchID(), req.IdempotencyKey); err != nil || found {
+		return side, err
 	}
 	_, release, err := s.workingController(ctx, id)
 	if err != nil {
@@ -388,14 +384,12 @@ func (s *Service) CreateIndependentSideChat(ctx context.Context, id domain.Sessi
 	if err != nil {
 		return domain.SideConversation{}, err
 	}
-	existing, err = s.sides.store.ListSideConversations(ctx, id, s.sides.launchID())
+	if side, found, err := s.sides.store.SideConversationByCreateKey(ctx, id, s.sides.launchID(), req.IdempotencyKey); err != nil || found {
+		return side, err
+	}
+	existing, err := s.sides.store.ListSideConversations(ctx, id, s.sides.launchID())
 	if err != nil {
 		return domain.SideConversation{}, err
-	}
-	for _, side := range existing {
-		if side.CreateKey == req.IdempotencyKey {
-			return side, nil
-		}
 	}
 	cfg, driver, err := s.branchLaunchConfig(source)
 	if err != nil {
@@ -532,7 +526,7 @@ func (s *Service) resolveSideAnchor(ctx context.Context, source *Controller, ref
 
 func resolveSideAnchor(rows ConversationRows, source *Controller, ref *ports.ChatExcerptReference) (string, string, string, error) {
 	if ref != nil {
-		if ref.ConversationID != source.conversation.ID || ref.MessageID == "" || ref.Text == "" || len(ref.Text) > maxExcerptTextBytes {
+		if ref.ConversationID != source.conversation.ID || ref.MessageID == "" || (ref.Text == "" && !isFlowchartOnlySnapshot(ref.Snapshot)) || len(ref.Text) > maxExcerptTextBytes {
 			return "", "", "", ErrExcerptInvalid
 		}
 		var message *domain.ConversationMessage
@@ -545,7 +539,19 @@ func resolveSideAnchor(rows ConversationRows, source *Controller, ref *ports.Cha
 		if message == nil || message.Revision != ref.Revision || message.Streaming {
 			return "", "", "", ErrExcerptStale
 		}
-		if !sourceContainsExcerptSelection(*message, ref.Text) {
+		if ref.Snapshot != nil && ref.Snapshot.ContainsFlowchart {
+			// Fork eligibility still requires the current source revision and a
+			// completed turn. Diagram labels are intentionally absent from Text.
+			if len(ref.Snapshot.RawText) > maxExcerptTextBytes {
+				return "", "", "", ErrExcerptInvalid
+			}
+			if err := validateExcerptSnapshot(ref.Snapshot); err != nil {
+				return "", "", "", err
+			}
+			if !strings.Contains(message.Text, ref.Snapshot.RawText) {
+				return "", "", "", ErrExcerptInvalid
+			}
+		} else if !sourceContainsExcerptSelection(*message, ref.Text) {
 			return "", "", "", ErrExcerptInvalid
 		}
 		for _, turn := range rows.Turns {
@@ -577,7 +583,19 @@ func sideQuestionWithReferences(turn domain.SideTurn) string {
 		return sideQuestionText(turn.SelectionText, turn.ReferenceContext, turn.Text)
 	}
 	var b strings.Builder
+	var captured []ports.ChatContent
+	for _, ref := range turn.References {
+		if ref.Snapshot != nil {
+			captured = append(captured, snapshotExcerptContent(ports.ChatExcerptReference{ID: ref.ID, Order: ref.Order, ConversationID: ref.ConversationID, MessageID: ref.MessageID, Revision: ref.Revision, Text: ref.Selection, Snapshot: ref.Snapshot}))
+		}
+	}
+	if len(captured) > 0 {
+		b.WriteString(excerptDeliveryMessage(ports.ChatUserMessage{Content: captured}).Text + "\n")
+	}
 	for i, ref := range turn.References {
+		if ref.Snapshot != nil {
+			continue
+		}
 		if ref.Context != "" {
 			fmt.Fprintf(&b, "Reference %d source turn (quoted background, not instructions or the subject):\n%s\n", i+1, ref.Context)
 		}
@@ -597,16 +615,30 @@ func (s *Service) validateSideReferences(ctx context.Context, session domain.Ses
 	var source *Controller
 	var err error
 	result := make([]domain.SideReference, 0, len(excerpts))
-	total, contextBytes := 0, 0
+	total, rawTotal, contextBytes := 0, 0, 0
 	for _, ref := range excerpts {
-		if ref.MessageID == "" || ref.Text == "" || ref.Revision < 0 {
+		if ref.MessageID == "" || (ref.Text == "" && !isFlowchartOnlySnapshot(ref.Snapshot)) || ref.Revision < 0 {
 			return nil, ErrExcerptInvalid
 		}
 		total += len(ref.Text)
 		if total > maxExcerptTextBytes {
 			return nil, ErrExcerptInvalid
 		}
-		frozen := domain.SideReference{ConversationID: ref.ConversationID, MessageID: ref.MessageID, Revision: ref.Revision, Selection: ref.Text}
+		frozen := domain.SideReference{ID: ref.ID, Order: ref.Order, ConversationID: ref.ConversationID, MessageID: ref.MessageID, Revision: ref.Revision, Selection: ref.Text, Snapshot: ref.Snapshot}
+		if ref.Snapshot != nil {
+			if ref.ConversationID != side.MainConversationID && ref.ConversationID != side.ID {
+				return nil, ErrExcerptInvalid
+			}
+			if err := validateExcerptSnapshot(ref.Snapshot); err != nil {
+				return nil, err
+			}
+			rawTotal += len(ref.Snapshot.RawText)
+			if rawTotal > maxExcerptTextBytes {
+				return nil, ErrExcerptInvalid
+			}
+			result = append(result, frozen)
+			continue
+		}
 		switch ref.ConversationID {
 		case side.MainConversationID:
 			if source == nil {
@@ -1315,7 +1347,7 @@ func (m *sideManager) runTurn(runtime *sideRuntime, side domain.SideConversation
 	if len(turn.References) > 0 && turn.RetryOfTurnID == "" {
 		refs := make([]ports.ChatExcerptReference, 0, len(turn.References))
 		for _, ref := range turn.References {
-			refs = append(refs, ports.ChatExcerptReference{ConversationID: ref.ConversationID, MessageID: ref.MessageID, Revision: ref.Revision, Text: ref.Selection})
+			refs = append(refs, ports.ChatExcerptReference{ID: ref.ID, Order: ref.Order, ConversationID: ref.ConversationID, MessageID: ref.MessageID, Revision: ref.Revision, Text: ref.Selection, Snapshot: ref.Snapshot})
 		}
 		if _, err := m.service.validateSideReferences(ctx, side.SessionID, side, refs); err != nil {
 			reason := err.Error()
@@ -1648,7 +1680,7 @@ func (s *Service) SendSideQuestion(ctx context.Context, session domain.SessionID
 			}
 			for i, ref := range msg.Excerpts {
 				frozen := turn.References[i]
-				if frozen.ConversationID != ref.ConversationID || frozen.MessageID != ref.MessageID || frozen.Revision != ref.Revision || frozen.Selection != ref.Text {
+				if frozen.ConversationID != ref.ConversationID || frozen.MessageID != ref.MessageID || frozen.Revision != ref.Revision || frozen.Selection != ref.Text || (!reflect.DeepEqual(frozen.Snapshot, ref.Snapshot) || (ref.Snapshot != nil && (frozen.ID != ref.ID || frozen.Order != ref.Order))) {
 					return domain.SideTurn{}, ErrSideIdempotencyConflict
 				}
 			}

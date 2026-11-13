@@ -13,11 +13,14 @@ import {
 } from "@dnd-kit/core";
 import { SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { ChevronDown, Circle, CornerDownLeft, GripVertical, Pencil, Trash2 } from "lucide-react";
+import { ChevronDown, Circle, CornerDownLeft, GripVertical, Pencil, Trash2 } from "@/components/app-icons";
 import { cn } from "../../lib/utils";
+import { Button } from "../ui/button";
+import { Pressable } from "../ui/pressable";
 import type { ConversationMessage } from "../../types/conversation";
 import { useTranslation } from "react-i18next";
 import { labelInlineImages } from "./messageAttachments";
+import { parseBrowserAnnotationMessage, type ParsedBrowserAnnotationItem } from "../../../shared/browser-annotations";
 
 export type QueuedMessage = {
 	turnId: string;
@@ -106,7 +109,21 @@ function QueuedMessageRowContent({
 	dragHandleProps?: Record<string, unknown>;
 }) {
 	const { t } = useTranslation();
-	const text = labelInlineImages(message.text, (index) => t("chat.image.numbered", { index }));
+	const annotations = message.origin === "human" ? null : parseBrowserAnnotationMessage(message.text);
+	// Lead with what the user wrote: page titles and counts alone leave two
+	// batches from the same page indistinguishable.
+	const annotationLabel = (item: ParsedBrowserAnnotationItem) =>
+		item.comment || (item.changes.length > 0 ? t("chat.automation.visualChanges", { count: item.changes.length }) : item.target);
+	const text = annotations
+		? [annotations.items[0] ? annotationLabel(annotations.items[0]) : annotations.pageTitle,
+			t("browser.annotationCount", { count: annotations.items.length })].join(" · ")
+		: labelInlineImages(message.text, (index) => t("chat.image.numbered", { index }));
+	const tooltip = annotations
+		? [annotations.pageTitle, ...annotations.items.map((item) => `${item.number}. ${annotationLabel(item)}`)].join("\n")
+		: text;
+	// Relayed user-authored text is generated, so it can be steered or cancelled
+	// but not edited.
+	const editable = message.origin === "human";
 	const showHoverSteerButton =
 		showHoverSteer ||
 		Boolean(onPromoteQueuedTurn && canSteer && !showPersistentSteer && !suppressHoverSteer);
@@ -116,26 +133,27 @@ function QueuedMessageRowContent({
 			<Circle
 				aria-hidden="true"
 				className="size-3 shrink-0 text-muted-foreground/60"
-				strokeWidth={1.5}
 			/>
 			<div className="min-w-0 flex-1 overflow-hidden">
 				<p
 					className="queue-dock-row-text truncate text-xs leading-relaxed text-foreground"
-					title={text}
+					title={tooltip}
 				>
 					{text}
 				</p>
 			</div>
 			<div className="queue-dock-actions flex shrink-0 items-center gap-0.5 whitespace-nowrap">
 				{showHoverSteerButton ? (
-					<button
+					<Button
 						type="button"
+						variant="quiet"
+						size="sm"
 						disabled={busy}
 						onClick={() => {
 							void onRunAction(turnId, () => onPromoteQueuedTurn!(turnId));
 						}}
 						className={cn(
-							"inline-flex h-7 items-center rounded-lg px-2 text-xs leading-none text-muted-foreground transition-[background-color,color] duration-150 ease-out hover:bg-interactive-hover hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 disabled:opacity-50 motion-reduce:transition-none",
+							"focus-visible:pointer-events-auto focus-visible:opacity-100",
 							showHoverSteer
 								? "pointer-events-none opacity-100"
 								: "pointer-events-none opacity-0 group-hover/queued-row:pointer-events-auto group-hover/queued-row:opacity-100",
@@ -144,54 +162,56 @@ function QueuedMessageRowContent({
 						title="Steer into running turn"
 					>
 						Steer
-					</button>
+					</Button>
 				) : null}
 				{showPersistentSteer && onPromoteQueuedTurn ? (
-					<button
+					<Button
 						type="button"
+						variant="quiet"
+						size="sm"
 						disabled={busy}
 						onClick={() => {
 							void onRunAction(turnId, () => onPromoteQueuedTurn(turnId));
 						}}
-						className="inline-flex h-7 items-center gap-1.5 rounded-lg px-2 text-xs leading-none text-muted-foreground transition-[scale,background-color,color] duration-150 ease-out hover:bg-interactive-hover hover:text-foreground active:scale-[0.96] disabled:pointer-events-none disabled:opacity-50 motion-reduce:transition-none motion-reduce:active:scale-100"
 						aria-label="Steer this queued message into the running turn"
 						title="Steer into running turn"
 					>
 						<span className="inline-flex shrink-0 items-center gap-1 text-muted-foreground">
-							<CornerDownLeft aria-hidden="true" className="shrink-0" width={14} height={14} strokeWidth={2} />
+							<CornerDownLeft aria-hidden="true" className="size-3.5 shrink-0" />
 						</span>
 						Steer
-					</button>
+					</Button>
 				) : null}
-				{onBeginQueuedEdit ? (
-					<button
+				{onBeginQueuedEdit && editable ? (
+					<Button
 						type="button"
+						variant="quiet"
+						size="icon-sm"
 						disabled={busy}
 						onClick={() => onBeginQueuedEdit(turnId, message.text)}
-						className="flex size-7 items-center justify-center rounded-md text-muted-foreground transition-[scale,background-color,color] duration-150 ease-out hover:bg-interactive-hover hover:text-foreground active:scale-[0.96] disabled:pointer-events-none disabled:opacity-50 motion-reduce:transition-none motion-reduce:active:scale-100"
 						aria-label="Edit queued message"
 						title="Edit"
 					>
-						<Pencil aria-hidden="true" className="shrink-0" width={14} height={14} strokeWidth={2} />
-					</button>
+						<Pencil aria-hidden="true" className="size-3.5 shrink-0" />
+					</Button>
 				) : null}
 				{onCancelQueuedTurn ? (
-					<button
+					<Button
 						type="button"
+						variant="destructive-ghost"
+						size="icon-sm"
 						disabled={busy}
 						onClick={() => {
 							void onRunAction(turnId, () => onCancelQueuedTurn(turnId));
 						}}
-						className="flex size-7 items-center justify-center rounded-md text-muted-foreground transition-[scale,background-color,color] duration-150 ease-out hover:bg-interactive-hover hover:text-destructive active:scale-[0.96] disabled:pointer-events-none disabled:opacity-50 motion-reduce:transition-none motion-reduce:active:scale-100"
 						aria-label="Delete queued message"
 						title="Delete"
 					>
-						<Trash2 aria-hidden="true" className="shrink-0" width={14} height={14} strokeWidth={2} />
-					</button>
+						<Trash2 aria-hidden="true" className="size-3.5 shrink-0" />
+					</Button>
 				) : null}
 				{reorderEnabled ? (
-					<button
-						type="button"
+					<Pressable
 						ref={dragHandleRef}
 						{...dragHandleProps}
 						disabled={busy}
@@ -199,8 +219,8 @@ function QueuedMessageRowContent({
 						aria-label="Drag to reorder queued message"
 						title="Drag to reorder"
 					>
-						<GripVertical aria-hidden="true" className="shrink-0" width={14} height={14} strokeWidth={2} />
-					</button>
+						<GripVertical aria-hidden="true" className="size-3.5 shrink-0" />
+					</Pressable>
 				) : null}
 			</div>
 		</div>
@@ -312,6 +332,7 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 	onReorderQueuedTurns,
 	promotePendingTurnId,
 	cancelPendingTurnId,
+	steerErrors,
 }: {
 	messages: QueuedMessage[];
 	disabled?: boolean;
@@ -325,12 +346,10 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 	onReorderQueuedTurns?: (turnIds: string[]) => Promise<unknown>;
 	promotePendingTurnId?: string;
 	cancelPendingTurnId?: string;
+	steerErrors?: Readonly<Record<string, string>>;
 }) {
 	const [expanded, setExpanded] = useState(true);
 	const [errors, setErrors] = useState<Record<string, string>>({});
-	const [optimisticallySteeredTurnIds, setOptimisticallySteeredTurnIds] = useState<Set<string>>(
-		() => new Set(),
-	);
 	const [displayOrder, setDisplayOrder] = useState<string[] | null>(null);
 	const [hoverSteerSuppressed, setHoverSteerSuppressed] = useState(false);
 	const [reorderError, setReorderError] = useState<string | undefined>();
@@ -368,19 +387,18 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 		[],
 	);
 
-	const visibleMessages = messages.filter(({ turnId }) => !optimisticallySteeredTurnIds.has(turnId));
-	const count = visibleMessages.length;
+	const count = messages.length;
 	const hasMore = count > 1;
 	const isOpen = !hasMore || expanded;
 	const expandedRows = Math.min(count, QUEUE_DOCK_VISIBLE_ROWS);
 	const messagesByTurnId = useMemo(
-		() => new Map(visibleMessages.map((message) => [message.turnId, message])),
-		[visibleMessages],
+		() => new Map(messages.map((message) => [message.turnId, message])),
+		[messages],
 	);
-	const pendingMessages = useMemo(() => visibleMessages.filter((entry) => entry.pending), [visibleMessages]);
+	const pendingMessages = useMemo(() => messages.filter((entry) => entry.pending), [messages]);
 	const fifoTurnIds = useMemo(
-		() => visibleMessages.filter((entry) => !entry.pending).map(({ turnId }) => turnId),
-		[visibleMessages],
+		() => messages.filter((entry) => !entry.pending).map(({ turnId }) => turnId),
+		[messages],
 	);
 	const defaultDisplayTurnIds = useMemo(() => [...fifoTurnIds].reverse(), [fifoTurnIds]);
 	const displayTurnIds = useMemo(() => {
@@ -445,24 +463,6 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 		}
 	}, [displayOrder, fifoTurnIds]);
 
-	const promoteQueuedTurn = useCallback(
-		async (turnId: string) => {
-			setOptimisticallySteeredTurnIds((current) => new Set(current).add(turnId));
-			try {
-				if (!onPromoteQueuedTurn) return;
-				await onPromoteQueuedTurn(turnId);
-			} catch (error) {
-				setOptimisticallySteeredTurnIds((current) => {
-					const next = new Set(current);
-					next.delete(turnId);
-					return next;
-				});
-				throw error;
-			}
-		},
-		[onPromoteQueuedTurn],
-	);
-
 	useEffect(() => {
 		if (steerNextRequest === undefined || steerNextRequest <= handledSteerNextRequest) return;
 		if (!canSteerNext || !onPromoteQueuedTurn) {
@@ -477,7 +477,7 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 			return;
 		}
 		steerNextInFlight.current = true;
-		void runAction(next.turnId, () => promoteQueuedTurn(next.turnId)).finally(() => {
+		void runAction(next.turnId, () => onPromoteQueuedTurn(next.turnId)).finally(() => {
 			steerNextInFlight.current = false;
 			setHandledSteerNextRequest((request) => request + 1);
 		});
@@ -487,7 +487,6 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 		handledSteerNextRequest,
 		nextQueuedTurnId,
 		onPromoteQueuedTurn,
-		promoteQueuedTurn,
 		runAction,
 		steerNextRequest,
 	]);
@@ -547,7 +546,7 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 
 	const rowProps = {
 		canSteer,
-		onPromoteQueuedTurn: onPromoteQueuedTurn ? promoteQueuedTurn : undefined,
+		onPromoteQueuedTurn,
 		onBeginQueuedEdit,
 		onCancelQueuedTurn,
 		onRunAction: runAction,
@@ -563,8 +562,7 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 			data-reordering={isReordering ? "true" : undefined}
 			style={{ "--queue-dock-expanded-rows": expandedRows } as CSSProperties}
 		>
-			<button
-				type="button"
+			<Pressable
 				onClick={() => hasMore && setExpanded((open) => !open)}
 				disabled={!hasMore}
 				className={cn(
@@ -597,7 +595,7 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 					</span>
 					{editingTurnId ? " · editing" : ""}
 				</span>
-			</button>
+			</Pressable>
 			{count > 0 ? (
 				<div
 					className="queue-dock-body bg-surface"
@@ -641,7 +639,7 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 											showPersistentSteer={Boolean(canSteer && canSteerNext && isNextQueuedTurn)}
 											busy={busy}
 											dragSnapshot={dragSnapshot}
-											error={errors[turnId]}
+											error={errors[turnId] ?? steerErrors?.[turnId]}
 											isReordering={isReordering}
 											onRowHoverChange={setHoveredTurnId}
 											reorderEnabled={reorderEnabled && !busy && !pending}

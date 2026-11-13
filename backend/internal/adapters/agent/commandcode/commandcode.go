@@ -12,9 +12,10 @@
 // "-" is never parsed as a flag. Its `-p`/`--print` mode runs a single headless
 // turn and exits, so supervised AO sessions do not use it.
 //
-// AO installs workspace-local Command Code hooks to observe activity, capture
-// the native session id for restore, and inject AO's standing instructions as
-// SessionStart context without modifying the project's AGENTS.md.
+// AO installs workspace-local Command Code hooks to observe activity and capture
+// the native session id for restore. Standing instructions are not delivered that
+// way: the SessionStart context hook only reaches the TUI, and memory is the one
+// channel Command Code reads in both modes. See sessionhome.go.
 package commandcode
 
 import (
@@ -26,6 +27,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/agentbase"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/binaryutil"
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -102,6 +104,12 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 	if err != nil {
 		return nil, err
 	}
+	// Command Code reads its system prompt from memory rather than a flag, so the
+	// session home has to exist before the process starts. AugmentRuntimeLaunchEnv
+	// points HOME / USERPROFILE at the same directory; see sessionhome.go.
+	if _, err := PrepareSessionHome(cfg.DataDir, domain.SessionID(cfg.SessionID), cfg.SystemPrompt); err != nil {
+		return nil, err
+	}
 
 	cmd = []string{binary, "--skip-onboarding", "--no-auto-update", "--trust"}
 	appendPermissionFlags(&cmd, cfg.Permissions)
@@ -152,6 +160,16 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 		return nil, false, err
 	}
 
+	// A restored session reloads its memory from the same per-session home a fresh
+	// launch would use, so the standing instructions are present without a restart.
+	// Sessions created before per-session homes existed keep their transcripts
+	// under the real home; migrate the captured conversation so --resume can find
+	// it from the isolated home.
+	if _, err := PrepareSessionHome(cfg.DataDir, domain.SessionID(cfg.Session.ID), cfg.SystemPrompt); err != nil {
+		return nil, false, err
+	}
+	MigrateNativeHistory(cfg.DataDir, domain.SessionID(cfg.Session.ID), agentSessionID)
+
 	cmd = make([]string, 0, 8)
 	cmd = append(cmd, binary, "--skip-onboarding", "--no-auto-update", "--trust")
 	appendPermissionFlags(&cmd, cfg.Permissions)
@@ -173,6 +191,18 @@ func (p *Plugin) SessionInfo(ctx context.Context, session ports.SessionRef) (por
 // ResolveBinary resolves the `cmd`/`command-code` executable.
 func (p *Plugin) ResolveBinary(ctx context.Context) (string, error) {
 	return p.binary(ctx)
+}
+
+var _ ports.AgentRuntimeLaunchEnv = (*Plugin)(nil)
+
+// AugmentRuntimeLaunchEnv points the Command Code process at the per-session home
+// that GetLaunchCommand prepared. This is the terminal half of the delivery; the
+// Chat binding sets the same keys from its own launch config, because
+// nativeacp's AugmentRuntimeEnv hook carries no session id.
+func (p *Plugin) AugmentRuntimeLaunchEnv(env map[string]string, dataDir string, sessionID domain.SessionID, _ string) {
+	for key, value := range SessionProcessEnv(dataDir, sessionID, env) {
+		env[key] = value
+	}
 }
 
 func (p *Plugin) binary(ctx context.Context) (string, error) {

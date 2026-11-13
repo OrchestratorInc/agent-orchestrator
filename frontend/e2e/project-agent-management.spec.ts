@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import type { AoBridge } from "../src/preload";
 import { agentReadiness } from "../src/renderer/test/agent-readiness-fixtures";
+import { cloneStream } from "./support/clone-stream";
 import { installFakeAgent } from "./support/fake-bridge";
 
 for (const role of ["Worker agent", "Orchestrator agent"] as const) {
@@ -17,10 +18,15 @@ for (const role of ["Worker agent", "Orchestrator agent"] as const) {
 				await route.fulfill({ json: { jobs: [] } });
 			} else if (pathname === "/api/v1/agents/auth-plans") {
 				await route.fulfill({ json: { plans: [] } });
-			} else if (pathname === "/api/v1/projects/clone/prepare") {
+			} else if (pathname === "/api/v1/projects/clone/check") {
 				await route.fulfill({ json: {
-					path: "/repos/example", remoteUrl: "https://example.com/example.git", preparationId: "prep-management",
+					remoteUrl: "https://example.com/example.git", path: "/repos/example",
+					exists: false, canUseExisting: false,
 				} });
+			} else if (pathname === "/api/v1/projects/clone/prepare/stream") {
+				await route.fulfill(cloneStream({ result: {
+					path: "/repos/example", remoteUrl: "https://example.com/example.git", preparationId: "prep-management",
+				} }));
 			} else if (pathname === "/api/v1/projects/clone/cleanup") {
 				cleanupRequests.push(route.request().postDataJSON());
 				await route.fulfill({ status: 204 });
@@ -58,6 +64,6 @@ for (const role of ["Worker agent", "Orchestrator agent"] as const) {
 		await expect(page.getByRole("dialog", { name: "Set up project" })).toBeVisible();
 		expect(cleanupRequests).toEqual([]);
 		await page.getByRole("button", { name: "Back to clone details" }).click();
-		await expect.poll(() => cleanupRequests).toEqual([{ path: "/repos/example", preparationId: "prep-management" }]);
+		await expect.poll(() => cleanupRequests).toEqual([{ path: "/repos/example", preparationId: "prep-management", keepCheckout: true }]);
 	});
 }

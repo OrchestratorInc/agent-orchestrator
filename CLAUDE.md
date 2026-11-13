@@ -8,9 +8,15 @@ All app state, the daemon's data dir, `running.json`, worktrees, and the Electro
 supervisor's `userData` (Chromium cache, cookies, local/session storage, crash
 dumps), must resolve under `~/.ao` (overridable via `AO_DATA_DIR`/`AO_RUN_FILE`).
 Never write AO state to `~/Library/Application Support` or any other OS-default
-app-data location. The sole read exception is an explicit user-initiated import
+app-data location. The read exceptions are an explicit user-initiated import
 from a validated Chrome, Firefox, or Safari profile: read known source files
-without modifying them and keep snapshots and results under `~/.ao`.
+without modifying them and keep snapshots and results under `~/.ao`; and chat
+import reading Conductor's `com.conductor.app/conductor.db` with SQLite
+`mode=ro`, never writing or checkpointing it. The sole
+write exception is Chrome mode's native-messaging host manifest, which Chrome
+only reads from its own `NativeMessagingHosts` directory: written only by an
+explicit `ao browser chrome setup`, removed by `remove`, pointing at a wrapper
+under `~/.ao` and holding no AO state.
 `frontend/src/main.ts` pins Electron's `userData` to
 `~/.ao/electron`; do not remove that override. See the hard rule in `AGENTS.md`.
 

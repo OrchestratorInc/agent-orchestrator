@@ -111,6 +111,7 @@ const WIRE = {
 					{ text: "one", status: "completed" },
 					{ text: "two", status: "in_progress" },
 				],
+				spansTurns: true,
 			},
 		},
 	],
@@ -728,6 +729,25 @@ describe("provider catalog controller epochs", () => {
 });
 
 describe("useConversation snapshot mapping", () => {
+	it("passes a typed DeepSeek key failure from the API to the timeline snapshot", async () => {
+		getMock.mockResolvedValue({
+			data: {
+				...WIRE,
+				turns: [{
+					...WIRE.turns[0],
+					state: "failed",
+					errorMessage: "ACP internal detail",
+					failureCode: "provider_key_missing",
+				}],
+			},
+			error: undefined,
+		});
+
+		const { result } = renderHook(() => useConversation("ao-1"), { wrapper });
+		await waitFor(() => expect(result.current.snapshot?.turns[0]?.failureCode).toBe("provider_key_missing"));
+		expect(result.current.snapshot?.turns[0]?.errorMessage).toBe("ACP internal detail");
+	});
+
 	it("maps branch metadata and lightweight prompt content", async () => {
 		getMock.mockResolvedValue({
 			data: {
@@ -819,6 +839,7 @@ describe("useConversation snapshot mapping", () => {
 			{ text: "one", status: "completed" },
 			{ text: "two", status: "in_progress" },
 		]);
+		expect(snapshot.turns[0]!.plan?.spansTurns).toBe(true);
 	});
 
 	it("maps retry lineage and durable prompt facts from the daemon", async () => {
@@ -1263,6 +1284,65 @@ describe("controller recovery", () => {
 		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: workspaceQueryKey });
 		invalidateSpy.mockRestore();
 	});
+
+	it("restores a terminated session, which the daemon refuses to resume", async () => {
+		postMock.mockResolvedValue({ data: {}, error: undefined, response: { status: 200 } });
+
+		const { result } = renderHook(() => useConversationCommands("ao-1", undefined, true), { wrapper });
+		await act(async () => {
+			await result.current.resumeAgent();
+		});
+
+		expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/restore", {
+			params: { path: { sessionId: "ao-1" } },
+		});
+		expect(postMock).not.toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/resume-agent", expect.anything());
+	});
+
+	it("stays pending until the chat has read the restored agent", async () => {
+		postMock.mockResolvedValue({ data: {}, error: undefined, response: { status: 200 } });
+		const refetched = deferred<void>();
+		const invalidateSpy = vi.spyOn(QueryClient.prototype, "invalidateQueries").mockImplementation(async (filters) => {
+			if (filters?.queryKey?.[0] === "conversation") await refetched.promise;
+		});
+
+		const { result } = renderHook(() => useConversationCommands("ao-1", undefined, true), { wrapper });
+		let settled = false;
+		let restoring: Promise<unknown> = Promise.resolve();
+		act(() => {
+			restoring = result.current.resumeAgent().then(() => { settled = true; });
+		});
+		await waitFor(() => expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["conversation", "ao-1"] }));
+		await act(async () => {
+			await new Promise((resolve) => setTimeout(resolve, 20));
+		});
+
+		// The cached snapshot still says stopped, which would read as a crashed agent.
+		expect(settled).toBe(false);
+		expect(result.current.resumingAgent).toBe(true);
+
+		await act(async () => {
+			refetched.resolve();
+			await restoring;
+		});
+		await waitFor(() => expect(result.current.resumingAgent).toBe(false));
+		invalidateSpy.mockRestore();
+	});
+
+	it("reports a refused restore through the resume error", async () => {
+		apiErrorMessageMock.mockImplementation((error: unknown, fallback: string) =>
+			error instanceof Error ? error.message : fallback,
+		);
+		postMock.mockResolvedValue({ data: undefined, error: { message: "Workspace restore failed" }, response: { status: 500 } });
+
+		const { result } = renderHook(() => useConversationCommands("ao-1", undefined, true), { wrapper });
+		await act(async () => {
+			await expect(result.current.resumeAgent()).rejects.toThrow();
+		});
+
+		await waitFor(() => expect(result.current.resumeError).toBe("Unable to restore session"));
+		apiErrorMessageMock.mockReset();
+	});
 });
 
 describe("useConversationSkills polling", () => {
@@ -1388,4 +1468,31 @@ describe("toSnapshot", () => {
 		const message = snapshot.items.find((item) => item.kind === "message");
 		expect(message).toMatchObject({ id: "m1", clientMessageId: "client-1" });
 	});
+});
+
+it("keeps a live refresh that is in flight when older history starts loading", async () => {
+	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	const local = ({ children }: { children: ReactNode }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+	const page = (latestSequence: number, older = false) => ({
+		data: {
+			conversationId: "conv-1", sessionId: "ao-1", harness: "codex", mode: "chat", controller: "ready", settings: {},
+			latestSequence, oldestSequence: older ? 1 : 20, hasMoreBefore: !older, turns: [], messages: [], activities: [],
+		},
+		error: undefined,
+	});
+	const refresh = deferred<ReturnType<typeof page>>();
+	getMock.mockReset()
+		.mockResolvedValueOnce(page(20))
+		.mockReturnValueOnce(refresh.promise)
+		.mockResolvedValue(page(20, true));
+	const { result } = renderHook(() => useConversation("ao-1"), { wrapper: local });
+	await waitFor(() => expect(result.current.snapshot?.latestSequence).toBe(20));
+
+	// A conversation event starts a refresh; the reader scrolls to the top before it lands.
+	void queryClient.invalidateQueries({ queryKey: ["conversation", "ao-1"] }, { cancelRefetch: false });
+	await waitFor(() => expect(getMock).toHaveBeenCalledTimes(2));
+	act(() => result.current.loadOlder());
+	await act(async () => { refresh.resolve(page(21)); });
+
+	await waitFor(() => expect(result.current.snapshot?.latestSequence).toBe(21));
 });

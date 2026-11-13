@@ -23,9 +23,15 @@ export type Host = {
 	endpoints: Endpoint[];
 	/** Connection token. Lives in the device keystore, never in AsyncStorage. */
 	token: string;
+	/** The pairing password swapped for the token, used again if the machine forgets the token. Keystore only. */
+	fallbackToken?: string;
 	lastConnected: number;
 	/** Present only for a machine discovered through AO Cloud. */
 	accountUserId?: string;
+	/** The account's label for the machine at the last sync. While `name` still
+	 * equals it, the name follows renames made on the account; a rename on the
+	 * phone makes them differ and keeps the phone's name. */
+	accountLabel?: string;
 };
 
 /** activeHost() uses explicit selection or the most recent machine. */
@@ -39,9 +45,15 @@ export function sameHostConnections(left: Host[], right: Host[]): boolean {
 const HOSTS_KEY = "ao.hosts";
 const ACTIVE_HOST_KEY = "ao.activeHost";
 const tokenKey = (id: string) => `ao.hostToken.${id}`;
+const fallbackTokenKey = (id: string) => `ao.hostFallbackToken.${id}`;
 
-/** What is written to AsyncStorage: everything except the token. */
-export type HostMetadata = Omit<Host, "token">;
+async function writeSecret(key: string, value: string | undefined): Promise<void> {
+	if (value) await SecureStore.setItemAsync(key, value);
+	else await SecureStore.deleteItemAsync(key);
+}
+
+/** What is written to AsyncStorage: everything except the tokens. */
+export type HostMetadata = Omit<Host, "token" | "fallbackToken">;
 type StoredHost = HostMetadata;
 
 function isStoredHost(v: unknown): v is StoredHost {
@@ -86,10 +98,14 @@ function mutateStored(change: (hosts: StoredHost[]) => StoredHost[] | Promise<St
 export async function loadHosts(): Promise<Host[]> {
 	const stored = sortHosts(await readStored());
 	return Promise.all(
-		stored.map(async (h) => ({
-			...h,
-			token: (await SecureStore.getItemAsync(tokenKey(h.id))) ?? "",
-		})),
+		stored.map(async (h) => {
+			const fallbackToken = await SecureStore.getItemAsync(fallbackTokenKey(h.id));
+			return {
+				...h,
+				token: (await SecureStore.getItemAsync(tokenKey(h.id))) ?? "",
+				...(fallbackToken ? { fallbackToken } : {}),
+			};
+		}),
 	);
 }
 
@@ -101,13 +117,15 @@ export async function findHost(id: string): Promise<Host | null> {
 /** Adds or replaces a machine. Re-pairing the same machine updates it in place
  * rather than adding a second entry for it. */
 export async function saveHost(host: Host): Promise<void> {
-	const { token, ...rest } = host;
+	const { token, fallbackToken, ...rest } = host;
 	await mutateStored((stored) => [rest, ...stored.filter((h) => h.id !== host.id)]);
-	if (token) {
-		await SecureStore.setItemAsync(tokenKey(host.id), token);
-	} else {
-		await SecureStore.deleteItemAsync(tokenKey(host.id));
-	}
+	await writeSecret(tokenKey(host.id), token);
+	await writeSecret(fallbackTokenKey(host.id), fallbackToken);
+}
+
+export async function updateHostToken(id: string, token: string, fallbackToken?: string): Promise<void> {
+	await writeSecret(tokenKey(id), token);
+	await writeSecret(fallbackTokenKey(id), fallbackToken);
 }
 
 /** Rename a pairing without rewriting its credential or discovered endpoints. */
@@ -191,6 +209,7 @@ export async function removeHost(id: string): Promise<void> {
 		return stored.filter((h) => h.id !== id);
 	});
 	await SecureStore.deleteItemAsync(tokenKey(id));
+	await SecureStore.deleteItemAsync(fallbackTokenKey(id));
 	// A pointer at a machine that no longer exists would resolve to nothing;
 	// clearing it falls back to recency instead.
 	if ((await AsyncStorage.getItem(ACTIVE_HOST_KEY)) === id) await clearActiveHost();
@@ -297,5 +316,10 @@ export async function adoptHostIdentity(oldId: string, hostId: string): Promise<
 	if (token) {
 		await SecureStore.setItemAsync(tokenKey(hostId), token);
 		await SecureStore.deleteItemAsync(tokenKey(""));
+	}
+	const fallbackToken = await SecureStore.getItemAsync(fallbackTokenKey(""));
+	if (fallbackToken) {
+		await SecureStore.setItemAsync(fallbackTokenKey(hostId), fallbackToken);
+		await SecureStore.deleteItemAsync(fallbackTokenKey(""));
 	}
 }

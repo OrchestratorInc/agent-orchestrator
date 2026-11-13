@@ -9,6 +9,7 @@
  * until it has been run. See docs for the local end-to-end check.
  */
 import { type ConnectDeps, connectHost, type ConnectResult } from "./connect";
+import { deviceTokenConnectDeps } from "./deviceTokenRuntime";
 import type { ServerConfig } from "./config";
 import { type Endpoint, endpointBaseUrl } from "./endpoints";
 import { shouldRetryProbe, TUNNEL_PROBE_RETRY_DELAY_MS } from "./probeRetry";
@@ -133,6 +134,13 @@ export async function rejectedEndpointNeedsRace(cfg: ServerConfig, status: numbe
  */
 export const ENDPOINT_REFRESH_TIMEOUT_MS = 5_000;
 
+export class EndpointRefreshError extends Error {
+	constructor(readonly status: number, readonly code?: string) {
+		super(`endpoint refresh returned ${status}`);
+		this.name = "EndpointRefreshError";
+	}
+}
+
 /**
  * Re-reads what the daemon advertises now.
  *
@@ -140,7 +148,7 @@ export const ENDPOINT_REFRESH_TIMEOUT_MS = 5_000;
  * control routes are 404'd on the LAN listener, which is the only listener a
  * phone can reach.
  */
-async function fetchAdvertisedEndpoints(config: ServerConfig): Promise<Endpoint[]> {
+export async function fetchAdvertisedEndpoints(config: ServerConfig): Promise<Endpoint[]> {
 	const controller = new AbortController();
 	const timeout = setTimeout(() => controller.abort(), ENDPOINT_REFRESH_TIMEOUT_MS);
 	try {
@@ -152,7 +160,10 @@ async function fetchAdvertisedEndpoints(config: ServerConfig): Promise<Endpoint[
 			},
 			signal: controller.signal,
 		});
-		if (!res.ok) throw new Error(`endpoint refresh returned ${res.status}`);
+		if (!res.ok) {
+			const body = (await res.json().catch(() => null)) as { code?: unknown } | null;
+			throw new EndpointRefreshError(res.status, typeof body?.code === "string" ? body.code : undefined);
+		}
 		const body = (await res.json()) as { endpoints?: Endpoint[] };
 		return body.endpoints ?? [];
 	} finally {
@@ -184,6 +195,7 @@ export function runtimeConnectDeps(options: ConnectOptions = {}): ConnectDeps {
 		saveEndpoints: updateHostEndpoints,
 		adoptIdentity: adoptHostIdentity,
 		touch: touchHost,
+		...deviceTokenConnectDeps(),
 	};
 }
 

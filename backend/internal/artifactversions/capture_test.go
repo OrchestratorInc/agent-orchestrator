@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	sessionsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/session"
 	"github.com/aoagents/agent-orchestrator/backend/internal/sessionartifacts"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
@@ -280,7 +281,7 @@ func TestCaptureSession_SnapshotsAreNotArtifacts(t *testing.T) {
 	h.write("page.html", "x")
 	h.tick()
 	h.tick()
-	files, err := sessionartifacts.List(h.dir)
+	files, err := sessionartifacts.List(context.Background(), h.dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -341,5 +342,211 @@ func TestCaptureSession_NoArtifactDirIsNotAnError(t *testing.T) {
 	h.tick()
 	if _, ok := h.cap.observed[h.sess.ID]; ok {
 		t.Fatal("kept observations for a session with no artifacts")
+	}
+}
+
+// A renamed file is the same artifact: its history moves with it, and its next
+// edit is its next version, not the first of a new file.
+func TestCaptureSession_RenamedFileKeepsItsHistory(t *testing.T) {
+	h := newHarness(t)
+	h.write("page.html", "<p>one</p>")
+	h.tick()
+	h.tick()
+	if vs := h.versions("page.html"); len(vs) != 1 {
+		t.Fatalf("versions before the rename = %+v", vs)
+	}
+	track := func() []domain.SessionArtifactFile {
+		t.Helper()
+		rows, err := h.store.ListSessionArtifacts(h.ctx, h.sess.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		files, err := h.cap.Track(h.ctx, h.sess, rows)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return files
+	}
+	before := track()
+	if len(before) != 1 || before[0].ID == "" {
+		t.Fatalf("tracked files = %+v", before)
+	}
+	if err := os.Rename(filepath.Join(h.dir, "page.html"), filepath.Join(h.dir, "report.html")); err != nil {
+		t.Fatal(err)
+	}
+	after := track()
+	if len(after) != 1 || after[0].Path != "report.html" || after[0].ID != before[0].ID {
+		t.Fatalf("after the rename = %+v, want report.html with id %s", after, before[0].ID)
+	}
+	if vs := h.versions("report.html"); len(vs) != 1 || vs[0].SHA256 != sum("<p>one</p>") {
+		t.Fatalf("history at the new path = %+v", vs)
+	}
+	if vs := h.versions("page.html"); len(vs) != 0 {
+		t.Fatalf("history left at the old path = %+v", vs)
+	}
+	h.write("report.html", "<p>two</p>")
+	h.tick()
+	h.tick()
+	if vs := h.versions("report.html"); len(vs) != 2 || vs[0].Version != 2 {
+		t.Fatalf("history after an edit = %+v, want version 2 on top", vs)
+	}
+}
+
+// A read that drops a version does not remove its blob while a capture is
+// running, since the capture may be about to record a version of the same
+// content; the next capture removes it. Versions left at a path with no
+// artifact are dropped when a renamed file takes that path.
+func TestTrackLeavesBlobCleanupToTheCaptureLock(t *testing.T) {
+	h := newHarness(t)
+	h.write("a.html", "<p>a</p>")
+	h.write("b.html", "<p>b</p>")
+	h.tick()
+	h.tick()
+	gone := h.versions("b.html")
+	if len(gone) != 1 {
+		t.Fatalf("b.html versions = %+v", gone)
+	}
+	track := func() {
+		t.Helper()
+		rows, err := h.store.ListSessionArtifacts(h.ctx, h.sess.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := h.cap.Track(h.ctx, h.sess, rows); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Remove(filepath.Join(h.dir, "b.html")); err != nil {
+		t.Fatal(err)
+	}
+	// Its row goes and its versions stay, belonging to no artifact.
+	if err := h.store.RemoveSessionArtifact(h.ctx, h.sess.ID, "b.html"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(filepath.Join(h.dir, "a.html"), filepath.Join(h.dir, "b.html")); err != nil {
+		t.Fatal(err)
+	}
+	h.cap.mu.Lock() // a capture is running
+	track()
+	if _, ok := h.blob(gone[0].SHA256); !ok {
+		h.cap.mu.Unlock()
+		t.Fatal("a read removed a blob while a capture held the lock")
+	}
+	h.cap.mu.Unlock()
+	if vs := h.versions("b.html"); len(vs) != 1 || vs[0].SHA256 != sum("<p>a</p>") {
+		t.Fatalf("b.html history = %+v, want a.html's", vs)
+	}
+	h.tick()
+	if _, ok := h.blob(gone[0].SHA256); ok {
+		t.Fatal("the next capture left the dropped version's blob")
+	}
+}
+
+func TestTrackFromBatchedSessionRowsKeepsDestinationHistory(t *testing.T) {
+	h := newHarness(t)
+	h.write("report.html", "original")
+	h.tick()
+	h.tick()
+	before := h.versions("report.html")
+	if len(before) != 1 {
+		t.Fatalf("initial versions = %+v", before)
+	}
+	if err := os.Remove(filepath.Join(h.dir, "report.html")); err != nil {
+		t.Fatal(err)
+	}
+	h.tick()
+	h.write("report.tmp.html", "replacement")
+	h.tick()
+	if err := os.Rename(filepath.Join(h.dir, "report.tmp.html"), filepath.Join(h.dir, "report.html")); err != nil {
+		t.Fatal(err)
+	}
+	batch, err := h.store.ListSessionArtifactsForSessions(h.ctx, []domain.SessionID{h.sess.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.cap.Track(h.ctx, h.sess, batch[h.sess.ID]); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.versions("report.html"); len(got) != 1 || got[0].SHA256 != before[0].SHA256 {
+		t.Fatalf("history after batch read = %+v, want %+v", got, before)
+	}
+	if body, exists := h.blob(before[0].SHA256); !exists || body != "original" {
+		t.Fatalf("original snapshot = %q, exists %v", body, exists)
+	}
+}
+
+func TestRegistrationBeforeFirstScanKeepsRenamedDeliverable(t *testing.T) {
+	for _, tracked := range []bool{false, true} {
+		for _, bundle := range []bool{false, true} {
+			t.Run(fmt.Sprintf("tracked=%v/bundle=%v", tracked, bundle), func(t *testing.T) {
+				h := newHarness(t)
+				from, to, member := "draft.html", "final.html", ""
+				if bundle {
+					from, to, member = "draft.icon", "final.icon", "/preview.svg"
+				}
+				h.write(from+member, "draft")
+				observation, err := sessionartifacts.Observe(h.ctx, h.dir, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				identified := false
+				for _, insert := range observation.Changes(nil, time.Now(), func() string { return "probe" }).Insert {
+					if insert.Path == from {
+						identified = insert.File.SameFile(insert.File)
+					}
+				}
+				if !identified {
+					t.Skip("this file system does not report stable file identity")
+				}
+				if tracked {
+					h.tick()
+				}
+				svc := sessionsvc.NewWithDeps(sessionsvc.Deps{Store: h.store, DataDir: h.cap.dataDir})
+				for range 2 {
+					if _, err := svc.RegisterArtifacts(h.ctx, h.sess.ID, []string{from}); err != nil {
+						t.Fatal(err)
+					}
+				}
+				before, err := h.store.ListSessionArtifacts(h.ctx, h.sess.ID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var registered domain.SessionArtifactRecord
+				for _, row := range before {
+					if row.Path == from {
+						registered = row
+					}
+				}
+				if registered.ID == "" || registered.RegisteredAt == nil {
+					t.Fatalf("registration was not persisted: %+v", before)
+				}
+				if err := os.Rename(filepath.Join(h.dir, from), filepath.Join(h.dir, to)); err != nil {
+					t.Fatal(err)
+				}
+				files, err := h.cap.Track(h.ctx, h.sess, before)
+				if err != nil {
+					t.Fatal(err)
+				}
+				found := false
+				for _, file := range files {
+					if file.Path == to+member && file.Registered {
+						found = true
+					}
+				}
+				if !found {
+					t.Fatalf("renamed deliverable lost registration: %+v", files)
+				}
+				after, err := h.store.ListSessionArtifacts(h.ctx, h.sess.ID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, row := range after {
+					if row.Path == to && row.ID == registered.ID && row.RegisteredAt != nil && row.RegisteredAt.Equal(*registered.RegisteredAt) {
+						return
+					}
+				}
+				t.Fatalf("renamed artifact did not keep its row: before=%+v, after=%+v", registered, after)
+			})
+		}
 	}
 }

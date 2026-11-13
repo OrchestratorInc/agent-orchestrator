@@ -1,16 +1,18 @@
-import { forwardRef, type ButtonHTMLAttributes } from "react";
-import { ChevronDown, ChevronRight } from "lucide-react";
+import { createContext, forwardRef, useCallback, useContext, useRef, useState, type ButtonHTMLAttributes } from "react";
+import { ChevronDown, ChevronRight } from "@/components/app-icons";
 import { DropdownMenu as DropdownMenuPrimitive } from "radix-ui";
 import { cn } from "../../lib/utils";
+import { GHOST_PILL_CLASS } from "./button";
+import { ShieldOutsideClick, skipFocusHopToSibling, swallowClickAfter } from "./menu-focus";
 
 const SURFACE =
-	"settings-menu-surface min-w-[14rem] rounded-(--radius-settings-panel) border-settings-menu bg-settings-menu p-1 gap-0!";
+	"settings-menu-surface min-w-[14rem] rounded-(--radius-settings-panel) border border-(--color-border-overlay) bg-settings-menu shadow-(--shadow-popover)";
 
 const ROW =
-	"relative isolate flex min-w-0 cursor-default items-center rounded-none px-3 py-2 outline-none whitespace-nowrap transition-none! before:pointer-events-none before:absolute before:inset-x-0 before:inset-y-px before:-z-10 before:rounded-[10px] first:before:top-0 last:before:bottom-0 focus:before:bg-settings-menu-selected focus:text-settings-title focus:text-foreground data-highlighted:before:bg-settings-menu-selected data-highlighted:text-settings-title data-highlighted:text-foreground data-[search-active=true]:before:bg-settings-menu-selected data-[search-active=true]:text-settings-title data-[search-active=true]:text-foreground data-[active=true]:before:bg-settings-menu-selected data-[active=true]:text-foreground";
+	"relative isolate flex min-w-0 cursor-default items-center gap-2.5 rounded-none px-2 py-1.5 text-control text-muted-foreground outline-none whitespace-nowrap transition-none! before:pointer-events-none before:absolute before:inset-0 before:-z-10 before:rounded-md focus:before:bg-interactive-hover focus:text-foreground data-highlighted:before:bg-interactive-hover data-highlighted:text-foreground data-[search-active=true]:before:bg-interactive-hover data-[search-active=true]:text-foreground data-[active=true]:before:bg-interactive-hover data-[active=true]:text-foreground";
 
 const LABEL =
-	"px-3 py-2 text-[length:var(--font-size-base)] font-normal tracking-normal text-settings-muted";
+	"px-2 py-1.5 text-micro tracking-wide text-passive";
 
 /**
  * The quiet filled trigger both this menu and the Settings pickers wear —
@@ -19,15 +21,31 @@ const LABEL =
  * same control: a visual tweak here should never need making twice.
  */
 export const MENU_TRIGGER_CHROME =
-	"settings-option-trigger max-w-full min-w-0 bg-[var(--color-bg-settings-trigger)] text-[var(--color-text-settings-trigger)] hover:bg-[var(--color-bg-settings-trigger-hover)] hover:text-[var(--color-text-settings-trigger)] data-[state=open]:bg-[var(--color-bg-settings-trigger-hover)] focus:outline-none focus-visible:outline-none focus-visible:ring-0 data-[state=open]:outline-none data-[state=open]:ring-0 disabled:cursor-not-allowed disabled:opacity-50";
+	"settings-option-trigger button-raised max-w-full min-w-0 border [--button-color:var(--secondary)] text-secondary-foreground motion-reduce:transition-none disabled:cursor-not-allowed disabled:opacity-50";
 
-const TRIGGER = cn("group/option-menu-trigger", MENU_TRIGGER_CHROME);
+export const MENU_GHOST_TRIGGER_CHROME = cn(
+	"settings-option-trigger max-w-full min-w-0 border-0 text-foreground motion-reduce:transition-none disabled:cursor-not-allowed disabled:opacity-50",
+	GHOST_PILL_CLASS,
+);
+const CloseSubmenu = createContext<(() => void) | undefined>(undefined);
 
 // ---------------------------------------------------------------------------
 // Root — re-export for convenience
 // ---------------------------------------------------------------------------
 
-export const OptionMenu = DropdownMenuPrimitive.Root;
+/**
+ * Not modal by default. A modal menu locks scrolling (a stylesheet added and removed)
+ * and turns off pointer events on <body>; either restyles every element on the page
+ * when the menu opens and again when it closes. Unless `modal` is passed, an outside
+ * click still only closes the menu, as a modal one's would.
+ */
+export function OptionMenu({ modal, ...props }: React.ComponentProps<typeof DropdownMenuPrimitive.Root>) {
+	return (
+		<ShieldOutsideClick.Provider value={modal === undefined}>
+			<DropdownMenuPrimitive.Root modal={modal ?? false} {...props} />
+		</ShieldOutsideClick.Provider>
+	);
+}
 
 // ---------------------------------------------------------------------------
 // Trigger
@@ -35,11 +53,11 @@ export const OptionMenu = DropdownMenuPrimitive.Root;
 
 export const OptionMenuTrigger = forwardRef<
 	HTMLButtonElement,
-	ButtonHTMLAttributes<HTMLButtonElement> & { showCaret?: boolean }
->(function OptionMenuTrigger({ className, children, showCaret = true, ...props }, ref) {
+	ButtonHTMLAttributes<HTMLButtonElement> & { showCaret?: boolean; variant?: "secondary" | "ghost" }
+>(function OptionMenuTrigger({ className, children, showCaret = true, variant = "secondary", ...props }, ref) {
 	return (
 		<DropdownMenuPrimitive.Trigger asChild>
-			<button ref={ref} type="button" className={cn(TRIGGER, className)} {...props}>
+			<button ref={ref} type="button" className={cn("group/option-menu-trigger", variant === "ghost" ? MENU_GHOST_TRIGGER_CHROME : MENU_TRIGGER_CHROME, className)} {...props}>
 				{children}
 				{showCaret ? (
 					<ChevronDown
@@ -59,12 +77,28 @@ export const OptionMenuTrigger = forwardRef<
 export function OptionMenuContent({
 	className,
 	sideOffset = 6,
+	steady,
 	children,
+	onPointerDownOutside,
 	...props
-}: React.ComponentProps<typeof DropdownMenuPrimitive.Content>) {
+}: React.ComponentProps<typeof DropdownMenuPrimitive.Content> & {
+	/**
+	 * Keep the rows still while open. A menu that opens upward is pinned by its bottom
+	 * edge, so a row that disappears would pull every row above it down under the pointer.
+	 */
+	steady?: boolean;
+}) {
+	const steadyRef = useSteadyHeight(steady);
+	const shield = useContext(ShieldOutsideClick);
 	return (
 		<DropdownMenuPrimitive.Portal>
 			<DropdownMenuPrimitive.Content
+				ref={steadyRef}
+				onPointerDownOutside={(event) => {
+					onPointerDownOutside?.(event);
+					if (shield) swallowClickAfter(event);
+				}}
+				data-browser-native-overlay="true"
 				sideOffset={sideOffset}
 				collisionPadding={16}
 				className={cn(
@@ -80,6 +114,39 @@ export function OptionMenuContent({
 			</DropdownMenuPrimitive.Content>
 		</DropdownMenuPrimitive.Portal>
 	);
+}
+
+/**
+ * Shrinks the panel from the bottom while the pointer is on it. The height it loses
+ * becomes a bottom margin, which the positioned wrapper still counts, so the top edge
+ * and every row stay put; the space sits outside the panel, between it and the
+ * trigger. Once the pointer leaves for anywhere but a submenu, the panel settles
+ * back onto its trigger.
+ */
+function useSteadyHeight(enabled: boolean | undefined) {
+	const cleanup = useRef<(() => void) | null>(null);
+	return useCallback((node: HTMLDivElement | null) => {
+		cleanup.current?.();
+		cleanup.current = null;
+		if (!node || !enabled) return;
+		let tallest = 0;
+		const observer = new ResizeObserver(() => {
+			const height = node.offsetHeight;
+			tallest = Math.max(tallest, height);
+			node.style.marginBottom = tallest > height ? `${tallest - height}px` : "";
+		});
+		const settle = (event: PointerEvent) => {
+			if (event.relatedTarget instanceof Element && event.relatedTarget.closest('[role="menu"]')) return;
+			tallest = node.offsetHeight;
+			node.style.marginBottom = "";
+		};
+		observer.observe(node);
+		node.addEventListener("pointerleave", settle);
+		cleanup.current = () => {
+			observer.disconnect();
+			node.removeEventListener("pointerleave", settle);
+		};
+	}, [enabled]);
 }
 
 // ---------------------------------------------------------------------------
@@ -107,6 +174,8 @@ export function OptionMenuItem({
 	active,
 	searchActive,
 	radio,
+	onPointerLeave,
+	onSelect,
 	...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Item> & {
 	active?: boolean;
@@ -114,6 +183,7 @@ export function OptionMenuItem({
 	searchActive?: boolean;
 	radio?: boolean;
 }) {
+	const closeSubmenu = useContext(CloseSubmenu);
 	return (
 		<DropdownMenuPrimitive.Item
 			{...(radio === undefined
@@ -122,6 +192,20 @@ export function OptionMenuItem({
 			data-active={active || undefined}
 			data-search-active={searchActive || undefined}
 			className={cn(ROW, className)}
+			onPointerLeave={(event) => {
+				onPointerLeave?.(event);
+				skipFocusHopToSibling(event);
+			}}
+			onSelect={(event) => {
+				onSelect?.(event);
+				if (!closeSubmenu || event.defaultPrevented) return;
+				const triggerId = event.currentTarget instanceof HTMLElement
+					? event.currentTarget.closest('[role="menu"]')?.getAttribute("aria-labelledby")
+					: undefined;
+				event.preventDefault();
+				closeSubmenu();
+				if (triggerId) document.getElementById(triggerId)?.focus();
+			}}
 			{...props}
 		/>
 	);
@@ -131,7 +215,46 @@ export function OptionMenuItem({
 // Submenu — trigger row + subcontent panel
 // ---------------------------------------------------------------------------
 
-export const OptionMenuSub = DropdownMenuPrimitive.Sub;
+/**
+ * Lets a submenu that a selection closed open again, once its trigger is
+ * asked for it: a click, a key, or a pointer that actually moves over it.
+ */
+const AllowSubmenuReopen = createContext<(() => void) | undefined>(undefined);
+
+export function OptionMenuSub({
+	closeOnSelect = false,
+	open,
+	defaultOpen = false,
+	onOpenChange,
+	...props
+}: React.ComponentProps<typeof DropdownMenuPrimitive.Sub> & { closeOnSelect?: boolean }) {
+	const [localOpen, setLocalOpen] = useState(defaultOpen);
+	// Radix opens a submenu 100ms after the pointer moves onto its trigger and
+	// does not cancel that timer when a click opens it at once. A choice made
+	// inside that window (a quick click and pick, or a search and Enter) closes
+	// the submenu, and the old timer then reopened it. After a selection closes
+	// it, only the trigger being asked again (see AllowSubmenuReopen) opens it.
+	const closedBySelection = useRef(false);
+	const changeOpen = (next: boolean) => {
+		if (next && closedBySelection.current) return;
+		setLocalOpen(next);
+		onOpenChange?.(next);
+	};
+	const closeAfterSelection = () => {
+		closedBySelection.current = true;
+		changeOpen(false);
+	};
+	const allowReopen = useCallback(() => {
+		closedBySelection.current = false;
+	}, []);
+	return (
+		<CloseSubmenu.Provider value={closeOnSelect ? closeAfterSelection : undefined}>
+			<AllowSubmenuReopen.Provider value={allowReopen}>
+				<DropdownMenuPrimitive.Sub open={open ?? localOpen} onOpenChange={changeOpen} {...props} />
+			</AllowSubmenuReopen.Provider>
+		</CloseSubmenu.Provider>
+	);
+}
 
 export function OptionMenuSubTrigger({
 	className,
@@ -139,20 +262,34 @@ export function OptionMenuSubTrigger({
 	value,
 	children,
 	onClick,
+	onKeyDown,
+	onPointerMove,
 	...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.SubTrigger> & {
 	label?: string;
 	value?: string;
 }) {
+	const allowReopen = useContext(AllowSubmenuReopen);
 	return (
 		<DropdownMenuPrimitive.SubTrigger
-			className={cn(ROW, "justify-between gap-3 text-xs text-foreground data-[state=open]:before:bg-settings-menu-selected data-[state=open]:text-foreground", className)}
+			className={cn(ROW, "justify-between gap-3 text-xs text-foreground data-[state=open]:before:bg-interactive-hover data-[state=open]:text-foreground", className)}
 			// Stop the click reaching the composer's click-to-focus handler without
 			// calling preventDefault, which Radix's composeEventHandlers reads as a
 			// signal to skip its own open/close handling.
 			onClick={(e) => {
 				e.stopPropagation();
+				allowReopen?.();
 				onClick?.(e);
+			}}
+			onKeyDown={(e) => {
+				allowReopen?.();
+				onKeyDown?.(e);
+			}}
+			onPointerMove={(e) => {
+				// A real move, not the zero-movement one a browser sends when the
+				// page changes under a resting pointer.
+				if (e.movementX || e.movementY) allowReopen?.();
+				onPointerMove?.(e);
 			}}
 			{...props}
 		>
@@ -182,6 +319,7 @@ export function OptionMenuSubContent({
 	return (
 		<DropdownMenuPrimitive.Portal>
 			<DropdownMenuPrimitive.SubContent
+				data-browser-native-overlay="true"
 				sideOffset={sideOffset}
 				alignOffset={alignOffset}
 				collisionPadding={16}

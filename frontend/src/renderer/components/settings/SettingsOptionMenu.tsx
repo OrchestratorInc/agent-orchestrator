@@ -1,4 +1,5 @@
-import { Fragment, type ReactNode, type Ref, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Fragment, type ReactNode, type Ref, useEffect, useRef, useState } from "react";
+import { useEdgeFade } from "../../hooks/useEdgeFade";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
 import { useSuppressStrayFocusRing } from "../../hooks/useSuppressStrayFocusRing";
@@ -28,6 +29,8 @@ export function SettingsOptionMenu<T extends string>({
 	renderMenuItem,
 	renderTrigger,
 	triggerClassName,
+	triggerVariant,
+	showCaret,
 	menuClassName,
 	menuItemClassName,
 	menuAlign = "end",
@@ -49,12 +52,15 @@ export function SettingsOptionMenu<T extends string>({
 	renderMenuItem?: (option: SettingsOption<T>, selected: boolean) => ReactNode;
 	renderTrigger?: (selected: SettingsOption<T> | undefined, placeholder?: string) => ReactNode;
 	triggerClassName?: string;
+	triggerVariant?: "secondary" | "ghost";
+	showCaret?: boolean;
 	menuClassName?: string;
 	menuItemClassName?: string;
 	menuAlign?: "start" | "center" | "end";
 	searchable?: boolean;
 	searchPlaceholder?: string;
-	action?: { label: string; onSelect: () => void };
+	/** An extra row under the options, such as "Manage…". */
+	action?: { label: string; onSelect: () => void; icon?: ReactNode };
 	emptyLabel?: string;
 	triggerRef?: Ref<HTMLButtonElement>;
 	onCloseAutoFocus?: (event: Event) => void;
@@ -71,23 +77,7 @@ export function SettingsOptionMenu<T extends string>({
 			)
 		: options;
 	const scrollRef = useRef<HTMLDivElement>(null);
-	const [canScrollDown, setCanScrollDown] = useState(false);
-	const updateScrollCue = useCallback(() => {
-		const element = scrollRef.current;
-		setCanScrollDown(Boolean(element && element.scrollHeight - element.scrollTop > element.clientHeight + 1));
-	}, []);
-	useLayoutEffect(() => {
-		if (!menuOpen) {
-			setCanScrollDown(false);
-			return;
-		}
-		updateScrollCue();
-		const element = scrollRef.current;
-		if (!element || typeof ResizeObserver === "undefined") return;
-		const observer = new ResizeObserver(updateScrollCue);
-		observer.observe(element);
-		return () => observer.disconnect();
-	}, [menuOpen, updateScrollCue, visibleOptions.length]);
+	useEdgeFade(scrollRef, "y", [menuOpen]);
 	const onCloseAutoFocus = useSuppressStrayFocusRing(menuOpen);
 	// Radix skips onOpenChange when an open menu unmounts (e.g. a shortcut closes
 	// the settings view), so end any highlight here or a preview would stick.
@@ -106,7 +96,7 @@ export function SettingsOptionMenu<T extends string>({
 			}}
 		>
 			<DropdownMenuTrigger asChild disabled={disabled}>
-				<SettingsMenuTrigger ref={triggerRef} className={triggerClassName} aria-label={ariaLabel}>
+				<SettingsMenuTrigger variant={triggerVariant} ref={triggerRef} className={triggerClassName} showCaret={showCaret} aria-label={ariaLabel}>
 					{renderTrigger ? (
 						renderTrigger(selected, placeholder)
 					) : (
@@ -146,8 +136,7 @@ export function SettingsOptionMenu<T extends string>({
 				>
 					<div
 						ref={scrollRef}
-						className="model-menu-scroll min-h-0 overflow-y-auto overscroll-contain"
-						onScroll={updateScrollCue}
+						className="model-menu-scroll edge-fade min-h-0 overflow-y-auto overscroll-contain"
 					>
 						{visibleOptions.map((option, index) => (
 							<Fragment key={option.value}>
@@ -155,10 +144,22 @@ export function SettingsOptionMenu<T extends string>({
 							<DropdownMenuItem
 								disabled={option.disabled}
 								onSelect={() => onChange(option.value)}
-								onFocus={onHighlight ? () => onHighlight(option.value) : undefined}
+								// Rows remain mounted during the exit animation; they must not restart a preview.
+								onFocus={menuOpen && onHighlight ? () => onHighlight(option.value) : undefined}
+								// Hovering off the options (or into the search box) ends the
+								// preview; moving to another option hands it straight over.
+								onBlur={
+									onHighlight
+										? (event) => {
+												const next = event.relatedTarget;
+												if (next instanceof Element && next.closest('[role="menuitem"]')) return;
+												onHighlight(null);
+											}
+										: undefined
+								}
 								className={cn(
 									SETTINGS_MENU_ITEM,
-									option.value === value && "border-settings-menu bg-settings-menu-selected text-settings-title",
+									option.value === value && "bg-interactive-active text-foreground",
 									menuItemClassName,
 								)}
 							>
@@ -177,15 +178,14 @@ export function SettingsOptionMenu<T extends string>({
 							<p className="px-2 py-1.5 text-xs text-settings-muted">{emptyLabel ?? t("settings.options.noMatches")}</p>
 						)}
 					</div>
-					<div
-						className={cn("model-menu-overflow-cue", canScrollDown ? "opacity-100" : "opacity-0")}
-						aria-hidden="true"
-					/>
 				</div>
 				{action && (
 					<div data-slot="settings-option-menu-action" className="shrink-0">
 						<DropdownMenuSeparator />
-						<DropdownMenuItem onSelect={action.onSelect} className={SETTINGS_MENU_ITEM}>{action.label}</DropdownMenuItem>
+						<DropdownMenuItem onSelect={action.onSelect} className={cn(SETTINGS_MENU_ITEM, action.icon && "gap-2! [&_svg]:text-current!")}>
+							{action.icon}
+							{action.label}
+						</DropdownMenuItem>
 					</div>
 				)}
 			</DropdownMenuContent>

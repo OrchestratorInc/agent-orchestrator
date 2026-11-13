@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 
 	acpsdk "github.com/coder/acp-go-sdk"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/claudecode"
 	acpdriver "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -251,8 +253,8 @@ func TestClaudeSessionMetaOmitsPlanGuidanceWhenTodoToolsAreOff(t *testing.T) {
 		t.Run("project env "+off, func(t *testing.T) {
 			t.Setenv("CLAUDE_CODE_ENABLE_TODO_TOOLS", "")
 			env := map[string]string{"CLAUDE_CODE_ENABLE_TODO_TOOLS": off}
-			if got := claudeSessionMeta(acpdriver.LaunchConfig{Env: env}); got != nil {
-				t.Fatalf("meta = %#v, want none: the to-do tools are off", got)
+			if got := claudeSessionMeta(acpdriver.LaunchConfig{Env: env}); got["systemPrompt"] != nil {
+				t.Fatalf("meta = %#v, want no system prompt: the to-do tools are off", got)
 			}
 			prompt := claudeSessionMeta(acpdriver.LaunchConfig{Env: env, SystemPrompt: "AO standing instructions"})["systemPrompt"].(map[string]any)
 			if prompt["append"] != "AO standing instructions" {
@@ -262,15 +264,15 @@ func TestClaudeSessionMetaOmitsPlanGuidanceWhenTodoToolsAreOff(t *testing.T) {
 	}
 	t.Run("daemon env", func(t *testing.T) {
 		t.Setenv("CLAUDE_CODE_ENABLE_TODO_TOOLS", "0")
-		if got := claudeSessionMeta(acpdriver.LaunchConfig{}); got != nil {
-			t.Fatalf("meta = %#v, want none: the to-do tools are off", got)
+		if got := claudeSessionMeta(acpdriver.LaunchConfig{}); got["systemPrompt"] != nil {
+			t.Fatalf("meta = %#v, want no system prompt: the to-do tools are off", got)
 		}
 	})
 }
 
 func TestClaudeSessionMetaAppendsWithoutReplacingPreset(t *testing.T) {
 	t.Setenv("CLAUDE_CODE_ENABLE_TODO_TOOLS", "0")
-	if got := claudeSessionMeta(acpdriver.LaunchConfig{}); got != nil {
+	if got := claudeSessionMeta(acpdriver.LaunchConfig{}); got["systemPrompt"] != nil {
 		t.Fatalf("empty prompt metadata = %#v", got)
 	}
 	meta := claudeSessionMeta(acpdriver.LaunchConfig{SystemPrompt: "AO standing instructions"})
@@ -280,6 +282,134 @@ func TestClaudeSessionMetaAppendsWithoutReplacingPreset(t *testing.T) {
 	}
 	if prompt["type"] != "preset" || prompt["preset"] != "claude_code" || prompt["append"] != "AO standing instructions" {
 		t.Fatalf("systemPrompt = %#v", prompt)
+	}
+	if options := claudeNestedMap(claudeNestedMap(meta, "claudeCode"), "options"); options["tools"] != nil {
+		t.Fatalf("ordinary session received a tool restriction: %#v", options)
+	}
+}
+
+func TestClaudeSessionMetaDisablesBackgroundTools(t *testing.T) {
+	t.Setenv("CLAUDE_CODE_ENABLE_TODO_TOOLS", "1")
+	for _, window := range []string{"", "50000"} {
+		t.Run("compact window "+window, func(t *testing.T) {
+			meta := claudeSessionMeta(acpdriver.LaunchConfig{
+				SystemPrompt: "Return only task title and slug JSON.", DisableTools: true,
+				Env: map[string]string{claudeAutoCompactWindowEnv: window},
+			})
+			prompt := meta["systemPrompt"].(map[string]any)
+			if prompt["append"] != "Return only task title and slug JSON." {
+				t.Fatalf("text-only task received tool-use guidance: %#v", prompt)
+			}
+			options := claudeNestedMap(claudeNestedMap(meta, "claudeCode"), "options")
+			tools, ok := options["tools"].([]string)
+			if !ok || tools == nil || len(tools) != 0 {
+				t.Fatalf("background tools = %#v, want an explicit empty list", options["tools"])
+			}
+			if options["strictMcpConfig"] != true || !reflect.DeepEqual(options["disallowedTools"], []string{"mcp__*"}) {
+				t.Fatalf("background task can inherit MCP tools: %#v", options)
+			}
+			if window != "" {
+				env, ok := options["env"].(map[string]string)
+				if !ok || env[claudeAutoCompactWindowEnv] != window {
+					t.Fatalf("lost compaction environment: %#v", options)
+				}
+			}
+		})
+	}
+}
+
+func TestClaudeSessionMetaAsksForSDKSessionState(t *testing.T) {
+	for _, cfg := range []acpdriver.LaunchConfig{{}, {DisableTools: true}} {
+		got := claudeNestedMap(claudeSessionMeta(cfg), "claudeCode")["emitRawSDKMessages"]
+		want := []map[string]string{{"type": "system", "subtype": "session_state_changed"}}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("emitRawSDKMessages = %#v, want only session state changes", got)
+		}
+	}
+}
+
+func TestClaudeSessionMetaSendsReviewerToolListsWhenReadOnly(t *testing.T) {
+	meta := claudeSessionMeta(acpdriver.LaunchConfig{SystemPrompt: "Review the PR.", ReadOnly: true})
+	options := claudeNestedMap(claudeNestedMap(meta, "claudeCode"), "options")
+	if !reflect.DeepEqual(options["allowedTools"], claudecode.ReviewerAllowedTools) ||
+		!reflect.DeepEqual(options["disallowedTools"], claudecode.ReviewerDisallowedTools) {
+		t.Fatalf("read-only options = %#v, want the reviewer tool lists", options)
+	}
+	if _, restricted := options["tools"]; restricted {
+		t.Fatalf("read-only reviewer lost its read tools: %#v", options)
+	}
+}
+
+func TestClaudeSessionMetaKeepsBackgroundTasksToolless(t *testing.T) {
+	meta := claudeSessionMeta(acpdriver.LaunchConfig{ReadOnly: true, DisableTools: true})
+	options := claudeNestedMap(claudeNestedMap(meta, "claudeCode"), "options")
+	if tools, _ := options["tools"].([]string); tools == nil || len(tools) != 0 {
+		t.Fatalf("background tools = %#v, want an explicit empty list", options["tools"])
+	}
+	if !reflect.DeepEqual(options["disallowedTools"], []string{"mcp__*"}) {
+		t.Fatalf("background disallowedTools = %#v", options["disallowedTools"])
+	}
+}
+
+func TestClaudeReadOnlySessionPinsDefaultMode(t *testing.T) {
+	session := claudeReadOnlySession(acpdriver.LaunchConfig{ReadOnly: true})
+	if session.Mode != "default" || session.PermissionPolicy == nil {
+		t.Fatalf("read-only session = %#v, want default mode with a policy", session)
+	}
+}
+
+func TestReviewerPermissionPolicyAllowsOnlyTheSubmitCommands(t *testing.T) {
+	const worker = "proj-7"
+	// The options claude-agent-acp offers on an ordinary tool permission.
+	options := []acpsdk.PermissionOption{
+		{OptionId: "reject", Name: "Deny", Kind: acpsdk.PermissionOptionKindRejectOnce},
+		{OptionId: "allow", Name: "Allow Once", Kind: acpsdk.PermissionOptionKindAllowOnce},
+		{OptionId: "allow_always", Name: "Always Allow", Kind: acpsdk.PermissionOptionKindAllowAlways},
+	}
+	request := func(kind acpsdk.ToolKind, command string) acpsdk.RequestPermissionRequest {
+		return acpsdk.RequestPermissionRequest{Options: options, ToolCall: acpsdk.ToolCallUpdate{
+			ToolCallId: "call-1", Kind: acpsdk.Ptr(kind), RawInput: map[string]any{"command": command},
+		}}
+	}
+	post := `printf '%s' '{"event":"COMMENT"}' | gh api --method POST repos/acme/app/pulls/12/reviews --input - --jq '.id'`
+	submit := `printf '%s' '[{"id":1}]' | ao review submit --session ` + worker + ` --reviews -`
+	tests := []struct {
+		name   string
+		worker string
+		req    acpsdk.RequestPermissionRequest
+		want   acpsdk.PermissionOptionId
+	}{
+		{"review POST", worker, request(acpsdk.ToolKindExecute, post), "allow"},
+		{"ao review submit for the worker", worker, request(acpsdk.ToolKindExecute, submit), "allow"},
+		{"ao review submit for another worker", "proj-8", request(acpsdk.ToolKindExecute, submit), "reject"},
+		{"launch without a worker", "", request(acpsdk.ToolKindExecute, post), "reject"},
+		{"shell write", worker, request(acpsdk.ToolKindExecute, "touch pwned"), "reject"},
+		{"submit with a chained command", worker, request(acpsdk.ToolKindExecute, post+"; rm -rf ."), "reject"},
+		{"file edit", worker, request(acpsdk.ToolKindEdit, post), "reject"},
+		{"no input", worker, acpsdk.RequestPermissionRequest{Options: options, ToolCall: acpsdk.ToolCallUpdate{
+			ToolCallId: "call-1", Kind: acpsdk.Ptr(acpsdk.ToolKindExecute),
+		}}, "reject"},
+		{"only reject always offered", worker, acpsdk.RequestPermissionRequest{Options: []acpsdk.PermissionOption{
+			{OptionId: "never", Kind: acpsdk.PermissionOptionKindRejectAlways},
+			{OptionId: "allow", Kind: acpsdk.PermissionOptionKindAllowOnce},
+		}, ToolCall: acpsdk.ToolCallUpdate{ToolCallId: "call-1", Kind: acpsdk.Ptr(acpsdk.ToolKindEdit)}}, "never"},
+		// Nothing selectable must still be answered, never parked for a human.
+		{"no reject option", worker, acpsdk.RequestPermissionRequest{Options: []acpsdk.PermissionOption{
+			{OptionId: "allow_always", Kind: acpsdk.PermissionOptionKindAllowAlways},
+		}, ToolCall: acpsdk.ToolCallUpdate{ToolCallId: "call-1", Kind: acpsdk.Ptr(acpsdk.ToolKindEdit)}}, acpdriver.CancelPermission},
+		{"submit without allow once", worker, acpsdk.RequestPermissionRequest{Options: []acpsdk.PermissionOption{
+			{OptionId: "allow_always", Kind: acpsdk.PermissionOptionKindAllowAlways},
+			{OptionId: "reject", Kind: acpsdk.PermissionOptionKindRejectOnce},
+		}, ToolCall: acpsdk.ToolCallUpdate{ToolCallId: "call-1", Kind: acpsdk.Ptr(acpsdk.ToolKindExecute),
+			RawInput: map[string]any{"command": post}}}, "reject"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, handled := reviewerPermissionPolicy(tt.worker)(ports.PermissionModeAuto, tt.req)
+			if !handled || got != tt.want {
+				t.Fatalf("policy = (%q, %v), want (%q, true)", got, handled, tt.want)
+			}
+		})
 	}
 }
 
@@ -423,7 +553,7 @@ func TestClaudePromptResponseFailureRequiresStructuredLoginAction(t *testing.T) 
 		}}},
 	}
 
-	err := claudePromptResponseFailure(response)
+	err := claudePromptResponseFailure(response, "")
 	if !errors.Is(err, ports.ErrChatAuthRequired) {
 		t.Fatalf("error = %v, want ErrChatAuthRequired", err)
 	}
@@ -434,7 +564,7 @@ func TestClaudePromptResponseFailureIgnoresAssistantAuthProse(t *testing.T) {
 		StopReason: acpsdk.StopReasonEndTurn,
 		Meta:       map[string]any{"assistantMessage": "Your OAuth token has expired; please run /login."},
 	}
-	if err := claudePromptResponseFailure(response); err != nil {
+	if err := claudePromptResponseFailure(response, ""); err != nil {
 		t.Fatalf("assistant prose classified as terminal auth failure: %v", err)
 	}
 }
@@ -445,5 +575,60 @@ func TestClaudeAuthRejectionNotifiesDaemon(t *testing.T) {
 	callback()
 	if called != 1 {
 		t.Fatalf("daemon callback calls = %d, want 1", called)
+	}
+}
+
+func TestClaudePromptResponseFailureRecordsVersionTooOld(t *testing.T) {
+	claudecode.ConfigureModelVersionRequirements("")
+	t.Cleanup(func() { claudecode.ConfigureModelVersionRequirements("") })
+	response := acpsdk.PromptResponse{
+		StopReason: acpsdk.StopReasonEndTurn,
+		Meta: map[string]any{"jetbrains": map[string]any{"air": map[string]any{
+			"version": float64(1),
+			"sessionFailure": map[string]any{
+				"id": "bad-request", "severity": "error", "category": "bad_request",
+				"title": `API Error: 400 {"type":"error","error":{"type":"invalid_request_error","message":"Claude Code 2.1.239 does not support this model; version 2.1.280 or newer is required. Run 'claude update', or update the Claude desktop app, then try again.","details":{"error_code":"claude_code_version_too_old"}}}`,
+			},
+		}}},
+	}
+
+	err := claudePromptResponseFailure(response, "us.anthropic.claude-opus-5-5-v1:0")
+	if !errors.Is(err, ports.ErrAgentVersionTooOld) {
+		t.Fatalf("error = %v, want ErrAgentVersionTooOld", err)
+	}
+	if !strings.Contains(err.Error(), "2.1.280") || !strings.Contains(err.Error(), "claude update") || strings.Contains(err.Error(), "API Error") {
+		t.Fatalf("error text = %q, want the remedy instead of the raw API error", err.Error())
+	}
+	if got, ok := claudecode.DefaultModelVersionRequirements().Required("us.anthropic.claude-opus-5-5-v1:0"); !ok || got != "2.1.280" {
+		t.Fatalf("recorded requirement = %q, %v", got, ok)
+	}
+
+	if err := claudePromptResponseFailure(response, "opus"); !errors.Is(err, ports.ErrAgentVersionTooOld) {
+		t.Fatalf("alias error = %v, want ErrAgentVersionTooOld", err)
+	}
+	if _, ok := claudecode.DefaultModelVersionRequirements().Required("opus"); ok {
+		t.Fatal("recorded a version requirement for an alias")
+	}
+}
+
+func TestClaudeServedModelOnlyReportsAliases(t *testing.T) {
+	configDir := t.TempDir()
+	sessionID := "8320947f-5806-4579-943f-b23a943bac1f"
+	projectDir := filepath.Join(configDir, "projects", "-work")
+	if err := os.MkdirAll(projectDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	transcript := `{"type":"assistant","message":{"model":"claude-opus-4-8"}}` + "\n"
+	if err := os.WriteFile(filepath.Join(projectDir, sessionID+".jsonl"), []byte(transcript), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := acpdriver.LaunchConfig{Env: map[string]string{"CLAUDE_CONFIG_DIR": configDir}}
+
+	served, reason := claudeServedModel(context.Background(), cfg, sessionID, "opus")
+	if served != "claude-opus-4-8" || !strings.Contains(reason, "opus") {
+		t.Fatalf("served = %q, reason = %q", served, reason)
+	}
+	if served, _ := claudeServedModel(context.Background(), cfg, sessionID, "claude-opus-4-8"); served != "" {
+		t.Fatalf("concrete model reported as rerouted to %q", served)
 	}
 }

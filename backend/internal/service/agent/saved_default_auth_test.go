@@ -12,7 +12,7 @@ import (
 // login says, and readiness names that account. When they start on the
 // computer's login, the existing check decides.
 func TestReadinessFollowsTheSavedDefaultAccount(t *testing.T) {
-	svc := newService(nil, nil, nil, nil)
+	svc := newService(nil, nil, nil)
 	for _, harness := range []domain.AgentHarness{domain.HarnessClaudeCode, domain.HarnessCodex} {
 		for _, tc := range []struct {
 			name     string

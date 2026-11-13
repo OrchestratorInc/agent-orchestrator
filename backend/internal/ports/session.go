@@ -28,6 +28,11 @@ type SpawnConfig struct {
 	// through `ao spawn`. The daemon validates this reference and derives any
 	// inherited settings itself; callers never supply an inherited policy.
 	ParentSessionID domain.SessionID
+	// CreatedBy names an unattended source the daemon cannot infer from the
+	// other fields (tracker intake sets automation). Empty derives it: an
+	// AutomationRunID is scheduled, a parent orchestrator is orchestrator, any
+	// other parent session is automation, and everything else is user.
+	CreatedBy domain.SessionCreator
 	// TrackerProvider is the issue-tracker provider hint from the CLI's
 	// --tracker-provider flag (defaults to "github"). It is used as a fallback
 	// when the project's SCM origin cannot be classified by the configured
@@ -40,7 +45,12 @@ type SpawnConfig struct {
 	Kind         domain.SessionKind
 	Harness      domain.AgentHarness
 	Branch       string
-	Prompt       string
+	// BaseBranch starts the session's branch from this branch instead of the
+	// project's default, and its pull request is meant to target it: stacking
+	// on another PR. Only ordinary repository projects can honor it.
+	BaseBranch       string
+	RequireNewBranch bool
+	Prompt           string
 	// AgentConfig overrides the resolved project/role agent config for this
 	// single spawn. Empty fields keep the project defaults.
 	AgentConfig AgentConfig
@@ -68,6 +78,9 @@ type SpawnConfig struct {
 	// DisplayName is the user-facing sidebar label. Empty falls back to the
 	// session id in the read model (e.g. orchestrator sessions).
 	DisplayName string
+	// DisplayNameExplicit marks DisplayName as chosen rather than derived from
+	// the prompt, so a terminal program's title cannot outrank it.
+	DisplayNameExplicit bool
 	// NameFromPrompt generates task and workspace names before launch.
 	NameFromPrompt bool
 	// KeepDisplayName preserves an explicit CLI/API title while naming its workspace.

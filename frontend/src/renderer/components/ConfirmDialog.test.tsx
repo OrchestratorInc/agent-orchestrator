@@ -27,6 +27,15 @@ test("starts on Cancel for destructive confirms and restores focus on close", as
 	opener.remove();
 });
 
+test("starts on Cancel while it can't be confirmed yet, so focus never stays behind it", async () => {
+	const opener = document.createElement("button");
+	document.body.appendChild(opener);
+	opener.focus();
+	render(<ConfirmDialog open confirmDisabled title="Make a new link?" description="Sure?" confirmLabel="Make new link" onConfirm={vi.fn()} onOpenChange={vi.fn()} />);
+	await waitFor(() => expect(screen.getByRole("button", { name: "Cancel" })).toHaveFocus());
+	opener.remove();
+});
+
 test("ignores Escape while busy", () => {
 	const onOpenChange = vi.fn();
 	render(<ConfirmDialog open busy title="Kill?" description="Sure?" confirmLabel="Kill it" onConfirm={vi.fn()} onOpenChange={onOpenChange} />);
@@ -50,6 +59,6 @@ test("uses the same centered settings-dialog layout as nearby app dialogs", () =
 
 	const dialog = screen.getByRole("dialog", { name: "Kill session?" });
 
-	expect(dialog).toHaveClass("left-[50%]", "top-[50%]", "z-overlay", "bg-popover", "p-0");
+	expect(dialog).toHaveClass("left-[50%]", "top-[50%]", "z-overlay", "bg-overlay", "p-0");
 	expect(screen.getByRole("button", { name: "Confirm kill" }).querySelector("svg")).toBeNull();
 });

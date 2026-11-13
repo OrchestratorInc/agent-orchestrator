@@ -27,9 +27,9 @@ type fakeStore struct {
 	sessionAutoInjectReview *bool
 	autoInjectSets          []bool
 
-	updateCalls        int
-	activityUpdates    int
-	resolvedCommentIDs []string
+	updateCalls       int
+	activityUpdates   int
+	resolvedThreadIDs []string
 }
 
 type fakeNotificationSink struct {
@@ -147,17 +147,16 @@ func (f *fakeStore) ListPRComments(_ context.Context, prURL string) ([]domain.Pu
 	return out, nil
 }
 
-func (f *fakeStore) MarkPRCommentResolved(_ context.Context, prURL, commentID string) (bool, error) {
-	f.resolvedCommentIDs = append(f.resolvedCommentIDs, commentID)
+func (f *fakeStore) MarkPRReviewThreadResolved(_ context.Context, prURL, threadID string) error {
+	f.resolvedThreadIDs = append(f.resolvedThreadIDs, threadID)
 	comments := f.prComments[prURL]
 	for i := range comments {
-		if comments[i].ID == commentID {
+		if comments[i].ThreadID == threadID {
 			comments[i].Resolved = true
-			f.prComments[prURL] = comments
-			return true, nil
 		}
 	}
-	return false, nil
+	f.prComments[prURL] = comments
+	return nil
 }
 
 type fakeReviewResolver struct {
@@ -186,7 +185,10 @@ func TestResolveReviewCommentResolvesTrackedThread(t *testing.T) {
 	store := &fakeStore{
 		prs: []domain.PullRequest{{URL: prURL, Number: 7, Provider: "github", Repo: "acme/widget"}},
 		prComments: map[string][]domain.PullRequestComment{
-			prURL: {{ThreadID: "thread-1", ID: "comment-1", URL: commentURL}},
+			prURL: {
+				{ThreadID: "thread-1", ID: "comment-1", URL: commentURL},
+				{ThreadID: "thread-1", ID: "comment-2", URL: commentURL + "-reply"},
+			},
 		},
 	}
 	resolver := &fakeReviewResolver{}
@@ -198,11 +200,37 @@ func TestResolveReviewCommentResolvesTrackedThread(t *testing.T) {
 	if resolver.request.ThreadID != "thread-1" || resolver.request.PR.Number != 7 {
 		t.Fatalf("request = %#v", resolver.request)
 	}
-	if got := store.resolvedCommentIDs; len(got) != 1 || got[0] != "comment-1" {
-		t.Fatalf("resolved comment ids = %#v", got)
+	// The whole thread is marked, replies included, so the summary shows it resolved at once.
+	if got := store.resolvedThreadIDs; len(got) != 1 || got[0] != "thread-1" {
+		t.Fatalf("resolved thread ids = %#v", got)
 	}
-	if !store.prComments[prURL][0].Resolved {
-		t.Fatalf("comment was not marked resolved: %#v", store.prComments[prURL][0])
+	for _, comment := range store.prComments[prURL] {
+		if !comment.Resolved {
+			t.Fatalf("comment was not marked resolved: %#v", comment)
+		}
+	}
+}
+
+func TestResolveReviewCommentMarksThreadWhenCommentIsAlreadyResolved(t *testing.T) {
+	prURL := "https://github.com/acme/widget/pull/7"
+	commentURL := "https://github.com/acme/widget/pull/7#discussion_r1"
+	store := &fakeStore{
+		prs: []domain.PullRequest{{URL: prURL, Number: 7, Provider: "github", Repo: "acme/widget"}},
+		prComments: map[string][]domain.PullRequestComment{
+			prURL: {{ThreadID: "thread-1", ID: "comment-1", URL: commentURL, Resolved: true}},
+		},
+	}
+	resolver := &fakeReviewResolver{}
+	svc := New(nil, store, WithReviewResolver(resolver))
+
+	if err := svc.ResolveReviewComment(context.Background(), "mer-1", prURL, commentURL); err != nil {
+		t.Fatal(err)
+	}
+	if resolver.request.ThreadID != "" {
+		t.Fatalf("provider asked again for a resolved comment: %#v", resolver.request)
+	}
+	if got := store.resolvedThreadIDs; len(got) != 1 || got[0] != "thread-1" {
+		t.Fatalf("resolved thread ids = %#v, want the thread marked locally", got)
 	}
 }
 
@@ -221,8 +249,8 @@ func TestResolveReviewCommentDoesNotPersistWhenProviderFails(t *testing.T) {
 	if err := svc.ResolveReviewComment(context.Background(), "mer-1", prURL, commentURL); err == nil {
 		t.Fatal("ResolveReviewComment error = nil, want provider failure")
 	}
-	if len(store.resolvedCommentIDs) != 0 {
-		t.Fatalf("resolved comment ids = %#v, want none", store.resolvedCommentIDs)
+	if len(store.resolvedThreadIDs) != 0 {
+		t.Fatalf("resolved thread ids = %#v, want none", store.resolvedThreadIDs)
 	}
 	if store.prComments[prURL][0].Resolved {
 		t.Fatalf("comment was marked resolved after provider failure")
@@ -578,9 +606,9 @@ func TestSubmitReportsReviewOutcome(t *testing.T) {
 		t.Fatalf("Submit: %v", err)
 	}
 
-	got := sink.named("ao.review.submitted")
+	got := sink.named("ao.reviews.submitted")
 	if len(got) != 1 {
-		t.Fatalf("ao.review.submitted count = %d, want 1", len(got))
+		t.Fatalf("ao.reviews.submitted count = %d, want 1", len(got))
 	}
 	p := got[0].Payload
 	if p["verdict"] != string(domain.VerdictChangesRequested) {
@@ -642,7 +670,7 @@ func TestSubmitNeverReportsReviewProseOrRepoIdentifiers(t *testing.T) {
 			t.Fatalf("payload carries a body key: %#v", ev.Payload)
 		}
 	}
-	if p := sink.named("ao.review.submitted")[0].Payload; p["posted_to_provider"] != false {
+	if p := sink.named("ao.reviews.submitted")[0].Payload; p["posted_to_provider"] != false {
 		t.Fatalf("posted_to_provider = %#v, want false when nothing was posted", p["posted_to_provider"])
 	}
 }
@@ -666,8 +694,8 @@ func TestResubmitDoesNotDoubleReport(t *testing.T) {
 			t.Fatalf("Submit %d: %v", i, err)
 		}
 	}
-	if got := len(sink.named("ao.review.submitted")); got != 1 {
-		t.Fatalf("ao.review.submitted count = %d, want 1 across three submits", got)
+	if got := len(sink.named("ao.reviews.submitted")); got != 1 {
+		t.Fatalf("ao.reviews.submitted count = %d, want 1 across three submits", got)
 	}
 }
 
@@ -739,15 +767,15 @@ func TestTriggerReportsWhoStartedThePass(t *testing.T) {
 			if err := c.call(svc); err != nil {
 				t.Fatalf("trigger: %v", err)
 			}
-			got := sink.named("ao.review.triggered")
+			got := sink.named("ao.reviews.triggered")
 			if len(got) != 1 {
-				t.Fatalf("ao.review.triggered count = %d, want 1", len(got))
+				t.Fatalf("ao.reviews.triggered count = %d, want 1", len(got))
 			}
 			if got[0].Payload["trigger"] != c.want {
 				t.Fatalf("trigger = %#v, want %q", got[0].Payload["trigger"], c.want)
 			}
-			if got[0].Payload["reused"] != false {
-				t.Fatalf("reused = %#v, want false", got[0].Payload["reused"])
+			if _, ok := got[0].Payload["reused"]; ok {
+				t.Fatalf("reused is still present: %#v", got[0].Payload["reused"])
 			}
 		})
 	}
@@ -765,14 +793,12 @@ func TestTriggerFailureReportsWhichPassFailed(t *testing.T) {
 	if _, err := svc.TriggerAuto(context.Background(), "worker-1", "codex"); err == nil {
 		t.Fatal("TriggerAuto: want error")
 	}
-	if got := sink.named("ao.review.triggered"); len(got) != 1 {
-		t.Fatalf("ao.review.triggered count = %d, want 1 even on failure", len(got))
-	} else if got[0].Payload["trigger"] != "auto" {
-		t.Fatalf("triggered payload = %#v, want trigger=auto", got[0].Payload)
+	if got := sink.named("ao.reviews.triggered"); len(got) != 0 {
+		t.Fatalf("ao.reviews.triggered count = %d, want 0 on failure", len(got))
 	}
-	got := sink.named("ao.review.trigger_failed")
+	got := sink.named("ao.reviews.trigger_failed")
 	if len(got) != 1 {
-		t.Fatalf("ao.review.trigger_failed count = %d, want 1", len(got))
+		t.Fatalf("ao.reviews.trigger_failed count = %d, want 1", len(got))
 	}
 	if got[0].Payload["error_kind"] != "invalid" || got[0].Payload["trigger"] != "auto" {
 		t.Fatalf("payload = %#v, want error_kind=invalid trigger=auto", got[0].Payload)
@@ -796,9 +822,9 @@ func TestTriggerRejectsInvalidReviewerConfigBeforeEngine(t *testing.T) {
 	if called {
 		t.Fatal("engineTrigger should not run for invalid config")
 	}
-	got := sink.named("ao.review.trigger_failed")
+	got := sink.named("ao.reviews.trigger_failed")
 	if len(got) != 1 {
-		t.Fatalf("ao.review.trigger_failed count = %d, want 1", len(got))
+		t.Fatalf("ao.reviews.trigger_failed count = %d, want 1", len(got))
 	}
 	if got[0].Payload["error_kind"] != "invalid" || got[0].Payload["trigger"] != "manual" {
 		t.Fatalf("payload = %#v, want error_kind=invalid trigger=manual", got[0].Payload)
@@ -825,7 +851,7 @@ func TestSubmitReportsPassShapeNotItsContents(t *testing.T) {
 		domain.VerdictChangesRequested, body, ""); err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
-	p := sink.named("ao.review.submitted")[0].Payload
+	p := sink.named("ao.reviews.submitted")[0].Payload
 	if p["trigger"] != string(domain.ReviewTriggerAuto) {
 		t.Fatalf("trigger = %#v, want auto", p["trigger"])
 	}
@@ -848,16 +874,16 @@ func TestRestartedManualPassIsNotReportedAsReused(t *testing.T) {
 	if _, err := svc.TriggerRequested(context.Background(), "worker-1", TriggerRequest{Config: domain.AgentConfig{Model: "gpt-5-mini"}}); err != nil {
 		t.Fatalf("Trigger: %v", err)
 	}
-	got := sink.named("ao.review.triggered")
+	got := sink.named("ao.reviews.triggered")
 	if len(got) != 1 {
-		t.Fatalf("ao.review.triggered count = %d, want 1", len(got))
+		t.Fatalf("ao.reviews.triggered count = %d, want 1", len(got))
 	}
-	if got[0].Payload["reused"] != false || got[0].Payload["created_runs"] != 0 {
+	if _, ok := got[0].Payload["reused"]; ok || got[0].Payload["created_runs"] != 0 {
 		t.Fatalf("payload = %#v, want reused=false created_runs=0 for a restart", got[0].Payload)
 	}
 }
 
-func TestReusedManualPassStaysATrigger(t *testing.T) {
+func TestReusedManualPassDoesNotReportNewReview(t *testing.T) {
 	sink := &recordingSink{}
 	svc := New(nil, &fakeStore{}, WithTelemetry(sink))
 	svc.engineTrigger = func(
@@ -869,22 +895,18 @@ func TestReusedManualPassStaysATrigger(t *testing.T) {
 	if _, err := svc.TriggerRequested(context.Background(), "worker-1", TriggerRequest{Config: domain.AgentConfig{}}); err != nil {
 		t.Fatalf("Trigger: %v", err)
 	}
-	got := sink.named("ao.review.triggered")
-	if len(got) != 1 {
-		t.Fatalf("ao.review.triggered count = %d, want 1", len(got))
+	got := sink.named("ao.reviews.triggered")
+	if len(got) != 0 {
+		t.Fatalf("ao.reviews.triggered count = %d, want 0 for reuse", len(got))
 	}
-	if got[0].Payload["reused"] != true || got[0].Payload["trigger"] != "manual" {
-		t.Fatalf("payload = %#v, want reused=true trigger=manual", got[0].Payload)
-	}
-	if n := len(sink.events); n != 1 {
-		t.Fatalf("emitted %d events, want only the trigger for a manual reuse", n)
+	if n := len(sink.events); n != 0 {
+		t.Fatalf("emitted %d events, want none for a manual reuse", n)
 	}
 }
 
-// ao.review.triggered now counts every attempt, including automatic no-op
-// sweeps. created_runs and reused distinguish real work from an already
-// running or skipped pass.
-func TestReusedOrSkippedAutoPassStillCountsAsTriggered(t *testing.T) {
+// An automatic sweep with an existing review or a skipped session is not a
+// newly triggered review.
+func TestReusedOrSkippedAutoPassDoesNotCountAsTriggered(t *testing.T) {
 	cases := []struct {
 		name    string
 		result  reviewcore.TriggerResult
@@ -912,20 +934,12 @@ func TestReusedOrSkippedAutoPassStillCountsAsTriggered(t *testing.T) {
 					t.Fatalf("TriggerAuto %d: %v", i, err)
 				}
 			}
-			got := sink.named("ao.review.triggered")
-			if len(got) != 6 {
-				t.Fatalf("ao.review.triggered count = %d, want 6", len(got))
+			got := sink.named("ao.reviews.triggered")
+			if len(got) != 0 {
+				t.Fatalf("ao.reviews.triggered count = %d, want 0", len(got))
 			}
-			for i, ev := range got {
-				if ev.Payload["trigger"] != "auto" || ev.Payload["created_runs"] != 0 || ev.Payload["reused"] != true {
-					t.Fatalf("event %d payload = %#v, want trigger=auto created_runs=0 reused=true", i, ev.Payload)
-				}
-				if ev.Payload["harness"] != c.harness {
-					t.Fatalf("event %d harness = %#v, want %#v", i, ev.Payload["harness"], c.harness)
-				}
-			}
-			if failed := sink.named("ao.review.trigger_failed"); len(failed) != 0 {
-				t.Fatalf("ao.review.trigger_failed count = %d, want 0", len(failed))
+			if failed := sink.named("ao.reviews.trigger_failed"); len(failed) != 0 {
+				t.Fatalf("ao.reviews.trigger_failed count = %d, want 0", len(failed))
 			}
 		})
 	}
@@ -954,7 +968,7 @@ func TestTriggerRequestedEnablesAutoInjectOnlyAfterAPassStarts(t *testing.T) {
 	if gotOpts.Source != domain.ReviewTriggerAgent || !gotOpts.RejectReviewedHead || gotOpts.Harness != domain.ReviewerCodex {
 		t.Fatalf("engine opts = %+v, want the request forwarded", gotOpts)
 	}
-	if got := sink.named("ao.review.triggered"); len(got) != 1 || got[0].Payload["trigger"] != "agent" {
+	if got := sink.named("ao.reviews.triggered"); len(got) != 1 || got[0].Payload["trigger"] != "agent" {
 		t.Fatalf("triggered events = %+v, want one agent trigger", got)
 	}
 
@@ -1010,6 +1024,17 @@ type fakePRRefresher struct {
 	err   map[string]error
 	// order records refreshes relative to the engine trigger.
 	order *[]string
+	// branchPRs, otherAuthorPRs, and findErr answer FindBranchPRs; finds
+	// counts the lookups.
+	branchPRs      []string
+	otherAuthorPRs []string
+	findErr        error
+	finds          int
+}
+
+func (f *fakePRRefresher) FindBranchPRs(context.Context, domain.SessionID) (BranchPRs, error) {
+	f.finds++
+	return BranchPRs{Own: f.branchPRs, OtherAuthor: f.otherAuthorPRs}, f.findErr
 }
 
 func (f *fakePRRefresher) RefreshPR(_ context.Context, _ domain.SessionID, prURL string) error {
@@ -1073,5 +1098,229 @@ func TestTriggerRequestedNamedPRAttachesItAndTargetsIt(t *testing.T) {
 	refresher.err = map[string]error{url: fmt.Errorf("%w: owned", reviewcore.ErrPROwnedElsewhere)}
 	if _, err := svc.TriggerRequested(context.Background(), "mer-1", TriggerRequest{PRURL: url}); !errors.Is(err, ErrPROwnedElsewhere) {
 		t.Fatalf("err = %v, want the attach failure for an untracked PR", err)
+	}
+}
+
+type recordingReviewRefresher struct{ prURLs []string }
+
+func (r *recordingReviewRefresher) RequestReviewRefresh(prURL string) {
+	r.prURLs = append(r.prURLs, prURL)
+}
+
+func TestSubmitRequestsReviewRefreshForProviderPostedReview(t *testing.T) {
+	const prURL = "https://github.com/acme/app/pull/42"
+	st := &fakeStore{
+		ok:  true,
+		run: domain.ReviewRun{ID: "run-1", SessionID: "mer-1", PRURL: prURL, Status: domain.ReviewRunRunning},
+		prs: []domain.PullRequest{{URL: prURL, Number: 42}},
+	}
+	refresher := &recordingReviewRefresher{}
+	svc := New(nil, st, WithThreadRefresher(refresher))
+
+	for range 2 {
+		if _, err := svc.Submit(context.Background(), "mer-1", "run-1", domain.VerdictApproved, "looks good", "987"); err != nil {
+			t.Fatalf("Submit: %v", err)
+		}
+	}
+	if len(refresher.prURLs) != 1 || refresher.prURLs[0] != prURL {
+		t.Fatalf("refresh requests = %v, want one for %s", refresher.prURLs, prURL)
+	}
+
+	st.run = domain.ReviewRun{ID: "run-2", SessionID: "mer-1", PRURL: prURL, Status: domain.ReviewRunRunning}
+	if _, err := svc.Submit(context.Background(), "mer-1", "run-2", domain.VerdictApproved, "looks good", ""); err != nil {
+		t.Fatalf("Submit without provider review: %v", err)
+	}
+	if len(refresher.prURLs) != 1 {
+		t.Fatalf("a review not posted to the provider requested a refresh: %v", refresher.prURLs)
+	}
+}
+
+// A review requested right after opening a PR, before the SCM observer has
+// discovered it, attaches the one open PR from the worker's branch and
+// reviews it instead of failing.
+func TestTriggerRequestedAttachesTheBranchPRWhenNoneIsTracked(t *testing.T) {
+	var order []string
+	url := "https://github.com/o/r/pull/9"
+	refresher := &fakePRRefresher{order: &order, branchPRs: []string{url}}
+	svc := New(nil, &fakeStore{}, WithPRRefresher(refresher))
+	svc.engineTrigger = func(_ context.Context, _ domain.SessionID, _ reviewcore.TriggerOptions) (reviewcore.TriggerResult, error) {
+		order = append(order, "trigger")
+		return reviewcore.TriggerResult{Created: true}, nil
+	}
+	if _, err := svc.TriggerRequested(context.Background(), "mer-1", TriggerRequest{Source: domain.ReviewTriggerAgent}); err != nil {
+		t.Fatalf("TriggerRequested: %v", err)
+	}
+	if strings.Join(order, ",") != "refresh "+url+",trigger" {
+		t.Fatalf("order = %v, want the branch PR attached before planning", order)
+	}
+
+	// A failed lookup says so, with the exact retry, instead of claiming the
+	// branch has no PR.
+	order = nil
+	refresher.branchPRs, refresher.findErr = nil, errors.New("provider down")
+	_, err := svc.TriggerRequested(context.Background(), "mer-1", TriggerRequest{Source: domain.ReviewTriggerAgent})
+	if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "could not look up open PRs") || !strings.Contains(err.Error(), "`ao review trigger mer-1 --pr <url>`") {
+		t.Fatalf("err = %v, want a lookup failure with the exact retry", err)
+	}
+	if len(order) != 0 {
+		t.Fatalf("order = %v, want no attach and no planning", order)
+	}
+}
+
+// A branch PR that cannot be attached right after the lookup found it (closed
+// in between) is reported as found but not attached, keeping the claim's
+// error class, and no review starts.
+func TestTriggerRequestedReportsABranchPRThatCouldNotBeAttached(t *testing.T) {
+	url := "https://github.com/o/r/pull/9"
+	claimErr := fmt.Errorf("%w: pull request %s was not found on the provider", ErrNotFound, url)
+	refresher := &fakePRRefresher{branchPRs: []string{url}, err: map[string]error{url: claimErr}}
+	svc := New(nil, &fakeStore{}, WithPRRefresher(refresher))
+	svc.engineTrigger = func(context.Context, domain.SessionID, reviewcore.TriggerOptions) (reviewcore.TriggerResult, error) {
+		t.Fatal("a PR that could not be attached must not start a review")
+		return reviewcore.TriggerResult{}, nil
+	}
+	_, err := svc.TriggerRequested(context.Background(), "mer-1", TriggerRequest{Source: domain.ReviewTriggerAgent})
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("err = %v, want the claim's ErrNotFound kept", err)
+	}
+	for _, want := range []string{"found PR " + url + " on worker \"mer-1\"'s branch but could not attach it", "`ao review trigger mer-1 --pr " + url + "`"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("err = %v, want it to contain %s", err, want)
+		}
+	}
+}
+
+// The engine may say the worker's branch has no open PR only when a lookup
+// ran and found none, not when it was skipped.
+func TestTriggerRequestedTellsTheEngineWhetherTheBranchLookupFoundNone(t *testing.T) {
+	var got []bool
+	trigger := func(_ context.Context, _ domain.SessionID, opts reviewcore.TriggerOptions) (reviewcore.TriggerResult, error) {
+		got = append(got, opts.BranchPRLookupFoundNone)
+		return reviewcore.TriggerResult{Created: true}, nil
+	}
+	open := &fakeStore{prs: []domain.PullRequest{{URL: "https://github.com/o/r/pull/8"}}}
+	for _, svc := range []*Service{
+		New(nil, &fakeStore{}, WithPRRefresher(&fakePRRefresher{})),
+		New(nil, &fakeStore{}, WithPRRefresher(namedPRRefresher{})),
+		New(nil, open, WithPRRefresher(&fakePRRefresher{})),
+		New(nil, &fakeStore{}),
+	} {
+		svc.engineTrigger = trigger
+		if _, err := svc.TriggerRequested(context.Background(), "mer-1", TriggerRequest{Source: domain.ReviewTriggerAgent}); err != nil {
+			t.Fatalf("TriggerRequested: %v", err)
+		}
+	}
+	if fmt.Sprint(got) != "[true false false false]" {
+		t.Fatalf("lookup found none = %v, want true only after a lookup that found nothing", got)
+	}
+}
+
+// namedPRRefresher refreshes named PRs but cannot look up a branch's PRs.
+type namedPRRefresher struct{}
+
+func (namedPRRefresher) RefreshPR(context.Context, domain.SessionID, string) error { return nil }
+
+// A session whose tracked PR was closed or merged may have opened a new PR on
+// the same branch. With no open tracked PR, the branch lookup still runs and
+// attaches it.
+func TestTriggerRequestedAttachesTheBranchPRWhenOnlyAClosedPRIsTracked(t *testing.T) {
+	var order []string
+	url := "https://github.com/o/r/pull/9"
+	st := &fakeStore{prs: []domain.PullRequest{{URL: "https://api/pr/8", HTMLURL: "https://github.com/o/r/pull/8", Closed: true}}}
+	refresher := &fakePRRefresher{order: &order, branchPRs: []string{url}}
+	svc := New(nil, st, WithPRRefresher(refresher))
+	svc.engineTrigger = func(_ context.Context, _ domain.SessionID, _ reviewcore.TriggerOptions) (reviewcore.TriggerResult, error) {
+		order = append(order, "trigger")
+		return reviewcore.TriggerResult{Created: true}, nil
+	}
+	if _, err := svc.TriggerRequested(context.Background(), "mer-1", TriggerRequest{Source: domain.ReviewTriggerAgent, RejectReviewedHead: true}); err != nil {
+		t.Fatalf("TriggerRequested: %v", err)
+	}
+	if strings.Join(order, ",") != "refresh "+url+",trigger" {
+		t.Fatalf("order = %v, want the open branch PR attached before planning", order)
+	}
+}
+
+func TestTriggerRequestedNamesEachBranchPRWhenSeveralAreOpen(t *testing.T) {
+	refresher := &fakePRRefresher{branchPRs: []string{"https://github.com/o/r/pull/9", "https://github.com/o/r/pull/10"}}
+	svc := New(nil, &fakeStore{}, WithPRRefresher(refresher))
+	svc.engineTrigger = func(context.Context, domain.SessionID, reviewcore.TriggerOptions) (reviewcore.TriggerResult, error) {
+		t.Fatal("ambiguous branch PRs must not start a review")
+		return reviewcore.TriggerResult{}, nil
+	}
+	_, err := svc.TriggerRequested(context.Background(), "mer-1", TriggerRequest{Source: domain.ReviewTriggerAgent})
+	if !errors.Is(err, ErrInvalid) {
+		t.Fatalf("err = %v, want ErrInvalid", err)
+	}
+	for _, want := range []string{"`ao review trigger mer-1 --pr https://github.com/o/r/pull/9`", "`ao review trigger mer-1 --pr https://github.com/o/r/pull/10`"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("err = %v, want it to contain %s", err, want)
+		}
+	}
+	if len(refresher.calls) != 0 {
+		t.Fatalf("attached %v, want nothing attached", refresher.calls)
+	}
+}
+
+// A PR another developer opened on a branch of the same name is not attached
+// on its own, the rule the SCM observer follows; the error says a PR from
+// another author was found and gives the --pr override.
+func TestTriggerRequestedDoesNotAttachAnotherAuthorsBranchPR(t *testing.T) {
+	url := "https://github.com/o/r/pull/9"
+	refresher := &fakePRRefresher{otherAuthorPRs: []string{url}}
+	svc := New(nil, &fakeStore{}, WithPRRefresher(refresher))
+	svc.engineTrigger = func(context.Context, domain.SessionID, reviewcore.TriggerOptions) (reviewcore.TriggerResult, error) {
+		t.Fatal("another author's PR must not start a review")
+		return reviewcore.TriggerResult{}, nil
+	}
+	_, err := svc.TriggerRequested(context.Background(), "mer-1", TriggerRequest{Source: domain.ReviewTriggerAgent})
+	if !errors.Is(err, ErrInvalid) {
+		t.Fatalf("err = %v, want ErrInvalid", err)
+	}
+	for _, want := range []string{"found a PR from another author on its branch", "`ao review trigger mer-1 --pr " + url + "`"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("err = %v, want it to contain %s", err, want)
+		}
+	}
+	if len(refresher.calls) != 0 {
+		t.Fatalf("attached %v, want nothing attached", refresher.calls)
+	}
+}
+
+// The worker's own PR is still attached when another author also has one on
+// a branch of the same name.
+func TestTriggerRequestedAttachesTheOwnBranchPRBesideAnotherAuthors(t *testing.T) {
+	var order []string
+	own := "https://github.com/o/r/pull/9"
+	refresher := &fakePRRefresher{order: &order, branchPRs: []string{own}, otherAuthorPRs: []string{"https://github.com/o/r/pull/10"}}
+	svc := New(nil, &fakeStore{}, WithPRRefresher(refresher))
+	svc.engineTrigger = func(context.Context, domain.SessionID, reviewcore.TriggerOptions) (reviewcore.TriggerResult, error) {
+		order = append(order, "trigger")
+		return reviewcore.TriggerResult{Created: true}, nil
+	}
+	if _, err := svc.TriggerRequested(context.Background(), "mer-1", TriggerRequest{Source: domain.ReviewTriggerAgent}); err != nil {
+		t.Fatalf("TriggerRequested: %v", err)
+	}
+	if strings.Join(order, ",") != "refresh "+own+",trigger" {
+		t.Fatalf("order = %v, want only the worker's own PR attached", order)
+	}
+}
+
+// Naming a PR with --pr stays the override: it is attached as named, without
+// a branch lookup or an authorship check.
+func TestTriggerRequestedNamedPRSkipsTheBranchLookup(t *testing.T) {
+	var order []string
+	url := "https://github.com/o/r/pull/9"
+	refresher := &fakePRRefresher{order: &order, otherAuthorPRs: []string{url}}
+	svc := New(nil, &fakeStore{}, WithPRRefresher(refresher))
+	svc.engineTrigger = func(_ context.Context, _ domain.SessionID, opts reviewcore.TriggerOptions) (reviewcore.TriggerResult, error) {
+		order = append(order, "trigger "+opts.PRURL)
+		return reviewcore.TriggerResult{Created: true}, nil
+	}
+	if _, err := svc.TriggerRequested(context.Background(), "mer-1", TriggerRequest{Source: domain.ReviewTriggerAgent, PRURL: url}); err != nil {
+		t.Fatalf("TriggerRequested: %v", err)
+	}
+	if strings.Join(order, ",") != "refresh "+url+",trigger "+url || refresher.finds != 0 {
+		t.Fatalf("order = %v finds = %d, want the named PR attached and reviewed without a branch lookup", order, refresher.finds)
 	}
 }

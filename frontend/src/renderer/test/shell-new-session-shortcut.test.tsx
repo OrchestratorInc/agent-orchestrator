@@ -12,6 +12,7 @@ const shellMocks = vi.hoisted(() => {
 	const state = {
 		newSessionListener: undefined as (() => void) | undefined,
 		keyboardShortcutsListener: undefined as (() => void) | undefined,
+		quitConfirmListener: undefined as ((request: { keepsRunning: boolean }) => void) | undefined,
 		newShellTerminalListener: undefined as (() => void) | undefined,
 		openSettingsListener: undefined as (() => void) | undefined,
 		previousSessionListener: undefined as (() => void) | undefined,
@@ -47,6 +48,7 @@ const shellMocks = vi.hoisted(() => {
 							workerAgent: string;
 							orchestratorAgent: string;
 							asWorkspace?: boolean;
+							clonePreparationId?: string;
 						}) => Promise<void>;
 				  }
 			| undefined,
@@ -61,10 +63,16 @@ const shellMocks = vi.hoisted(() => {
 			state.keyboardShortcutsListener = listener;
 			return vi.fn();
 		}),
+		onQuitConfirmRequest: vi.fn((listener: (request: { keepsRunning: boolean }) => void) => {
+			state.quitConfirmListener = listener;
+			return vi.fn();
+		}),
+		resolveQuitConfirm: vi.fn(),
 		onNewShellTerminalShortcut: vi.fn((listener: () => void) => {
 			state.newShellTerminalListener = listener;
 			return vi.fn();
 		}),
+		openShellTerminalHost: vi.fn((_hostId?: string) => {}),
 		openShellTerminal: vi.fn((input: { projectId?: string; sessionId?: string }) => ({
 			handleId: "pending-shell:test",
 			projectId: input.projectId,
@@ -105,6 +113,7 @@ const shellMocks = vi.hoisted(() => {
 		queryClient: {
 			ensureQueryData: vi.fn(),
 			fetchQuery: vi.fn(),
+			getQueryCache: () => ({ findAll: () => [], subscribe: () => () => undefined }),
 			getQueryData: vi.fn(),
 			getQueryState: vi.fn(),
 			invalidateQueries: vi.fn(),
@@ -129,24 +138,29 @@ vi.mock("@tanstack/react-query", async (importOriginal) => ({
 vi.mock("@tanstack/react-router", async (importOriginal) => ({
 	...(await importOriginal<typeof import("@tanstack/react-router")>()),
 	createFileRoute: () => (options: unknown) => ({ options }),
-	Outlet: () => null,
+	Outlet: () => <input aria-label="Page draft" defaultValue="" />,
 	useMatch: () => undefined,
 	useMatchRoute: () => (options: { to: string }) => shellMocks.state.matchRouteTarget === options.to,
 	useNavigate: () => shellMocks.navigate,
 	useRouter: () => shellMocks.router,
 	useParams: () => shellMocks.state.routeParams,
 	useSearch: () => shellMocks.state.routeSearch,
+	useRouterState: ({ select }: { select: (state: { location: { search: unknown } }) => unknown }) =>
+		select({ location: { search: shellMocks.state.routeSearch ?? {} } }),
 }));
 
 vi.mock("../lib/bridge", () => ({
 	aoBridge: {
 		app: {
+			onScrollPhase: () => () => {},
 			onCloseShellTerminalShortcut: () => () => {},
 			onPreviousTabShortcut: () => () => {},
 			onNextTabShortcut: () => () => {},
 			setCloseShellTerminalShortcutEnabled: () => {},
 			onNewSessionShortcut: shellMocks.onNewSessionShortcut,
 			onKeyboardShortcutsHelp: shellMocks.onKeyboardShortcutsHelp,
+			onQuitConfirmRequest: shellMocks.onQuitConfirmRequest,
+			resolveQuitConfirm: shellMocks.resolveQuitConfirm,
 			onNewShellTerminalShortcut: shellMocks.onNewShellTerminalShortcut,
 			onOpenSettingsShortcut: shellMocks.onOpenSettingsShortcut,
 			onPreviousSessionShortcut: shellMocks.onPreviousSessionShortcut,
@@ -199,7 +213,7 @@ vi.mock("../hooks/useDaemonStatus", () => ({
 
 vi.mock("../lib/api-client", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../lib/api-client")>()),
-	apiClient: { POST: vi.fn(), DELETE: vi.fn(), PATCH: vi.fn() },
+	apiClient: { POST: vi.fn(), DELETE: vi.fn(), PATCH: vi.fn(), PUT: vi.fn() },
 	apiErrorCode: (error: { code?: string } | undefined) => error?.code,
 	apiErrorMessage: (error: { message?: string } | undefined) => error?.message ?? "request failed",
 	hasTrustedApiBaseUrl: () => true,
@@ -224,8 +238,11 @@ vi.mock("../hooks/useCloudOrg", () => ({
 // shortcut subscriptions, so the mutation is stubbed rather than driven.
 vi.mock("../hooks/useShellTerminals", () => ({
 	useShellTerminals: () => ({ data: [], isSuccess: true }),
-	useOpenShellTerminal: () => ({
-		open: shellMocks.openShellTerminal,
+	useOpenShellTerminal: (hostId?: string) => ({
+		open: (input: { projectId?: string; sessionId?: string }) => {
+			shellMocks.openShellTerminalHost(hostId);
+			return shellMocks.openShellTerminal(input);
+		},
 		mutate: shellMocks.openShellTerminal,
 	}),
 }));
@@ -237,42 +254,60 @@ vi.mock("../hooks/useAgentReadinessQuery", () => ({
 	// which keeps these shortcut tests free of telemetry side effects.
 	useAgentReadinessQuery: () => ({ data: undefined }),
 	useEnsureAgentReadiness: vi.fn(),
+	useProjectAgentDefaults: () => async () => ({ workerAgent: "claude-code", orchestratorAgent: "claude-code", reviewerAgent: "claude-code" }),
 }));
 
-vi.mock("../components/NotificationCenter", () => ({ NotificationRuntime: () => null }));
+// ao.setup.checked reads the startup checks' react-query cache; these
+// shortcut tests render the shell without a QueryClient.
+vi.mock("../hooks/useAgentInventoryTelemetry", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../hooks/useAgentInventoryTelemetry")>()),
+	useSetupCheckedTelemetry: () => undefined,
+}));
+
+vi.mock("../components/NotificationCenter", () => ({ NotificationRuntime: () => null, NotificationCenter: () => <button type="button" aria-label="Notifications" /> }));
 vi.mock("../components/HarnessUpdateNotice", () => ({ HarnessUpdateNotice: () => null }));
+vi.mock("../components/SessionTopbarActions", () => ({ SessionTopbarActions: () => null }));
 vi.mock("../components/DaemonStartupLoader", () => ({
 	DaemonStartupLoader: () => <div data-testid="daemon-startup-loader" />,
 }));
 vi.mock("../components/CommandPalette", () => ({ CommandPalette: () => null }));
 vi.mock("../components/OrchestratorReplacementDialog", () => ({ OrchestratorReplacementDialog: () => null }));
-vi.mock("../components/ShellTopbar", () => ({ ShellTopbar: () => null }));
+vi.mock("../components/OpenShareLinkDialog", () => ({ ShareLinkHost: () => null }));
 vi.mock("../components/TitlebarNav", async () => {
 	const { sidebarIsVisible, useUiStore: useStore } = await vi.importActual<
 		typeof import("../stores/ui-store")
 	>("../stores/ui-store");
 	return {
-		TitlebarNav: () => {
+		useCanGoForward: () => false,
+		TitlebarNav: ({ onBack }: { onBack?: () => void }) => {
 			const isSidebarOpen = useStore(sidebarIsVisible);
 			const toggleSidebar = useStore((state) => state.toggleSidebar);
 			return (
-				<button
-					aria-label={isSidebarOpen ? "Collapse sidebar" : "Expand sidebar"}
-					onClick={toggleSidebar}
-					type="button"
-				/>
+				<>
+					<button type="button" aria-label="Titlebar Back" onClick={onBack} />
+					<button
+						aria-label={isSidebarOpen ? "Collapse sidebar" : "Expand sidebar"}
+						onClick={toggleSidebar}
+						type="button"
+					/>
+				</>
 			);
 		},
 	};
 });
-vi.mock("../components/WindowTitlebar", () => ({ WindowTitlebar: () => null }));
-vi.mock("../components/SettingsDialog", () => ({
-	SettingsProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-	SettingsPane: () => null,
-	useSettingsPage: () => null,
-}));
+vi.mock("../components/WindowTitlebar", () => ({ WindowTitlebar: ({ onBack }: { onBack?: () => void }) => <button type="button" aria-label="Windows Back" onClick={onBack} /> }));
+vi.mock("../components/SettingsDialog", async () => {
+	const { useUiStore: useStore } = await vi.importActual<typeof import("../stores/ui-store")>("../stores/ui-store");
+	return {
+		SettingsProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+		SettingsPane: () => null,
+		useSettingsPage: () => useStore((state) => state.settingsModal?.scope === "global")
+			? { close: useStore.getState().closeSettings, navigation: { canGoBack: true, canGoForward: false, back: vi.fn(), forward: vi.fn() } }
+			: null,
+	};
+});
 vi.mock("../components/KeyboardShortcutsDialog", () => ({
-	KeyboardShortcutsDialog: ({ open }: { open: boolean }) => (open ? <div data-testid="keyboard-shortcuts" /> : null),
+	KeyboardShortcutsDialog: ({ open, onCustomize }: { open: boolean; onCustomize?: () => void }) => (open ? <div data-testid="keyboard-shortcuts"><button type="button" onClick={onCustomize}>Customize</button></div> : null),
 }));
 vi.mock("../lib/shell-context", () => ({
 	ShellProvider: ({ children, value }: PropsWithChildren<{ value?: { workspaceStartupState?: string } }>) => {
@@ -288,12 +323,12 @@ vi.mock("../components/ui/sidebar", () => ({
 	),
 }));
 
-vi.mock("../components/GlobalNewTaskDialog", async () => {
+vi.mock("../components/NewTaskNavigator", async () => {
 	const { useUiStore: useStore } = await vi.importActual<typeof import("../stores/ui-store")>("../stores/ui-store");
 	return {
-		GlobalNewTaskDialog: () => {
+		NewTaskNavigator: () => {
 			const request = useStore((state) => state.newTaskRequest);
-			return request ? <div data-testid="new-task-flow" data-project={request.projectId} /> : null;
+			return request ? <div data-testid="new-task-flow" data-project={request.projectId} data-host={request.hostId} /> : null;
 		},
 	};
 });
@@ -394,11 +429,14 @@ function emitShortcut() {
 }
 
 beforeEach(() => {
+	// The shell remembers the last project for ⌘N outside one; start each test clean.
+	window.localStorage.removeItem("ao.newTask.lastProject");
 	shellMocks.navigate.mockReset();
 	shellMocks.onNewSessionShortcut.mockClear();
 	shellMocks.onKeyboardShortcutsHelp.mockClear();
 	shellMocks.onNewShellTerminalShortcut.mockClear();
 	shellMocks.openShellTerminal.mockClear();
+	shellMocks.openShellTerminalHost.mockClear();
 	shellMocks.state.newShellTerminalListener = undefined;
 	shellMocks.onOpenSettingsShortcut.mockClear();
 	shellMocks.onPreviousSessionShortcut.mockClear();
@@ -408,11 +446,13 @@ beforeEach(() => {
 	shellMocks.router.history.canGoBack.mockReset().mockReturnValue(true);
 	shellMocks.router.history.back.mockClear();
 	shellMocks.router.history.forward.mockClear();
-	useSidebarOrderStore.setState({ projectOrder: [], sessionOrders: {} });
+	useSidebarOrderStore.setState({ projectOrder: [], pendingCreatedProjectIds: [], sessionOrders: {} });
 	shellMocks.getPathForFile.mockClear();
 	shellMocks.onOpenFolderPath.mockClear();
 	shellMocks.state.newSessionListener = undefined;
 	shellMocks.state.keyboardShortcutsListener = undefined;
+	shellMocks.state.quitConfirmListener = undefined;
+	shellMocks.resolveQuitConfirm.mockClear();
 	shellMocks.state.openSettingsListener = undefined;
 	shellMocks.state.previousSessionListener = undefined;
 	shellMocks.state.nextSessionListener = undefined;
@@ -436,6 +476,7 @@ beforeEach(() => {
 	shellMocks.state.daemonStatus = { state: "error", code: "not_ready" };
 	shellMocks.state.shellValue = undefined;
 	vi.mocked(apiClient.PATCH).mockReset().mockResolvedValue({ error: undefined });
+	vi.mocked(apiClient.PUT).mockReset().mockResolvedValue({ error: undefined });
 	shellMocks.queryClient.fetchQuery.mockReset().mockResolvedValue(workspaces);
 	shellMocks.queryClient.getQueryData.mockReset().mockReturnValue(workspaces);
 	shellMocks.queryClient.getQueryState.mockReset().mockReturnValue({ dataUpdatedAt: 0 });
@@ -508,6 +549,9 @@ describe("shell workspace startup", () => {
 		expect(apiClient.PATCH).toHaveBeenCalledWith("/api/v1/settings/chat-hibernation", {
 			body: { enabled: true },
 		});
+		await waitFor(() => expect(apiClient.PUT).toHaveBeenCalledWith("/api/v1/usage/limit-history", {
+			body: { enabled: true },
+		}));
 
 		shellMocks.state.daemonStatus = { state: "ready", port: 4777, pid: 202 };
 		view.rerender(
@@ -524,6 +568,9 @@ describe("shell workspace startup", () => {
 		await renderShell();
 
 		await waitFor(() => expect(apiClient.PATCH).toHaveBeenCalledWith("/api/v1/settings/chat-hibernation", {
+			body: { enabled: false },
+		}));
+		await waitFor(() => expect(apiClient.PUT).toHaveBeenCalledWith("/api/v1/usage/limit-history", {
 			body: { enabled: false },
 		}));
 	});
@@ -553,6 +600,33 @@ describe("shell workspace startup", () => {
 			params: { projectId: "proj-1" },
 		});
 		expect(screen.getByTestId("global-toast")).toHaveTextContent("Project already added");
+	});
+
+	it("finishes clone provisioning after registration committed but its response was lost", async () => {
+		shellMocks.state.daemonStatus = { state: "ready", port: 4777 };
+		shellMocks.state.routeParams = { projectId: "proj-1" };
+		vi.mocked(apiClient.POST)
+			.mockReset()
+			.mockRejectedValueOnce(new TypeError("Failed to fetch"))
+			.mockResolvedValueOnce({ error: {
+				code: "PATH_ALREADY_REGISTERED", message: "Already registered", details: { existingProjectId: "proj-1" },
+			} })
+			.mockResolvedValueOnce({ data: { session: {
+				id: "orch-existing", projectId: "proj-1", kind: "orchestrator", mode: "chat",
+			} } });
+		await renderShell();
+		const input = { path: "/one", workerAgent: "codex", orchestratorAgent: "codex", clonePreparationId: "prepared" };
+		await expect(shellMocks.state.shellValue?.createProject?.(input)).rejects.toThrow("Failed to fetch");
+		await expect(shellMocks.state.shellValue?.createProject?.(input)).resolves.toBeUndefined();
+		await waitFor(() => expect(shellMocks.navigate).toHaveBeenCalledWith({
+			to: "/projects/$projectId/sessions/$sessionId",
+			params: { projectId: "proj-1", sessionId: "orch-existing" },
+		}));
+		expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/sessions", {
+			body: { projectId: "proj-1", kind: "orchestrator", harness: "codex", async: true },
+		});
+		expect(apiClient.POST).toHaveBeenCalledTimes(3);
+		expect(useUiStore.getState().provisioningProjectIds.has("proj-1")).toBe(false);
 	});
 
 	it("uses the daemon project identity when an imported path is an alias", async () => {
@@ -664,13 +738,13 @@ describe("shell workspace startup", () => {
 			useUiStore.getState().setProjectCreationPending(false);
 		});
 		view.rerender(<Suspense fallback={null}><ShellRoute /></Suspense>);
-		expect(screen.getByText("Getting your project ready")).toBeInTheDocument();
+		expect(screen.getByText("Starting your orchestrator")).toBeInTheDocument();
 		shellMocks.state.routeParams = { projectId: "proj-1", sessionId: "sess-1" };
 		view.rerender(<Suspense fallback={null}><ShellRoute /></Suspense>);
 		expect(screen.getByLabelText("Message the agent")).toBe(composer);
-		expect(screen.getByText("Getting your project ready")).toBeInTheDocument();
+		expect(screen.getByText("Starting your orchestrator")).toBeInTheDocument();
 		act(() => useUiStore.getState().setProjectProvisioning("proj-1", false));
-		expect(screen.queryByText("Getting your project ready")).not.toBeInTheDocument();
+		expect(screen.queryByText("Starting your orchestrator")).not.toBeInTheDocument();
 	});
 
 	const spawnNewProject = () => {
@@ -679,6 +753,19 @@ describe("shell workspace startup", () => {
 			.mockResolvedValueOnce({ data: { project: { id: "proj-new", name: "New", kind: "single_repo", path: "/repo/new" } } })
 			.mockResolvedValueOnce({ data: { session: { id: "orch-new", projectId: "proj-new", kind: "orchestrator", mode: "chat", provisionState: "provisioning" } } });
 	};
+
+	it.each([
+		{ savedOrder: ["proj-2", "proj-1"] },
+		{ savedOrder: ["proj-2", "proj-1", "proj-new"] },
+	])("saves a newly created project first ahead of saved order $savedOrder", async ({ savedOrder }) => {
+		spawnNewProject();
+		useSidebarOrderStore.getState().setProjectOrder(savedOrder);
+		await renderShell();
+		await shellMocks.state.shellValue?.createProject?.({ path: "/repo/new", workerAgent: "codex", orchestratorAgent: "codex" });
+
+		expect(useSidebarOrderStore.getState().projectOrder).toEqual(["proj-new", "proj-2", "proj-1"]);
+		expect(JSON.parse(window.localStorage.getItem("ao.sidebar.project-order") ?? "null")).toEqual(["proj-new", "proj-2", "proj-1"]);
+	});
 
 	it("opens the returned orchestrator without waiting for a workspace refetch", async () => {
 		spawnNewProject();
@@ -689,6 +776,9 @@ describe("shell workspace startup", () => {
 			to: "/projects/$projectId/sessions/$sessionId",
 			params: { projectId: "proj-new", sessionId: "orch-new" },
 		}));
+		expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/sessions", {
+			body: { projectId: "proj-new", kind: "orchestrator", harness: "codex", async: true },
+		});
 		const publish = shellMocks.queryClient.setQueryData.mock.calls.at(-1)?.[1] as (current: WorkspaceSummary[]) => WorkspaceSummary[];
 		expect(publish([{ ...workspaces[0], id: "proj-new", name: "New", sessions: [] }])[0].sessions[0]).toMatchObject({ id: "orch-new", mode: "chat", provisionState: "provisioning" });
 		expect(useUiStore.getState().provisioningProjectIds.has("proj-new")).toBe(false);
@@ -880,17 +970,7 @@ describe("shell new-shell-terminal shortcut subscription", () => {
 	// Regression: the shell LAYOUT must own this, not the session view. When the
 	// session view owned it, the shortcut did nothing outside a session route —
 	// nothing was mounted to hear it.
-	it("opens a terminal from the dedicated terminals route", async () => {
-		shellMocks.state.matchRouteTarget = "/terminals";
-		await renderShell();
-
-		pressNewShellTerminal();
-
-		expect(useUiStore.getState().newShellTerminalNonce).toBe(1);
-		expect(shellMocks.openShellTerminal).toHaveBeenCalledTimes(1);
-	});
-
-	// Regression (#4772): ⌘T on the project board must not yank users into /terminals.
+	// Regression (#4772): ⌘T on the project board has no session to open a terminal in.
 	it("ignores the shortcut on the project board", async () => {
 		shellMocks.state.routeParams = { projectId: "proj-1" };
 		await renderShell();
@@ -956,9 +1036,31 @@ describe("shell new-shell-terminal shortcut subscription", () => {
 		expect(useUiStore.getState().newShellTerminalNonce).toBe(2);
 		expect(shellMocks.openShellTerminal).toHaveBeenCalledTimes(2);
 	});
+
+	// Regression: ⌘T did nothing on a remote machine's session.
+	it("opens the terminal on the remote host that owns the session on screen", async () => {
+		shellMocks.state.routeParams = { hostId: "box-a", projectId: "remote-proj", sessionId: "remote-sess" };
+		await renderShell();
+
+		pressNewShellTerminal();
+
+		expect(shellMocks.openShellTerminal).toHaveBeenCalledWith(
+			expect.objectContaining({ projectId: "remote-proj", sessionId: "remote-sess" }),
+		);
+		expect(shellMocks.openShellTerminalHost).toHaveBeenLastCalledWith("box-a");
+	});
 });
 
 describe("shell keyboard-shortcuts help subscription", () => {
+	it("opens the Shortcuts settings page from Customize and closes help", async () => {
+		await renderShell();
+		act(() => shellMocks.state.keyboardShortcutsListener?.());
+		fireEvent.click(screen.getByRole("button", { name: "Customize" }));
+
+		expect(screen.queryByTestId("keyboard-shortcuts")).not.toBeInTheDocument();
+		expect(useUiStore.getState().settingsModal).toEqual({ scope: "global", section: "shortcuts" });
+	});
+
 	it("opens the keyboard-shortcuts dialog", async () => {
 		await renderShell();
 
@@ -967,6 +1069,46 @@ describe("shell keyboard-shortcuts help subscription", () => {
 		act(() => listener());
 
 		expect(screen.getByTestId("keyboard-shortcuts")).toBeInTheDocument();
+	});
+});
+
+describe("shell quit confirm subscription", () => {
+	it("shows the quit confirm over the startup loader and resolves it either way", async () => {
+		shellMocks.state.daemonStatus = { state: "starting", port: 4777 };
+		await renderShell();
+		expect(screen.getByTestId("daemon-startup-loader")).toBeInTheDocument();
+
+		const listener = shellMocks.state.quitConfirmListener;
+		if (!listener) throw new Error("quit confirm listener was not registered");
+		act(() => listener({ keepsRunning: true }));
+		fireEvent.click(await screen.findByRole("button", { name: "Cancel" }));
+		expect(shellMocks.resolveQuitConfirm).toHaveBeenLastCalledWith(false);
+		await waitFor(() => expect(screen.queryByRole("dialog", { name: "Quit Orchestrator?" })).not.toBeInTheDocument());
+
+		act(() => listener({ keepsRunning: true }));
+		fireEvent.click(await screen.findByRole("button", { name: "Quit" }));
+		expect(shellMocks.resolveQuitConfirm).toHaveBeenLastCalledWith(true);
+		expect(shellMocks.resolveQuitConfirm).toHaveBeenCalledTimes(2);
+		expect(screen.getByTestId("daemon-startup-loader")).toBeInTheDocument();
+	});
+
+	it("opens the Quit AO? dialog on request and reports the answer to the main process", async () => {
+		await renderShell();
+
+		const listener = shellMocks.state.quitConfirmListener;
+		if (!listener) throw new Error("quit confirm listener was not registered");
+		act(() => listener({ keepsRunning: true }));
+		expect(
+			await screen.findByText("Orchestrator will keep running in the background. You can reopen it from the menu bar."),
+		).toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "Quit" }));
+		expect(shellMocks.resolveQuitConfirm).toHaveBeenCalledExactlyOnceWith(true);
+		await waitFor(() => expect(screen.queryByRole("dialog", { name: "Quit Orchestrator?" })).not.toBeInTheDocument());
+
+		act(() => listener({ keepsRunning: false }));
+		expect(await screen.findByText("Are you sure you want to quit Orchestrator?")).toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+		expect(shellMocks.resolveQuitConfirm).toHaveBeenLastCalledWith(false);
 	});
 });
 
@@ -997,6 +1139,29 @@ describe("shell new-session shortcut subscription", () => {
 
 		expect(screen.getByTestId("new-task-flow")).toHaveAttribute("data-project", "__standalone__");
 		expect(screen.queryByTestId("create-project-flow")).not.toBeInTheDocument();
+	});
+
+	it("stays with the project the new chat page shows, not the last one opened", async () => {
+		window.localStorage.setItem("ao.newTask.lastProject", "proj-1");
+		shellMocks.state.matchRouteTarget = "/new";
+		shellMocks.state.routeSearch = { project: "proj-2" };
+		await renderShell();
+
+		emitShortcut();
+
+		expect(screen.getByTestId("new-task-flow")).toHaveAttribute("data-project", "proj-2");
+	});
+
+	it("stays with the project and host a remote new chat page shows", async () => {
+		shellMocks.state.matchRouteTarget = "/new";
+		shellMocks.state.routeSearch = { project: "remote-proj", host: "host-a" };
+		await renderShell();
+
+		emitShortcut();
+
+		const flow = screen.getByTestId("new-task-flow");
+		expect(flow).toHaveAttribute("data-project", "remote-proj");
+		expect(flow).toHaveAttribute("data-host", "host-a");
 	});
 });
 
@@ -1199,12 +1364,53 @@ describe("shell application shortcut subscriptions", () => {
 		expect(shellMocks.router.history.forward).toHaveBeenCalledTimes(1);
 	});
 
+	it.each([
+		["home", {}, "/"],
+		["project board", { projectId: "proj-1" }, "/projects/$projectId"],
+		["project session", { projectId: "proj-1", sessionId: "sess-1" }, "/projects/$projectId/sessions/$sessionId"],
+		["standalone session", { sessionId: "standalone-1" }, "/sessions/$sessionId"],
+	] as const)("returns from Settings to %s without changing its route or draft", async (_origin, params, route) => {
+		shellMocks.state.routeParams = params;
+		shellMocks.state.matchRouteTarget = route;
+		await renderShell();
+		const draft = screen.getByRole("textbox", { name: "Page draft" });
+		fireEvent.change(draft, { target: { value: "Keep my draft" } });
+		for (const canGoBack of [false, true]) {
+			shellMocks.router.history.canGoBack.mockReturnValue(canGoBack);
+			for (const action of ["Titlebar Back", "Windows Back", "shortcut"]) {
+				act(() => useUiStore.getState().openGlobalSettings("harness"));
+				if (action === "shortcut") emitAppShortcut({ id: "history-back" });
+				else fireEvent.click(screen.getByRole("button", { name: action }));
+				expect(useUiStore.getState().settingsModal).toBeNull();
+				expect(screen.getByRole("textbox", { name: "Page draft" })).toBe(draft);
+				expect(draft).toHaveValue("Keep my draft");
+			}
+		}
+		expect(shellMocks.router.history.back).not.toHaveBeenCalled();
+		expect(shellMocks.navigate).not.toHaveBeenCalled();
+		// The next shortcut resumes ordinary route navigation.
+		emitAppShortcut({ id: "history-back" });
+		expect(shellMocks.router.history.back).toHaveBeenCalledTimes(1);
+	});
+
 	it("does not go back past the first route", async () => {
 		shellMocks.router.history.canGoBack.mockReturnValue(false);
 		await renderShell();
 
 		emitAppShortcut({ id: "history-back" });
 
+		expect(shellMocks.router.history.back).not.toHaveBeenCalled();
+	});
+
+	it.each(["Titlebar Back", "Windows Back", "shortcut"])("returns to covered project settings using %s", async (action) => {
+		await renderShell();
+		act(() => {
+			useUiStore.getState().openProjectSettings("proj-1");
+			useUiStore.getState().openGlobalSettings("harness", { preserveProject: true });
+		});
+		if (action === "shortcut") emitAppShortcut({ id: "history-back" });
+		else fireEvent.click(screen.getByRole("button", { name: action }));
+		expect(useUiStore.getState().settingsModal).toEqual({ scope: "project", projectId: "proj-1" });
 		expect(shellMocks.router.history.back).not.toHaveBeenCalled();
 	});
 

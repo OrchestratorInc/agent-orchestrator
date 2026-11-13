@@ -10,7 +10,7 @@ type Hunk = { old: HunkLine[]; new: HunkLine[] };
 // Groups rows into per-hunk old/new line sequences. A hunk's old-side sequence
 // (context + del, in order) and new-side sequence (context + add, in order) each
 // reconstruct a contiguous excerpt of the real file, which is what lets tokenizing
-// each side as one blob carry highlight.js's state (inside a string, a block
+// each side as one blob carry Shiki's state (inside a string, a block
 // comment, ...) correctly across line breaks.
 function groupHunks(rows: DiffRow[]): Hunk[] {
 	const hunks: Hunk[] = [];

@@ -22,6 +22,7 @@ import type {
 	DecisionOption,
 	TurnSettings,
 } from "./types";
+import type { TurnArtifactChange } from "../../../shared/artifacts/turn-artifacts";
 import { parseSseFrame, readSseFrameSeq, takeSseFrames, type ConversationEvent } from "./sse";
 import { mergeConversationPages, type ConversationPage } from "./snapshot";
 
@@ -113,8 +114,12 @@ export async function acknowledgeSessionInterfaceTransitionNotice(
 	return body.transition;
 }
 
-type WireSnapshot = Omit<ConversationSnapshot, "items" | "controller"> & {
+/** The daemon sends a turn's artifacts wrapped as `{ files }`. */
+type WireTurn = Omit<ConversationTurn, "artifacts"> & { artifacts?: { files?: TurnArtifactChange[] } };
+
+type WireSnapshot = Omit<ConversationSnapshot, "items" | "controller" | "turns"> & {
 	controller: ControllerState;
+	turns?: WireTurn[];
 	messages?: ConversationMessage[];
 	activities?: Array<Omit<ConversationActivity, "detail" | "decisions"> & { detail?: Record<string, unknown> }>;
 };
@@ -283,6 +288,20 @@ export async function rollbackConversation(cfg: ServerConfig, sessionId: string,
 	});
 	const body = (await res.json()) as { turnsDiscarded?: number };
 	return body.turnsDiscarded ?? 0;
+}
+
+/** Branches before an earlier human prompt and resends it with new text; the daemon keeps its attachments. */
+export async function editConversationMessage(
+	cfg: ServerConfig,
+	sessionId: string,
+	turnId: string,
+	text: string,
+	clientMessageId: string,
+): Promise<void> {
+	await apiRequest(cfg, conversationPath(sessionId, `/turns/${encodeURIComponent(turnId)}/edit`), {
+		method: "POST",
+		body: JSON.stringify({ text, clientMessageId }),
+	});
 }
 
 export async function setConversationTitle(cfg: ServerConfig, sessionId: string, title: string): Promise<void> {
@@ -509,9 +528,14 @@ function toSnapshot(wire: WireSnapshot): ConversationSnapshot {
 			reasoningEffort: wire.settings?.reasoningEffort || undefined,
 			approvalMode: (wire.settings?.approvalMode as ApprovalMode | undefined) || undefined,
 		},
-		turns: wire.turns ?? [],
+		turns: (wire.turns ?? []).map(toTurn),
 		items: [...messages, ...activities].sort((a, b) => a.sequence - b.sequence),
 	};
+}
+
+function toTurn({ artifacts, ...turn }: WireTurn): ConversationTurn {
+	const files = artifacts?.files?.filter((file) => file && typeof file.path === "string" && (file.status === "added" || file.status === "modified"));
+	return files?.length ? { ...turn, artifacts: files.map(({ path, status }) => ({ path, status })) } : turn;
 }
 
 function readDecisions(detail: ActivityDetail): DecisionOption[] | undefined {

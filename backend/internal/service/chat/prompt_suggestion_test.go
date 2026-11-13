@@ -313,7 +313,7 @@ func suggestionPage(rows store.ConversationSnapshot) chatsvc.ConversationRows {
 func TestPromptSuggestionReadsBoundedPagesAcrossActivityHistory(t *testing.T) {
 	var h *harness
 	var reads int
-	h = newPagedSuggestionHarness(t, func(ctx context.Context, conversationID string, before, limit int64) (chatsvc.ConversationRows, error) {
+	h = newPagedSuggestionHarness(t, func(ctx context.Context, conversationID string, before, _, limit int64) (chatsvc.ConversationRows, error) {
 		if limit != 200 {
 			t.Fatalf("unbounded page limit: %d", limit)
 		}
@@ -347,7 +347,9 @@ func TestPromptSuggestionReadsBoundedPagesAcrossActivityHistory(t *testing.T) {
 		}
 		return `{"prompt":"Run the tests."}`, nil
 	})
-	if prompt, err := h.svc.PromptSuggestion(context.Background(), testSession, rows.Turns[len(rows.Turns)-1].ID); err != nil || prompt != "Run the tests." || reads != 4 {
+	// Activity does not count toward a page, so the read and its revalidation
+	// each take one bounded page despite the 205 late activities.
+	if prompt, err := h.svc.PromptSuggestion(context.Background(), testSession, rows.Turns[len(rows.Turns)-1].ID); err != nil || prompt != "Run the tests." || reads != 2 {
 		t.Fatalf("paged suggestion: prompt=%q err=%v reads=%d", prompt, err, reads)
 	}
 }
@@ -358,7 +360,7 @@ func TestPromptSuggestionRevalidatesWithCallerContextAndPreservesReadErrors(t *t
 			var h *harness
 			var runCalls, reads int
 			readErr := errors.New("snapshot database unavailable")
-			h = newPagedSuggestionHarness(t, func(ctx context.Context, conversationID string, before, limit int64) (chatsvc.ConversationRows, error) {
+			h = newPagedSuggestionHarness(t, func(ctx context.Context, conversationID string, before, _, limit int64) (chatsvc.ConversationRows, error) {
 				reads++
 				if _, hasDeadline := ctx.Deadline(); hasDeadline {
 					t.Fatal("snapshot read inherited the provider deadline")

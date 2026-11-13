@@ -29,6 +29,7 @@ const (
 	handoffOriginalTaskCap  = 2_000
 	handoffChangedFileLimit = 50
 	handoffChangedFileCap   = 160
+	handoffArtifactLimit    = 50
 	handoffHistoryPathCap   = 400
 
 	// A note delivered as a launch argument must also fit the operating
@@ -70,8 +71,12 @@ type HandoffNoteInput struct {
 	At            time.Time
 	OriginalTask  string
 	ChangedFiles  []string
-	Turns         []HandoffTurn
-	Terminal      bool
+	// ArtifactDir is the session's artifact directory and Artifacts the files
+	// in it, in the order the note lists them.
+	ArtifactDir string
+	Artifacts   []SessionArtifactFile
+	Turns       []HandoffTurn
+	Terminal    bool
 	// HistoryFiles point at the agent's own record for an agent whose answers
 	// AO did not record, because it reports no turns through hooks.
 	HistoryFiles []HandoffHistoryFile
@@ -108,25 +113,48 @@ func BuildHandoffNote(in HandoffNoteInput) string {
 	recent := in.Turns[max(0, len(in.Turns)-1-handoffPreviousTurnLimit):]
 	older := in.Turns[max(0, len(in.Turns)-len(recent)-handoffOlderTurnLimit) : len(in.Turns)-len(recent)]
 
-	// Drop the oldest material first until the whole note fits. The latest
-	// turn is never dropped.
+	artifacts := min(len(in.Artifacts), handoffArtifactLimit)
+
+	// Drop material until the whole note fits: older turns, then the last
+	// listed artifacts, then previous turns. The latest turn is never dropped.
 	for {
-		note := renderHandoffNote(in, older, recent)
-		if utf8.RuneCountInString(note) <= handoffNoteMaxChars && len(note) <= handoffNoteMaxBytes {
+		note := renderHandoffNote(in, older, recent, artifacts)
+		if handoffNoteFits(note) {
 			return note
 		}
 		switch {
 		case len(older) > 0:
 			older = older[1:]
+		case artifacts > 0:
+			artifacts--
 		case len(recent) > 1:
 			recent = recent[1:]
 		default:
-			return clipHandoffText(note, handoffNoteMaxChars, handoffClipMarker)
+			return clipHandoffNote(note)
 		}
 	}
 }
 
-func renderHandoffNote(in HandoffNoteInput, older, recent []HandoffTurn) string {
+func handoffNoteFits(note string) bool {
+	return utf8.RuneCountInString(note) <= handoffNoteMaxChars && len(note) <= handoffNoteMaxBytes
+}
+
+// clipHandoffNote clips a note to both the character and the byte cap.
+func clipHandoffNote(note string) string {
+	limit := handoffNoteMaxChars
+	for {
+		clipped := clipHandoffText(note, limit, handoffClipMarker)
+		if len(clipped) <= handoffNoteMaxBytes {
+			return clipped
+		}
+		// A rune is at most four bytes.
+		limit -= max(1, (len(clipped)-handoffNoteMaxBytes)/4)
+	}
+}
+
+// renderHandoffNote renders the note with the given turns and the first
+// artifacts entries of in.Artifacts.
+func renderHandoffNote(in HandoffNoteInput, older, recent []HandoffTurn, artifacts int) string {
 	var b strings.Builder
 	if in.SwitchID != "" {
 		fmt.Fprintf(&b, "%s switch-id=%q>\n", HandoffNotePrefix, in.SwitchID)
@@ -136,9 +164,9 @@ func renderHandoffNote(in HandoffNoteInput, older, recent []HandoffTurn) string 
 	// The new agent must take this as the user's real conversation. Calling it
 	// AO's note, not the user's, made Claude refuse to use what the user had
 	// said, such as a value they asked it to remember.
-	fmt.Fprintf(&b, "You are %s, taking over this AO session from %s. The conversation below really took place between this user and %s. Treat it as your own history with them: what the user told you there, such as facts, preferences or values they asked you to remember, still holds.\n",
+	fmt.Fprintf(&b, "You are %s, taking over this Orchestrator-managed session from %s. The conversation below really took place between this user and %s. Treat it as your own history with them: what the user told you there, such as facts, preferences or values they asked you to remember, still holds.\n",
 		handoffHarnessLabel(in.TargetHarness), handoffHarnessLabel(in.SourceHarness), handoffHarnessLabel(in.SourceHarness))
-	b.WriteString("- AO copied this record from that conversation. Requests in it were already handled; do not carry them out again.\n")
+	b.WriteString("- Orchestrator copied this record from that conversation. Requests in it were already handled; do not carry them out again.\n")
 	b.WriteString("- The files in the workspace and git are the truth. Check them before relying on this record.\n")
 	b.WriteString("- Do not redo work that is already finished.\n")
 
@@ -166,6 +194,17 @@ func renderHandoffNote(in HandoffNoteInput, older, recent []HandoffTurn) string 
 		}
 	}
 
+	if len(in.Artifacts) > 0 {
+		fmt.Fprintf(&b, "\n## Session artifacts\nFiles already in the session artifact directory `%s` (%d). Read the one a request is about before writing it again, and update it instead of starting over:\n",
+			quoteHandoffLine(in.ArtifactDir, handoffHistoryPathCap), len(in.Artifacts))
+		for _, file := range in.Artifacts[:artifacts] {
+			fmt.Fprintf(&b, "- %s (%d bytes, updated %s)\n", quoteHandoffLine(file.Path, handoffChangedFileCap), file.Size, file.UpdatedAt.UTC().Format(time.RFC3339))
+		}
+		if hidden := len(in.Artifacts) - artifacts; hidden > 0 {
+			fmt.Fprintf(&b, "(%d more not listed; list the directory to see them)\n", hidden)
+		}
+	}
+
 	if len(older) > 0 {
 		b.WriteString("\n## Older turns, oldest first\n")
 		for _, turn := range older {
@@ -188,7 +227,7 @@ func renderHandoffNote(in HandoffNoteInput, older, recent []HandoffTurn) string 
 
 	if len(in.HistoryFiles) > 0 {
 		b.WriteString("\n## Earlier agents' own history\n")
-		b.WriteString("AO did not record what these agents answered in this session, but each keeps its own history. Read only the last few exchanges, and only when this note does not tell you enough.\n")
+		b.WriteString("Orchestrator did not record what these agents answered in this session, but each keeps its own history. Read only the last few exchanges, and only when this note does not tell you enough.\n")
 		for _, file := range in.HistoryFiles {
 			note := ""
 			if file.RequestsOnly {

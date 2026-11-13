@@ -35,6 +35,11 @@ export type BrowserProfileRegistry = {
 	bindings: Record<string, BrowserProfileBinding>;
 	/** Profile new sessions fall back to when they have no session-specific binding. */
 	defaultProfileId: BrowserProfileId | null;
+	/**
+	 * Set once the oldest profile has been offered as the default. Registries
+	 * saved without it get that default on load, so a later unset stays unset.
+	 */
+	defaultProfileSeeded: true;
 };
 
 export type BrowserProfileStoreError = {
@@ -55,6 +60,16 @@ export type BrowserProfileViewState = {
 	/** True when the selection is the per-worker temporary profile. */
 	temporary: boolean;
 };
+
+/** Live browsers affected by deleting a named profile; no paths or partitions. */
+export type BrowserProfileUsage = {
+	viewId: string;
+	sessionId: string;
+	blocker: "agent-active" | "switching" | null;
+};
+
+export type BrowserProfileUsageResult = { sessions: BrowserProfileUsage[]; error?: string };
+export type BrowserProfileDeleteResult = { error?: string };
 
 export type BrowserMenuBounds = {
 	x: number;

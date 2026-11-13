@@ -11,7 +11,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	archiveExtraction,
 	createWorkDirectory,
@@ -180,15 +180,24 @@ describe("patchClaudeHibernationCheck", () => {
 });
 
 describe("patchClaudeContextUsage", () => {
-	it("publishes the SDK context snapshot through ACP after a result", async () => {
+	function patchedUsageBlock() {
 		const adapterPath = join(temporaryDirectory(), "acp-agent.js");
 		writeFileSync(adapterPath, `
                             // Send usage_update notification
                             if (lastAssistantTotalUsage !== null) {
                                 await sendUpdate({
+                                    sessionId: params.sessionId,
                                     update: {
+                                        sessionUpdate: "usage_update",
                                         used: lastAssistantTotalUsage,
                                         size: session.contextWindowSize,
+                                        cost: {
+                                            amount: message.total_cost_usd,
+                                            currency: "USD",
+                                        },
+                                        ...(message.origin && {
+                                            _meta: { "_claude/origin": message.origin },
+                                        }),
                                     },
                                 });
                             }
@@ -198,52 +207,89 @@ describe("patchClaudeContextUsage", () => {
 		expect(patchClaudeContextUsage(adapterPath)).toBe(true);
 		expect(patchClaudeContextUsage(adapterPath)).toBe(false);
 		const patched = readFileSync(adapterPath, "utf8");
-		expect(patched).toContain("session.query.getContextUsage()");
-		expect(patched).toContain("lastAssistantTotalUsage = contextUsage.totalTokens");
-		expect(patched).toContain("session.contextWindowSize = contextUsage.rawMaxTokens");
-
-		const start = patched.indexOf("// AO: use the SDK's context snapshot.");
+		const start = patched.indexOf("// AO: publish the SDK's context snapshot");
 		const end = patched.indexOf("if (session.cancelled) {", start);
 		const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
-		const run = new AsyncFunction("session", "sendUpdate", `
+		return new AsyncFunction("session", "sendUpdate", "state", `
+			const params = { sessionId: "s" };
+			const message = { total_cost_usd: 1.5 };
 			let lastAssistantTotalUsage = 9;
 			${patched.slice(start, end)}
+			state.read = () => lastAssistantTotalUsage;
 		`);
-		const updates = [];
-		const session = {
+	}
+
+	function claudeSession(getContextUsage) {
+		return {
 			contextWindowSize: 100,
 			contextWindowAuthoritative: false,
-			query: { getContextUsage: async () => ({ totalTokens: 17, rawMaxTokens: 200 }) },
+			models: { currentModelId: "sonnet" },
+			query: { getContextUsage },
 		};
+	}
+
+	async function publish(run, session, sendUpdate) {
+		const updates = [];
+		const errors = [];
+		const state = {};
+		await run.call({ logger: { error: (...args) => errors.push(args) } }, session, async (notification) => {
+			updates.push(notification.update);
+			await sendUpdate?.();
+		}, state);
+		await vi.waitFor(() => expect(updates.length + errors.length).toBeGreaterThan(0));
+		return { updates, errors, state };
+	}
+
+	it("settles the result before the SDK context snapshot arrives", async () => {
+		const run = patchedUsageBlock();
+		let resolveSnapshot;
+		const session = claudeSession(() => new Promise((resolve) => { resolveSnapshot = resolve; }));
+		const updates = [];
+		const state = {};
+
 		await run.call({ logger: { error: () => {} } }, session, (notification) => {
 			updates.push(notification.update);
-		});
-		expect(updates.map(({ used, size }) => [used, size])).toEqual([[17, 200]]);
+		}, state);
+		expect(updates).toEqual([]);
+
+		resolveSnapshot({ totalTokens: 17, rawMaxTokens: 200 });
+		await vi.waitFor(() => expect(updates).toHaveLength(1));
+		expect(updates[0]).toMatchObject({ sessionUpdate: "usage_update", used: 17, size: 200, cost: { amount: 1.5 } });
 		expect(session.contextWindowAuthoritative).toBe(true);
+		expect(state.read()).toBe(17);
+	});
 
-		const fallback = {
-			contextWindowSize: 100,
-			contextWindowAuthoritative: false,
-			query: { getContextUsage: async () => { throw new Error("unavailable"); } },
-		};
-		const fallbackUpdates = [];
-		await run.call({ logger: { error: () => {} } }, fallback, (notification) => {
-			fallbackUpdates.push(notification.update);
-		});
-		expect(fallbackUpdates.map(({ used, size }) => [used, size])).toEqual([[9, 100]]);
-		expect(fallback.contextWindowAuthoritative).toBe(false);
+	it("falls back to the message usage when the snapshot is unusable", async () => {
+		const run = patchedUsageBlock();
+		for (const getContextUsage of [
+			async () => { throw new Error("unavailable"); },
+			async () => ({ totalTokens: 0, rawMaxTokens: 200 }),
+		]) {
+			const session = claudeSession(getContextUsage);
+			const { updates } = await publish(run, session);
+			expect(updates.map(({ used, size }) => [used, size])).toEqual([[9, 100]]);
+			expect(session.contextWindowAuthoritative).toBe(false);
+		}
+	});
 
-		const zero = {
-			contextWindowSize: 100,
-			contextWindowAuthoritative: false,
-			query: { getContextUsage: async () => ({ totalTokens: 0, rawMaxTokens: 200 }) },
-		};
-		const zeroUpdates = [];
-		await run.call({ logger: { error: () => {} } }, zero, (notification) => {
-			zeroUpdates.push(notification.update);
+	it("keeps the window a model switch seeded while the snapshot was pending", async () => {
+		const run = patchedUsageBlock();
+		const session = claudeSession(async () => {
+			session.models.currentModelId = "opus";
+			session.contextWindowSize = 1000;
+			return { totalTokens: 17, rawMaxTokens: 200 };
 		});
-		expect(zeroUpdates.map(({ used, size }) => [used, size])).toEqual([[9, 100]]);
-		expect(zero.contextWindowAuthoritative).toBe(false);
+		const { updates } = await publish(run, session);
+		expect(updates.map(({ used, size }) => [used, size])).toEqual([[17, 1000]]);
+		expect(session.contextWindowAuthoritative).toBe(false);
+	});
+
+	it("logs a failed usage publish instead of rejecting", async () => {
+		const run = patchedUsageBlock();
+		const session = claudeSession(async () => ({ totalTokens: 17, rawMaxTokens: 200 }));
+		const { errors } = await publish(run, session, async () => { throw new Error("closed"); });
+		await vi.waitFor(() => expect(errors).toHaveLength(1));
+		expect(errors[0][0]).toBe("Failed to publish Claude context usage:");
 	});
 });
 

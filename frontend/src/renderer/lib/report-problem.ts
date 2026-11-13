@@ -83,7 +83,7 @@ export function formatReportProblemDraft(
 
 	if (output === "discord") {
 		return [
-			"**AO feedback**",
+			"**Orchestrator feedback**",
 			`Summary: ${fields.summary}`,
 			`Details: ${fields.details}`,
 			"",
@@ -96,14 +96,14 @@ export function formatReportProblemDraft(
 		return [
 			`To: ${SUPPORT_EMAIL}`,
 			`Cc: ${SUPPORT_CC_EMAIL}`,
-			`Subject: AO feedback: ${fields.summary}`,
+			`Subject: Orchestrator feedback: ${fields.summary}`,
 			"",
 			formatEmailBody(fields, diagnosticsBlock),
 		].join("\n");
 	}
 
 	return [
-		`# ${fields.summary === "Not provided" ? "AO feedback" : fields.summary}`,
+		`# ${fields.summary === "Not provided" ? "Orchestrator feedback" : fields.summary}`,
 		"",
 		"## Summary",
 		fields.summary,
@@ -124,7 +124,7 @@ export function reportProblemDestinationUrl(
 ): string | null {
 	if (output === "discord") return DISCORD_SUPPORT_URL;
 	if (output === "email") {
-		const subject = `AO feedback: ${reportTitle(input)}`;
+		const subject = `Orchestrator feedback: ${reportTitle(input)}`;
 		const body = formatEmailBody(normalizeInput(input), formatDiagnostics(diagnostics));
 		if (emailProvider === "gmail") {
 			const url = new URL("https://mail.google.com/mail/");
@@ -172,7 +172,7 @@ function normalizeInput(input: ReportProblemInput) {
 
 function formatEmailBody(fields: ReturnType<typeof normalizeInput>, diagnosticsBlock: string): string {
 	return [
-		"AO feedback",
+		"Orchestrator feedback",
 		"",
 		`Summary: ${fields.summary}`,
 		"",
@@ -186,7 +186,7 @@ function formatEmailBody(fields: ReturnType<typeof normalizeInput>, diagnosticsB
 
 function reportTitle(input: ReportProblemInput): string {
 	const summary = valueOrPlaceholder(input.summary);
-	return summary === "Not provided" ? "AO feedback" : summary;
+	return summary === "Not provided" ? "Orchestrator feedback" : summary;
 }
 
 function valueOrPlaceholder(value: string): string {
@@ -194,14 +194,33 @@ function valueOrPlaceholder(value: string): string {
 	return safe || "Not provided";
 }
 
+// Reports go to support in another timezone, so pair the reporter's local
+// wall-clock time with an unambiguous UTC reference.
+export function formatReportTimestamp(value: string, timeZone?: string): string {
+	const date = new Date(value);
+	if (Number.isNaN(date.getTime())) return value;
+	const local = new Intl.DateTimeFormat("en-US", {
+		year: "numeric",
+		month: "short",
+		day: "numeric",
+		hour: "numeric",
+		minute: "2-digit",
+		second: "2-digit",
+		timeZoneName: "short",
+		timeZone,
+	}).format(date);
+	const utc = date.toISOString().slice(0, 19).replace("T", " ");
+	return `${local} (${utc} UTC)`;
+}
+
 function formatDiagnostics(diagnostics: ReportProblemDiagnostics): string {
 	const lines = [
-		`AO version: ${sanitizeReportText(diagnostics.appVersion) || "unknown"}`,
+		`Orchestrator version: ${sanitizeReportText(diagnostics.appVersion) || "unknown"}`,
 		`Build mode: ${sanitizeReportText(diagnostics.buildMode) || "unknown"}`,
 		`Platform: ${sanitizeReportText(diagnostics.platform) || "unknown"}`,
 		`Route surface: ${sanitizeReportText(diagnostics.routeSurface) || "unknown"}`,
 		`Daemon: ${sanitizeReportText(diagnostics.daemonState) || "unknown"}`,
-		`Generated: ${sanitizeReportText(diagnostics.generatedAt) || "unknown"}`,
+		`Generated: ${sanitizeReportText(formatReportTimestamp(diagnostics.generatedAt)) || "unknown"}`,
 	];
 	if (diagnostics.daemonMessage?.trim()) {
 		lines.push(`Daemon message: ${sanitizeReportText(diagnostics.daemonMessage.trim())}`);

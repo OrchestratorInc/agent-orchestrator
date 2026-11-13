@@ -3,7 +3,10 @@ package gemini
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -131,11 +134,131 @@ func (p *Plugin) ResolveBinary(ctx context.Context) (string, error) {
 	return bin, nil
 }
 
-// AuthStatus remains unknown because Gemini has no cheap credential-validation command.
-// Key or OAuth-file presence alone cannot establish that an account works.
+// AuthStatus reports configured when Gemini has locally cached credentials.
+// This is deliberately not authorized: checking a file or environment variable
+// cannot establish that the credential is still valid.
 func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
-	_, err := p.ResolveBinary(ctx)
-	return ports.AgentAuthStatusUnknown, err
+	if _, err := p.ResolveBinary(ctx); err != nil {
+		return ports.AgentAuthStatusUnknown, err
+	}
+	configured, err := hasCachedCredentials()
+	if err != nil {
+		return ports.AgentAuthStatusUnknown, err
+	}
+	if configured {
+		return ports.AgentAuthStatusConfigured, nil
+	}
+	return ports.AgentAuthStatusUnknown, nil
+}
+
+var (
+	geminiUserHomeDir        = os.UserHomeDir
+	statGeminiCredentialFile = os.Stat
+)
+
+func hasCachedCredentials() (bool, error) {
+	if strings.TrimSpace(os.Getenv("GEMINI_API_KEY")) != "" {
+		return true, nil
+	}
+	configDir, err := geminiConfigDir()
+	if err != nil {
+		return false, err
+	}
+	if configDir == "" {
+		return false, nil
+	}
+	configured, err := geminiAPIKeySelected(filepath.Join(configDir, "settings.json"))
+	if err != nil || configured {
+		return configured, err
+	}
+	return geminiCredentialFileConfigured(filepath.Join(configDir, "oauth_creds.json"), statGeminiCredentialFile)
+}
+
+func geminiAPIKeySelected(path string) (bool, error) {
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	var settings struct {
+		Security struct {
+			Auth struct {
+				SelectedType string `json:"selectedType"`
+			} `json:"auth"`
+		} `json:"security"`
+	}
+	if err := json.Unmarshal(stripGeminiJSONComments(data), &settings); err != nil {
+		return false, err
+	}
+	return settings.Security.Auth.SelectedType == "gemini-api-key", nil
+}
+
+// Gemini CLI accepts comments in settings.json. Replace them with whitespace
+// so quoted strings and the remaining JSON retain their original boundaries.
+func stripGeminiJSONComments(data []byte) []byte {
+	out := append([]byte(nil), data...)
+	inString, escaped := false, false
+	for i := 0; i < len(out); i++ {
+		switch {
+		case inString:
+			if escaped {
+				escaped = false
+			} else if out[i] == '\\' {
+				escaped = true
+			} else if out[i] == '"' {
+				inString = false
+			}
+		case out[i] == '"':
+			inString = true
+		case out[i] == '/' && i+1 < len(out) && out[i+1] == '/':
+			for i < len(out) && out[i] != '\n' && out[i] != '\r' {
+				out[i] = ' '
+				i++
+			}
+		case out[i] == '/' && i+1 < len(out) && out[i+1] == '*':
+			out[i], out[i+1] = ' ', ' '
+			i += 2
+			for i+1 < len(out) && (out[i] != '*' || out[i+1] != '/') {
+				if out[i] != '\n' && out[i] != '\r' {
+					out[i] = ' '
+				}
+				i++
+			}
+			if i+1 < len(out) {
+				out[i], out[i+1] = ' ', ' '
+				i++
+			}
+		}
+	}
+	return out
+}
+
+func geminiConfigDir() (string, error) {
+	home := strings.TrimSpace(os.Getenv("GEMINI_CLI_HOME"))
+	if home == "" {
+		var err error
+		home, err = geminiUserHomeDir()
+		if err != nil {
+			return "", err
+		}
+	}
+	if home == "" {
+		return "", nil
+	}
+	return filepath.Join(home, ".gemini"), nil
+}
+
+func geminiCredentialFileConfigured(path string, stat func(string) (os.FileInfo, error)) (bool, error) {
+	info, err := stat(path)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return !info.IsDir() && info.Size() > 0, nil
 }
 
 // ResolveBinaryPresence keeps initial inventory discovery free of child processes.

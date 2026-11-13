@@ -18,6 +18,7 @@ import (
 
 	"github.com/google/uuid"
 
+	codexagent "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codex"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/shellterm"
@@ -50,6 +51,7 @@ type Service struct {
 	terminals Terminals
 	// stopAgents stops every running agent on an account before it is removed.
 	stopAgents func(context.Context, string) error
+	limitLog   ports.AgentLimitReadingStore
 	log        *slog.Logger
 	now        func() time.Time
 
@@ -60,6 +62,7 @@ type Service struct {
 	// agent cannot start on a login AO is about to delete.
 	removing       map[string]bool
 	defaultChanged func(domain.AgentAccountProvider)
+	loginConfirmed func(domain.AgentAccount, time.Time)
 }
 
 // reading is the last identity and limits read for one account.
@@ -122,11 +125,70 @@ func (s *Service) SetAgentStopper(stop func(ctx context.Context, accountID strin
 	s.stopAgents = stop
 }
 
+// SetLimitLog late-binds where each limits read is kept.
+func (s *Service) SetLimitLog(log ports.AgentLimitReadingStore) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.limitLog = log
+}
+
+// KeepReadingLimits reads each account's limits again once its last reading is stale, so the window history keeps going while no screen asks for limits.
+func (s *Service) KeepReadingLimits(ctx context.Context, every time.Duration) {
+	ticker := time.NewTicker(every)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if !s.keepingLimits(ctx) {
+				continue
+			}
+			if _, err := s.List(ctx, false); err != nil && ctx.Err() == nil {
+				s.log.DebugContext(ctx, "background limits read failed", "error", err)
+			}
+		}
+	}
+}
+
+func (s *Service) keepingLimits(ctx context.Context) bool {
+	s.mu.Lock()
+	log := s.limitLog
+	s.mu.Unlock()
+	return log != nil && log.LimitHistoryEnabled(ctx)
+}
+
+func (s *Service) recordLimits(ctx context.Context, account domain.AgentAccount, email, plan string, limits domain.AgentAccountLimits) {
+	if len(limits.Windows) == 0 || !s.keepingLimits(ctx) {
+		return
+	}
+	s.mu.Lock()
+	log := s.limitLog
+	s.mu.Unlock()
+	at := limits.FetchedAt
+	if at.IsZero() {
+		at = s.now()
+	}
+	readings := make([]domain.AgentLimitReading, 0, len(limits.Windows))
+	for _, w := range limits.Windows {
+		readings = append(readings, domain.AgentLimitReading{
+			AccountID: account.ID, Provider: account.Provider, Email: email, Plan: plan, WindowID: w.ID, Label: w.Label,
+			DurationMinutes: w.DurationMinutes, UsedPercent: w.UsedPercent, ResetsAt: w.ResetsAt, ReadAt: at,
+		})
+	}
+	if err := log.RecordAgentLimitReadings(context.WithoutCancel(ctx), readings); err != nil {
+		s.log.WarnContext(ctx, "failed to record limit readings", "account", account.ID, "error", err)
+	}
+}
+
 // AccountView is an account with its latest readings, as the app shows it.
 type AccountView struct {
-	Account     domain.AgentAccount
-	Default     bool
-	SignedIn    bool
+	Account  domain.AgentAccount
+	Default  bool
+	SignedIn bool
+	// LoggedIn is any login the CLI launches with as this account, an API key
+	// included; a folder signed in as another login is not.
+	LoggedIn    bool
 	IdentityErr string
 	Limits      *domain.AgentAccountLimits
 	LimitsErr   string
@@ -155,6 +217,7 @@ func (s *Service) List(ctx context.Context, refresh bool) ([]AccountView, error)
 		view := AccountView{Account: account, Default: def == account.ID}
 		if r != nil {
 			view.SignedIn, view.IdentityErr, view.Limits, view.LimitsErr = r.identity.SignedIn, r.identityErr, r.limits, r.limitsErr
+			view.LoggedIn = r.identity.LoggedIn && !r.mismatch
 			if account.Device() {
 				view.Account.Email, view.Account.Plan = r.identity.Email, r.identity.Plan
 			} else if r.identity.Plan != "" {
@@ -215,8 +278,21 @@ func (s *Service) read(ctx context.Context, account domain.AgentAccount) *readin
 	default:
 		if limits, limitsErr := provider.Limits(ctx, account.Home); limitsErr != nil {
 			r.limitsErr = limitsErr.Error()
+			s.mu.Lock()
+			if prev := s.readings[account.ID]; prev != nil && prev.limits != nil && strings.EqualFold(prev.identity.Email, identity.Email) {
+				r.limits = prev.limits
+			}
+			s.mu.Unlock()
 		} else {
 			r.limits = &limits
+			email, plan := identity.Email, identity.Plan
+			if email == "" {
+				email = account.Email
+			}
+			if plan == "" {
+				plan = account.Plan
+			}
+			s.recordLimits(ctx, account, email, plan, limits)
 		}
 	}
 	// A caller that went away (a closed request, a cancelled move) says nothing
@@ -227,7 +303,13 @@ func (s *Service) read(ctx context.Context, account domain.AgentAccount) *readin
 	}
 	s.mu.Lock()
 	s.readings[account.ID] = r
+	confirmed := s.loginConfirmed
 	s.mu.Unlock()
+	// The limits come from the provider's API under this login, so a reading
+	// that has them shows the login worked when the reading began.
+	if confirmed != nil && err == nil && r.identity.SignedIn && r.limits != nil && r.limitsErr == "" {
+		confirmed(account, r.at)
+	}
 	return r
 }
 
@@ -317,6 +399,19 @@ func (s *Service) DefaultSignIn(ctx context.Context, harness domain.AgentHarness
 	if r == nil || (r.identityErr != "" && !r.mismatch) {
 		return identity, false // not known: leave it to the CLI's own readiness
 	}
+	if !r.identity.SignedIn {
+		// New sessions start on another signed-in account instead, if there is one.
+		next, err := s.newSessionAccount(ctx, p)
+		switch {
+		case err == nil && next.Device():
+			return identity, false
+		case err == nil:
+			account = next
+			if r = s.cachedReading(next.ID); r == nil {
+				return identity, false
+			}
+		}
+	}
 	identity = r.identity
 	// A mismatched folder names another login; the account is still its own.
 	if account.Email != "" {
@@ -325,12 +420,35 @@ func (s *Service) DefaultSignIn(ctx context.Context, harness domain.AgentHarness
 	return identity, true
 }
 
+// DefaultLaunchEnv gives discovery the account a new task would use, without binding a session.
+func (s *Service) DefaultLaunchEnv(ctx context.Context, harness domain.AgentHarness) (map[string]string, error) {
+	p, ok := domain.AgentAccountProviderFor(harness)
+	if !ok || s.providers[p] == nil {
+		return nil, nil
+	}
+	account, err := s.newSessionAccount(ctx, p)
+	if err != nil {
+		return nil, err
+	}
+	return s.providers[p].LaunchEnv(account.Home), nil
+}
+
 // SetDefaultChanged late-binds what must hear that the account new sessions of
 // a provider start on, or its sign-in, may have changed (agent readiness).
 func (s *Service) SetDefaultChanged(changed func(domain.AgentAccountProvider)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.defaultChanged = changed
+}
+
+// SetLoginConfirmed late-binds what must hear that a reading found an
+// account's login working, with the time the reading began: chat sessions on
+// it that were refused their credentials can stop asking for a sign-in, however
+// the login came back (AO's sign-in, the CLI's own, or a renewed token).
+func (s *Service) SetLoginConfirmed(confirmed func(domain.AgentAccount, time.Time)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.loginConfirmed = confirmed
 }
 
 func (s *Service) notifyDefaultChanged(p domain.AgentAccountProvider) {
@@ -351,13 +469,82 @@ func (s *Service) RunsOnComputerLogin(ctx context.Context, harness domain.AgentH
 		return true
 	}
 	if accountID == "" {
-		def, err := s.defaultID(ctx, p)
+		account, err := s.newSessionAccount(ctx, p)
 		if err != nil {
 			return true
 		}
-		accountID = def
+		accountID = account.ID
 	}
 	return accountID == domain.DeviceAgentAccountID(p)
+}
+
+// newSessionAccount is the account a new session of p starts on: the default,
+// or, when the default is known to be signed out or to hold another login, the
+// first other account that is signed in. The session's account shows which.
+// Only a bad default costs CLI calls; a good one is answered from the cache.
+func (s *Service) newSessionAccount(ctx context.Context, p domain.AgentAccountProvider) (domain.AgentAccount, error) {
+	def, err := s.defaultID(ctx, p)
+	if err != nil {
+		return domain.AgentAccount{}, err
+	}
+	account, err := s.find(ctx, def)
+	if err != nil {
+		return domain.AgentAccount{}, err
+	}
+	// A custom Codex model provider does not use the account's sign-in.
+	if p == domain.AgentAccountProviderCodex && codexagent.UsesCustomModelProvider() {
+		return account, nil
+	}
+	r := s.cachedReading(account.ID)
+	if !r.knownUnusable() {
+		return account, nil
+	}
+	// The user may have signed it in outside AO since an old reading.
+	if s.now().Sub(r.at) > freshFor {
+		if r = s.read(ctx, account); !r.knownUnusable() {
+			return account, nil
+		}
+	}
+	accounts, err := s.accounts(ctx)
+	if err != nil {
+		return domain.AgentAccount{}, err
+	}
+	for _, other := range accounts {
+		if other.Provider != p || other.ID == account.ID || s.beingRemoved(other.ID) {
+			continue
+		}
+		r := s.cachedReading(other.ID)
+		if r == nil || r.identityErr != "" || s.now().Sub(r.at) > freshFor {
+			r = s.read(ctx, other)
+		}
+		if r != nil && r.identity.SignedIn {
+			return other, nil
+		}
+	}
+	return domain.AgentAccount{}, ports.ErrAgentAccountDefaultUnusable
+}
+
+func (s *Service) cachedReading(id string) *reading {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.readings[id]
+}
+
+// RecheckSessionAccount reads the account a session runs on again, after its
+// agent was refused for its credentials. Claude clears a folder's login when
+// its refresh token is refused, so the account reads as signed out at once and
+// new sessions stop starting on it, instead of after the cache window.
+func (s *Service) RecheckSessionAccount(ctx context.Context, id domain.SessionID, harness domain.AgentHarness) {
+	p, ok := domain.AgentAccountProviderFor(harness)
+	if !ok || s.providers[p] == nil {
+		return
+	}
+	account, _, err := s.SessionAccount(ctx, id, p)
+	if err != nil {
+		s.log.Debug("recheck session account", "session", id, "error", err)
+		return
+	}
+	s.read(ctx, account)
 }
 
 // SetDefault makes accountID the account new sessions of its provider start on.
@@ -434,7 +621,9 @@ func (s *Service) startLogin(ctx context.Context, p domain.AgentAccountProvider,
 		discard()
 		return LoginStart{}, err
 	}
-	terminal, err := terminals.OpenCommandTerminal(ctx, shellterm.OpenCommandTerminalInput{Argv: argv, Env: provider.LaunchEnv(home), WorkingDir: home, Title: title})
+	terminal, err := terminals.OpenCommandTerminal(ctx, shellterm.OpenCommandTerminalInput{
+		Owner: "agentaccounts:" + string(p), Argv: argv, Env: provider.LaunchEnv(home), WorkingDir: home, Title: title,
+	})
 	if err != nil {
 		discard()
 		return LoginStart{}, fmt.Errorf("open sign-in terminal: %w", err)
@@ -695,27 +884,17 @@ func (s *Service) BindSession(ctx context.Context, id domain.SessionID, harness 
 		return nil
 	}
 	if accountID == "" {
-		def, err := s.defaultID(ctx, p)
+		// A default known to be signed out would start the task signed out, or as
+		// someone else: it starts on another signed-in account instead, and is
+		// refused only when there is none.
+		account, err := s.newSessionAccount(ctx, p)
 		if err != nil {
 			return err
-		}
-		account, err := s.find(ctx, def)
-		if err != nil {
-			return err
-		}
-		// The task would start on the wrong login, or none. Refuse rather than
-		// run it there or quietly on another account, which bills someone else.
-		// The cached reading decides, so a new task costs no CLI call.
-		s.mu.Lock()
-		r := s.readings[account.ID]
-		s.mu.Unlock()
-		if r.knownUnusable() {
-			return ports.ErrAgentAccountDefaultUnusable
 		}
 		if err := s.prepare(s.providers[p], account.Home); err != nil {
 			return err
 		}
-		return s.store.BindSessionAgentAccount(ctx, id, p, def, s.now())
+		return s.store.BindSessionAgentAccount(ctx, id, p, account.ID, s.now())
 	}
 	account, err := s.pick(ctx, harness, accountID)
 	if err != nil {

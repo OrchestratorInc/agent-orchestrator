@@ -38,9 +38,9 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 }
 
 // AuthStatusWithDiagnostics asks Hermes which provider it resolves. Hermes has
-// no status command that verifies a credential, so a resolved provider is
-// configured, not authorized, and its inventory cannot prove a credential is
-// missing. When the probe is inconclusive, Hermes's own credential stores decide.
+// status inventory cannot verify credentials or prove one is missing. A resolved
+// Z.AI route is verified against its selected endpoint; unsupported or inconclusive
+// routes retain the credential-presence result.
 func (p *Plugin) AuthStatusWithDiagnostics(ctx context.Context) (ports.AgentAuthStatus, domain.AgentAccountIdentity, []domain.AgentAuthDiagnostic, error) {
 	binary, err := p.ResolveBinary(ctx)
 	if err != nil {
@@ -61,14 +61,14 @@ func (p *Plugin) AuthStatusWithDiagnostics(ctx context.Context) (ports.AgentAuth
 		if status.HasCredential() {
 			ports.RecordAuthEvidence(ctx, identity)
 		}
-		return status, identity, steps, nil
+		return verifyAuthentication(ctx, status, identity, steps)
 	}
 	identity, found := credentialStoreIdentity(ctx)
 	if !found {
 		return ports.AgentAuthStatusUnknown, domain.AgentAccountIdentity{}, steps, nil
 	}
 	ports.RecordAuthEvidence(ctx, identity)
-	return ports.AgentAuthStatusConfigured, identity, steps, nil
+	return verifyAuthentication(ctx, ports.AgentAuthStatusConfigured, identity, steps)
 }
 
 // providerFromStatus reads `hermes status`. Its "Provider:" row is a display

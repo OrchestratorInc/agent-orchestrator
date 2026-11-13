@@ -49,6 +49,7 @@ describe("WindowTitlebar", () => {
   });
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     if (platformDescriptor) {
       Object.defineProperty(navigator, "platform", platformDescriptor);
     } else {
@@ -98,6 +99,16 @@ describe("WindowTitlebar", () => {
     ).not.toBeInTheDocument();
   });
 
+  it.each([false, true])("shows shell debugging actions only in development: %s", async (development) => {
+    vi.stubEnv("DEV", development);
+    const { WindowTitlebar } = await loadWindowTitlebar();
+    render(<TooltipProvider><WindowTitlebar /></TooltipProvider>);
+    await userEvent.click(screen.getByRole("button", { name: "View" }));
+    expect(screen.queryByRole("menuitem", { name: /Reload/ }) !== null).toBe(development);
+    expect(screen.queryByRole("menuitem", { name: /DevTools/ }) !== null).toBe(development);
+    expect(screen.getByRole("menuitem", { name: /Zoom In/ })).toBeInTheDocument();
+  });
+
   it("renders the back and forward navigation buttons", async () => {
     const { WindowTitlebar } = await loadWindowTitlebar();
 
@@ -111,6 +122,18 @@ describe("WindowTitlebar", () => {
     expect(
       screen.getByRole("button", { name: "Go forward" }),
     ).toBeInTheDocument();
+  });
+
+  it("enables Settings Back without route history and restores its disabled state on close", async () => {
+    const { WindowTitlebar } = await loadWindowTitlebar();
+    const onBack = vi.fn();
+    const { rerender } = render(<TooltipProvider><WindowTitlebar onBack={onBack} /></TooltipProvider>);
+    const back = screen.getByRole("button", { name: "Go back" });
+    expect(back).toBeEnabled();
+    await userEvent.click(back);
+    expect(onBack).toHaveBeenCalledTimes(1);
+    rerender(<TooltipProvider><WindowTitlebar /></TooltipProvider>);
+    expect(back).toBeDisabled();
   });
 
   it("switches the maximize control to a restore icon when the window is maximized", async () => {
@@ -131,12 +154,12 @@ describe("WindowTitlebar", () => {
       name: "Maximize / Restore",
     });
     await waitFor(() =>
-      expect(maximizeButton.querySelector(".lucide-square")).not.toBeNull(),
+      expect(maximizeButton.querySelector(".icon-square")).not.toBeNull(),
     );
 
     reportMaximized?.(true);
     await waitFor(() =>
-      expect(maximizeButton.querySelector(".lucide-copy")).not.toBeNull(),
+      expect(maximizeButton.querySelector(".icon-copy")).not.toBeNull(),
     );
   });
 
@@ -200,7 +223,7 @@ describe("WindowTitlebar", () => {
       /html\[data-native-browser-composition="true"\]\[data-ao-platform="win32"\] \.browser-popout-overlay,\s*html\[data-native-browser-composition="true"\]\[data-ao-platform="win32"\] \.files-popout-overlay\s*{\s*top: var\(--size-window-titlebar\);/s,
     );
     expect(css).toMatch(
-      /body:has\(#root \.platform-windows\) > \.browser-popout-overlay,\s*body:has\(#root \.platform-windows\) > \.files-popout-overlay\s*{\s*top: var\(--size-window-titlebar\);/s,
+      /html\[data-shell-windows\] body > \.browser-popout-overlay,\s*html\[data-shell-windows\] body > \.files-popout-overlay\s*{\s*top: var\(--size-window-titlebar\);/s,
     );
     expect(css).toMatch(
       /\.platform-windows\s*{\s*--size-center-panel-inset: 8px;\s*--size-center-panel-inline-inset: 8px;\s*--size-center-panel-bottom-inset: 8px;/s,

@@ -1,5 +1,5 @@
 import { Linking } from "react-native";
-import { githubAppUrl } from "./githubLink";
+import { GITHUB_APP_SCHEME, githubAppLink } from "./githubLink";
 import { haptics } from "./haptics";
 
 /**
@@ -38,7 +38,13 @@ function inAppBrowser(): Promise<WebBrowserModule | null> {
 // `NoMatchingActivityException`) the system browser is the last hop, as it was
 // before the in-app one existed. Every caller is a tap, so when nothing at all
 // could open the link the tap says so with the error haptic rather than reading
-// as a dead button. On iOS `canOpenURL` also needs "github" listed in
+// as a dead button.
+//
+// The app gets the https URL, opened with `Linking.openURL` so iOS treats it as
+// a universal link and lands on the PR or issue (see githubLink.ts for why not
+// `github://`). The in-app browser never hands a universal link to an app,
+// which is why this has to go through Linking. `github://` is only probed, to
+// learn whether the app is installed; on iOS that needs "github" listed in
 // LSApplicationQueriesSchemes (see app.json) or it always answers false.
 //
 // A URL that is not a web page can only be opened by the system: the iOS bug
@@ -53,11 +59,11 @@ function inAppBrowser(): Promise<WebBrowserModule | null> {
 // restarts. Leaving the app keeps the sheet untouched, exactly as it already is
 // on a device with the GitHub app installed.
 export async function openGitHub(url: string, options: { fromSheet?: boolean } = {}): Promise<void> {
-	const appUrl = githubAppUrl(url);
-	if (appUrl) {
+	const appLink = githubAppLink(url);
+	if (appLink) {
 		try {
-			if (await Linking.canOpenURL(appUrl)) {
-				await Linking.openURL(appUrl);
+			if (await Linking.canOpenURL(GITHUB_APP_SCHEME)) {
+				await Linking.openURL(appLink);
 				return;
 			}
 		} catch {

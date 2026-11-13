@@ -4,13 +4,17 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"sync"
 
 	scmgithub "github.com/aoagents/agent-orchestrator/backend/internal/adapters/scm/github"
 	scmgitlab "github.com/aoagents/agent-orchestrator/backend/internal/adapters/scm/gitlab"
 	scmmulti "github.com/aoagents/agent-orchestrator/backend/internal/adapters/scm/multi"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/lifecycle"
 	scmobserve "github.com/aoagents/agent-orchestrator/backend/internal/observe/scm"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	reviewsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/review"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 )
 
@@ -18,7 +22,7 @@ import (
 // and GitLab providers via a multi Provider dispatcher. Missing credentials
 // for one provider do not prevent the other from starting; the observer is
 // disabled only when no provider has usable credentials.
-func startSCMObserver(ctx context.Context, store *sqlite.Store, lcm *lifecycle.Manager, branchStates scmobserve.BranchStateReconciler, gitlabCfg config.GitLabConfig, logger *slog.Logger) <-chan struct{} {
+func startSCMObserver(ctx context.Context, store *sqlite.Store, lcm *lifecycle.Manager, branchStates scmobserve.BranchStateReconciler, gitlabCfg config.GitLabConfig, reviewRefresher *scmReviewRefresher, logger *slog.Logger) <-chan struct{} {
 	var named []scmmulti.NamedProvider
 
 	ghProvider, ghErr := newGitHubSCMProvider(logger)
@@ -41,6 +45,7 @@ func startSCMObserver(ctx context.Context, store *sqlite.Store, lcm *lifecycle.M
 	}
 	provider := scmmulti.New(named...)
 	observer := scmobserve.New(provider, store, lcm, scmobserve.Config{Logger: logger, ScopedIdentityResolver: provider, BranchStates: branchStates})
+	reviewRefresher.Bind(observer)
 	return observer.Start(ctx)
 }
 
@@ -50,6 +55,18 @@ func newGitHubSCMProvider(logger *slog.Logger) (*scmgithub.Provider, error) {
 		&scmgithub.GHTokenSource{},
 	}
 	return scmgithub.NewProvider(scmgithub.ProviderOptions{Token: tokens, SkipTokenPreflight: true, Logger: logger})
+}
+
+// newGitHubRepoResolver returns the resolver that follows github.com repository
+// renames and transfers, sharing AO's GitHub auth. It returns a nil interface
+// (not a typed nil) when the provider cannot be built, so callers degrade to
+// exact origin matching.
+func newGitHubRepoResolver(logger *slog.Logger) ports.GitHubRepositoryResolver {
+	gh, err := newGitHubSCMProvider(logger)
+	if err != nil {
+		return nil
+	}
+	return scmgithub.NewRepoResolver(gh)
 }
 
 func newGitLabSCMProvider(gitlabCfg config.GitLabConfig, logger *slog.Logger) (*scmgitlab.Provider, error) {
@@ -113,6 +130,53 @@ func newMultiSCMMerger(gitlabCfg config.GitLabConfig, logger *slog.Logger) *scmm
 		return nil
 	}
 	return scmmulti.NewMerger(named...)
+}
+
+// scmRefreshTarget is what the running observer offers early-refresh callers.
+type scmRefreshTarget interface {
+	reviewsvc.ThreadRefresher
+	RequestSessionRefresh(sessionID domain.SessionID)
+}
+
+// scmReviewRefresher hands early-refresh requests to the SCM observer once it
+// is running. Before then, or without any SCM provider, a request is dropped
+// and the observer's regular poll picks the change up.
+type scmReviewRefresher struct {
+	mu     sync.RWMutex
+	target scmRefreshTarget
+}
+
+// Bind attaches the running observer.
+func (r *scmReviewRefresher) Bind(target scmRefreshTarget) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	r.target = target
+	r.mu.Unlock()
+}
+
+// RequestReviewRefresh forwards to the bound observer without blocking.
+func (r *scmReviewRefresher) RequestReviewRefresh(prURL string) {
+	if r == nil {
+		return
+	}
+	r.mu.RLock()
+	target := r.target
+	r.mu.RUnlock()
+	if target != nil {
+		target.RequestReviewRefresh(prURL)
+	}
+}
+
+// RequestSessionRefresh forwards to the bound observer without blocking.
+func (r *scmReviewRefresher) RequestSessionRefresh(id domain.SessionID) {
+	r.mu.RLock()
+	target := r.target
+	r.mu.RUnlock()
+	if target != nil {
+		target.RequestSessionRefresh(id)
+	}
 }
 
 func closedDone() <-chan struct{} {

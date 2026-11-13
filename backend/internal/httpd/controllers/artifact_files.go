@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
@@ -28,11 +29,18 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
 	previewutil "github.com/aoagents/agent-orchestrator/backend/internal/preview"
 	"github.com/aoagents/agent-orchestrator/backend/internal/renderpage"
+	"github.com/aoagents/agent-orchestrator/backend/internal/sessionartifacts"
+	"github.com/aoagents/agent-orchestrator/backend/internal/workspacewatch"
 )
 
 const (
 	artifactFilePath  = "/api/v1/sessions/{sessionId}/artifact-files/*"
 	artifactFilesPath = "/api/v1/sessions/{sessionId}/artifact-files"
+	// Not under artifact-files/, where it would shadow a file named "events".
+	artifactEventsPath = "/api/v1/sessions/{sessionId}/artifact-events"
+	// artifactRegistrationsPath is the only way a path gets registered as a
+	// deliverable: it is what ao artifact add calls.
+	artifactRegistrationsPath = "/api/v1/sessions/{sessionId}/artifact-registrations"
 )
 
 // artifactFile serves a file from the session's artifact directory in the
@@ -125,12 +133,78 @@ func serveArtifactFile(w http.ResponseWriter, r *http.Request, csp, root, asset 
 	serveSandboxed(w, r, csp, data, contentType, tag)
 }
 
+// streamArtifactChanges tells a client viewing a session's artifacts that a
+// file in its artifact directory changed, so an open view rereads it instead
+// of showing what it opened with. Each event is only an invalidation edge: a
+// burst of writes coalesces, and the client rereads through the usual routes.
+func (c *SessionsController) streamArtifactChanges(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, http.MethodGet, artifactEventsPath)
+		return
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		envelope.WriteAPIError(w, r, http.StatusInternalServerError, "internal", "SSE_UNSUPPORTED", "Streaming is not supported by this server", nil)
+		return
+	}
+	sess, err := c.Svc.Get(r.Context(), sessionID(r))
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	dir := sess.Metadata.ArtifactDir
+	if info, statErr := os.Stat(dir); dir == "" || statErr != nil || !info.IsDir() {
+		envelope.WriteAPIError(w, r, http.StatusNotFound, "not_found", "ARTIFACT_DIR_NOT_FOUND", "artifact directory not found", nil)
+		return
+	}
+	changes, err := workspacewatch.WatchSkipping(r.Context(), dir, sessionartifacts.Skips)
+	if err != nil {
+		envelope.WriteError(w, r, fmt.Errorf("watch artifact directory: %w", err))
+		return
+	}
+
+	h := w.Header()
+	h.Set("Content-Type", "text/event-stream; charset=utf-8")
+	h.Set("Cache-Control", "no-cache")
+	h.Set("Connection", "keep-alive")
+	h.Set("X-Accel-Buffering", "no")
+	w.WriteHeader(http.StatusOK)
+	// The watch cannot report a write made before it existed, so a client
+	// rereads once on ready.
+	if _, err := fmt.Fprint(w, "event: ready\ndata: {}\n\n"); err != nil {
+		return
+	}
+	flusher.Flush()
+
+	keepAlive := time.NewTicker(15 * time.Second)
+	defer keepAlive.Stop()
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case _, ok := <-changes:
+			if !ok {
+				return
+			}
+			if _, err := fmt.Fprint(w, "event: artifacts_changed\ndata: {}\n\n"); err != nil {
+				return
+			}
+			flusher.Flush()
+		case <-keepAlive.C:
+			if _, err := fmt.Fprint(w, "event: heartbeat\ndata: {}\n\n"); err != nil {
+				return
+			}
+			flusher.Flush()
+		}
+	}
+}
+
 func writeArtifactFileNotFound(w http.ResponseWriter, r *http.Request) {
 	envelope.WriteAPIError(w, r, http.StatusNotFound, "not_found", "ARTIFACT_FILE_NOT_FOUND", "artifact file not found", nil)
 }
 
 // deleteArtifactFile removes one listed file from the session's artifact
-// directory and returns the session with its refreshed artifact list.
+// directory along with its kept versions, and returns the session with its refreshed artifact list.
 func (c *SessionsController) deleteArtifactFile(w http.ResponseWriter, r *http.Request) {
 	if c.Svc == nil {
 		apispec.NotImplemented(w, r, http.MethodDelete, artifactFilesPath)
@@ -154,12 +228,50 @@ func (c *SessionsController) deleteArtifactFile(w http.ResponseWriter, r *http.R
 		envelope.WriteError(w, r, fmt.Errorf("delete artifact file: %w", err))
 		return
 	}
+	if c.ArtifactVersions != nil {
+		if err := c.ArtifactVersions.DeleteVersions(r.Context(), sess.SessionRecord, clean); err != nil {
+			envelope.WriteError(w, r, fmt.Errorf("delete artifact versions: %w", err))
+			return
+		}
+	}
+	if err := c.Svc.UnregisterArtifact(r.Context(), sess.ID, clean); err != nil {
+		envelope.WriteError(w, r, fmt.Errorf("unregister artifact: %w", err))
+		return
+	}
 	updated, err := c.Svc.Get(r.Context(), sessionID(r))
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
 	}
 	envelope.WriteJSON(w, http.StatusOK, SessionResponse{Session: sessionView(r, updated)})
+}
+
+// registerArtifacts registers files in the session's artifact directory as its
+// deliverables.
+func (c *SessionsController) registerArtifacts(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, http.MethodPost, artifactRegistrationsPath)
+		return
+	}
+	var in RegisterArtifactsRequest
+	if err := decodeJSON(r, &in); err != nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
+		return
+	}
+	if len(in.Paths) == 0 || len(in.Paths) > domain.MaxArtifactRegistrationPaths {
+		envelope.WriteError(w, r, apierr.Invalid("INVALID_ARTIFACT_PATHS", fmt.Sprintf("paths must list 1 to %d paths", domain.MaxArtifactRegistrationPaths), nil))
+		return
+	}
+	result, err := c.Svc.RegisterArtifacts(r.Context(), sessionID(r), in.Paths)
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, RegisterArtifactsResponse{
+		Registered:     result.Registered,
+		OtherFiles:     result.OtherFiles,
+		OtherRootFiles: result.OtherRootFiles,
+	})
 }
 
 func listsArtifactFile(files []domain.SessionArtifactFile, relPath string) bool {

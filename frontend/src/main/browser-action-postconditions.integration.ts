@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { readFile, readdir } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { app, BrowserWindow, WebContentsView } from "electron";
-import type { AgentBrowserRuntime } from "./agent-browser-runtime";
+import type { ChromeApi } from "../browser-extension/chrome-api";
+import { TrustedInput } from "../browser-extension/trusted-input";
+import { AgentBrowserRuntime } from "./agent-browser-runtime";
 import { createBrowserViewHost } from "./browser-view-host";
 import type { BrowserTabsState } from "./browser-view-host";
 
@@ -17,11 +20,153 @@ const fixturePath = requiredEnvironmentVariable("AO_BROWSER_POSTCONDITION_FIXTUR
 const userDataPath = requiredEnvironmentVariable("AO_BROWSER_POSTCONDITION_USER_DATA");
 app.setPath("userData", userDataPath);
 
+// Exercise the extension's actual input loop against Chromium, rather than a
+// fake that cannot observe click default actions such as form submission.
+async function testCancelledTrustedClick(): Promise<void> {
+	const window = new BrowserWindow({ show: false, width: 500, height: 400 });
+	try {
+		await window.loadURL(`data:text/html,${encodeURIComponent(`<!doctype html>
+			<style>html,body{margin:0}button{width:100vw;height:100vh}</style>
+			<form><button>Submit</button></form><script>
+			window.events = [];
+			for (const type of ["mousedown","mouseup","click","submit"]) {
+				document.addEventListener(type, event => {
+					if (event.target.closest("form")) window.events.push(type);
+					if (type === "submit") event.preventDefault();
+				});
+			}
+		</script>`)}`);
+		const debuggerApi = window.webContents.debugger;
+		let controller = new AbortController();
+		let cancelOnPress = false;
+		let cancelOnMove = false;
+		let valueAtCancel: number | undefined;
+		let unobservedChild = false;
+		const chrome = {
+			scripting: {
+				executeScript: async ({ func, args }: { func: (...args: never[]) => unknown; args: unknown[] }) => {
+					type FrameTree = { frame: { id: string }; childFrames?: FrameTree[] };
+					const { frameTree } = await debuggerApi.sendCommand("Page.getFrameTree") as { frameTree: FrameTree };
+					const frames = (tree: FrameTree): string[] => [tree.frame.id, ...(tree.childFrames ?? []).flatMap(frames)];
+					const results = await Promise.all(frames(frameTree).map(async (frameId) => {
+						const { executionContextId } = await debuggerApi.sendCommand("Page.createIsolatedWorld", { frameId, worldName: "ao-test-input" }) as { executionContextId: number };
+						const result = await debuggerApi.sendCommand("Runtime.evaluate", {
+							contextId: executionContextId, expression: `(${func.toString()})(...${JSON.stringify(args)})`, returnByValue: true,
+						}) as { result: { value?: unknown }; exceptionDetails?: unknown };
+						if (result.exceptionDetails) throw new Error("Isolated capture cleanup failed");
+						return { result: result.result.value };
+					}));
+					if (args[0] === "observed" && results.length > 1) {
+						unobservedChild = results.some(({ result }) => typeof result === "number") && results.some(({ result }) => result === "idle");
+					}
+					return results;
+				},
+			},
+			debugger: {
+				attach: async () => debuggerApi.attach("1.3"),
+				detach: async () => debuggerApi.detach(),
+				onEvent: { addListener() {}, removeListener() {} },
+				onDetach: { addListener() {}, removeListener() {} },
+				sendCommand: async (_target: unknown, method: string, params: Record<string, unknown>) => {
+					const result = await debuggerApi.sendCommand(method, params);
+					if (method === "Input.dispatchMouseEvent" && params.type === "mousePressed" && cancelOnPress) controller.abort();
+					if (cancelOnMove && method === "Input.dispatchMouseEvent" && params.type === "mouseMoved" && params.buttons === 1 && Number(params.x) >= 150) {
+						const value = await window.webContents.mainFrame.frames[0]!.executeJavaScript("window.value");
+						assert.ok(typeof value === "number");
+						valueAtCancel = value;
+						await window.webContents.mainFrame.frames[0]!.executeJavaScript("window.cancelled = true");
+						controller.abort();
+					}
+					return result;
+				},
+			},
+		} as unknown as ChromeApi;
+		const input = new TrustedInput(chrome);
+		// Sanity check: normal trusted input activates the full-viewport button.
+		await input.click(1, { x: 50, y: 50 });
+		assert.deepEqual(await window.webContents.executeJavaScript("window.events"), ["mousedown", "mouseup", "click", "submit"]);
+		await window.webContents.executeJavaScript("window.events = []");
+		cancelOnPress = true;
+		await assert.rejects(input.click(1, { x: 50, y: 50 }, { signal: controller.signal }),
+			(error: unknown) => (error as { code?: string }).code === "BROWSER_COMMAND_CANCELED");
+		assert.deepEqual(await window.webContents.executeJavaScript("window.events"), ["mousedown"]);
+		// Pointer capture routes releases back to the button even outside its box.
+		await window.webContents.executeJavaScript(`
+			document.querySelector("button").addEventListener("pointerdown", event => {
+				event.target.setPointerCapture(event.pointerId);
+			});
+			window.events = [];
+		`);
+		controller = new AbortController();
+		cancelOnPress = false;
+		await input.click(1, { x: 50, y: 50 });
+		assert.deepEqual(await window.webContents.executeJavaScript("window.events"), ["mousedown", "mouseup", "click", "submit"]);
+		await window.webContents.executeJavaScript("window.events = []");
+		cancelOnPress = true;
+		await assert.rejects(input.click(1, { x: 50, y: 50 }, { signal: controller.signal }),
+			(error: unknown) => (error as { code?: string }).code === "BROWSER_COMMAND_CANCELED");
+		const capturedEvents = await window.webContents.executeJavaScript("window.events") as string[];
+		assert.equal(capturedEvents.includes("click"), false, "cancelled captured pointer must not click");
+		assert.equal(capturedEvents.includes("submit"), false, "cancelled captured pointer must not submit");
+		// Cleanup must not leave the browser's mouse button stuck down.
+		controller = new AbortController();
+		cancelOnPress = false;
+		await window.webContents.executeJavaScript("window.events = []");
+		await input.click(1, { x: 50, y: 50 });
+		assert.deepEqual(await window.webContents.executeJavaScript("window.events"), ["mousedown", "mouseup", "click", "submit"]);
+		await window.loadURL(`data:text/html,${encodeURIComponent(`<!doctype html>
+			<style>html,body{margin:0}button{position:absolute;left:0;top:0;width:60px;height:60px}iframe{position:absolute;left:100px;top:100px;width:200px;height:200px;border:0}</style>
+			<button>Origin</button><iframe srcdoc='<style>html,body{margin:0;width:100%;height:100%}</style><script>
+			window.value=70;window.afterCancel=[];
+			window.addEventListener("pointermove",event=>{
+				if(!event.buttons)return;
+				event.target.setPointerCapture(event.pointerId);
+				window.value=Math.max(0,event.clientX);
+				if(window.cancelled)window.afterCancel.push(event.clientX);
+				event.stopImmediatePropagation();
+			},true);
+			</script>'></iframe>`)}`);
+		controller = new AbortController();
+		cancelOnPress = false;
+		cancelOnMove = true;
+		await assert.rejects(input.drag(1, { x: 20, y: 20 }, { x: 170, y: 170 }, false, controller.signal),
+			(error: unknown) => (error as { code?: string }).code === "BROWSER_COMMAND_CANCELED");
+		assert.equal(typeof valueAtCancel, "number");
+		assert.equal(unobservedChild, true, "the child's early listener must suppress AO's local pointer observer");
+		assert.equal(await window.webContents.mainFrame.frames[0]!.executeJavaScript("window.value"), valueAtCancel);
+		assert.deepEqual(await window.webContents.mainFrame.frames[0]!.executeJavaScript("window.afterCancel"), []);
+		process.stdout.write("cancelled trusted click does not activate its target in Chromium\n");
+	} finally {
+		window.destroy();
+	}
+}
+
 async function run(): Promise<void> {
 	await app.whenReady();
 	const fixture = await readFile(fixturePath, "utf8");
 	const dragFixture = await readFile(path.join(path.dirname(fixturePath), "drag-regions.html"), "utf8");
 	const server = createServer((request, response) => {
+		if (request.url?.startsWith("/native-tab?")) {
+			const name = new URL(request.url, "http://fixture").searchParams.get("name");
+			assert.ok(name === "Third" || name === "Fourth" || name === "Transient");
+			response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+			response.end(`<!doctype html><title>${name} tab</title><h1>${name} page</h1>
+				<button onclick="this.textContent='${name} changed'">Change ${name}</button>`);
+			return;
+		}
+		if (request.url === "/native-popup-opener") {
+			response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+			response.end(`<!doctype html><title>Native popup opener</title>
+				<a href="/native-popup-child" target="_blank">Open report link</a>
+				<button onclick="window.open('/native-popup-child', '_blank')">Open report window</button>`);
+			return;
+		}
+		if (request.url === "/native-popup-child") {
+			response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+			response.end(`<!doctype html><title>Native popup child</title><h1>Child report</h1>
+				<button onclick="this.textContent='Child changed'">Change child</button>`);
+			return;
+		}
 		if (request.url === "/drag-regions") {
 			response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
 			response.end(dragFixture);
@@ -71,23 +216,25 @@ async function run(): Promise<void> {
 	const fixtureURL = `http://127.0.0.1:${address.port}/fixture`;
 
 	const window = new BrowserWindow({ show: true, width: 800, height: 600 });
+	await testCancelledTrustedClick();
 	// Initialize the owning window before attaching a WebContentsView. On
 	// Windows and Xvfb, a never-navigated BrowserWindow can leave the child
 	// renderer unscheduled even though the native view is marked visible.
 	await window.loadURL("data:text/html,<title>AO browser integration host</title>");
 	window.show();
 	let browserView: WebContentsView | undefined;
+	let forceInitialPresentation = true;
+	const browserViews = new Map<number, WebContentsView>();
 	const IntegrationWebContentsView = function (options: ConstructorParameters<typeof WebContentsView>[0]) {
 		const view = new WebContentsView(options);
 		browserView = view;
-		// AO normally hides a new view off-screen until the renderer asks to show
-		// the panel. This standalone fixture has no renderer, so keep a real surface
-		// attached; Chromium otherwise may defer initialization indefinitely on
-		// Windows and under Xvfb.
+		browserViews.set(view.webContents.id, view);
+		// Warm the initial blank view before this fixture can show the panel.
+		// Native scenarios then honor AO's real active/inactive tab layout.
 		const setBounds = view.setBounds.bind(view);
-		view.setBounds = () => setBounds({ x: 0, y: 0, width: 800, height: 600 });
+		view.setBounds = (bounds) => setBounds(forceInitialPresentation ? { x: 0, y: 0, width: 800, height: 600 } : bounds);
 		const setVisible = view.setVisible.bind(view);
-		view.setVisible = () => setVisible(true);
+		view.setVisible = (visible) => setVisible(forceInitialPresentation || visible);
 		const loadURL = view.webContents.loadURL.bind(view.webContents);
 		view.webContents.loadURL = async (url, loadOptions) => {
 			let timeout: ReturnType<typeof setTimeout> | undefined;
@@ -240,28 +387,34 @@ async function run(): Promise<void> {
 
 	const shellWebContents = {
 		id: 1,
+		getZoomFactor: () => 1,
 		focus: () => undefined,
 		send: () => undefined,
 		on: () => undefined,
 	} as never;
-	const host = createBrowserViewHost({
+	const ipcHandlers = new Map<string, (...args: unknown[]) => unknown>();
+	const ipcEvents = new Map<string, (...args: unknown[]) => unknown>();
+	const hostOptions = {
 		mainWindow: {
 			contentView: window.contentView,
 			getContentBounds: () => ({ x: 0, y: 0, width: 800, height: 600 }),
 		} as never,
 		shellWebContents,
 		ipcMain: {
-			handle: () => undefined,
-			on: () => undefined,
-			removeHandler: () => undefined,
-			off: () => undefined,
+			handle: (channel: string, handler: (...args: unknown[]) => unknown) => ipcHandlers.set(channel, handler),
+			on: (channel: string, handler: (...args: unknown[]) => unknown) => ipcEvents.set(channel, handler),
+			removeHandler: (channel: string) => ipcHandlers.delete(channel),
+			off: (channel: string) => ipcEvents.delete(channel),
 		} as never,
 		shell: { openExternal: async () => undefined },
 		WebContentsView: IntegrationWebContentsView,
 		annotatePreloadPath: path.join(path.dirname(fixturePath), "empty-preload.cjs"),
 		rendererOrigin: "http://127.0.0.1:1",
 		agentBrowserRuntime: runtime,
-	});
+	};
+	const host = createBrowserViewHost(hostOptions);
+	let nativeRuntime: AgentBrowserRuntime | undefined;
+	let nativeHost: ReturnType<typeof createBrowserViewHost> | undefined;
 
 	try {
 		// Exercise Chromium's actual CSS cascade: a mock of insertCSS cannot
@@ -291,7 +444,7 @@ async function run(): Promise<void> {
 				`) as string[];
 				if (regions.every(region => region === "no-drag") || Date.now() >= deadline) {
 					assert.deepEqual(regions, Array(7).fill("no-drag"),
-						"page drag regions must be disabled, including inline, dynamic and pseudo-element rules");
+						`page drag regions must be disabled at zoom ${zoom}, including inline, dynamic and pseudo-element rules`);
 					break;
 				}
 				await new Promise(resolve => setTimeout(resolve, 25));
@@ -404,8 +557,259 @@ async function run(): Promise<void> {
 		assert.equal((await host.execute("integration-session", "tabs") as BrowserTabsState).tabs.length, 1);
 		process.stdout.write("browser popup handle, cross-origin messaging, shared browser profile and self-close integration passed\n");
 
+		host.destroyAll();
+		const nativeRuntimeDataDir = path.join(userDataPath, "native-runtime");
+		nativeRuntime = new AgentBrowserRuntime({
+			binaryPath: path.resolve("agent-browser", process.platform === "win32" ? "agent-browser.exe" : "agent-browser"),
+			dataDir: nativeRuntimeDataDir,
+		});
+		nativeHost = createBrowserViewHost({ ...hostOptions, agentBrowserRuntime: nativeRuntime });
+		const liveHost = nativeHost;
+		const shownSessions = new Set<string>();
+		async function nativeCommand(sessionId: string, action: string, args: Record<string, unknown> = {}) {
+			const initialOpen = action === "open" && !shownSessions.has(sessionId);
+			if (initialOpen) forceInitialPresentation = true;
+			try {
+				const result = await liveHost.execute(sessionId, action, args);
+				if (initialOpen) {
+					const ensure = ipcHandlers.get("browser:ensure");
+					const setBounds = ipcEvents.get("browser:setBounds");
+					assert.ok(ensure && setBounds);
+					const { viewId } = await ensure({ sender: shellWebContents }, sessionId) as { viewId: string };
+					forceInitialPresentation = false;
+					setBounds({ sender: shellWebContents }, {
+						viewId, revision: 1, rect: { x: 0, y: 0, width: 800, height: 600 }, visible: true,
+					});
+					shownSessions.add(sessionId);
+					await waitForFirstFrame(activeWebContents());
+				}
+				return result;
+			} finally {
+				if (initialOpen) forceInitialPresentation = false;
+			}
+		}
+		async function nativeSnapshot(sessionId: string, expected: string, tabId: string) {
+			const result = await nativeCommand(sessionId, "snapshot", { interactive: true }) as {
+				text: string; target: { tabId: string };
+			};
+			assert.equal(result.target.tabId, tabId);
+			assert.ok(result.text.includes(expected), `Expected ${expected} in ${tabId}: ${result.text}`);
+			return result.text;
+		}
+		function refFor(snapshot: string, name: string): string {
+			const line = snapshot.split("\n").find(line => line.includes(`"${name}"`));
+			const ref = line?.match(/\[ref=(e\d+)\]/)?.[1];
+			assert.ok(ref, `Missing ${name} in snapshot: ${snapshot}`);
+			return ref;
+		}
+		for (const name of ["Open report link", "Open report window"]) {
+			for (let attempt = 0; attempt < 3; attempt++) {
+				const sessionId = `native-popup-${name.endsWith("link") ? "link" : "window"}-${attempt}`;
+				await nativeCommand(sessionId, "open", { url: `http://127.0.0.1:${address.port}/native-popup-opener` });
+				const openerSnapshot = await nativeSnapshot(sessionId, name, "t1");
+				window.show();
+				window.focus();
+				await waitForFirstFrame(activeWebContents());
+				await nativeCommand(sessionId, "click", { ref: refFor(openerSnapshot, name) });
+				try {
+					await deadline((async () => {
+						for (;;) {
+							const state = await nativeCommand(sessionId, "tabs") as BrowserTabsState;
+							if (state.activeTabId === "t2" && state.tabs.length === 2) return;
+							await new Promise(resolve => setTimeout(resolve, 10));
+						}
+					})());
+				} catch (error) {
+					throw new Error(`${name} attempt ${attempt + 1}: ${String(error)}; last created view URL=${activeWebContents().getURL()}; tabs=${JSON.stringify(await nativeCommand(sessionId, "tabs"))}`);
+				}
+				const childSnapshot = await nativeSnapshot(sessionId, "Change child", "t2");
+				assert.equal((await nativeCommand(sessionId, "get", { property: "title" }) as { value: string }).value, "Native popup child");
+				await nativeCommand(sessionId, "click", { ref: refFor(childSnapshot, "Change child") });
+				await nativeCommand(sessionId, "wait", { text: "Child changed", timeoutMs: 2_500 });
+				await nativeSnapshot(sessionId, "Child changed", "t2");
+				await nativeCommand(sessionId, "tab-select", { tabId: "t1" });
+				await nativeSnapshot(sessionId, "Open report link", "t1");
+				assert.equal((await nativeCommand(sessionId, "get", { property: "title" }) as { value: string }).value, "Native popup opener");
+				await nativeCommand(sessionId, "tab-select", { tabId: "t2" });
+				await nativeSnapshot(sessionId, "Child changed", "t2");
+				await nativeCommand(sessionId, "tab-close", { tabId: "t2" });
+				await nativeSnapshot(sessionId, "Open report link", "t1");
+				await nativeCommand(sessionId, "__destroy-session");
+				process.stdout.write(`browser native popup ${name.endsWith("link") ? "link" : "window"} attempt ${attempt + 1} passed\n`);
+			}
+		}
+		async function waitForTabs(sessionId: string, expectedIds: string[], activeTabId?: string) {
+			return deadline((async () => {
+				for (;;) {
+					const state = await nativeCommand(sessionId, "tabs") as BrowserTabsState;
+					if (state.tabs.map(tab => tab.id).join(",") === expectedIds.join(",") &&
+						(activeTabId === undefined || state.activeTabId === activeTabId)) return state;
+					await new Promise(resolve => setTimeout(resolve, 10));
+				}
+			})());
+		}
+		async function stopNativeDaemon(sessionId: string): Promise<void> {
+			const prefix = `ao-${createHash("sha256").update(sessionId).digest("hex").slice(0, 4)}-`;
+			const pidFiles: string[] = [];
+			for (const root of await readdir(nativeRuntimeDataDir)) {
+				if (!root.startsWith("r-")) continue;
+				const namespaces = path.join(nativeRuntimeDataDir, root, "s", "namespaces");
+				for (const namespace of await readdir(namespaces)) {
+					if (namespace.startsWith(prefix)) pidFiles.push(path.join(namespaces, namespace, "run", `${namespace}.pid`));
+				}
+			}
+			assert.equal(pidFiles.length, 1, "restart must identify exactly this fixture's native daemon");
+			const pid = Number((await readFile(pidFiles[0], "utf8")).trim());
+			assert.ok(Number.isSafeInteger(pid) && pid > 0 && pid !== process.pid);
+			process.kill(pid, "SIGKILL");
+			await deadline((async () => {
+				for (;;) {
+					try { process.kill(pid, 0); }
+					catch (error) {
+						if ((error as NodeJS.ErrnoException).code === "ESRCH") return;
+						throw error;
+					}
+					await new Promise(resolve => setTimeout(resolve, 10));
+				}
+			})());
+		}
+		for (const restart of [false, true]) {
+			const sessionId = `native-tab-gap-${restart ? "restart" : "selection"}`;
+			process.stdout.write(`browser native tab gap ${restart ? "restart" : "queued selection"} scenario starting\n`);
+			await nativeCommand(sessionId, "open", { url: `http://127.0.0.1:${address.port}/native-popup-opener` });
+			const gapOpener = activeWebContents();
+			async function openGapPopup(name: "Third" | "Fourth" | "Transient", ids: string[]) {
+				await gapOpener.executeJavaScript(`window.open(${JSON.stringify(new URL(`/native-tab?name=${name}`, fixtureURL).href)}, '_blank'); undefined`, true);
+				await waitForTabs(sessionId, ids, ids[ids.length - 1]);
+				const contents = activeWebContents();
+				await deadline((async () => {
+					while (await contents.executeJavaScript("document.title") !== `${name} tab`)
+						await new Promise(resolve => setTimeout(resolve, 10));
+				})());
+				return contents;
+			}
+			// Popup activation also queues a native synchronization. Hold that
+			// boundary until t2 is gone so the daemon cannot discover it early.
+			const originalRunAction = nativeRuntime.runAction.bind(nativeRuntime);
+			let backgroundEntered: (() => void) | undefined;
+			let releaseBackground: (() => void) | undefined;
+			const backgroundStarted = new Promise<void>(resolve => { backgroundEntered = resolve; });
+			const backgroundHeld = new Promise<void>(resolve => { releaseBackground = resolve; });
+			let targetProvider: Parameters<AgentBrowserRuntime["runAction"]>[3] | undefined;
+			nativeRuntime.runAction = async (...args: Parameters<AgentBrowserRuntime["runAction"]>) => {
+				if (args[0] === sessionId) {
+					targetProvider = args[3];
+					backgroundEntered?.();
+					await backgroundHeld;
+				}
+				return originalRunAction(...args);
+			};
+			let third: WebContentsView["webContents"];
+			let fourth: WebContentsView["webContents"];
+			try {
+				const transient = await openGapPopup("Transient", ["t1", "t2"]);
+				await deadline(backgroundStarted);
+				const transientClosed = new Promise<void>(resolve => transient.once("destroyed", () => resolve()));
+				void transient.executeJavaScript("window.close()").catch(() => undefined);
+				await deadline(transientClosed);
+				await waitForTabs(sessionId, ["t1"], "t1");
+				third = await openGapPopup("Third", ["t1", "t3"]);
+				fourth = await openGapPopup("Fourth", ["t1", "t3", "t4"]);
+			} finally {
+				releaseBackground?.();
+				nativeRuntime.runAction = originalRunAction;
+			}
+			await nativeCommand(sessionId, "tab-select", { tabId: "t3" });
+			assert.equal(browserViews.get(third.id)?.getBounds().x, 0, "AO t3 must occupy the visible panel");
+			assert.ok((browserViews.get(fourth.id)?.getBounds().x ?? 0) < 0, "inactive AO t4 must be parked outside the panel");
+			assert.ok(targetProvider, "background synchronization must expose this session's real target provider");
+			const nativeTabs = (await nativeRuntime.runAction(sessionId, "tabs", {}, targetProvider)).tabs as Array<{ tabId: string; targetId: string }>;
+			assert.equal(nativeTabs.find(tab => tab.targetId === "t3")?.tabId, "t2", "fixture must prove AO t3 differs from native t2");
+			assert.equal(nativeTabs.find(tab => tab.targetId === "t4")?.tabId, "t3", "fixture must prove native t3 means AO t4");
+			let snapshot = await nativeSnapshot(sessionId, "Change Third", "t3");
+			if (restart) {
+				await stopNativeDaemon(sessionId);
+				// Read before explicit selection: the host still caches t3 while
+				// a freshly connected native daemon may default to opener t1.
+				try {
+					const result = await nativeCommand(sessionId, "get", { property: "title" }) as { value: string; target: { tabId: string } };
+					assert.equal(result.target.tabId, "t3");
+					assert.equal(result.value, "Third tab", "restart must not read the opener under the cached child identity");
+				} catch (error) {
+					assert.equal((error as { code?: string }).code, "BROWSER_TARGET_MISMATCH", "a restart may fail closed, but must not return another page");
+				}
+				await nativeCommand(sessionId, "tab-select", { tabId: "t3" });
+				snapshot = await nativeSnapshot(sessionId, "Change Third", "t3");
+			}
+			assert.equal(browserViews.get(third.id)?.getVisible(), true, "selected AO t3 must be drawn");
+			assert.equal(browserViews.get(fourth.id)?.getVisible(), false, "inactive AO t4 must not cover the selected page");
+			await nativeCommand(sessionId, "click", { ref: refFor(snapshot, "Change Third") });
+			try {
+				await nativeCommand(sessionId, "wait", { text: "Third changed", timeoutMs: 2_500 });
+				await nativeSnapshot(sessionId, "Third changed", "t3");
+			} catch (error) {
+				const pages = await Promise.all([third, fourth].map(async (contents) => ({
+					state: await contents.executeJavaScript("({button: document.querySelector('button').textContent, focused: document.hasFocus()})"),
+					visible: browserViews.get(contents.id)?.getVisible(),
+				})));
+				throw new Error(`${String(error)}; pages=${JSON.stringify(pages)}; windowFocused=${window.isFocused()}; tabs=${JSON.stringify(await nativeCommand(sessionId, "tabs"))}`);
+			}
+			assert.equal(await third.executeJavaScript("document.querySelector('button').textContent"), "Third changed");
+			assert.equal(await fourth.executeJavaScript("document.querySelector('button').textContent"), "Change Fourth");
+			assert.equal(await gapOpener.executeJavaScript("document.title"), "Native popup opener");
+			if (!restart) {
+				const state = await nativeCommand(sessionId, "tabs") as BrowserTabsState;
+				const ensure = ipcHandlers.get("browser:ensure");
+				const select = ipcHandlers.get("browser:selectTab");
+				assert.ok(ensure && select);
+				await ensure({ sender: shellWebContents }, sessionId);
+				const runAction = nativeRuntime.runAction.bind(nativeRuntime);
+				let entered: (() => void) | undefined;
+				let release: (() => void) | undefined;
+				const started = new Promise<void>(resolve => { entered = resolve; });
+				const held = new Promise<void>(resolve => { release = resolve; });
+				nativeRuntime.runAction = async (...args: Parameters<AgentBrowserRuntime["runAction"]>) => {
+					if (args[0] === sessionId && args[1] === "tab-select" && args[2].tabId === "t4") {
+						entered?.();
+						await held;
+					}
+					return runAction(...args);
+				};
+				const first = nativeCommand(sessionId, "tab-select", { tabId: "t4" });
+				try {
+					await deadline(started);
+					const second = nativeCommand(sessionId, "tab-select", { tabId: "t1" });
+					// Let the admitted command enqueue behind the held native operation
+					// before the independent renderer selects its final page.
+					await new Promise<void>(resolve => setImmediate(resolve));
+					const human = Promise.resolve(select({ sender: shellWebContents }, { viewId: state.viewId, tabId: "t3" }));
+					release?.();
+					await Promise.all([first, second, human]);
+				} finally {
+					release?.();
+					nativeRuntime.runAction = runAction;
+				}
+				await waitForTabs(sessionId, ["t1", "t3", "t4"], "t3");
+				await nativeSnapshot(sessionId, "Third changed", "t3");
+			}
+			const thirdClosed = new Promise<void>(resolve => third.once("destroyed", () => resolve()));
+			await nativeCommand(sessionId, "tab-close", { tabId: "t3" });
+			await deadline(thirdClosed);
+			assert.equal(third.isDestroyed(), true, "close must remove exact AO t3 despite native numbering drift");
+			assert.equal(fourth.isDestroyed(), false, "closing AO t3 must leave native t3 / AO t4 intact");
+			await waitForTabs(sessionId, ["t1", "t4"]);
+			await nativeCommand(sessionId, "tab-select", { tabId: "t4" });
+			await nativeSnapshot(sessionId, "Change Fourth", "t4");
+			await nativeCommand(sessionId, "tab-select", { tabId: "t1" });
+			await nativeSnapshot(sessionId, "Open report link", "t1");
+			await nativeCommand(sessionId, "__destroy-session");
+			process.stdout.write(`browser native tab numbering gap, exact close and ${restart ? "daemon restart" : "queued renderer selection"} integration passed\n`);
+		}
+
 		process.stdout.write("browser action postcondition integration passed\n");
 	} finally {
+		nativeHost?.destroyAll();
+		await nativeRuntime?.dispose();
 		// Tear down native views synchronously before exiting. Electron can leave a
 		// graceful app-level dispose pending after a beforeunload interaction even
 		// though all assertions completed; the standalone process must not turn that

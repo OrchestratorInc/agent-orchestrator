@@ -7,6 +7,9 @@ import {
 	type BrowserProfileMenuInput,
 	type BrowserProfileSelectInput,
 	type BrowserProfileViewState,
+	type BrowserProfileUsage,
+	type BrowserProfileUsageResult,
+	type BrowserProfileDeleteResult,
 } from "../shared/browser-profiles";
 import type { BrowserImportRequest } from "../shared/browser-profile-import";
 import type { BrowserProfileImportService } from "./browser-profile-import";
@@ -30,6 +33,8 @@ export type BrowserProfileIpcHost = {
 	refreshProfileState?: (profileId: string) => void;
 	getProfileSwitchInfo: (viewId: string) => { hasNavigated: boolean; agentActive: boolean } | null;
 	switchProfile: (viewId: string, profileId: string | null) => Promise<BrowserProfileViewState>;
+	getProfileUsage: (profileId: string) => BrowserProfileUsage[];
+	detachProfile: (profileId: string) => Promise<void>;
 	isProfileLive: (profileId: string) => boolean;
 	clearProfileData: (profileId: string) => Promise<void>;
 };
@@ -169,13 +174,47 @@ export function registerBrowserProfileIpc(options: BrowserProfileIpcOptions): Br
 		const profileId = profileIdFromInput(isRecord(input) ? input.id : undefined);
 		return options.store.runProfileOperation(profileId, () => options.host.isProfileLive(profileId), () => options.host.clearProfileData(profileId));
 	});
-	handle("browserProfiles:delete", async (event, input: unknown) => {
-		if (!trustedShellSender(event, options.shellWebContents)) throw invalid("Untrusted browser profile sender.");
-		const profileId = profileIdFromInput(isRecord(input) ? input.id : undefined);
-		return options.store.runProfileOperation(profileId, () => options.host.isProfileLive(profileId), async () => {
-			await options.host.clearProfileData(profileId);
-			await options.store.deleteProfile(profileId);
-		});
+	handle("browserProfiles:usage", async (event, input: unknown): Promise<BrowserProfileUsageResult> => {
+		if (!trustedShellSender(event, options.shellWebContents)) return { sessions: [], error: "Browser profile access was denied." };
+		try {
+			const profileId = profileIdFromInput(isRecord(input) ? input.id : undefined);
+			await options.store.load();
+			if (!options.store.getProfile(profileId)) return { sessions: [], error: "This browser profile no longer exists." };
+			return { sessions: options.host.getProfileUsage(profileId) };
+		} catch {
+			return { sessions: [], error: "Could not check browsers using this profile. Please try again." };
+		}
+	});
+	handle("browserProfiles:delete", async (event, input: unknown): Promise<BrowserProfileDeleteResult> => {
+		if (!trustedShellSender(event, options.shellWebContents)) return { error: "Browser profile access was denied." };
+		try {
+			const profileId = profileIdFromInput(isRecord(input) ? input.id : undefined);
+			const confirmed = isRecord(input) ? input.confirmedViewIds : undefined;
+			if (!Array.isArray(confirmed) || !confirmed.every((id) => typeof id === "string")) {
+				return { error: "Review the affected sessions before deleting this profile." };
+			}
+			// Reserve against new selections before switching existing browsers.
+			await options.store.runProfileOperation(profileId, () => false, async () => {
+				const usage = options.host.getProfileUsage(profileId);
+				if (usage.some((session) => !confirmed.includes(session.viewId))) {
+					throw invalid("The affected sessions changed. Review the updated list and confirm again.");
+				}
+				await options.host.detachProfile(profileId);
+				if (options.host.isProfileLive(profileId)) {
+					throw invalid("A browser is still using this profile. Please try again.");
+				}
+				await options.host.clearProfileData(profileId);
+				await options.store.deleteProfile(profileId);
+			});
+			return {};
+		} catch (error) {
+			// Only intentional domain messages cross IPC; storage/runtime errors may
+			// include paths or Electron details and get a safe, actionable fallback.
+			const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
+			const readable = ["INVALID_ARGUMENT", "BROWSER_PROFILE_ACTIVE", "BROWSER_PROFILE_SWITCH_FAILED", "BROWSER_PROFILE_NOT_FOUND"].includes(String(code));
+			return { error: readable && error instanceof Error ? error.message :
+				"Could not finish deleting the profile. Some browsers may already be temporary. Please check the session list and try again." };
+		}
 	});
 	handle("browserProfiles:setDefault", async (event, input: unknown) => {
 		if (!trustedShellSender(event, options.shellWebContents)) throw invalid("Untrusted browser profile sender.");

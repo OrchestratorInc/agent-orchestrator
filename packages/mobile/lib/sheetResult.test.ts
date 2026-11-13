@@ -1,10 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	agentSheetRoute,
-	connectSheetRoute,
+	connectRoute,
 	machineNameSheetRoute,
 	parkSheetResult,
-	projectSheetRoute,
 	modelSheetRoute,
 	releaseSheetResult,
 	resetSheetResults,
@@ -43,36 +42,6 @@ describe("parkSheetResult", () => {
 });
 
 describe("route builders", () => {
-	it("encodes includeAll as a string param and parks the callback", () => {
-		const fn = vi.fn();
-		const route = projectSheetRoute({ selected: "p1", onSelect: fn, includeAll: false });
-		expect(route.pathname).toBe("/sheets/project");
-		expect(route.params.includeAll).toBe("0");
-		expect(route.params.selected).toBe("p1");
-		takeSheetResult<string>(route.params.resultKey)?.("p2");
-		expect(fn).toHaveBeenCalledWith("p2");
-	});
-
-	it("defaults includeAll to on", () => {
-		expect(projectSheetRoute({ selected: "", onSelect: vi.fn() }).params.includeAll).toBe("1");
-	});
-
-	it("omits optional title and subtitle rather than sending undefined", () => {
-		const params = projectSheetRoute({ selected: "", onSelect: vi.fn() }).params;
-		expect("title" in params).toBe(false);
-		expect("subtitle" in params).toBe(false);
-	});
-
-	it("passes title and subtitle through when given", () => {
-		const params = projectSheetRoute({
-			selected: "",
-			onSelect: vi.fn(),
-			title: "Project",
-			subtitle: "Where this agent gets its workspace.",
-		}).params;
-		expect(params).toMatchObject({ title: "Project", subtitle: "Where this agent gets its workspace." });
-	});
-
 	it("builds the agent route", () => {
 		const fn = vi.fn();
 		const route = agentSheetRoute({ selected: "claude-code", onSelect: fn });
@@ -93,8 +62,8 @@ describe("route builders", () => {
 
 	it("passes the saved machine id to a reconnect form", () => {
 		const fn = vi.fn();
-		const route = connectSheetRoute(fn, "h_dev");
-		expect(route.pathname).toBe("/sheets/connect");
+		const route = connectRoute(fn, "h_dev");
+		expect(route.pathname).toBe("/connect");
 		expect(route.params.hostId).toBe("h_dev");
 		takeSheetResult<void>(route.params.resultKey)?.();
 		expect(fn).toHaveBeenCalled();
@@ -102,10 +71,13 @@ describe("route builders", () => {
 
 	it("builds the machine-name route and reports a nullable choice", () => {
 		const fn = vi.fn();
-		const route = machineNameSheetRoute({ suggested: "studio-mac", onSelect: fn });
+		const route = machineNameSheetRoute({ suggested: "studio-mac", appearance: { symbol: "laptop" }, hostId: "h_new", onSelect: fn });
 		expect(route.pathname).toBe("/sheets/machine-name");
 		expect(route.params.suggested).toBe("studio-mac");
-		takeSheetResult<string | null>(route.params.resultKey)?.("Studio");
-		expect(fn).toHaveBeenCalledWith("Studio");
+		expect(route.params.symbol).toBe("laptop");
+		expect(route.params.hostId).toBe("h_new");
+		const choice = { name: "Studio", appearance: { symbol: "desktop" as const } };
+		takeSheetResult<typeof choice | null>(route.params.resultKey)?.(choice);
+		expect(fn).toHaveBeenCalledWith(choice);
 	});
 });

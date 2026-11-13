@@ -18,6 +18,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/inputdelay"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/ptyexec"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -922,6 +923,7 @@ func (r *Runtime) SendMessage(ctx context.Context, handle ports.RuntimeHandle, m
 	}
 	enterCtx := ctx
 	if message != "" {
+		delay := inputdelay.ForMessage(message, r.enterDelay)
 		messageChunks := chunks(message, r.chunkSize)
 		sendCtx := ctx
 		var finishCancel context.CancelFunc
@@ -933,7 +935,7 @@ func (r *Runtime) SendMessage(ctx context.Context, handle ports.RuntimeHandle, m
 				return fmt.Errorf("tmux runtime: send message %s: %w", id, err)
 			}
 			if i == 0 {
-				completionBudget := sendCompletionBudget(len(messageChunks), r.timeout, r.enterDelay)
+				completionBudget := sendCompletionBudget(len(messageChunks), r.timeout, delay)
 				enterCtx, finishCancel = context.WithTimeout(context.WithoutCancel(ctx), completionBudget)
 				sendCtx = enterCtx
 			}
@@ -954,11 +956,11 @@ func (r *Runtime) SendMessage(ctx context.Context, handle ports.RuntimeHandle, m
 		// Errors reported by tmux after it accepts a chunk still return to the
 		// caller; they are not retried because AO cannot safely distinguish
 		// whether tmux applied the failed command.
-		if r.enterDelay > 0 {
+		if delay > 0 {
 			select {
 			case <-enterCtx.Done():
 				return enterCtx.Err()
-			case <-time.After(r.enterDelay):
+			case <-time.After(delay):
 			}
 		}
 	}
@@ -1467,11 +1469,13 @@ func handleID(handle ports.RuntimeHandle) (string, error) {
 // running" describes the whole server and "error connecting" is a transient
 // socket failure; neither says anything about one session, so treating them as
 // per-session death let a single server outage archive every session on the
-// board (issue #3475).
+// board (issue #3475). tmux >= 3.5 words a missing target as "no such
+// session: <target>" for some commands, e.g. set-option (issue #6099).
 func sessionMissingOutput(out string) bool {
 	s := strings.ToLower(out)
 	return strings.Contains(s, "can't find session") ||
-		strings.Contains(s, "session not found")
+		strings.Contains(s, "session not found") ||
+		strings.Contains(s, "no such session")
 }
 
 func serverNotRunningOutput(out string) bool {

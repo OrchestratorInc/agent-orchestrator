@@ -48,6 +48,10 @@ type Claude struct {
 	DeviceHome string
 	// DeviceConfig is the computer's own global config (~/.claude.json).
 	DeviceConfig string
+	// DeviceEnv returns the credential AO adds to sessions that run on the
+	// computer's own login (a setup token saved through AO's login menu), so
+	// checks of that account see what its sessions use. Nil adds nothing.
+	DeviceEnv func() map[string]string
 }
 
 var _ ports.AgentAccountProviderCLI = (*Claude)(nil)
@@ -166,7 +170,11 @@ func (c *Claude) Limits(ctx context.Context, home string) (domain.AgentAccountLi
 		if line.Response.Subtype != "success" {
 			return domain.AgentAccountLimits{}, fmt.Errorf("claude get_usage: %s", strings.TrimSpace(line.Response.Error))
 		}
-		return line.Response.Response.limits(time.Now().UTC()), nil
+		body := line.Response.Response
+		if body.RateLimitsAvailable && body.RateLimits == nil {
+			return domain.AgentAccountLimits{}, errors.New("claude could not fetch its usage limits")
+		}
+		return body.limits(time.Now().UTC()), nil
 	}
 	if err := ctx.Err(); err != nil {
 		return domain.AgentAccountLimits{}, err
@@ -180,7 +188,8 @@ type claudeUsageWindow struct {
 }
 
 type claudeUsageBody struct {
-	RateLimits *struct {
+	RateLimitsAvailable bool `json:"rate_limits_available"`
+	RateLimits          *struct {
 		FiveHour    *claudeUsageWindow `json:"five_hour"`
 		SevenDay    *claudeUsageWindow `json:"seven_day"`
 		Opus        *claudeUsageWindow `json:"seven_day_opus"`
@@ -222,7 +231,10 @@ func (b claudeUsageBody) limits(now time.Time) domain.AgentAccountLimits {
 		if w == nil || w.Utilization == nil {
 			return
 		}
-		window := domain.AgentAccountLimitWindow{ID: id, Label: label, UsedPercent: min(max(*w.Utilization, 0), 100)}
+		window := domain.AgentAccountLimitWindow{ID: id, Label: label, UsedPercent: min(max(*w.Utilization, 0), 100), DurationMinutes: 7 * 24 * 60}
+		if id == "five_hour" {
+			window.DurationMinutes = 5 * 60
+		}
 		if w.ResetsAt != nil {
 			if at, err := time.Parse(time.RFC3339, *w.ResetsAt); err == nil {
 				window.ResetsAt = &at
@@ -409,6 +421,11 @@ func (c *Claude) command(ctx context.Context, bin, home string, args ...string) 
 	cmd.Env = os.Environ()
 	for key, value := range c.LaunchEnv(home) {
 		cmd.Env = append(cmd.Env, key+"="+value)
+	}
+	if home == "" && c.DeviceEnv != nil {
+		for key, value := range c.DeviceEnv() {
+			cmd.Env = append(cmd.Env, key+"="+value)
+		}
 	}
 	// A throwaway cwd keeps a project's own Claude settings out of the probe.
 	cmd.Dir = os.TempDir()

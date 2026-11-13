@@ -55,8 +55,8 @@ func RedactValues(output string, configured map[string]string) string {
 	return output
 }
 
-// RedactError drops the original error when it contains a sensitive value so
-// unwrapping and telemetry cannot expose that value.
+// RedactError hides the original error when it contains a sensitive value so
+// unwrapping and telemetry cannot expose that value; errors.Is still matches it.
 func RedactError(err error, configured map[string]string) error {
 	if err == nil {
 		return nil
@@ -65,8 +65,17 @@ func RedactError(err error, configured map[string]string) error {
 	if message == err.Error() {
 		return err
 	}
-	return errors.New(message)
+	return redactedError{message: message, cause: err}
 }
+
+type redactedError struct {
+	message string
+	cause   error
+}
+
+func (e redactedError) Error() string { return e.message }
+
+func (e redactedError) Is(target error) bool { return errors.Is(e.cause, target) }
 
 // PinnedPATH prepends an AO-only directory to the supplied
 // PATH. It rejects executables not named ao because their directory cannot
@@ -158,6 +167,24 @@ func AugmentRuntimePATHForLaunchBinary(ctx context.Context, env map[string]strin
 	}
 	parts = restorePinnedDir(parts, pinnedDir)
 	env["PATH"] = strings.Join(parts, string(os.PathListSeparator))
+}
+
+// ProcessEnvForLaunchBinary returns this process's environment with PATH
+// augmented for bin exactly as session launches are, for direct children such
+// as native login flows and auth-status probes. Without it an npm launcher
+// resolved outside PATH fails with `env: node: No such file or directory`.
+func ProcessEnvForLaunchBinary(ctx context.Context, bin string) []string {
+	overlay := map[string]string{"PATH": os.Getenv("PATH")}
+	AugmentRuntimePATHForLaunchBinary(ctx, overlay, []string{bin}, exec.LookPath, "")
+	env := make([]string, 0, len(os.Environ())+1)
+	for _, entry := range os.Environ() {
+		key, _, _ := strings.Cut(entry, "=")
+		if key == "PATH" || (runtime.GOOS == "windows" && strings.EqualFold(key, "PATH")) {
+			continue
+		}
+		env = append(env, entry)
+	}
+	return append(env, "PATH="+overlay["PATH"])
 }
 
 func restorePinnedDir(parts []string, dir string) []string {

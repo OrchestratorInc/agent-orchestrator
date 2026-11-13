@@ -1,5 +1,5 @@
 import { AppLink } from "./AppLink";
-import { Pencil, Plus, TriangleAlert } from "lucide-react";
+import { Pencil, Plus, TriangleAlert } from "@/components/app-icons";
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../api/schema";
@@ -112,6 +112,7 @@ export function IntakeFields({
 	controlClassName,
 	labelClassName,
 	variant = "default",
+	description,
 }: {
 	form: IntakeForm;
 	onChange: (patch: Partial<IntakeForm>) => void;
@@ -122,12 +123,14 @@ export function IntakeFields({
 	controlClassName?: string;
 	labelClassName?: string;
 	variant?: "default" | "settings";
+	/** Replaces the settings row's description, for an intake with rules of its own (a Cloud project's). */
+	description?: string;
 }) {
 	const { t } = useTranslation();
 	const needsRule = intakeNeedsRule(form);
 	if (variant === "settings") {
 		return (
-			<IntakeSettingsFields form={form} onChange={onChange} repoPreview={repoPreview} />
+			<IntakeSettingsFields form={form} onChange={onChange} repoPreview={repoPreview} description={description} />
 		);
 	}
 	return (
@@ -205,10 +208,12 @@ function IntakeSettingsFields({
 	form,
 	onChange,
 	repoPreview,
+	description,
 }: {
 	form: IntakeForm;
 	onChange: (patch: Partial<IntakeForm>) => void;
 	repoPreview?: { value?: string; host?: string };
+	description?: string;
 }) {
 	const { t } = useTranslation();
 	const [assigneeEditing, setAssigneeEditing] = useState(false);
@@ -244,7 +249,7 @@ function IntakeSettingsFields({
 	return (
 		<div className="flex flex-col gap-1.5">
 			<SettingsRow
-				description={t("settings.project.intakeDescription")}
+				description={description ?? t("settings.project.intakeDescription")}
 				label={t("settings.project.enableIssueIntake")}
 			>
 				<Switch
@@ -295,8 +300,8 @@ function IntakeSettingsFields({
 								<Button
 									type="button"
 									size="sm"
-									variant="ghost"
-									className="shrink-0 text-settings-muted hover:text-settings-label"
+									variant="quiet"
+									className="shrink-0"
 									aria-label={t("settings.field.edit", { label: t("settings.project.assignee") })}
 									onClick={() => setAssigneeEditing(true)}
 								>
@@ -305,7 +310,7 @@ function IntakeSettingsFields({
 								</Button>
 							</div>
 						) : (
-							<Button type="button" variant="ghost" size="sm" className="text-settings-muted hover:text-settings-label" onClick={() => setAssigneeEditing(true)}>
+							<Button type="button" variant="quiet" size="sm" onClick={() => setAssigneeEditing(true)}>
 								<Plus className="size-3.5" aria-hidden="true" />
 								{t("settings.project.addAssignee")}
 							</Button>

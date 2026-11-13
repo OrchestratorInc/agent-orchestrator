@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("@react-native-async-storage/async-storage", () => ({ default: { getItem: vi.fn(), setItem: vi.fn(), removeItem: vi.fn() } }));
 vi.mock("expo-secure-store", () => ({ getItemAsync: vi.fn(), setItemAsync: vi.fn(), deleteItemAsync: vi.fn() }));
 
-import { getSessions, type DashboardSession, type OrchestratorLink } from "../api";
+import { getSessions, type DashboardSession, type OrchestratorLink, resetArchivePagingProbes } from "../api";
 import type { ServerConfig } from "../config";
 import { lookUpSession } from "./sessionLookup";
 import {
@@ -16,6 +16,8 @@ import {
 	type SessionLookup,
 } from "./sessionRoute";
 
+// A daemon that pages its archive answers the live-only poll with its size.
+const NO_ARCHIVE = { total: 0, byProject: {} };
 const worker = (over: Partial<DashboardSession> = {}): DashboardSession =>
 	({ id: "proj-1", projectId: "proj", mode: "chat", isTerminated: false, ...over }) as DashboardSession;
 
@@ -33,11 +35,11 @@ const pending: SessionLookup = { state: "pending" };
 
 type ViewArgs = Parameters<typeof sessionRouteView>[0];
 const view = (over: Partial<ViewArgs> = {}) =>
-	sessionRouteView({ listed: undefined, configured: true, connection: "open", loading: false, lookup: pending, routeHostId: "host-a", currentHostId: "host-a", ...over });
+	sessionRouteView({ listed: undefined, paired: true, connection: "open", loading: false, lookup: pending, routeHostId: "host-a", currentHostId: "host-a", ...over });
 
 type DueArgs = Parameters<typeof sessionLookupDue>[0];
 const due = (over: Partial<DueArgs> = {}) =>
-	sessionLookupDue({ listed: false, configured: true, connection: "open", appActive: true, machineChanged: false, lookup: pending, ...over });
+	sessionLookupDue({ listed: false, paired: true, connection: "open", appActive: true, machineChanged: false, lookup: pending, ...over });
 
 describe("sessionRouteView", () => {
 	it("never opens another machine's same-ID session from a stale route", () => {
@@ -46,17 +48,17 @@ describe("sessionRouteView", () => {
 		expect(view({ listed, routeHostId: undefined })).toEqual({ kind: "wrongHost" });
 	});
 	it("waits for the saved config before judging anything", () => {
-		expect(view({ configured: null, loading: true, listed: orchestrator(), lookup: failed(404) })).toEqual({ kind: "loading" });
+		expect(view({ paired: null, loading: true, listed: orchestrator(), lookup: failed(404) })).toEqual({ kind: "loading" });
 	});
 	it("shows an offline paired host instead of another-machine or a permanent loader", () => {
-		expect(view({ configured: null, connection: "closed" })).toEqual({ kind: "offline" });
-		expect(view({ configured: null, connection: "closed", currentHostId: "host-b" })).toEqual({ kind: "wrongHost" });
+		expect(view({ paired: null, connection: "closed" })).toEqual({ kind: "offline" });
+		expect(view({ paired: null, connection: "closed", currentHostId: "host-b" })).toEqual({ kind: "wrongHost" });
 	});
 
 	// The store keeps the last machine's lists after Settings → forget, so a
 	// cached id must not open a session screen with nothing paired.
 	it("shows the unpaired state before consulting the lists", () => {
-		expect(view({ configured: false, listed: orchestrator() })).toEqual({ kind: "unpaired" });
+		expect(view({ paired: false, listed: orchestrator() })).toEqual({ kind: "unpaired" });
 	});
 
 	it("opens a listed session whatever the lookup or the link says", () => {
@@ -68,8 +70,18 @@ describe("sessionRouteView", () => {
 		}
 	});
 
-	it("reports an unlisted session that has ended as ended, not as not found", () => {
-		expect(view({ lookup: found(worker({ isTerminated: true })) })).toEqual({ kind: "ended" });
+	it("reports an unlisted orchestrator that has ended as ended, not as not found", () => {
+		expect(view({ lookup: found(worker({ isTerminated: true, kind: "orchestrator" })) })).toEqual({ kind: "ended" });
+	});
+
+	// A machine that pages its archive leaves archived workers out of the poll.
+	// Opening one (from a notification, say) shows its screen, which offers
+	// Restore, rather than a dead end.
+	it("opens an unlisted worker that has ended", () => {
+		const archived = worker({ isTerminated: true, kind: "worker" });
+		expect(view({ lookup: found(archived) })).toEqual({ kind: "screen", session: archived });
+		const kindless = worker({ isTerminated: true });
+		expect(view({ lookup: found(kindless) })).toEqual({ kind: "screen", session: kindless });
 	});
 
 	it("opens an unlisted session that is still live", () => {
@@ -89,7 +101,7 @@ describe("sessionRouteView", () => {
 
 	// An answer the daemon gave is not withdrawn because the link dropped after.
 	it("keeps a settled answer while the board is disconnected", () => {
-		expect(view({ connection: "closed", lookup: found(worker({ isTerminated: true })) })).toEqual({ kind: "ended" });
+		expect(view({ connection: "closed", lookup: found(worker({ isTerminated: true, kind: "orchestrator" })) })).toEqual({ kind: "ended" });
 		expect(view({ connection: "closed", lookup: failed(404) })).toEqual({ kind: "missing" });
 	});
 
@@ -160,8 +172,8 @@ describe("sessionLookupDue", () => {
 
 	it("never asks for a listed id, or without a paired machine", () => {
 		expect(due({ listed: true })).toBe(false);
-		expect(due({ configured: false })).toBe(false);
-		expect(due({ configured: null })).toBe(false);
+		expect(due({ paired: false })).toBe(false);
+		expect(due({ paired: null })).toBe(false);
 	});
 
 	it("never asks again once the daemon has answered", () => {
@@ -235,12 +247,15 @@ function response(body: unknown, status = 200): Response {
 }
 
 describe("lookUpSession, the request the route sends", () => {
-	beforeEach(() => vi.stubGlobal("fetch", vi.fn()));
+	beforeEach(() => {
+		resetArchivePagingProbes();
+		vi.stubGlobal("fetch", vi.fn());
+	});
 	afterEach(() => vi.unstubAllGlobals());
 
 	it("finds the orchestrator the board's lists dropped, and reports it ended", async () => {
 		vi.mocked(fetch)
-			.mockResolvedValueOnce(response({ sessions: [scratch1, scratch2] }))
+			.mockResolvedValueOnce(response({ archived: NO_ARCHIVE, sessions: [scratch1, scratch2] }))
 			.mockResolvedValueOnce(response({ sessions: [scratch1, scratch2] }))
 			.mockResolvedValueOnce(response({ projects: [{ id: "scratch", name: "Scratch", kind: "scratch", sessionPrefix: "scratch" }] }))
 			.mockResolvedValueOnce(response({ session: scratch1 }));

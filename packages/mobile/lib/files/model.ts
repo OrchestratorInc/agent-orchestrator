@@ -1,12 +1,13 @@
 import type { DiffRow } from "../../../shared/files/diff-parser";
 import type { FileAnnotationTarget } from "../../../shared/files/file-annotations";
-import type { WorkspaceFileStatus, WorkspaceFileSummary, WorkspaceManifest, WorkspaceSection } from "./api";
+import type { WorkspaceFileDetail, WorkspaceFileStatus, WorkspaceFileSummary, WorkspaceManifest, WorkspaceSection } from "./api";
 
 // ---- Changed-file list -------------------------------------------------------
 
 /** A changed file with every git section it shows up in (staged and unstaged at once, say). */
 export type ChangeEntry = WorkspaceFileSummary & { sections: WorkspaceSection[] };
-export type ChangeGroup = { key: "uncommitted" | "committed"; title: string; files: ChangeEntry[] };
+/** `key` names the group in a list: uncommitted, committed, or the pick a list shows (see selection.ts). */
+export type ChangeGroup = { key: string; title: string; files: ChangeEntry[] };
 
 const SECTION_ORDER: WorkspaceSection[] = ["staged", "unstaged", "untracked", "committed"];
 
@@ -48,6 +49,74 @@ export function changeGroups(manifest: Pick<WorkspaceManifest, "files" | "sectio
 	].filter((group) => group.files.length > 0);
 }
 
+/** Files, additions and deletions across `files`. */
+export function sumFiles(files: readonly Pick<WorkspaceFileSummary, "additions" | "deletions">[]): { files: number; additions: number; deletions: number } {
+	const total = { files: 0, additions: 0, deletions: 0 };
+	for (const file of files) {
+		total.files += 1;
+		total.additions += file.additions;
+		total.deletions += file.deletions;
+	}
+	return total;
+}
+
+// ---- One file read in a worktree scope -------------------------------------------
+
+/** What `POST workspace/diffs` answers for one path. */
+export type ScopedDiffs = {
+	workspaceVersion?: string;
+	groups?: Array<{ patch?: string; includedPaths?: string[]; truncated?: boolean; deferred?: Array<{ path: string; reason: string }>; errors?: Array<{ code: string; message: string }> }>;
+};
+
+/** What `GET workspace/file/revision` answers for a scope's after side. */
+export type ScopedRevision = { exists?: boolean; binary?: boolean; content?: string; truncated?: boolean; size?: number; revision?: string };
+
+/**
+ * One file as a worktree scope sees it: the scope's own patch, status and
+ * counts (from its git diff, not the combined base → worktree view), and the
+ * scope's after side as the content (the index for Staged, HEAD for the
+ * branch's commits), so expanded context and the File view match the diff.
+ */
+export function scopedFileDetail(path: string, diffs: ScopedDiffs, revision: ScopedRevision): WorkspaceFileDetail {
+	const groups = diffs.groups ?? [];
+	const group = groups.find((item) => item.includedPaths?.includes(path)) ?? groups.find((item) => item.patch);
+	const patch = group?.patch ?? "";
+	const deferred = groups.flatMap((item) => item.deferred ?? []).find((item) => item.path === path);
+	const previousPath = /^rename from (.+)$/m.exec(patch)?.[1];
+	let status: WorkspaceFileStatus = "unmodified";
+	if (/^new file mode/m.test(patch)) status = "added";
+	else if (/^deleted file mode/m.test(patch)) status = "deleted";
+	else if (previousPath) status = "renamed";
+	else if (patch.trim()) status = "modified";
+	let additions = 0;
+	let deletions = 0;
+	let inHunk = false;
+	for (const line of patch.split("\n")) {
+		if (line.startsWith("diff --git")) inHunk = false;
+		else if (line.startsWith("@@")) inHunk = true;
+		else if (inHunk && line.startsWith("+")) additions += 1;
+		else if (inHunk && line.startsWith("-")) deletions += 1;
+	}
+	const binary = deferred?.reason === "binary" || /^Binary files /m.test(patch) || Boolean(revision.binary);
+	const deleted = status === "deleted" || revision.exists === false;
+	return {
+		path,
+		...(previousPath ? { previousPath } : {}),
+		status: deleted && status === "unmodified" ? "deleted" : status,
+		additions,
+		deletions,
+		binary,
+		deleted,
+		size: revision.size ?? 0,
+		content: !deleted && !binary ? revision.content ?? "" : "",
+		contentTruncated: Boolean(revision.truncated),
+		diff: patch,
+		diffTruncated: Boolean(group?.truncated) || (deferred !== undefined && deferred.reason !== "binary"),
+		fileFingerprint: revision.revision ?? "",
+		workspaceVersion: diffs.workspaceVersion ?? "",
+	};
+}
+
 /** Every changed file in list order — what the viewer's previous/next buttons walk. */
 export function orderedChanges(groups: ChangeGroup[]): ChangeEntry[] {
 	return groups.flatMap((group) => group.files);
@@ -75,6 +144,17 @@ export function compactCount(value: number): string {
 	if (value < 1000) return String(value);
 	if (value < 10_000) return `${Math.round(value / 100) / 10}k`;
 	return `${Math.round(value / 1000)}k`;
+}
+
+/**
+ * The branch a ref names, as a person would say it: "main" for
+ * refs/remotes/origin/main or refs/heads/main. The daemon reports the full ref
+ * it compared against.
+ */
+export function branchName(ref: string): string {
+	const remote = /^refs\/remotes\/[^/]+\/(.+)$/.exec(ref);
+	if (remote) return remote[1];
+	return ref.startsWith("refs/heads/") ? ref.slice("refs/heads/".length) : ref;
 }
 
 export function plural(count: number, noun: string): string {
