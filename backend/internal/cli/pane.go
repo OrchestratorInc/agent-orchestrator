@@ -370,9 +370,12 @@ func (c *commandContext) runInPane(ctx context.Context, w io.Writer, tab, comman
 		// A stalled read must not outlast --timeout.
 		readCtx, cancelRead := context.WithDeadline(ctx, deadline)
 		next, err := c.readPane(readCtx, tab, wait.lines)
+		// Read the context's state before cancelling it: cancelling always makes
+		// it non-nil, which would pass every read error off as a timeout.
+		readExpired := errors.Is(readCtx.Err(), context.DeadlineExceeded)
 		cancelRead()
 		if err != nil {
-			if ctx.Err() == nil && readCtx.Err() != nil && haveOutput {
+			if ctx.Err() == nil && readExpired && haveOutput {
 				// The deadline passed mid-read: show the last screen we did get.
 				_, _ = fmt.Fprintf(w, "(timed out after %s; it may still be running. Check again with `ao pane read %s`.)\n", wait.timeout, tab)
 				break
