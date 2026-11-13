@@ -1077,6 +1077,21 @@ describe("Sidebar", () => {
 		expect(navigateMock).toHaveBeenCalledWith({ to: "/sessions" });
 	});
 
+	it.each([
+		{ name: "without any projects", workspaces: [] },
+		{ name: "with project sessions only", workspaces: [workspace] },
+	])("keeps Sessions available before its first session $name", async ({ workspaces }) => {
+		const user = userEvent.setup();
+		renderSidebar({ workspaces });
+
+		const header = screen.getByRole("button", { name: "Sessions" });
+		const section = header.closest<HTMLElement>("[data-scratchpad-section]")!;
+		await user.click(within(section).getByRole("button", { name: "Open a new agent" }));
+
+		expect(useUiStore.getState().newTaskRequest).toMatchObject({ projectId: STANDALONE_WORKSPACE_ID });
+		expect(useUiStore.getState().newTaskRequest?.hostId).toBeUndefined();
+	});
+
 	it("opens a new ad hoc agent directly from the ad hoc row action", async () => {
 		const user = userEvent.setup();
 		renderSidebar({
@@ -1312,7 +1327,7 @@ describe("Sidebar", () => {
 		expect(navigateMock).toHaveBeenCalledWith({ to: "/projects/$projectId", params: { projectId: "proj-1" } });
 	});
 
-	it("never leaves the Scratchpad an empty header: an archived-only Cloud agent shows the way to its archive", async () => {
+	it("keeps an archived-only Cloud agent accessible from Sessions", async () => {
 		const user = userEvent.setup();
 		const agent = (sessions: WorkspaceSession[]): WorkspaceSummary => ({
 			id: "agent-1", name: "Fix the flake", kind: "cloud", cloudOrgId: "org-1", standaloneAgent: true, path: "", sessions,
