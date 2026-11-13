@@ -32,6 +32,7 @@ type fakeHandoffAccounts struct {
 	target   string
 	models   []string
 	excluded []map[string]bool
+	onTarget func()
 }
 
 func (a *fakeHandoffAccounts) SessionAccountID(ctx context.Context, id domain.SessionID, _ domain.AgentHarness) (string, error) {
@@ -44,6 +45,9 @@ func (a *fakeHandoffAccounts) HandoffTarget(_ context.Context, _ domain.SessionI
 	defer a.mu.Unlock()
 	a.models = append(a.models, model)
 	a.excluded = append(a.excluded, exclude)
+	if a.onTarget != nil {
+		a.onTarget()
+	}
 	if exclude[a.target] {
 		return "", nil
 	}
@@ -360,6 +364,16 @@ func TestAccountHandoffOffClaimsNothing(t *testing.T) {
 	hh.tick(t)
 	if len(hh.accounts.excluded) != 0 || len(hh.mover.moves()) != 0 {
 		t.Fatal("an old failure was handed off")
+	}
+}
+
+func TestAccountHandoffTurnedOffDuringSelectionDoesNotMove(t *testing.T) {
+	hh := newHandoffHarness(t, domain.HarnessCodex)
+	hh.accounts.onTarget = func() { hh.enabled.Store(false) }
+	failUsageLimitedTurn(t, hh.harness, usageLimitMessage(domain.HarnessCodex, true, hh.now()))
+	hh.tick(t)
+	if len(hh.accounts.excluded) != 1 || len(hh.mover.moves()) != 0 {
+		t.Fatal("moved after the setting was turned off")
 	}
 }
 

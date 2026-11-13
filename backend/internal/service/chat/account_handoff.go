@@ -244,6 +244,9 @@ func (s *Service) selectAccountHandoff(ctx context.Context, store accountHandoff
 	if target == "" {
 		return s.stayOnAccount(ctx, h, source, "No other signed-in account has room for this request.")
 	}
+	if !deps.enabled(ctx) {
+		return true, nil
+	}
 	if pinned, err := store.SessionAccountPinned(ctx, h.sessionID); err != nil {
 		return false, err
 	} else if pinned {
