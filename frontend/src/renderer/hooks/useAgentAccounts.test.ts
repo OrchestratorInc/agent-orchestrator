@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentAccountLabel, withoutSameLogins } from "./useAgentAccounts";
+import { agentAccountLabel, agentAccountName, withoutSameLogins } from "./useAgentAccounts";
 
 const cli = { id: "device-claude", sameLoginAs: "acct-a" };
 const a = { id: "acct-a" };
@@ -66,5 +66,22 @@ describe("agentAccountLabel", () => {
 		const labels = peers.map((account) => agentAccountLabel(account, peers, t));
 		expect(labels).toEqual(["a@example.com · Acme · aaaaaaaa · Claude Code CLI login", "a@example.com · Acme · aaaaaaaa", "a@example.com · Acme · bbbbbbbb"]);
 		expect(new Set(labels).size).toBe(3);
+	});
+});
+
+describe("agentAccountName", () => {
+	const t = (key: string, options?: { provider: string }) => key === "settings.agentAccounts.cliLoginOf" ? `${options?.provider} CLI login` : key === "settings.agentAccounts.oauthToken" ? "OAuth token" : key;
+
+	it("is the email when there is one", () => {
+		expect(agentAccountName({ provider: "claude", email: "a@example.com", signedIn: false }, t)).toBe("a@example.com");
+	});
+
+	it("is an OAuth token only for a signed-in Claude login that reports no email", () => {
+		expect(agentAccountName({ provider: "claude", signedIn: true }, t)).toBe("OAuth token");
+	});
+
+	it("is the CLI login when signed out with no email", () => {
+		expect(agentAccountName({ provider: "claude", signedIn: false }, t)).toBe("Claude Code CLI login");
+		expect(agentAccountName({ provider: "codex", signedIn: false }, t)).toBe("Codex CLI login");
 	});
 });

@@ -49,9 +49,9 @@ type AccountNameT = (key: "settings.agentAccounts.cliLoginOf" | "settings.agentA
 
 /** An account's name: its email. A Claude login without one is a
  * CLAUDE_CODE_OAUTH_TOKEN login, which reports no identity. */
-export function agentAccountName(account: Pick<AgentAccount, "email" | "provider">, t: AccountNameT): string {
+export function agentAccountName(account: Pick<AgentAccount, "email" | "provider"> & { signedIn?: boolean }, t: AccountNameT): string {
 	if (account.email) return account.email;
-	return account.provider === "claude"
+	return account.provider === "claude" && account.signedIn
 		? t("settings.agentAccounts.oauthToken")
 		: t("settings.agentAccounts.cliLoginOf", { provider: agentAccountProviderNames[account.provider] });
 }
@@ -62,7 +62,7 @@ export function withoutSameLogins<T extends Pick<AgentAccount, "id" | "sameLogin
 	return accounts.filter((account) => account.id === keepId || !twinOf(account));
 }
 
-export function agentAccountLabel(account: Pick<AgentAccount, "id" | "email" | "provider" | "device" | "orgId" | "orgName">, peers: readonly Pick<AgentAccount, "id" | "email" | "orgId" | "orgName">[], t: AccountNameT): string {
+export function agentAccountLabel(account: Pick<AgentAccount, "id" | "email" | "provider" | "device" | "orgId" | "orgName"> & { signedIn?: boolean }, peers: readonly Pick<AgentAccount, "id" | "email" | "orgId" | "orgName">[], t: AccountNameT): string {
 	const name = agentAccountName(account, t);
 	const email = account.email?.toLowerCase();
 	const twins = email ? peers.filter((peer) => peer.id !== account.id && peer.email?.toLowerCase() === email) : [];
