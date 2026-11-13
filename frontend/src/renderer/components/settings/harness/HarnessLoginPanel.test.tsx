@@ -3,11 +3,11 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { actOnAgentUILogin, cancelAgentUILogin, getAgentUILogin, startAgentUILogin, submitAgentUILoginCode, type AgentLoginSnapshot, fetchCatalogProviders, startCatalogKeyLogin } from "../../../hooks/useAgentAuth";
 import { isAgentLoginPending } from "../../../lib/agent-login-lifecycle";
-import { checkProviderKey } from "../../../hooks/useProviderKeys";
+import { checkProviderKey, removeProviderKey } from "../../../hooks/useProviderKeys";
 import { aoBridge } from "../../../lib/bridge";
 import { HarnessLoginPanel } from "./HarnessLoginPanel";
 
-vi.mock("../../../hooks/useProviderKeys", async (importOriginal) => ({ ...(await importOriginal<typeof import("../../../hooks/useProviderKeys")>()), checkProviderKey: vi.fn() }));
+vi.mock("../../../hooks/useProviderKeys", async (importOriginal) => ({ ...(await importOriginal<typeof import("../../../hooks/useProviderKeys")>()), checkProviderKey: vi.fn(), removeProviderKey: vi.fn() }));
 vi.mock("../../../hooks/useAgentAuth", () => ({ startAgentUILogin: vi.fn(), startCatalogKeyLogin: vi.fn(), fetchCatalogProviders: vi.fn(), getAgentUILogin: vi.fn(), cancelAgentUILogin: vi.fn(), actOnAgentUILogin: vi.fn(), submitAgentUILoginCode: vi.fn() }));
 
 const methods = [
@@ -633,5 +633,42 @@ describe("HarnessLoginPanel", () => {
 		await user.click(screen.getByRole("button", { name: "ChatGPT in browser" }));
 		expect(await screen.findByText("Connected", {}, { timeout: 4_000 })).toBeVisible();
 		expect(onVerify).toHaveBeenCalledTimes(1);
+	});
+
+	// Keys are set here, so they are removed here too: AO stops passing the key
+	// to sessions and takes its copy out of the user environment.
+	describe("removing a saved key", () => {
+		const savedOpenAIKey = { name: "OPENAI_API_KEY", label: "OpenAI API key", configured: true, hint: "abcd", device: true, deviceAvailable: true, checkable: false, agents: ["goose"] };
+		const renderSaved = (onProviderKeysChanged = vi.fn()) => {
+			render(<HarnessLoginPanel agentId="goose" methods={[{ id: "env_OPENAI_API_KEY", label: "OpenAI API key", secret: true }]} providerKeys={[savedOpenAIKey]} onProviderKeysChanged={onProviderKeysChanged} onVerify={vi.fn().mockResolvedValue("configured")} onClose={vi.fn()} onTerminal={vi.fn()} />);
+			return onProviderKeysChanged;
+		};
+
+		it("removes it only after a second, confirming click", async () => {
+			const user = userEvent.setup();
+			vi.mocked(removeProviderKey).mockResolvedValue({ ...savedOpenAIKey, configured: false, hint: undefined, device: false });
+			const onProviderKeysChanged = renderSaved();
+			await user.click(await screen.findByRole("button", { name: "Remove" }));
+			expect(removeProviderKey).not.toHaveBeenCalled();
+			await user.click(screen.getByRole("button", { name: "Confirm remove" }));
+			expect(removeProviderKey).toHaveBeenCalledWith("OPENAI_API_KEY", undefined);
+			expect(await screen.findByText("Removed. Copies an agent saved in its own settings stay there.")).toBeVisible();
+			expect(onProviderKeysChanged).toHaveBeenCalled();
+		});
+
+		it("warns when AO's copy is still in the user environment", async () => {
+			const user = userEvent.setup();
+			vi.mocked(removeProviderKey).mockResolvedValue({ ...savedOpenAIKey, configured: false, hint: undefined, device: false, withdrawFailed: true });
+			renderSaved();
+			await user.click(await screen.findByRole("button", { name: "Remove" }));
+			await user.click(screen.getByRole("button", { name: "Confirm remove" }));
+			expect(await screen.findByText("Removed, but apps outside AO can still see this key until you log out.")).toBeVisible();
+		});
+
+		it("offers no removal while no key is saved", async () => {
+			render(<HarnessLoginPanel agentId="goose" methods={[{ id: "env_OPENAI_API_KEY", label: "OpenAI API key", secret: true }]} providerKeys={[unsavedKey("OPENAI_API_KEY")]} onVerify={vi.fn()} onClose={vi.fn()} onTerminal={vi.fn()} />);
+			expect(await screen.findByLabelText("API key")).toBeVisible();
+			expect(screen.queryByRole("button", { name: "Remove" })).toBeNull();
+		});
 	});
 });

@@ -3,7 +3,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../../../api/schema";
 import { actOnAgentUILogin, cancelAgentUILogin, fetchCatalogProviders, getAgentUILogin, startAgentUILogin, startCatalogKeyLogin, submitAgentUILoginCode, type AgentLoginSnapshot, type CatalogProvider } from "../../../hooks/useAgentAuth";
-import { checkProviderKey, providerKeyName, type ProviderKey } from "../../../hooks/useProviderKeys";
+import { checkProviderKey, providerKeyName, removeProviderKey, type ProviderKey } from "../../../hooks/useProviderKeys";
 import { agentLabel, type AgentId } from "../../../lib/agent-options";
 import { apiErrorCode } from "../../../lib/api-client";
 import { disposeAgentLogin, retainAgentLoginDisposal, runAgentLoginTask } from "../../../lib/agent-login-lifecycle";
@@ -20,6 +20,8 @@ const CATALOG_METHOD = "provider_key";
 // A native screen AO cannot read stays "waiting"; after this long the panel
 // offers the terminal instead of a silent spinner.
 const NATIVE_STALL_MS = 12_000;
+// An armed "Confirm remove" for a saved key disarms itself after this long.
+const REMOVE_CONFIRM_MS = 4_000;
 // Crush providers whose stored sign-in Crush itself removes when a key is
 // saved for them (backend crushSignInFields).
 const CRUSH_SIGN_IN_PROVIDERS = new Set(["openai", "xai", "anthropic"]);
@@ -70,6 +72,10 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, prov
 	const [configured, setConfigured] = useState(false);
 	const [error, setError] = useState("");
 	const [copied, setCopied] = useState(false);
+	// Removing a saved key takes a second click, which disarms itself after
+	// a few seconds; removed says how it went once the key is gone.
+	const [confirmRemove, setConfirmRemove] = useState(false);
+	const [removed, setRemoved] = useState<{ warn: boolean; text: string }>();
 	const operationRef = useRef<AgentLoginSnapshot | undefined>(undefined);
 	const mounted = useRef(true);
 	const pending = useRef(false);
@@ -337,8 +343,46 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, prov
 		setDevice(providerKeyFor(item.id)?.device ?? false);
 		setLoginCode("");
 		setError("");
+		setConfirmRemove(false);
+		setRemoved(undefined);
 		updateOperation(undefined);
 		if (!item.secret) void start(item);
+	};
+	useEffect(() => {
+		if (!confirmRemove || busy) return;
+		const timer = window.setTimeout(() => setConfirmRemove(false), REMOVE_CONFIRM_MS);
+		return () => window.clearTimeout(timer);
+	}, [confirmRemove, busy]);
+	// Removes the key AO saved for this method, and AO's copy in the user
+	// environment, so it no longer reaches sessions or other apps. A copy a
+	// harness wrote into its own settings is left alone.
+	const removeSavedKey = async () => {
+		if (!savedKey || pending.current || locked) return;
+		if (!confirmRemove) {
+			setConfirmRemove(true);
+			return;
+		}
+		pending.current = true;
+		setBusy(true);
+		setError("");
+		try {
+			const result = await removeProviderKey(savedKey.name, hostId);
+			if (!mounted.current) return;
+			setSecret("");
+			setDevice(false);
+			setRemoved(result.withdrawFailed
+				? { warn: true, text: t("settings.apiKeys.removedWithdrawFailed") }
+				: { warn: false, text: t("settings.apiKeys.removed") });
+			onProviderKeysChanged?.();
+		} catch (err) {
+			if (mounted.current) setError(err instanceof Error ? err.message : t("settings.apiKeys.removeFailed"));
+		} finally {
+			pending.current = false;
+			if (mounted.current) {
+				setConfirmRemove(false);
+				setBusy(false);
+			}
+		}
 	};
 	// A key typed for one catalog provider never goes to another: choosing a
 	// different provider clears it with the rest of the form.
@@ -476,7 +520,7 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, prov
 					const open = item.secret && selected;
 					// Save sits beside the last field: the key, or the model when one follows it.
 					const saveButton = <Button type="submit" disabled={busy || keyStateUnknown(item.id) || (!secret.trim() && !savedKey) || (needsModel && !model.trim()) || (item.id === CATALOG_METHOD && !catalogProvider)}>
-						{busy && <LoaderCircle className="animate-spin" aria-hidden="true" />}
+						{busy && !confirmRemove && <LoaderCircle className="animate-spin" aria-hidden="true" />}
 						{t("settings.harness.loginUi.save")}
 					</Button>;
 					// One line per method. A sign-in's hint only restates its label, so it is
@@ -531,6 +575,15 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, prov
 							</div>
 							: <p role="status" className="col-start-2 flex items-center gap-2 text-xs leading-4 text-settings-muted"><LoaderCircle className="size-3.5 animate-spin" aria-hidden="true" />{t("settings.apiKeys.loading")}</p>)}
 						{selectedKey?.deviceAvailable ? <DeviceEnvToggle className="col-start-2" checked={device} disabled={locked} onChange={setDevice} /> : null}
+						{savedKey ? <div className="col-start-2 flex justify-end">
+							<Button type="button" size="sm" variant="destructive-ghost" disabled={locked} onClick={() => void removeSavedKey()}>
+								{busy && confirmRemove ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : null}
+								{t(confirmRemove ? "settings.apiKeys.confirmRemove" : "settings.apiKeys.remove")}
+							</Button>
+						</div> : null}
+						{removed ? removed.warn
+							? <KeyWarning className="col-start-2">{removed.text}</KeyWarning>
+							: <p role="status" className="col-start-2 text-xs leading-4 text-settings-muted">{removed.text}</p> : null}
 					</div>}
 					</div>;
 				})}
