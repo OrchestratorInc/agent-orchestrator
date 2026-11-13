@@ -1164,7 +1164,9 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 		}
 		if mode == domain.SessionModeChat {
 			checked := BeginSpawnStep(ctx, SpawnStepModelCheck)
-			resolved, err := m.resolveAgentConfig(ctx, cfg, project.Config)
+			chatCfg := cfg
+			chatCfg.RequestedMode = mode
+			resolved, err := m.resolveAgentConfig(ctx, chatCfg, project.Config)
 			checked(err)
 			if err != nil {
 				return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w", err)
@@ -1740,6 +1742,15 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 		!cfg.EffortOverride && requested.Effort == ""
 	if cfg.EffortOverride {
 		resolved.Effort = requested.Effort
+	}
+	if cfg.Harness == domain.HarnessGrok && cfg.RequestedMode == domain.SessionModeChat {
+		// Grok's ACP session advertises and validates reasoning_effort. Its
+		// terminal adapter does not support effort, so keep this Chat-only and
+		// leave validation to the live ACP catalog instead of the TUI catalog.
+		if modelChangedWithoutExplicitEffort {
+			resolved.Effort = ""
+		}
+		return resolved, nil
 	}
 	if cfg.Harness != domain.HarnessCodex && cfg.Harness != domain.HarnessClaudeCode && cfg.Harness != domain.HarnessCommandCode && cfg.Harness != domain.HarnessHermes {
 		// Only a flagged explicit override (the spawn API and delegation mark
