@@ -50,7 +50,7 @@ func (s *Store) ListSessionForks(ctx context.Context, sourceID domain.SessionID)
 	if err != nil {
 		return nil, fmt.Errorf("list session forks of %s: %w", sourceID, err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var forks []domain.SessionFork
 	for rows.Next() {
 		fork, err := scanSessionFork(rows)
@@ -133,7 +133,7 @@ func (s *Store) CopyForkMessageContent(ctx context.Context, sourceConversationID
 		if err != nil {
 			return nil, err
 		}
-		defer rows.Close()
+		defer func() { _ = rows.Close() }()
 		var out []userMessage
 		for rows.Next() {
 			var m userMessage

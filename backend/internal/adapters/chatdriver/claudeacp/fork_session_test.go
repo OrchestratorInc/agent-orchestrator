@@ -264,15 +264,15 @@ func TestClaudeForkRealSDKAtOlderMessage(t *testing.T) {
 // A fork's session copy is removed even when its workspace is already gone
 // and was reached through a symlink, so its folder can't be derived again.
 func TestDeleteWorkspaceForkFindsTheCopyWithoutItsWorkspace(t *testing.T) {
-	config, real := realDir(t), realDir(t)
+	config, resolved := realDir(t), realDir(t)
 	link := filepath.Join(t.TempDir(), "link")
-	if err := os.Symlink(real, link); err != nil {
+	if err := os.Symlink(resolved, link); err != nil {
 		t.Fatal(err)
 	}
 	// Saved under the resolved folder's key, as ForkIntoWorkspace does.
-	copy := filepath.Join(config, "projects", claudeProjectKey(real), "child-id.jsonl")
-	other := filepath.Join(config, "projects", claudeProjectKey(real), "other-id.jsonl")
-	for _, path := range []string{copy, other} {
+	forked := filepath.Join(config, "projects", claudeProjectKey(resolved), "child-id.jsonl")
+	other := filepath.Join(config, "projects", claudeProjectKey(resolved), "other-id.jsonl")
+	for _, path := range []string{forked, other} {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -280,7 +280,7 @@ func TestDeleteWorkspaceForkFindsTheCopyWithoutItsWorkspace(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := os.RemoveAll(real); err != nil {
+	if err := os.RemoveAll(resolved); err != nil {
 		t.Fatal(err)
 	}
 
@@ -288,8 +288,8 @@ func TestDeleteWorkspaceForkFindsTheCopyWithoutItsWorkspace(t *testing.T) {
 	if err := d.DeleteWorkspaceFork(context.Background(), "child-id", link, nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(copy); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("fork's session copy left behind: %v", err)
+	if _, err := os.Stat(forked); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("fork's session forked left behind: %v", err)
 	}
 	if _, err := os.Stat(other); err != nil {
 		t.Fatalf("another session was removed: %v", err)

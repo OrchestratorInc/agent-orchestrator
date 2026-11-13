@@ -9,12 +9,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
 //go:embed fork_session.mjs
@@ -110,7 +110,7 @@ func resolveForkPoint(ctx context.Context, sessionFile, apiMessageID string) (st
 	if err != nil {
 		return "", err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 0, 1<<20), 256<<20)
 	last := ""
@@ -148,7 +148,7 @@ func moveSessionFile(ctx context.Context, from, to string, sources []string, dst
 	if err != nil {
 		return err
 	}
-	defer in.Close()
+	defer func() { _ = in.Close() }()
 	if err := os.MkdirAll(filepath.Dir(to), 0o700); err != nil {
 		return err
 	}
@@ -156,27 +156,27 @@ func moveSessionFile(ctx context.Context, from, to string, sources []string, dst
 	if err != nil {
 		return err
 	}
-	defer os.Remove(tmp.Name())
+	defer func() { _ = os.Remove(tmp.Name()) }()
 	out := bufio.NewWriter(tmp)
 	scanner := bufio.NewScanner(in)
 	scanner.Buffer(make([]byte, 0, 1<<20), 256<<20)
 	for scanner.Scan() {
 		if err := ctx.Err(); err != nil {
-			tmp.Close()
+			_ = tmp.Close()
 			return err
 		}
 		line := rewriteWorkspacePaths(scanner.Bytes(), sources, dst)
 		if _, err := out.Write(append(line, '\n')); err != nil {
-			tmp.Close()
+			_ = tmp.Close()
 			return err
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return err
 	}
 	if err := out.Flush(); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return err
 	}
 	if err := tmp.Close(); err != nil {
@@ -185,7 +185,7 @@ func moveSessionFile(ctx context.Context, from, to string, sources []string, dst
 	if err := os.Rename(tmp.Name(), to); err != nil {
 		return err
 	}
-	in.Close()
+	_ = in.Close()
 	return os.Remove(from)
 }
 
@@ -219,7 +219,8 @@ func rewriteWorkspacePaths(line []byte, sources []string, dst string) []byte {
 			rest = rest[end:]
 		}
 		if out != nil {
-			line = append(out, rest...)
+			out = append(out, rest...)
+			line = out
 		}
 	}
 	return line
@@ -266,13 +267,13 @@ var runForkScript = func(ctx context.Context, env []string, sourceID, dir, upTo 
 	if err != nil {
 		return "", err
 	}
-	defer os.Remove(script.Name())
+	defer func() { _ = os.Remove(script.Name()) }()
 	if _, err := script.Write(forkSessionScript); err != nil {
-		script.Close()
+		_ = script.Close()
 		return "", err
 	}
-	script.Close()
-	cmd := exec.CommandContext(ctx, node, script.Name(), sdk, sourceID, dir, upTo)
+	_ = script.Close()
+	cmd := aoprocess.CommandContext(ctx, node, script.Name(), sdk, sourceID, dir, upTo)
 	cmd.Env = env
 	cmd.Dir = dir
 	var stdout, stderr bytes.Buffer

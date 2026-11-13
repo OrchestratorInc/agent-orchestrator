@@ -250,7 +250,7 @@ func (a transcriptAgent) NativeSessionConfigDir(context.Context, map[string]stri
 func (a transcriptAgent) LocateTranscript(_ context.Context, ref ports.NativeSessionRef) (string, bool, error) {
 	path := filepath.Join(ref.ConfigDir, ref.NativeSessionID+".jsonl")
 	if _, err := os.Stat(path); err != nil {
-		return "", false, nil
+		return "", false, nil //nolint:nilerr // a missing transcript is not found
 	}
 	return path, true, nil
 }

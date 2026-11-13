@@ -184,7 +184,7 @@ func wireSessionFork(store *sqlite.Store, sessionSvc *sessionsvc.Service, mgr se
 // tellPRMoved tells a session that one of its PRs moved. A Chat session whose
 // agent isn't running gets the notice queued for when it wakes; only one
 // whose agent never started, which has no queue, is started to be told.
-func tellPRMoved(ctx context.Context, send func(context.Context, domain.SessionID, string) error, queue func(context.Context, domain.SessionID, string) error, resume func(context.Context, domain.SessionID) error, id domain.SessionID, message string) error {
+func tellPRMoved(ctx context.Context, send, queue func(context.Context, domain.SessionID, string) error, resume func(context.Context, domain.SessionID) error, id domain.SessionID, message string) error {
 	err := send(ctx, id, message)
 	if !errors.Is(err, chatsvc.ErrNoController) {
 		return err

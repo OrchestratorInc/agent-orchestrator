@@ -41,7 +41,8 @@ func sessionForkStrategy(driver ports.ChatDriver) sessionForkMode {
 func (s *Service) SessionForkSource(ctx context.Context, rec domain.SessionRecord, turnID string) (sessionfork.Source, error) {
 	driver, err := s.drivers.Driver(rec.Harness)
 	if err != nil {
-		return sessionfork.Source{Refusal: sessionfork.CodeAgentUnsupported}, nil
+		// No driver for this agent: a refusal the desktop shows, not a failure.
+		return sessionfork.Source{Refusal: sessionfork.CodeAgentUnsupported}, nil //nolint:nilerr // reported as a refusal
 	}
 	// An agent that can't copy its own conversation is forked with AO's copy,
 	// as text.

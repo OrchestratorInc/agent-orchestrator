@@ -13,11 +13,12 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
+
+	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
 // RefPrefix holds every seed ref. Leftovers here with no fork are reaped.
@@ -68,7 +69,7 @@ func worktreeTree(ctx context.Context, workspace string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer os.Remove(index)
+	defer func() { _ = os.Remove(index) }()
 	env := []string{"GIT_INDEX_FILE=" + index}
 	if _, err := run(ctx, workspace, env, "add", "-A", "--", "."); err != nil {
 		return "", fmt.Errorf("forkseed: stage files: %w", err)
@@ -104,7 +105,7 @@ func RecordBase(ctx context.Context, worktree, ref string) error {
 func UnchangedSince(ctx context.Context, worktree, ref string) (bool, error) {
 	base, err := run(ctx, worktree, nil, "rev-parse", "--verify", "--quiet", ref+"^{tree}")
 	if err != nil {
-		return false, nil
+		return false, nil //nolint:nilerr // a missing ref reports false, as documented
 	}
 	now, err := worktreeTree(ctx, worktree)
 	if err != nil {
@@ -126,7 +127,7 @@ func RestoreBase(ctx context.Context, worktree, ref string) (applied bool, err e
 	}
 	start, err := run(ctx, worktree, nil, "rev-parse", "--verify", "--quiet", ref+"^1")
 	if err != nil {
-		return false, nil
+		return false, nil //nolint:nilerr // no recorded start: nothing to restore
 	}
 	head, err := run(ctx, worktree, nil, "rev-parse", "--verify", "HEAD")
 	if err != nil {
@@ -213,7 +214,7 @@ func Delete(ctx context.Context, workspace, ref string) error {
 		return fmt.Errorf("forkseed: refusing to delete %q outside %s", ref, RefPrefix)
 	}
 	if _, err := run(ctx, workspace, nil, "rev-parse", "--verify", "--quiet", ref); err != nil {
-		return nil
+		return nil //nolint:nilerr // already gone: nothing to delete
 	}
 	if _, err := run(ctx, workspace, nil, "update-ref", "-d", ref); err != nil {
 		return fmt.Errorf("forkseed: delete ref: %w", err)
@@ -238,7 +239,7 @@ func List(ctx context.Context, workspace string) ([]string, error) {
 
 // tempIndex copies the real index so `git add` reuses its file stats.
 func tempIndex(ctx context.Context, workspace string) (string, error) {
-	real, err := run(ctx, workspace, nil, "rev-parse", "--path-format=absolute", "--git-path", "index")
+	indexPath, err := run(ctx, workspace, nil, "rev-parse", "--path-format=absolute", "--git-path", "index")
 	if err != nil {
 		return "", fmt.Errorf("forkseed: find index: %w", err)
 	}
@@ -246,18 +247,18 @@ func tempIndex(ctx context.Context, workspace string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer tmp.Close()
-	src, err := os.Open(real)
+	defer func() { _ = tmp.Close() }()
+	src, err := os.Open(indexPath)
 	if errors.Is(err, os.ErrNotExist) {
 		return tmp.Name(), nil
 	}
 	if err != nil {
-		os.Remove(tmp.Name())
+		_ = os.Remove(tmp.Name())
 		return "", err
 	}
-	defer src.Close()
+	defer func() { _ = src.Close() }()
 	if _, err := io.Copy(tmp, src); err != nil {
-		os.Remove(tmp.Name())
+		_ = os.Remove(tmp.Name())
 		return "", err
 	}
 	return tmp.Name(), nil
@@ -269,7 +270,7 @@ var identityEnv = []string{
 }
 
 func run(ctx context.Context, dir string, env []string, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
+	cmd := aoprocess.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
 	cmd.Env = append(os.Environ(), env...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr

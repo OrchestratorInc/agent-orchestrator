@@ -131,18 +131,28 @@ func PruneTurnArtifacts(dir string, keep int) error {
 			used[sum] = true
 		}
 	}
-	err = filepath.WalkDir(filepath.Join(dir, keptDir), func(path string, entry fs.DirEntry, err error) error {
+	// Removed through a root, so a symlink inside can't point a removal
+	// outside the kept content.
+	root, err := os.OpenRoot(filepath.Join(dir, keptDir))
+	if errors.Is(err, fs.ErrNotExist) {
+		return errors.Join(errs...)
+	}
+	if err != nil {
+		return errors.Join(append(errs, err)...)
+	}
+	defer func() { _ = root.Close() }()
+	err = fs.WalkDir(root.FS(), ".", func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if entry.Type().IsRegular() && !used[entry.Name()] {
-			if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			if err := root.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
 				errs = append(errs, err)
 			}
 		}
 		return nil
 	})
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+	if err != nil {
 		errs = append(errs, err)
 	}
 	return errors.Join(errs...)

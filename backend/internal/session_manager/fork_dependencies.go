@@ -27,7 +27,7 @@ func cloneForkDependencies(ctx context.Context, src, dst string) ([]string, erro
 	var cloned []string
 	err := filepath.WalkDir(src, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
-			return nil
+			return nil //nolint:nilerr // skip an unreadable folder; setup installs what's missing
 		}
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
@@ -37,7 +37,7 @@ func cloneForkDependencies(ctx context.Context, src, dst string) ([]string, erro
 		}
 		rel, relErr := filepath.Rel(src, path)
 		if relErr != nil {
-			return nil
+			return nil //nolint:nilerr // skip a path outside the source
 		}
 		if entry.Name() == ".git" || strings.Count(rel, string(filepath.Separator)) >= forkDependencyDepth {
 			return filepath.SkipDir

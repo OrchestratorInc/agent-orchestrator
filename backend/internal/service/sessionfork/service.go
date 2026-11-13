@@ -433,6 +433,19 @@ func (s *Service) RetrySpawnFork(ctx context.Context, fork domain.SessionRecord)
 	return plan.spawnFork(), nil
 }
 
+type forkPlan struct {
+	source  domain.SessionRecord
+	agent   Source
+	title   string
+	root    domain.SessionID
+	number  int
+	name    string
+	head    string
+	seedRef string
+	// keepSeed marks a seed the fork borrowed and must not delete.
+	keepSeed bool
+}
+
 // dropSeed deletes a seed the fork captured itself; a borrowed one is kept.
 func (p forkPlan) dropSeed(ctx context.Context, seeds Seeds) {
 	if p.keepSeed || p.seedRef == "" {
@@ -457,19 +470,6 @@ func (p forkPlan) spawnFork() *ports.SpawnFork {
 		PrepareTerminal:  p.agent.PrepareTerminal,
 		Handoff:          p.agent.Handoff,
 	}
-}
-
-type forkPlan struct {
-	source  domain.SessionRecord
-	agent   Source
-	title   string
-	root    domain.SessionID
-	number  int
-	name    string
-	head    string
-	seedRef string
-	// keepSeed marks a seed the fork borrowed and must not delete.
-	keepSeed bool
 }
 
 // plan checks every rule. With capture set it also records the source's files.
