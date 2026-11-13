@@ -59,7 +59,7 @@ vi.mock("./Toast", () => ({ ToastHost: "ToastHost" }));
 vi.mock("./pageNavigation", () => ({ useOpenPage: () => vi.fn() }));
 vi.mock("./pr-filter-control", () => ({ PRFilterControl: "PRFilterControl" }));
 vi.mock("./ProjectSwitcher", () => ({ ProjectSwitcher: "ProjectSwitcher" }));
-vi.mock("./StaleBanner", () => ({ StaleBanner: "StaleBanner" }));
+vi.mock("./FreshnessLine", () => ({ FreshnessLine: "FreshnessLine" }));
 vi.mock("./UnpairedState", () => ({ UnpairedState: "UnpairedState" }));
 vi.mock("./useBoardFailure", () => ({ useBoardFailure: () => ({}) }));
 vi.mock("./RouteErrorBoundary", () => ({ RouteErrorBoundary: () => null }));

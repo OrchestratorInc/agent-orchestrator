@@ -13,7 +13,7 @@ vi.mock("react-native", () => ({
 	View: "View",
 }));
 vi.mock("./ThemeProvider", () => {
-	const theme = { textSecondary: "gray" };
+	const theme = { textSecondary: "gray", red: "red", amber: "amber", textTertiary: "silver" };
 	return {
 		useTheme: () => theme,
 		useThemedStyles: (factory: (value: typeof theme) => unknown) => factory(theme),
@@ -45,6 +45,27 @@ describe("MachineIdentity", () => {
 		expect(glyph.props.tintColor).toBe("gray");
 		expect(glyph.props.size).toBe(16);
 		expect(surfaceStyle.backgroundColor).toBeUndefined();
+	});
+
+	it("puts the freshness dot before the name and speaks the state", () => {
+		let renderer!: ReactTestRenderer;
+		act(() => {
+			renderer = create(<MachineIdentity name="Mac" appearance={{ symbol: "laptop" }} freshness="unreachable" />);
+		});
+		const identity = renderer.root.findByProps({ testID: "machine-identity" });
+		expect(identity.props.accessibilityLabel).toBe("Machine Mac, can't reach");
+		const dot = renderer.root.find((node) => node.props.testID === "machine-identity-freshness" && (node.type as unknown) === "View");
+		expect(dot.props.style).toContainEqual({ backgroundColor: "red" });
+		expect(dot.props.accessibilityElementsHidden).toBe(true);
+	});
+
+	it("wears no dot while live", () => {
+		let renderer!: ReactTestRenderer;
+		act(() => {
+			renderer = create(<MachineIdentity name="Mac" appearance={{ symbol: "laptop" }} freshness="live" />);
+		});
+		expect(renderer.root.findAll((node) => node.props.testID === "machine-identity-freshness")).toHaveLength(0);
+		expect(renderer.root.findByProps({ testID: "machine-identity" }).props.accessibilityLabel).toBe("Machine Mac");
 	});
 });
 

@@ -1,5 +1,6 @@
-import { FilterChip, Host, Icon, LazyRow, Text } from "@expo/ui/jetpack-compose";
-import { testID } from "@expo/ui/jetpack-compose/modifiers";
+import { Box, FilterChip, Host, Icon, LazyRow, Text } from "@expo/ui/jetpack-compose";
+import { background, clip, Shapes, size, testID } from "@expo/ui/jetpack-compose/modifiers";
+import { freshnessColor, freshnessTone } from "./machineFreshness";
 import { haptics } from "./haptics";
 import { useTheme, useThemeState } from "./ThemeProvider";
 import { materialDrawable } from "./toolbarIcon.android";
@@ -11,6 +12,8 @@ export type { WorkerEnvironmentFilterProps } from "./worker-environment-filter.t
 
 /** Material's filter-chip glyph size. */
 const CHIP_ICON_SIZE = 18;
+/** The freshness dot, the same size as on the rows. */
+const FRESHNESS_DOT = 7;
 
 /**
  * The Workers board's machine filter as a row of Material 3 filter chips: "All
@@ -37,6 +40,7 @@ export function WorkerEnvironmentFilter({ environments, selectedEnvironmentId, o
 				{workerEnvironmentOptions(environments).map((environment) => {
 					const all = environment.id === ALL_WORKER_ENVIRONMENTS;
 					const selected = environment.id === selectedEnvironmentId;
+					const tone = freshnessTone(environment.freshness);
 					return (
 						<FilterChip
 							key={environment.id}
@@ -57,6 +61,12 @@ export function WorkerEnvironmentFilter({ environments, selectedEnvironmentId, o
 								<FilterChip.LeadingIcon>
 									<Icon source={materialDrawable("check")} size={CHIP_ICON_SIZE} />
 								</FilterChip.LeadingIcon>
+							) : null}
+							{/* Trailing: Material keeps the leading slot for the check. */}
+							{tone ? (
+								<FilterChip.TrailingIcon>
+									<Box modifiers={[size(FRESHNESS_DOT, FRESHNESS_DOT), clip(Shapes.Circle), background(freshnessColor(t, tone)), testID(`worker-environment-freshness-${environment.id}`)]} />
+								</FilterChip.TrailingIcon>
 							) : null}
 							<FilterChip.Label>
 								<Text maxLines={1} overflow="ellipsis" style={{ typography: "labelLarge", fontFamily: "DMSans_500Medium" }}>

@@ -86,7 +86,8 @@ vi.mock("./store", () => ({ useApp: () => ({
 	hostStates: fixtures.hostStates, notificationsUnread: fixtures.notificationsUnread,
 	phoneNetwork: { connected: true, internet: true },
 }) }));
-vi.mock("./StaleBanner", () => ({ StaleBanner: "StaleBanner" }));
+vi.mock("./FreshnessLine", () => ({ FreshnessLine: "FreshnessLine" }));
+vi.mock("./useMachineFreshness", () => ({ useMachineFreshness: () => new Map() }));
 vi.mock("./useBoardFailure", () => ({ useBoardFailure: () => ({ icon: "wifi-off", title: "Can't connect", hint: "Try again" }) }));
 vi.mock("./UnpairedState", () => ({ UnpairedState: "UnpairedState" }));
 vi.mock("./ThemeProvider", () => ({

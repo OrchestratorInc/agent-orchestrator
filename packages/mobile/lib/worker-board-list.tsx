@@ -25,6 +25,8 @@ import { usePressFeedback } from "./pressFeedback";
 import { refreshControlColors } from "./refreshControlColors";
 import { Spinner } from "./Spinner";
 import { useApp } from "./store";
+import type { MachineFreshness } from "./machineFreshness";
+import { useMachineFreshness } from "./useMachineFreshness";
 import type { Theme } from "./theme";
 import { statusVisual } from "./theme";
 import { useTheme, useThemedStyles } from "./ThemeProvider";
@@ -189,6 +191,8 @@ function WorkerBoard({
 	const styles = useThemedStyles(makeStyles);
 	const router = useRouter();
 	const { projects, allProjects, currentHostId, connection, hostStates, kill, renameWorker, setWorkerPinned, restore, resumeAgent } = useApp();
+	// Each machine's dot beside its name on the rows; only drawn where rows name their machine.
+	const freshness = useMachineFreshness();
 	const [renamingWorkerId, setRenamingWorkerId] = useState<string>();
 	// The rows are memoised on their session, so a live text-size change would
 	// leave them drawn at the old size's measurements, cut into fragments,
@@ -543,9 +547,10 @@ function WorkerBoard({
 		return <BoundWorkerRow session={item.session} hostId={currentHostId} nowBucket={nowBucket}
 			projectName={showProject ? projectNameFor(item.session) : item.session.harness || "Agent"}
 			isRenaming={renamingWorkerId === item.key} activeSwipeId={activeSwipeId}
-			onSwipeOpen={openExclusiveSwipe} onSwipeClose={closeExclusiveSwipe} actions={actions} showMachine={showMachine} />;
+			onSwipeOpen={openExclusiveSwipe} onSwipeClose={closeExclusiveSwipe} actions={actions} showMachine={showMachine}
+			freshness={showMachine ? freshness.get(sessionHostId(item.session) ?? currentHostId ?? "") : undefined} />;
 	}, [archiveCount, archiveOpen, pagedArchive.loading, pagedArchive.error, pagedArchive.hasMore, pagedArchive.retry, pagedArchive.loadMore, toggleArchive, toggleSection, currentHostId, nowBucket, showProject, showMachine, projectNameFor,
-		renamingWorkerId, activeSwipeId, openExclusiveSwipe, closeExclusiveSwipe, actions, restoringKey, restoreErrors, restoreArchived, machineOffline]);
+		renamingWorkerId, activeSwipeId, openExclusiveSwipe, closeExclusiveSwipe, actions, restoringKey, restoreErrors, restoreArchived, machineOffline, freshness]);
 
 	// An empty board's message is centred in what the bars leave of the page.
 	// Grown to the list's frame, as `flexGrow` grows it, an iOS list inset for
@@ -628,6 +633,8 @@ function WorkerBoard({
 type BoundWorkerRowProps = Pick<ComponentProps<typeof WorkerListRow>,
 	"session" | "hostId" | "projectName" | "nowBucket" | "isRenaming" | "activeSwipeId" | "onSwipeOpen" | "onSwipeClose"> & {
 	showMachine: boolean;
+	/** The row's machine's freshness, for the dot beside its name. */
+	freshness?: MachineFreshness;
 	actions: {
 		renameStart(id: string | undefined): void;
 		rename(id: string, title: string, hostId?: string): Promise<void>;
@@ -638,10 +645,13 @@ type BoundWorkerRowProps = Pick<ComponentProps<typeof WorkerListRow>,
 };
 
 // Bind once per changed session, not once per whole-board context publication.
-const BoundWorkerRow = memo(function BoundWorkerRow({ actions, showMachine, ...props }: BoundWorkerRowProps) {
+const BoundWorkerRow = memo(function BoundWorkerRow({ actions, showMachine, freshness, ...props }: BoundWorkerRowProps) {
 	const session = props.session;
 	const rowKey = hostedSessionKey(session);
-	const machine = useMemo(() => showMachine ? sessionMachineIdentity(session) : undefined, [session, showMachine]);
+	const machine = useMemo(() => {
+		const identity = showMachine ? sessionMachineIdentity(session) : undefined;
+		return identity && freshness ? { ...identity, freshness } : identity;
+	}, [session, showMachine, freshness]);
 	const handlers = useMemo(() => ({
 		onRenameStart: () => actions.renameStart(rowKey),
 		onRenameCancel: () => actions.renameStart(undefined),

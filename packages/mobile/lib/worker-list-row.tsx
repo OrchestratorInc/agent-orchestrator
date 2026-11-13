@@ -26,6 +26,7 @@ import { reviewRouteForSession } from "./reviewView";
 import { isCloudHost } from "./cloud/mapping";
 import { MachineIdentity } from "./MachineIdentity";
 import type { MachineAppearance } from "./machineAppearance";
+import type { MachineFreshness } from "./machineFreshness";
 
 export const WorkerListRow = memo(
 	function WorkerListRow({
@@ -52,7 +53,7 @@ export const WorkerListRow = memo(
 	hostId?: string;
 	rowKey?: string;
 	projectName?: string;
-	machine?: { name: string; appearance: MachineAppearance };
+	machine?: { name: string; appearance: MachineAppearance; freshness?: MachineFreshness };
 	isRenaming: boolean;
 	activeSwipeId?: string;
 	/**
@@ -265,6 +266,7 @@ export const WorkerListRow = memo(
 		prev.hostId === next.hostId &&
 		prev.machine?.name === next.machine?.name &&
 		prev.machine?.appearance.symbol === next.machine?.appearance.symbol &&
+		prev.machine?.freshness === next.machine?.freshness &&
 		prev.isRenaming === next.isRenaming &&
 		prev.activeSwipeId === next.activeSwipeId &&
 		prev.session === next.session &&
@@ -297,7 +299,7 @@ function WorkerRowContents({
 	details: string;
 	prsTone?: Parameters<typeof toneColor>[1];
 	harness: DashboardSession["harness"];
-	machine?: { name: string; appearance: MachineAppearance };
+	machine?: { name: string; appearance: MachineAppearance; freshness?: MachineFreshness };
 	isRenaming?: boolean;
 	renameTitle?: string;
 	renameSaving?: boolean;
@@ -356,7 +358,9 @@ function WorkerRowContents({
 					{renameSaving ? <Spinner size={iconSize.md} accessibilityLabel="Saving worker name" /> : null}
 				</View>
 			) : (
-				<Text style={styles.title} numberOfLines={1}>
+				// Softened while its machine can't be reached: the status above it is
+				// the last one heard, so the row should not read as live.
+				<Text style={[styles.title, machine?.freshness === "unreachable" && styles.titleUnreachable]} numberOfLines={1}>
 					{row.title}
 				</Text>
 			)}
@@ -368,7 +372,7 @@ function WorkerRowContents({
 							{details}
 						</Text>
 					) : <View style={styles.metadataSpacer} />}
-					{machine ? <MachineIdentity testID="worker-machine-identity" name={machine.name} appearance={machine.appearance} style={styles.machineIdentity} /> : null}
+					{machine ? <MachineIdentity testID="worker-machine-identity" name={machine.name} appearance={machine.appearance} freshness={machine.freshness} style={styles.machineIdentity} /> : null}
 				</View>
 			) : null}
 		</>
@@ -414,6 +418,7 @@ const makeStyles = (t: Theme) =>
 		project: { fontFamily: "DMSans_500Medium", flex: 1, color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "500" },
 		trailing: { fontFamily: "DMSans_500Medium", flexShrink: 0, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "500", fontVariant: ["tabular-nums"] },
 		title: { fontFamily: "DMSans_600SemiBold", color: t.textPrimary, fontSize: 16, lineHeight: 21, fontWeight: "600", letterSpacing: -0.15 },
+		titleUnreachable: { color: t.textSecondary },
 		metadata: { minWidth: 0, flexDirection: "row", alignItems: "center", gap: space.sm },
 		metadataSpacer: { flex: 1 },
 		details: { flex: 1, minWidth: 0, color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontFamily: t.fontMono },

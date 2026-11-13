@@ -190,7 +190,7 @@ type AppState = {
 	 *
 	 * Deliberately a getter rather than a value: a timestamp that changed on every
 	 * successful tick would re-render every consumer of this store once per poll.
-	 * Read it through useStaleness, which owns the clock.
+	 * Read it through useMachineFreshness or FreshnessLine, which own the clock.
 	 */
 	getLastSyncAt: () => number;
 	// actions

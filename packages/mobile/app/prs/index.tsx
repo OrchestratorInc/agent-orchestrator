@@ -11,7 +11,7 @@ import { collectPRs, prFilterCounts, prInFilter, prLifecycle, prListSections, ty
 import { refreshControlColors } from "../../lib/refreshControlColors";
 import { Spinner } from "../../lib/Spinner";
 import { StackRootBack } from "../../lib/StackRootBack";
-import { StaleBanner } from "../../lib/StaleBanner";
+import { FreshnessLine } from "../../lib/FreshnessLine";
 import { useApp } from "../../lib/store";
 import { useCloud } from "../../lib/cloud/CloudProvider";
 import { isCloudHost } from "../../lib/cloud/mapping";
@@ -149,7 +149,8 @@ function PRList() {
 		<>
 			{singleMachine && !routeHostId ? <ProjectSwitcher /> : null}
 			<PRFilterControl filter={filter} counts={counts} onChange={setFilter} />
-			{singleMachine ? <StaleBanner error={!!error} onRetry={retry} /> : <StaleBanner networkOnly />}
+			{/* Speaks for one machine only when every PR here is on it. */}
+			<FreshnessLine hostId={singleMachine ? hostStates[0].hostId : routeHostId ?? undefined} onRetry={retry} />
 		</>
 	);
 

@@ -4,7 +4,8 @@ import { ActivityIndicator, FlatList, Keyboard, StyleSheet, View } from "react-n
 import { useLargeTitle } from "../../../lib/largeTitle";
 import { useTabBarFrost } from "../../../lib/frost";
 import { boardTitle } from "../../../lib/board-tabs";
-import { StaleBanner } from "../../../lib/StaleBanner";
+import { FreshnessLine } from "../../../lib/FreshnessLine";
+import { useMachineFreshness } from "../../../lib/useMachineFreshness";
 import { useApp } from "../../../lib/store";
 import { useCloud } from "../../../lib/cloud/CloudProvider";
 import { CLOUD_HOST_ID } from "../../../lib/cloud/mapping";
@@ -82,10 +83,12 @@ export default function FleetScreen() {
 	// handlers below avoid.
 	// Orchestrator Cloud is one more environment while signed in: its workers are on this board.
 	const environmentsKey = JSON.stringify([...hostStates, ...(cloud ? [cloud] : [])].map((host) => [host.hostId, host.name, host.appearance.symbol]));
+	// Each machine's dot on its chip. Changes only when some machine's state does.
+	const freshness = useMachineFreshness();
 	const environments = useMemo(
-		() => sortWorkerEnvironments([...hostStates, ...(cloud ? [cloud] : [])].map((host) => ({ id: host.hostId, name: host.name, appearance: host.appearance }))),
-		// eslint-disable-next-line react-hooks/exhaustive-deps -- environmentsKey covers every field read here
-		[environmentsKey],
+		() => sortWorkerEnvironments([...hostStates, ...(cloud ? [cloud] : [])].map((host) => ({ id: host.hostId, name: host.name, appearance: host.appearance, freshness: freshness.get(host.hostId) }))),
+		// eslint-disable-next-line react-hooks/exhaustive-deps -- environmentsKey and freshness cover every field read here
+		[environmentsKey, freshness],
 	);
 	const projectOptions = useMemo(
 		() => workerProjectOptions(allProjects, workerEnvironmentId),
@@ -221,15 +224,20 @@ export default function FleetScreen() {
 						: workerEnvironmentId !== ALL_WORKER_ENVIRONMENTS ? "environment"
 							: "idle";
 	const [boardEmpty, setBoardEmpty] = useState(false);
+	// The one machine every row is on, when it is a paired machine: the line under
+	// the title speaks for it, since a dot on every row would say the same thing.
+	// With several machines on the board their chips and rows carry the dots.
+	const lineHostId = selectedHost?.hostId ?? (!cloudSelected && !cloud && hostStates.length === 1 ? hostStates[0].hostId : undefined);
 
 	// Inside the list rather than above it: the header is translucent and the page
 	// is laid out under it, so the list has to be the page's first view. Above the
-	// rows rather than inside ListEmptyComponent, because the case the banner
-	// exists for is a populated board whose poll has died.
+	// rows rather than inside ListEmptyComponent, because the case the line exists
+	// for is a populated board whose machine has stopped answering; an empty board's
+	// own state already says why it is empty.
 	const listHeader = unpaired ? largeTitle.header : (
 		<>
 			{largeTitle.header}
-			{hostStates.length <= 1 ? <StaleBanner error={!!error} onRetry={retry} /> : <StaleBanner networkOnly />}
+			{boardEmpty ? null : <FreshnessLine hostId={lineHostId} onRetry={retry} />}
 			{showsEnvironmentFilter(environments) ? (
 				<WorkerEnvironmentFilter
 					environments={environments}

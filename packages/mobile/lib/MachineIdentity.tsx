@@ -1,6 +1,8 @@
 import type { StyleProp, ViewStyle } from "react-native";
 import { StyleSheet, Text, View } from "react-native";
 import { AppSymbol } from "./AppSymbol";
+import { FreshnessDot } from "./FreshnessDot";
+import { freshnessAccessibilityLabel, freshnessTone, type MachineFreshness } from "./machineFreshness";
 import { machineSymbolNames, type MachineAppearance } from "./machineAppearance";
 import type { Theme } from "./theme";
 import { useTheme, useThemedStyles } from "./ThemeProvider";
@@ -21,10 +23,17 @@ export function MachineAvatar({ appearance, size = 22, color }: { appearance: Ma
 	);
 }
 
-export function MachineIdentity({ name, appearance, style, testID = "machine-identity" }: { name: string; appearance: MachineAppearance; style?: StyleProp<ViewStyle>; testID?: string }) {
+/**
+ * A machine's name and glyph at the end of a row. `freshness` puts its dot in
+ * front of the name when the machine's rows may not be current (see
+ * machineFreshness); a live machine shows no mark.
+ */
+export function MachineIdentity({ name, appearance, freshness, style, testID = "machine-identity" }: { name: string; appearance: MachineAppearance; freshness?: MachineFreshness; style?: StyleProp<ViewStyle>; testID?: string }) {
 	const themed = useThemedStyles(makeStyles);
+	const state = freshnessAccessibilityLabel(freshness);
 	return (
-		<View testID={testID} accessibilityLabel={`Machine ${name}`} style={[themed.identity, style]}>
+		<View testID={testID} accessibilityLabel={state ? `Machine ${name}, ${state}` : `Machine ${name}`} style={[themed.identity, style]}>
+			{freshness && freshness !== "live" ? <FreshnessDot tone={freshnessTone(freshness)} testID="machine-identity-freshness" /> : null}
 			<Text testID="machine-identity-name" numberOfLines={1} ellipsizeMode="tail" style={themed.name}>{name}</Text>
 			<MachineAvatar testID="machine-identity-symbol" appearance={appearance} />
 		</View>
