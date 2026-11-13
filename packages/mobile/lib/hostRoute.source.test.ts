@@ -16,15 +16,16 @@ describe("retained-stack host routes", () => {
 		expect(shell).toContain("hostRouteMatches(routeHostId, currentHostId)");
 		expect(shell).toContain("<TerminalSessionScreen /></View>;");
 		expect(preview).toContain("hostRouteMatches(routeHostId, currentHostId)");
-		expect(preview).toContain("previewForConfig(");
+		expect(preview).toContain("heldPreview(");
 	});
 
 	it("routes terminal previews through the owning host without leaking another credential", () => {
 		const terminal = source("./session/TerminalSessionScreen.tsx");
 		const preview = source("../app/preview/[id].tsx");
 		expect(terminal).toContain("hostId: params.hostId");
-		expect(preview).toContain("previewForConfig(loaded, config, routeHostId)");
-		expect(preview).toContain("headers: preview.authenticated && config ? authHeaders(config) : undefined");
+		// The URL and its credential always come from the same connection (see heldPreview).
+		expect(preview).toContain("heldPreview(loaded, config, routeHostId)");
+		expect(preview).toContain("authHeaders(shown.config)");
 	});
 
 	it("requires the owning host for review detail, reviewer chat, and actions", () => {

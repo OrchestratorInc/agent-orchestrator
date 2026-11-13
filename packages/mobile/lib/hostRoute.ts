@@ -1,4 +1,5 @@
 import type { ServerConfig } from "./config";
+import { sameServerConfig } from "./sameConfig";
 
 export type SpawnHostOption = { id: string; label: string };
 
@@ -78,4 +79,22 @@ export function previewForConfig<T>(
 	return loaded && loaded.config === config && hostRouteMatches(routeHostId, config?.hostId)
 		? loaded.value
 		: null;
+}
+
+/**
+ * The preview to keep on screen, with the connection whose credential goes
+ * with its URL: the one loaded for this connection; or, while the connection
+ * is away (an app switch, an endpoint race) or back on the same endpoint with
+ * the same credential, the one already showing, so its page is not loaded
+ * again. Never an old URL with a different endpoint's credential, and never
+ * another machine's preview.
+ */
+export function heldPreview<T>(
+	loaded: { config: ServerConfig; value: T } | null,
+	config: ServerConfig | null,
+	routeHostId: string | undefined,
+): { value: T; config: ServerConfig } | null {
+	if (!loaded || !hostRouteMatches(routeHostId, loaded.config.hostId)) return null;
+	if (previewForConfig(loaded, config, routeHostId) !== null) return { value: loaded.value, config: loaded.config };
+	return !config || sameServerConfig(loaded.config, config) ? { value: loaded.value, config: loaded.config } : null;
 }

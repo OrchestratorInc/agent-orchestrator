@@ -8,7 +8,7 @@ import { AppSymbol } from "../../lib/AppSymbol";
 import { authHeaders } from "../../lib/config";
 import { userFacingError } from "../../lib/connectionError";
 import { rowDividerWidth } from "../../lib/divider";
-import { hostRouteMatches, previewForConfig } from "../../lib/hostRoute";
+import { heldPreview, hostRouteMatches } from "../../lib/hostRoute";
 import { BrowserLivePane } from "../../lib/preview/BrowserLivePane";
 import { LoadingBar } from "../../lib/preview/LoadingBar";
 import { previewModeMenu, type PreviewMode } from "../../lib/preview/previewModeMenu";
@@ -42,7 +42,12 @@ function SessionPreviewContent() {
 	// An explicit choice wins over the initial disabled-sharing fallback.
 	const [active, setActive] = useState<"browser" | "app" | null>(null);
 	const [loaded, setLoaded] = useState<{ config: NonNullable<typeof config>; id: string; value: Awaited<ReturnType<typeof getPreview>> } | null>(null);
-	const preview = loaded?.id === sessionID ? previewForConfig(loaded, config, routeHostId) : null;
+	// The page on screen stays through an app switch: while the connection is away,
+	// and once it is back on the same endpoint with the same credential, the
+	// preview loaded for it is still the one to show, so the web view keeps its
+	// page instead of loading it again. A different endpoint loads it fresh.
+	const shown = loaded?.id === sessionID ? heldPreview(loaded, config, routeHostId) : null;
+	const preview = shown?.value ?? null;
 	const currentConfig = useRef(config);
 	currentConfig.current = config;
 	const currentRoute = useRef(`${routeHostId ?? ""}|${sessionID}`);
@@ -53,7 +58,7 @@ function SessionPreviewContent() {
 	const sharingDisabled = disabledStream?.id === sessionID && disabledStream?.hostId === routeHostId;
 	const wantsResponsive = active === "app" || (active === null && sharingDisabled);
 	const refreshingResponsive = wantsResponsive && !previewError && loaded !== null &&
-		loaded.id === sessionID && loaded.config.hostId === routeHostId && Boolean(loaded.value) && loaded.config !== config;
+		loaded.id === sessionID && loaded.config.hostId === routeHostId && Boolean(loaded.value) && loaded.config !== config && !shown;
 	const responsive = wantsResponsive && (canShowResponsive || refreshingResponsive);
 	const showingApp = responsive && !refreshingResponsive && preview !== null;
 	const onBrowserDisabled = useCallback(() => {
@@ -66,6 +71,11 @@ function SessionPreviewContent() {
 	const [webProgress, setWebProgress] = useState(1);
 	const webHistory = useRef(false);
 	const appURL = showingApp ? preview.url : undefined;
+	// The URL with the headers of the connection that answered it, kept as one
+	// object while both are the same: a new source makes the web view reload.
+	const appHeaders = showingApp && preview.authenticated && shown ? authHeaders(shown.config) : undefined;
+	const appHeadersKey = JSON.stringify(appHeaders ?? null);
+	const appSource = useMemo(() => appURL ? { uri: appURL, headers: appHeaders } : undefined, [appURL, appHeadersKey]);
 	useEffect(() => {
 		setWebTitle(undefined);
 		setWebProgress(1);
@@ -95,7 +105,7 @@ function SessionPreviewContent() {
 	// re-renders on every preview poll. The live browser draws the bar's right
 	// side itself, ending with the view menu handed to it.
 	const mode: PreviewMode = responsive ? "app" : "browser";
-	const showMenu = hostMatches && Boolean(config);
+	const showMenu = hostMatches && Boolean(config || shown);
 	const modeMenu = useMemo(() => showMenu ? previewModeMenu({ mode, appAvailable: canShowResponsive, onSelect: setActive }) : null, [canShowResponsive, mode, showMenu]);
 	const headerItems = useMemo(() => modeMenu && !showingBrowser ? (
 		<Stack.Toolbar placement="right">
@@ -148,15 +158,16 @@ function SessionPreviewContent() {
 	// Preview is pushed over the board, so the way back to it pops rather than
 	// stacking a second board on top.
 	if (!hostMatches) return <View style={styles.center}><EmptyState icon="globe" title="Preview belongs to another machine" message="Open it from that machine's session." action={<Button title="Open board" icon="workers" onPress={() => router.dismissTo("/")} />} /></View>;
-	if (!config && connection === "closed") return <View style={styles.center}><EmptyState icon="wifi-off" title="Machine offline" message="This preview loads once the app reconnects." /></View>;
-	if (!config) return <View style={styles.center}><EmptyState busy title="Connecting to this machine…" /></View>;
+	// Only with nothing to show yet: a page already open stays while the app reconnects.
+	if (!config && !preview && connection === "closed") return <View style={styles.center}><EmptyState icon="wifi-off" title="Machine offline" message="This preview loads once the app reconnects." /></View>;
+	if (!config && !preview) return <View style={styles.center}><EmptyState busy title="Connecting to this machine…" /></View>;
 
 	return <View style={[styles.screen, { paddingTop: glassInset }]}>
 		{headerItems}
 		{refreshingResponsive ? <View style={styles.center}><EmptyState busy title="Loading mobile preview…" /></View> : !showingApp ? <BrowserLivePane sessionID={sessionID} onDisabled={onBrowserDisabled} onTitle={setBrowserTitle} headerItem={modeMenu} /> : <View style={styles.appPane}>
 			<WebView
 				ref={web}
-				source={{ uri: preview.url, headers: preview.authenticated && config ? authHeaders(config) : undefined }}
+				source={appSource ?? { uri: preview.url }}
 				style={styles.web}
 				// The bar shows a load in progress; a reload keeps the page readable
 				// under it rather than covering it with a spinner.
