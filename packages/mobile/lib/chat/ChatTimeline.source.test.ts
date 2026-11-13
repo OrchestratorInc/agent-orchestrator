@@ -8,6 +8,17 @@ const turnSummarySource = source.slice(
 	source.indexOf("function ChangedFiles"),
 );
 
+describe("chat turn results", () => {
+	// A failed or interrupted turn shows no tiles, so the changed-files card has
+	// to keep its artifact files: it takes turnResults' files and nothing else.
+	it("lists the changed files turnResults keeps, never a separately filtered diff", () => {
+		expect(turnSummarySource).toContain("const results = useMemo(() => turnResults(turn, source), [source, turn]);");
+		expect(turnSummarySource).toContain("<ChangedFiles turn={turn} changed={results.files} />");
+		expect(turnSummarySource).toContain("<TurnArtifacts artifacts={results.artifacts} source={source} />");
+		expect(turnSummarySource).not.toContain("splitTurnArtifacts");
+	});
+});
+
 describe("chat turn summary styling", () => {
 	it("shows the duration without a trailing divider line", () => {
 		expect(turnSummarySource).toContain("Worked for ${duration}");

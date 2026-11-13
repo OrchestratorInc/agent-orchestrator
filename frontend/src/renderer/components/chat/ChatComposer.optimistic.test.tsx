@@ -82,6 +82,61 @@ describe("optimistic message delivery", () => {
 		}
 	});
 
+	it("sends a message entered while the previous one is still being sent, right after it", async () => {
+		const sessionId = "optimistic-rapid-next-message";
+		const pending = pendingSend();
+		renderComposer(sessionId, pending.onSend);
+		const field = await startSend(pending.onSend, "first message");
+		await typeInLexicalEditor(field, "second message");
+		fireEvent.keyDown(field, { key: "Enter" });
+
+		expect(pending.onSend).toHaveBeenCalledOnce();
+		expect(field).toHaveTextContent("second message");
+
+		await act(async () => pending.resolve());
+
+		await waitFor(() => expect(pending.onSend).toHaveBeenCalledTimes(2));
+		expect(pending.onSend.mock.calls.map(([text]) => text)).toEqual(["first message", "second message"]);
+		expect(pending.onSend.mock.calls[1][2]).toEqual(expect.any(String));
+		expect(pending.onSend.mock.calls[1][2]).not.toBe(pending.onSend.mock.calls[0][2]);
+		await waitFor(() => expect(readChatSessionDraft(sessionId).composer.delivery).toBeUndefined());
+		expect(field.textContent).toBe("");
+		expect(readChatSessionDraft(sessionId).composer.text).toBe("");
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+	});
+
+	it("sends nothing extra when Enter is pressed again on the cleared box during a send", async () => {
+		const sessionId = "optimistic-repeat-enter";
+		const pending = pendingSend();
+		renderComposer(sessionId, pending.onSend);
+		const field = await startSend(pending.onSend, "only once");
+		fireEvent.keyDown(field, { key: "Enter" });
+		fireEvent.keyDown(field, { key: "Enter" });
+
+		await act(async () => pending.resolve());
+
+		await waitFor(() => expect(readChatSessionDraft(sessionId).composer.delivery).toBeUndefined());
+		await act(async () => {});
+		expect(pending.onSend).toHaveBeenCalledOnce();
+		expect(field.textContent).toBe("");
+	});
+
+	it("keeps a message entered during a send that got no answer in the box instead of sending it first", async () => {
+		const sessionId = "optimistic-rapid-next-message-lost";
+		const pending = pendingSend();
+		renderComposer(sessionId, pending.onSend);
+		const field = await startSend(pending.onSend, "first message");
+		await typeInLexicalEditor(field, "second message");
+		fireEvent.keyDown(field, { key: "Enter" });
+
+		await act(async () => pending.reject(new Error("response lost")));
+
+		expect(await screen.findByTestId("unsent-message-strip")).toHaveTextContent("first message");
+		await act(async () => {});
+		expect(pending.onSend).toHaveBeenCalledOnce();
+		expect(field).toHaveTextContent("second message");
+	});
+
 	it("persists the next draft after storage reads recover before the original message is accepted", async () => {
 		const sessionId = "optimistic-accepted-next-draft-read-failure";
 		const pending = pendingSend();

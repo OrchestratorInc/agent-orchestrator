@@ -1,5 +1,5 @@
 import { artifactFileIcon } from "./artifact-file-icon";
-import { ChevronDown, File, Filter, Globe, List, Loader2, Package, Pin, Plus, SelectMultiple, Trash2 } from "@/components/app-icons";
+import { ChevronDown, File, Filter, List, Loader2, Package, Pin, Plus, SelectMultiple, Trash2 } from "@/components/app-icons";
 import { useProjectAvatars } from "../hooks/useProjectAvatars";
 import { ProjectIcon } from "./ProjectIcon";
 import { ScrollArea } from "radix-ui";
@@ -22,6 +22,7 @@ import {
 	canChangeSessionArtifacts,
 	filterArtifactGroups,
 	groupArtifactsByProject,
+	withShareAccess,
 	type ArtifactGroup,
 	type ArtifactLocation,
 	type ArtifactRow,
@@ -37,6 +38,7 @@ import { CLOUD_PROJECT_KIND, STANDALONE_WORKSPACE_ID, type WorkspaceSummary } fr
 import { DeferredArtifactActionsMenu } from "./ArtifactActionsMenu";
 import { useArtifactShareFile, useReconciledShareLinks } from "./ShareArtifactPopover";
 import { ArtifactGalleryCard, type ArtifactCardSelection } from "./ArtifactGalleryCard";
+import { ArtifactShareMark } from "./ArtifactShareMark";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { Checkbox } from "./ui/checkbox";
 import { ArtifactPreviewModal } from "./ArtifactPreviewModal";
@@ -87,8 +89,11 @@ export function ArtifactsView() {
 	const orchestratorTitle = t("shell.orchestrator");
 	// Published marks and the Sharing filter read each file's shareUrl; bring
 	// the publish records behind it up to date first.
-	useReconciledShareLinks();
-	const groups = useMemo(() => groupArtifactsByProject(workspaces ?? [], orchestratorTitle), [workspaces, orchestratorTitle]);
+	const shareAccess = useReconciledShareLinks();
+	const groups = useMemo(
+		() => withShareAccess(groupArtifactsByProject(workspaces ?? [], orchestratorTitle), shareAccess),
+		[workspaces, orchestratorTitle, shareAccess],
+	);
 	const [query, setQuery] = useState("");
 	// Each filter keeps several values at once; an empty list shows every artifact.
 	const [projectIds, setProjectIds] = useState<readonly string[]>([]);
@@ -542,17 +547,7 @@ function ArtifactCard({ row, projectName, pinned, view, previewLive = true, onPr
 					<div className="relative z-[2] flex shrink-0 items-center gap-3">
 						{/* Empty for an unshared artifact, so every row's time lines up. */}
 						<span className="inline-flex size-icon-sm items-center justify-center">
-							{row.shareUrl ? (
-								<Tooltip>
-									<TooltipTrigger asChild>
-										{/* Green, as the publish panel marks a public file. */}
-										<span aria-label={t("artifacts.published")} role="img" className="inline-flex text-success">
-											<Globe aria-hidden="true" className="size-icon-sm" />
-										</span>
-									</TooltipTrigger>
-									<TooltipContent side="bottom">{t("artifacts.published")}</TooltipContent>
-								</Tooltip>
-							) : null}
+							<ArtifactShareMark row={row} iconClassName="size-icon-sm" />
 						</span>
 						{/* "14h ago", and "Updated 14h ago" while the row is hovered or focused.
 						    A title, not a Tooltip: one per row costs too much to mount in a long list. */}

@@ -1,27 +1,32 @@
 import * as Clipboard from "expo-clipboard";
 import { useRouter } from "expo-router";
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 import { Share } from "react-native";
 import { haptics } from "../haptics";
 import type { ToastController } from "../Toast.types";
 import type { FileRowAction } from "./FileRowMenu.types";
+import { DEFAULT_SELECTION, selectionParams, type FilesSelection, type SelectionParams } from "./selection";
 
 /**
  * How the Files screens open what a row points at, and what its long-press
  * menu does. A folder is a page of its own, so the system back (the edge
  * swipe, Android's back, the back button's history) climbs one level at a
- * time instead of leaving Files.
+ * time instead of leaving Files. What the Files screen compares (`selection`)
+ * goes along, so a file opens on that branch's diff and a folder lists it.
  */
-export function useFileActions({ sessionId, hostId, toast }: { sessionId: string; hostId?: string; toast: Pick<ToastController, "show"> }) {
+export function useFileActions({ sessionId, hostId, toast, selection = DEFAULT_SELECTION }: { sessionId: string; hostId?: string; toast: Pick<ToastController, "show">; selection?: FilesSelection }) {
 	// `show` is stable where the controller is not, so the rows keep their memo.
 	const showToast = toast.show;
 	const router = useRouter();
+	// Keyed by value, so a new object naming the same pick keeps the callbacks.
+	const key = JSON.stringify(selectionParams(selection));
+	const picked = useMemo(() => JSON.parse(key) as SelectionParams, [key]);
 	const openFile = useCallback((path: string, mode: "diff" | "file", previousPath?: string) => {
-		router.push({ pathname: "/files/[sessionId]/file", params: { sessionId, path, mode, previousPath, hostId } });
-	}, [hostId, router, sessionId]);
+		router.push({ pathname: "/files/[sessionId]/file", params: { sessionId, path, mode, previousPath, hostId, ...picked } });
+	}, [hostId, picked, router, sessionId]);
 	const openFolder = useCallback((dir: string) => {
-		router.push({ pathname: "/files/[sessionId]/folder", params: { sessionId, dir, hostId } });
-	}, [hostId, router, sessionId]);
+		router.push({ pathname: "/files/[sessionId]/folder", params: { sessionId, dir, hostId, ...picked } });
+	}, [hostId, picked, router, sessionId]);
 	/** The queued review, in a sheet over the page. */
 	const openReview = useCallback(() => {
 		router.push({ pathname: "/files/[sessionId]/review", params: { sessionId, hostId } });

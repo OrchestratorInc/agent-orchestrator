@@ -7,7 +7,6 @@ import { useTruncatedText } from "../hooks/useTruncatedText";
 import type { ShellTerminal } from "../hooks/useShellTerminals";
 import { cn } from "../lib/utils";
 import { type ShellAgent, useShellAgentStore, useShellAgentStream } from "../stores/shell-agent-store";
-import { useUiStore } from "../stores/ui-store";
 import { AgentAvatar } from "./AgentAvatar";
 import { TabContextMenu } from "./TabContextMenu";
 import { TerminalTabFrame, terminalTabActionClassName, terminalTabRenameInputClassName } from "./TerminalTabFrame";
@@ -51,9 +50,8 @@ export function ShellTerminalTab({
 	const inputRef = useRef<HTMLInputElement | null>(null);
 	const lastClickAtRef = useRef(0);
 	const canEdit = Boolean(onRename) && !shell.optimistic;
-	// The agent tab is a Developer Mode preview, like the simplified topbar.
-	const developerMode = useUiStore((state) => state.developerMode);
-	const tracksAgent = developerMode && !shell.optimistic && !shell.cloud && !shell.hostId;
+	// Only the local daemon watches shells, so cloud and remote-host tabs stay plain.
+	const tracksAgent = !shell.optimistic && !shell.cloud && !shell.hostId;
 	useShellAgentStream(tracksAgent);
 	const agent = useShellAgentStore((state) => (tracksAgent ? state.agents[shell.handleId] : undefined));
 	const unseenDone = useShellAgentStore((state) => Boolean(state.unseenDone[shell.handleId]));
@@ -66,7 +64,7 @@ export function ShellTerminalTab({
 		Boolean(agent && stripShellHandleIds?.some((id) => id !== shell.handleId && state.agents[id]?.harness === agent.harness)),
 	);
 	const agentName = agent && defaultNumber ? agentLabel(agent.harness) : undefined;
-	const terminalTitle = developerMode ? shell.terminalTitle : undefined;
+	const terminalTitle = shell.terminalTitle;
 	const title = terminalTitle ?? (agentName ? (sharesAgent ? `${agentName} ${defaultNumber}` : agentName) : shell.title);
 	// An agent's name is display only, so renaming starts from the real title.
 	const renameBase = terminalTitle ?? shell.title;

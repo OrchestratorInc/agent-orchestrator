@@ -30,6 +30,8 @@ type taskPromptConfig struct {
 	Prompt       string
 	IssueID      string
 	IssueContext string
+	// BaseBranch is set for a task stacked on another pull request.
+	BaseBranch string
 }
 
 type systemPromptConfig struct {
@@ -58,6 +60,17 @@ type projectRulesConfig struct {
 }
 
 func buildTaskPrompt(cfg taskPromptConfig) string {
+	prompt := issueTaskPrompt(cfg)
+	base := strings.TrimSpace(cfg.BaseBranch)
+	if base == "" || prompt == "" {
+		return prompt
+	}
+	return strings.TrimRight(prompt, "\n") + "\n\n" + fmt.Sprintf(
+		"This task is stacked on another pull request: your branch starts from `%s`. Open your pull request against `%s`, not the default branch, and don't merge either one.",
+		base, base)
+}
+
+func issueTaskPrompt(cfg taskPromptConfig) string {
 	issueContext := strings.TrimSpace(cfg.IssueContext)
 	if cfg.Prompt != "" {
 		if cfg.Role == sessionPromptRoleWorker && issueContext != "" {
@@ -429,7 +442,7 @@ func workerMultiPRPrompt() string {
 
 Orchestrator attributes PRs to this session when the source branch is this session branch or lives under this session namespace.
 
-- If your current branch ends in ` + "`/root`" + `, create independent PR branches as siblings under the same namespace, for example ` + "`<namespace>/<topic>`" + ` from ` + "`<namespace>/root`" + `. Do not create ` + "`<namespace>/root/<topic>`" + `.
+- If your current branch ends in ` + "`/root`" + `, create independent PR branches as siblings under the same namespace, for example ` + "`<namespace>/<topic>`" + ` from ` + "`<namespace>/root`" + `. Do not create ` + "`<namespace>/root/<topic>`" + `. Name the topic after the change, such as ` + "`<namespace>/dev-warm-cache`" + `, and open the PR from that topic branch, never from ` + "`<namespace>/root`" + ` itself.
 - For a workspace project whose recorded session branch is ` + "`ao/<session-id>`" + ` or a collision variant such as ` + "`ao/<session-id>-2`" + `, use hyphen siblings such as ` + "`<session-branch>-<topic>`" + ` in each registered repository. The bare session ref prevents Git from creating slash children. Keep the full collision suffix. Claim a child-repository PR explicitly with ` + "`ao session claim-pr <full-pr-url>`" + ` when needed.
 - Otherwise, create each source branch as a child of this session branch, for example ` + "`<current-branch>/<topic>`" + `.
 - To stack a PR on top of another, create the new branch from the parent branch and target the parent branch in the PR. Use ` + "`<parent-branch>/<topic>`" + ` when Git permits slash children, or another ` + "`<session-branch>-<topic>`" + ` for bare workspace refs.

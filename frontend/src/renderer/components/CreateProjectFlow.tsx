@@ -46,6 +46,8 @@ import { CloudWorkspaceCard } from "./CloudWorkspaceCard";
 import { additionalReposProblem, canonicalGitHubUrl, sameRepository } from "../lib/cloud-project-repos";
 import { useCloudGate } from "../hooks/useCloudGate";
 import { useCloudOrg } from "../hooks/useCloudOrg";
+import { useProjectAgentDefaults } from "../hooks/useAgentReadinessQuery";
+import { useSettings } from "../hooks/useSettings";
 import type { RemoteHost } from "../hooks/useRemoteHosts";
 import { type CloneProgress, usePreparedClone } from "../hooks/usePreparedClone";
 import { clientForSessionHost } from "../lib/host-clients";
@@ -68,7 +70,7 @@ import {
 } from "../lib/onboarding-ui";
 import { cn } from "../lib/utils";
 import type { ProjectKind } from "../types/workspace";
-import { CreateProjectAgentSheet, type CreateProjectAgentSelection } from "./CreateProjectAgentSheet";
+import { CreateProjectAgentSheet, type CreateProjectSetup } from "./CreateProjectAgentSheet";
 import { RemoteDirectoryPicker } from "./RemoteDirectoryPicker";
 import { GitHubSetupPanel, WithGitHubState } from "./FirstRunSteps";
 import { GitHubIcon } from "./GitHubIcon";
@@ -84,14 +86,20 @@ import { Pressable } from "./ui/pressable";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 import { Switch } from "./ui/switch";
 
+// The reviewer is set only when the project starts on its default agents
+// (Developer Mode); the setup sheet asks for the worker and orchestrator only.
+type ProjectAgents = CreateProjectSetup & {
+	workerAgent: string;
+	orchestratorAgent: string;
+	reviewerAgent?: string;
+};
 export type CreateProjectInput = {
 	path: string;
 	asWorkspace?: boolean;
 	defaultBranch?: string;
 	clonePreparationId?: string;
-} & CreateProjectAgentSelection;
-export type CloneProjectInput = Pick<CloneRepositorySelection, "remoteUrl" | "destinationParent"> &
-	CreateProjectAgentSelection;
+} & ProjectAgents;
+export type CloneProjectInput = Pick<CloneRepositorySelection, "remoteUrl" | "destinationParent"> & ProjectAgents;
 
 const LAST_CLONE_DESTINATION_KEY = "ao.clone.lastDestinationParent";
 const LAST_IMPORT_REMOTE_URL_KEY = "ao.import.lastRemoteUrl";
@@ -252,6 +260,26 @@ export function CreateProjectFlow({
 	const projectImportOpen = projectImportStep !== null && projectValidation !== null;
 	const folderDialogOpen = folderPickerOpen && validationScan !== null;
 	const isBusy = isChoosingPath || isCreating || isInitializing || isPreparingGit || preparedClone.isCleaning;
+	// Developer Mode previews the automatic flow: the project starts on the most
+	// preferred ready agent without asking. Otherwise the setup sheet asks for
+	// the worker and orchestrator agents.
+	const automaticAgents = useUiStore((state) => state.developerMode);
+	// Refresh agent checks while the flow is open so the project starts on the
+	// best agent this machine (or host) has right now, not a stale snapshot.
+	const loadAgentDefaults = useProjectAgentDefaults(
+		automaticAgents && (embedded || activeView !== null || selectedPath !== null) && connected,
+		hostId,
+	);
+	const { settings: flowSettings, isLoading: settingsLoading } = useSettings(hostId);
+	const intakeVisible = !!flowSettings?.trackerIntakeEnabled;
+	// Without agent pickers the sheet only asks for tracker intake, shows a
+	// repository setup notice, or reports a failed create. With none of those
+	// there is nothing to decide, so the project is created as soon as its folder
+	// is chosen. While settings still load the sheet stays up, so the wait is
+	// visible and can be cancelled.
+	const sheetNeeded = !automaticAgents || intakeVisible || repositorySetup !== null || error !== null;
+	const sheetOpen = selectedPath !== null && (sheetNeeded || settingsLoading);
+	const autoCreatedPath = useRef<string | null>(null);
 	const setModePickerOpen = (open: boolean) => dispatchView(open ? { type: "open", view: "source" } : { type: "close", view: "source" });
 	const setCloneDialogOpen = (open: boolean) => dispatchView(open ? { type: "open", view: "clone" } : { type: "close", view: "clone" });
 	const setFolderPickerOpen = (open: boolean) => dispatchView(open ? { type: "open", view: "folder" } : { type: "close", view: "folder" });
@@ -510,12 +538,15 @@ export function CreateProjectFlow({
 		void selectSource(sourceSignal.source);
 	}, [sourceSignal]);
 
-	const createProject = async (selection: CreateProjectAgentSelection) => {
+	const createProject = async (setup: CreateProjectSetup) => {
 		if (!selectedPath || isCreating || isInitializing) return;
 		setError(null);
 		setIsCreating(true);
 		useUiStore.getState().setProjectCreationPending(true);
 		try {
+			const selection: ProjectAgents = automaticAgents
+				? { ...(await loadAgentDefaults()), ...setup }
+				: { ...setup, workerAgent: setup.workerAgent ?? "", orchestratorAgent: setup.orchestratorAgent ?? "" };
 			if (cloneSelection) {
 				const prepared = preparedClone.current();
 				if (!prepared) throw new Error(t("createProject.couldNotAdd"));
@@ -602,6 +633,17 @@ export function CreateProjectFlow({
 			setIsInitializing(false);
 		}
 	};
+
+	useEffect(() => {
+		if (selectedPath === null) {
+			autoCreatedPath.current = null;
+			return;
+		}
+		if (sheetNeeded || settingsLoading || isCreating || isInitializing) return;
+		if (autoCreatedPath.current === selectedPath) return;
+		autoCreatedPath.current = selectedPath;
+		void createProject({});
+	}, [selectedPath, sheetNeeded, settingsLoading, isCreating, isInitializing]);
 
 	const prepareClone = async (next: CloneRepositorySelection) => {
 		if (hostId && !connected) {
@@ -1000,9 +1042,12 @@ export function CreateProjectFlow({
 					setError(null);
 					onDismiss?.();
 				} : undefined}
+				chooseAgents={!automaticAgents}
 				connected={connected}
 				error={error}
 				hostId={hostId}
+				intakeVisible={intakeVisible}
+				settingsLoading={settingsLoading}
 				isCreating={isCreating}
 				isInitializing={isInitializing}
 				kind={selectedKind}
@@ -1033,7 +1078,7 @@ export function CreateProjectFlow({
 						: undefined
 				}
 				onSubmit={createProject}
-				open={selectedPath !== null}
+				open={sheetOpen}
 				path={selectedPath}
 				repositorySetupNeeded={repositorySetup !== null}
 				repositorySetupWarning={repositorySetupWarning}

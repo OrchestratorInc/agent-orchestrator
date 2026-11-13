@@ -70,7 +70,8 @@ const cases: Array<[string, TabMenuSpec, SessionTabAgentMenu?]> = [
 	["HTML file tab", file("site/index.html")],
 	["diff tab", file("src/app.ts", { kind: "snapshot", label: "abc123" })],
 	["artifact tab", file("report.md", { kind: "artifact" } as never)],
-	["split group tab on a session", { kind: "group", onUngroup: vi.fn(), member: { ...sessionSpec, onRename: undefined } }, terminalAgent],
+	// A group member closes (SessionView's closePane), the session too.
+	["split group tab on a session", { kind: "group", onUngroup: vi.fn(), member: { ...sessionSpec, onRename: undefined, onClose: vi.fn() } }, terminalAgent],
 	["split group tab on a file", { kind: "group", onUngroup: vi.fn(), member: { ...file("src/app.ts"), closeShortcut: true } }],
 ];
 
@@ -143,6 +144,29 @@ describe("tab menus", () => {
 		expect(labels[1]).toBe("Switch to chat UI");
 		expect(labels).toContain("Open PR #7");
 		expect(labels.at(-1)).toMatch(/^Archive session/);
+	});
+
+	it.each([false, true])("lists no Close tab on the session's own tab, and one separator before Archive (split panes %s)", async (splitOn) => {
+		const { contextRows, dropdownRows } = await renderBoth(sessionSpec, terminalAgent, splitOn);
+		for (const rows of [contextRows, dropdownRows]) {
+			expect(rows.some((row) => row.includes("Close tab"))).toBe(false);
+			const archive = rows.findIndex((row) => row.includes("Archive session"));
+			expect(archive).toBe(rows.length - 1);
+			expect(rows[archive - 1]).toMatch(/^separator/);
+			expect(rows[archive - 2]).not.toMatch(/^separator/);
+			if (splitOn) expect(rows[archive - 2]).toMatch(/^menuitem\|Split down/);
+		}
+	});
+
+	it("keeps an enabled Close tab for the session as a split group member", async () => {
+		const spec: TabMenuSpec = { kind: "group", onUngroup: vi.fn(), member: { ...sessionSpec, onClose: vi.fn() } };
+		const { dropdownRows } = await renderBoth(spec, undefined, true);
+		expect(dropdownRows.filter((row) => row.includes("Close tab"))).toEqual(["menuitem|Close tab|enabled"]);
+	});
+
+	it("keeps the disabled Close tab on a tab with no close action but the session's", async () => {
+		const { dropdownRows } = await renderBoth({ kind: "plain", tabKey: "reviewer:1" }, undefined, false);
+		expect(dropdownRows).toEqual(["menuitem|Close tab|disabled"]);
 	});
 
 	it("keeps Split rows out of both menus while split panes are off", async () => {

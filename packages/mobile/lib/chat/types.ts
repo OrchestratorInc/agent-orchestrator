@@ -1,3 +1,4 @@
+import type { TurnArtifactChange } from "../../../shared/artifacts/turn-artifacts";
 import type { SessionMode } from "../api";
 
 export type ControllerState = "connecting" | "ready" | "busy" | "recovering" | "hibernated" | "stopped";
@@ -53,6 +54,11 @@ export type ConversationTurn = {
 	completedAt?: string;
 	rolledBack?: boolean;
 	diff?: TurnDiff;
+	/**
+	 * The session artifacts the daemon saw this turn create or edit, by artifact
+	 * path. Unlike the diff it also lists files written through a shell command.
+	 */
+	artifacts?: TurnArtifactChange[];
 	plan?: ConversationPlan;
 	/**
 	 * Where the turn sorts when its prompt is above the loaded history (a Cloud
