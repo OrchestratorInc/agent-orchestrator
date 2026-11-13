@@ -178,6 +178,7 @@ export type SendMessageInput = Schemas["SendMessageInput"];
 export type ChatMessageInput = Schemas["ChatMessageInput"];
 export type ChatApprovalDecisionInput = Schemas["ChatApprovalDecisionInput"];
 export type TurnSteeredEvent = Schemas["TurnSteeredEvent"];
+export type AgentSwitchedEvent = Schemas["AgentSwitchedEvent"];
 export type ChatModel = Schemas["ChatModel"];
 export type ChatModelsResponse = Schemas["ChatModelsResponse"];
 export type CloudHarnessVersions = Schemas["CloudHarnessVersions"];
