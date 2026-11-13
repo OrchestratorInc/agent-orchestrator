@@ -71,6 +71,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/computeruse"
 	cuesvc "github.com/aoagents/agent-orchestrator/backend/internal/service/cue"
 	devimportsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/devimport"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/dictation"
 	fsbrowsersvc "github.com/aoagents/agent-orchestrator/backend/internal/service/fsbrowser"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/githubpat"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/hookprocess"
@@ -868,6 +869,8 @@ func Run(buildVersion string) (retErr error) {
 	// desktop-launched daemon's PATH rarely includes.
 	cuaDriver := cuadriver.New()
 	systemInstall.SetSystemTargetResolver(systeminstall.TargetCuaDriver, cuaDriver.Locate)
+	dictationService := dictation.New(cfg.DataDir)
+	defer dictationService.Close()
 	computerUse := computeruse.New(cuaDriver, cfg.DataDir)
 	// Computer-use calls run only while "Let agents use this computer" is on,
 	// and it turns on only with Cua Driver installed.
@@ -1233,6 +1236,7 @@ func Run(buildVersion string) (retErr error) {
 		AgentAccounts:      freshAccountUsage{agentAccountSvc, usagePipeline},
 		SystemChecks:       systemChecks,
 		Installer:          systemInstall,
+		Dictation:          dictationService,
 		ComputerUse:        computerUse,
 		Sessions:           sessionSvc,
 		Automations:        automationSvc,

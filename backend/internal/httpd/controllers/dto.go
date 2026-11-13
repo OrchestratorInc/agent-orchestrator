@@ -16,6 +16,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/agentauth"
 	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/computeruse"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/dictation"
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
 	sessionsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/session"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/sessionimport"
@@ -4633,4 +4634,13 @@ type SessionImportRequest struct {
 // SessionImportResponse retains an outcome for every selected history.
 type SessionImportResponse struct {
 	Results []sessionimport.Result `json:"results"`
+}
+
+// DictationStatusResponse reports local model readiness.
+type DictationStatusResponse = dictation.Status
+
+// DictationRequest changes a catalog model or cancels its installation.
+type DictationRequest struct {
+	Action string `json:"action" enum:"install,select,delete,cancel"`
+	Model  string `json:"model"`
 }

@@ -168,6 +168,9 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"DomainChatExcerptTurnMessage":                         "ChatExcerptTurnMessage",
 	"ControllersConversationFindResponse":                  "ConversationFindResponse",
 	"ChatFindOccurrence":                                   "ConversationFindOccurrence",
+	"DictationStatus":                                      "DictationStatus",
+	"DictationModel":                                       "DictationModel",
+	"ControllersDictationRequest":                          "DictationRequest",
 	"ControllersTelemetryIdentityResponse":                 "TelemetryIdentityResponse",
 	"ControllersAgentAccountIDParam":                       "AgentAccountIDParam",
 	"ControllersAgentLoginActionRequest":                   "AgentLoginActionRequest",
@@ -842,6 +845,7 @@ func operations() []operation {
 	ops = append(ops, cueOperations()...)
 	ops = append(ops, systemOperations()...)
 	ops = append(ops, computerUseOperations()...)
+	ops = append(ops, dictationOperations()...)
 	ops = append(ops, identityOperations()...)
 	ops = append(ops, endpointsOperations()...)
 	ops = append(ops, telemetryIdentityOperations()...)
@@ -4307,5 +4311,14 @@ func awakeOperations() []operation {
 		common(http.MethodPost, "/api/v1/awake/recover", "recoverAwake", nil, nil),
 		common(http.MethodDelete, "/api/v1/awake/history", "clearAwakeHistory", nil, nil),
 		common(http.MethodPost, "/api/v1/awake/downloads", "awakeDownloads", controllers.AwakeDownloadsRequest{}, nil),
+	}
+}
+
+func dictationOperations() []operation {
+	responses := []respUnit{{http.StatusOK, controllers.DictationStatusResponse{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusConflict, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}}
+	return []operation{
+		{method: http.MethodGet, path: "/api/v1/dictation", id: "getDictation", tag: "dictation", summary: "List local dictation models and installation progress", resps: responses},
+		{method: http.MethodPost, path: "/api/v1/dictation", id: "changeDictation", tag: "dictation", summary: "Install, select or delete a local speech model", reqBody: controllers.DictationRequest{}, resps: responses},
+		{method: http.MethodGet, path: "/api/v1/dictation/stream", id: "streamDictation", tag: "dictation", summary: "Stream 16 kHz mono float32 audio to local dictation over WebSocket", resps: []respUnit{{http.StatusSwitchingProtocols, nil}}},
 	}
 }

@@ -228,6 +228,8 @@ func TestComputerUseOriginBoundaryBlocksPreviewAndAllowsRenderers(t *testing.T) 
 		wantStatus int
 		wantACAO   string
 	}{
+		{name: "preview cannot manage dictation models", method: http.MethodPost, path: "/api/v1/dictation", origin: preview, wantStatus: http.StatusForbidden},
+		{name: "preview cannot stream dictation audio", method: http.MethodGet, path: "/api/v1/dictation/stream", origin: preview, wantStatus: http.StatusForbidden},
 		{
 			name:       "preview cannot call a tool",
 			method:     http.MethodPost,

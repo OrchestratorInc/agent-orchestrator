@@ -3842,6 +3842,82 @@ paths:
       summary: Run the developer project-registry import through the daemon store
       tags:
       - dev
+  /api/v1/dictation:
+    get:
+      operationId: getDictation
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DictationStatus'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List local dictation models and installation progress
+      tags:
+      - dictation
+    post:
+      operationId: changeDictation
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DictationRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DictationStatus'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Install, select or delete a local speech model
+      tags:
+      - dictation
+  /api/v1/dictation/stream:
+    get:
+      operationId: streamDictation
+      responses:
+        "101":
+          description: Switching Protocols
+      summary: Stream 16 kHz mono float32 audio to local dictation over WebSocket
+      tags:
+      - dictation
   /api/v1/endpoints:
     get:
       operationId: getEndpoints
@@ -19520,6 +19596,81 @@ components:
           $ref: '#/components/schemas/DevImportProjectsReport'
       required:
       - report
+      type: object
+    DictationModel:
+      properties:
+        available:
+          type: boolean
+        description:
+          type: string
+        downloadBytes:
+          format: int64
+          type: integer
+        id:
+          type: string
+        installed:
+          type: boolean
+        languages:
+          items:
+            type: string
+          type: array
+        license:
+          type: string
+        name:
+          type: string
+      required:
+      - id
+      - name
+      - downloadBytes
+      - installed
+      - available
+      type: object
+    DictationRequest:
+      properties:
+        action:
+          enum:
+          - install
+          - select
+          - delete
+          - cancel
+          type: string
+        model:
+          type: string
+      required:
+      - action
+      - model
+      type: object
+    DictationStatus:
+      properties:
+        error:
+          type: string
+        installing:
+          type: string
+        models:
+          items:
+            $ref: '#/components/schemas/DictationModel'
+          type: array
+        progressDone:
+          format: int64
+          type: integer
+        progressTotal:
+          format: int64
+          type: integer
+        recording:
+          type: boolean
+        selected:
+          type: string
+        stage:
+          type: string
+      required:
+      - selected
+      - models
+      - installing
+      - stage
+      - progressDone
+      - progressTotal
+      - error
+      - recording
       type: object
     DomainActivity:
       properties:
