@@ -24,7 +24,7 @@ import { useChatMessageFocus, useChatNavigationRequest } from "../../hooks/useCh
 import { useChatModelChoices } from "../../hooks/useChatModelChoices";
 import { apiClient, apiErrorCode, apiErrorMessage } from "../../lib/api-client";
 import { forgetLaunchSettings, forgetOpeningStart, LaunchSettingsBar, launchSettingsFor, openingStartFor } from "./LaunchSettingsBar";
-import { rememberChatSettingsTemplate, rememberChatSkills } from "../../lib/chat-settings-template";
+import { readChatSkills, rememberChatSettingsTemplate, rememberChatSkills } from "../../lib/chat-settings-template";
 import {
 	clearConversationProviderCatalogs,
 	conversationQueryKey,
@@ -399,17 +399,27 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		hostId,
 	);
 	const { models, configOptions: offeredConfigOptions } = useChatModelChoices(snapshot?.harness, controllerModels, configOptions.options, snapshot?.settings?.model, hostId, controllerModelsLoaded);
-	const { skills } = useConversationSkills(
+	const { skills: liveSkills, loaded: liveSkillsLoaded, updatedAt: liveSkillsUpdatedAt } = useConversationSkills(
 		session.id,
 		Boolean(controllerCatalogsEnabled && snapshot),
 		hostId,
 	);
 	// A new chat of this agent offers these "/" skills before its own session runs.
 	const skillsHarness = snapshot?.harness;
+	const skillsSaved = useRef({ chat: "", openedAt: 0, fetchedAt: 0 });
 	useEffect(() => {
-		if (session.kind !== "worker" || !skillsHarness || skills.length === 0) return;
-		rememberChatSkills(skillsHarness, hostId, skills);
-	}, [hostId, session.kind, skills, skillsHarness]);
+		if (skillsSaved.current.chat !== uiSessionId) skillsSaved.current = { chat: uiSessionId, openedAt: Date.now(), fetchedAt: 0 };
+		if (session.kind !== "worker" || !skillsHarness || !liveSkillsLoaded ||
+			liveSkillsUpdatedAt < skillsSaved.current.openedAt || liveSkillsUpdatedAt === skillsSaved.current.fetchedAt) return;
+		skillsSaved.current.fetchedAt = liveSkillsUpdatedAt;
+		rememberChatSkills(skillsHarness, session.workspaceId, hostId, liveSkills);
+	}, [hostId, session.kind, session.workspaceId, liveSkills, liveSkillsLoaded, liveSkillsUpdatedAt, skillsHarness, uiSessionId]);
+	const skills = useMemo(
+		() => liveSkillsLoaded || !skillsHarness || session.cloud
+			? liveSkills
+			: readChatSkills(skillsHarness, session.workspaceId, hostId),
+		[hostId, liveSkills, liveSkillsLoaded, session.cloud, session.workspaceId, skillsHarness],
+	);
 	const { paths, truncated } = useWorkspaceFilePaths(session.id, Boolean(snapshot) && !session.needsResume, hostId);
 	const stageAttachments = useStageAttachments(session.id, hostId);
 	// Applied once: the chat below unmounts while the conversation reloads, and

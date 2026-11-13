@@ -3113,6 +3113,19 @@ describe("ChatWorkspace timeline", () => {
 		expect(onChooseSettings).not.toHaveBeenCalled();
 	});
 
+	it("keeps the settings of a chat that already ran usable while its agent wakes", () => {
+		render(
+			<ChatWorkspace
+				snapshot={{ ...chatFixtureSettled, controller: { state: "hibernated" } }}
+				session={{ ...chatSession, provisionState: "ready" }}
+				onChooseSettings={vi.fn()}
+				settingsLoading
+			/>,
+		);
+		expect(screen.getByRole("button", { name: "Approval policy for the next turn" })).toBeEnabled();
+		expect(screen.getByRole("combobox", { name: "Message the agent" })).toBeEnabled();
+	});
+
 	it("shimmers the entire centered composer until the orchestrator is ready", async () => {
 		const view = render(
 			<ChatWorkspace

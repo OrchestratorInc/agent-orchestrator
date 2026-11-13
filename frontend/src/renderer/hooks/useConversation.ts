@@ -544,6 +544,32 @@ export function conversationSettled(queryClient: QueryClient, sessionId: string,
 	return state === "ready" || state === "busy";
 }
 
+function refreshConversationState(queryClient: QueryClient, sessionId: string, hostId?: string): void {
+	if (hostId) refreshRemoteConversationOnce(queryClient, sessionId, hostId);
+	else void queryClient.invalidateQueries({ queryKey: conversationQueryKey(sessionId) }, { cancelRefetch: false });
+}
+
+const SETTINGS_WRITE_KEY = ["conversation-settings-write"];
+const settingsWriteMeta = (sessionId: string, hostId?: string) => ({ settingsFor: `${hostId ?? ""}:${sessionId}` });
+
+export const CHAT_SETTINGS_NOT_SAVED = "CHAT_SETTINGS_NOT_SAVED";
+
+function settingsWritesSettled(queryClient: QueryClient, sessionId: string, hostId?: string): Promise<void> {
+	const cache = queryClient.getMutationCache();
+	const { settingsFor } = settingsWriteMeta(sessionId, hostId);
+	const writes = cache.findAll({ mutationKey: SETTINGS_WRITE_KEY, status: "pending", predicate: (write) => write.options.meta?.settingsFor === settingsFor });
+	if (writes.length === 0) return Promise.resolve();
+	return new Promise((resolve, reject) => {
+		const stop = cache.subscribe(() => {
+			if (writes.some((write) => write.state.status === "pending")) return;
+			stop();
+			if (writes.some((write) => write.state.status === "error")) {
+				reject(Object.assign(new Error("The settings change before this message was not saved, so the message was not sent."), { code: CHAT_SETTINGS_NOT_SAVED }));
+			} else resolve();
+		});
+	});
+}
+
 export function conversationQueryOptions(sessionId: string, hostId?: string) {
 	return infiniteQueryOptions({
 		queryKey: conversationQueryKey(sessionId, hostId),
@@ -763,6 +789,7 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 			clientMessageId,
 			input,
 		}: ConversationSendMutationInput) => {
+			await settingsWritesSettled(queryClient, targetSessionId, hostId);
 			const { providerSwitch, switchDisplay: _switchDisplay, ...message } = input;
 			if (providerSwitch) {
 				// One request: the daemon switches, then sends, without waiting on a refetch here.
@@ -995,6 +1022,8 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 			} : current,
 		);
 	const chooseSettings = useMutation({
+		mutationKey: SETTINGS_WRITE_KEY,
+		meta: settingsWriteMeta(sessionId ?? "", hostId),
 		// Shown at once, so the next pick builds on this one rather than on the saved settings.
 		onMutate: async ({ targetSessionId, settings }: { targetSessionId: string; settings: TurnSettings }) => {
 			await queryClient.cancelQueries({ queryKey: conversationQueryKey(targetSessionId, hostId) });
@@ -1683,11 +1712,16 @@ export function useConversationConfigOptions(sessionId: string | undefined, enab
 					params: { path: { sessionId: sessionId as string } },
 				},
 			);
-			if (error) throw error;
+			if (error) {
+				if (apiErrorCode(error) === "CHAT_CONTROLLER_NOT_READY") refreshConversationState(queryClient, sessionId as string, hostId);
+				throw error;
+			}
 			return (data?.options ?? []) as ChatConfigOption[];
 		},
 	});
 	const mutation = useMutation({
+		mutationKey: SETTINGS_WRITE_KEY,
+		meta: settingsWriteMeta(sessionId ?? "", hostId),
 		// Held across the whole write, paired with the cancel below: `onMutate`
 		// runs before the request and `onSettled` after the result is committed,
 		// so no poll can start or land inside that window.
@@ -1775,13 +1809,14 @@ export function useConversationConfigOptions(sessionId: string | undefined, enab
 		return { controllerEpoch, options };
 	}
 
+	const queryError = apiErrorCode(query.error) === "CHAT_CONTROLLER_NOT_READY" ? null : query.error;
 	return {
 		options: query.data ?? [],
 		loaded: query.isSuccess,
 		setOption: async (optionId: string, value: ChatConfigOptionValue) =>
 			(await mutation.mutateAsync({ optionId, value })).options,
 		pending: mutation.isPending,
-		error: mutation.error || query.error ? apiErrorMessage(mutation.error ?? query.error) : undefined,
+		error: mutation.error || queryError ? apiErrorMessage(mutation.error ?? queryError) : undefined,
 	};
 }
 
@@ -1830,7 +1865,7 @@ export function useConversationSkills(sessionId: string | undefined, enabled: bo
 			return (data?.skills ?? []) as ChatSkill[];
 		},
 	});
-	return { skills: query.data ?? [], isLoading: query.isLoading };
+	return { skills: query.data ?? [], isLoading: query.isLoading, loaded: query.data !== undefined, updatedAt: query.dataUpdatedAt };
 }
 
 /**
