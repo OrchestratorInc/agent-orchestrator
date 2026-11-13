@@ -1758,7 +1758,7 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 		// the harness cannot honor. Unflagged or inherited effort still clears
 		// silently so role/project defaults keep working for every harness.
 		if cfg.EffortOverride && strings.TrimSpace(requested.Effort) != "" {
-			return ports.AgentConfig{}, fmt.Errorf("%w for harness %q: effort is only supported for codex, claude-code, command-code, and hermes agents", ports.ErrUnsupportedEffort, cfg.Harness)
+			return ports.AgentConfig{}, fmt.Errorf("%w for harness %q: effort is only supported for codex, claude-code, command-code, and hermes agents, or Grok Chat", ports.ErrUnsupportedEffort, cfg.Harness)
 		}
 		resolved.Effort = ""
 		return resolved, nil
