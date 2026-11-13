@@ -1339,7 +1339,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Stop a turn. Allowed for the person whose message started it, the composer lease holder, the session's creator, and the organization's owners and admins; anyone else gets 403. */
+        /** @description Stop a turn. Allowed for the person whose message started it, the composer lease holder, the session's creator, and the organization's owners and admins; anyone else gets 403. A running turn is stopped by its worker (chat.interrupt_requested, then chat.turn_interrupted). A turn still queued ends at once with chat.turn_interrupted of attempt 0, and stopping it again answers 202. 409 TURN_FINISHED once the turn ended otherwise. */
         post: operations["cancelTurn"];
         delete?: never;
         options?: never;
@@ -1621,7 +1621,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Replace the text and files of a message whose turn is still queued, before the agent starts on it. Only the message's author may edit it (403 otherwise). The message keeps its model and settings, and runs under the author's share access as it is at the edit; a display it recorded (displayText, content) is dropped. 409 TURN_NOT_QUEUED once the agent took the turn or it was stopped, and 409 SESSION_TERMINATED once the session ended. Offered when offering.features lists queued-edit. */
+        /** @description Replace the text and files of a message whose turn is still queued, before the agent starts on it. Only the message's author may edit it (403 NOT_MESSAGE_AUTHOR otherwise). The message keeps its model and settings and, like every queued message, runs within the access its author holds when the agent starts on it; a display it recorded (displayText, content) is dropped. 409 TURN_NOT_QUEUED once the agent took the turn or it was stopped, and 409 SESSION_TERMINATED once the session ended. Offered when offering.features lists queued-edit. */
         post: operations["editQueuedMessage"];
         delete?: never;
         options?: never;
@@ -5475,11 +5475,13 @@ export interface components {
             payload: {
                 /** Format: uuid */
                 turnId: string;
+                /** @description 0 for a turn stopped while still queued, before the agent started on it. */
                 attempt: number;
             };
             /** Format: date-time */
             createdAt: string;
         };
+        /** @description A turn ended in failure, with payload.error saying why. Also a queued message the control plane did not run because, when the agent came to it, its author could no longer write to the session (cut to watching, share revoked, gone from the organization or the team). */
         TurnAbortedEvent: {
             sessionId: string;
             /** Format: int64 */
@@ -8161,7 +8163,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Cancellation was durably requested for the turn. */
+            /** @description Cancellation was durably requested for the turn, or the queued turn was stopped. */
             202: {
                 headers: {
                     [name: string]: unknown;
