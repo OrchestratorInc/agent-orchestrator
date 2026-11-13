@@ -14791,6 +14791,10 @@ components:
           $ref: '#/components/schemas/AgentAccountLimits'
         loggedIn:
           type: boolean
+        orgId:
+          type: string
+        orgName:
+          type: string
         plan:
           type: string
         problem:
@@ -14799,6 +14803,8 @@ components:
           enum:
           - claude
           - codex
+          type: string
+        sameLoginAs:
           type: string
         signedIn:
           type: boolean
@@ -24997,6 +25003,7 @@ components:
           - complete
           - duplicate
           - mismatch
+          - not_subscription
           type: string
       required:
       - status

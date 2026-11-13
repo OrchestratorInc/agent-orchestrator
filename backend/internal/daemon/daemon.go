@@ -50,6 +50,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
+	"github.com/aoagents/agent-orchestrator/backend/internal/lifecyclelog"
 	"github.com/aoagents/agent-orchestrator/backend/internal/mobilebridge"
 	"github.com/aoagents/agent-orchestrator/backend/internal/notify"
 	"github.com/aoagents/agent-orchestrator/backend/internal/observe/sentryobs"
@@ -154,7 +155,7 @@ func daemonShutdownContext() (ctx context.Context, cancelWorkers, stopSignals co
 
 // Run starts the daemon and blocks until it exits. SIGINT/SIGTERM drive
 // graceful shutdown through the HTTP server and background workers.
-func Run(buildVersion string) error {
+func Run(buildVersion string) (retErr error) {
 	cfg, err := config.Load()
 	if err != nil {
 		return err
@@ -173,6 +174,37 @@ func Run(buildVersion string) error {
 		return err
 	}
 	ignoreBrokenPipeSignal()
+
+	// Persistent lifecycle record under <dataDir>/logs. stderr belongs to the
+	// desktop app and is lost with it, so without this a daemon exit or crash
+	// left no evidence of why.
+	// Beside the desktop's logs (normally ~/.ao/logs), next to running.json.
+	logRoot := cfg.DataDir
+	if cfg.RunFilePath != "" {
+		logRoot = filepath.Dir(cfg.RunFilePath)
+	}
+	lifecycle := lifecyclelog.Open(logRoot, cfg.Telemetry.AppVersion)
+	startedAt := time.Now()
+	startFields := lifecyclelog.ProcessContext()
+	startFields["owner"] = os.Getenv("AO_OWNER")
+	startFields["port"] = cfg.Port
+	if err := lifecycle.InstallCrashOutput(); err != nil {
+		startFields["crashOutput"] = "unavailable"
+	}
+	lifecycle.Record("daemon_start", startFields)
+	defer func() {
+		fields := map[string]any{"uptimeMs": time.Since(startedAt).Milliseconds()}
+		if recovered := recover(); recovered != nil {
+			fields["panic"] = true
+			lifecycle.RecordError("daemon_exit", fmt.Errorf("panic: %v", recovered), fields)
+			panic(recovered)
+		}
+		if retErr != nil {
+			lifecycle.RecordError("daemon_exit", retErr, fields)
+			return
+		}
+		lifecycle.Record("daemon_exit", fields)
+	}()
 
 	log := newLogger()
 	var browserRuntimeToken string
@@ -1347,7 +1379,10 @@ func Run(buildVersion string) error {
 		log.Warn("supervisor: listener unavailable; frontend-death auto-stop disabled", "err", err)
 	} else {
 		log.Info("supervisor: listening", "addr", addr)
-		sup := supervisor.New(supervisorGrace, srv.RequestShutdownAfterDesktopExit, log)
+		sup := supervisor.New(supervisorGrace, func() {
+			lifecycle.Record("supervisor_link_lost", map[string]any{"graceMs": supervisorGrace.Milliseconds()})
+			srv.RequestShutdownAfterDesktopExit()
+		}, log)
 		go func() {
 			defer sentryobs.RecoverBackground()
 			if err := sup.Serve(ctx, ln); err != nil {
@@ -1485,6 +1520,17 @@ func Run(buildVersion string) error {
 			runVersionRefreshSweep(ctx, cfg, settingsSvc, sessMgr, systemInstall, log)
 		}()
 	})
+
+	shutdownFields := map[string]any{"stopAgents": srv.StopAgentsRequested()}
+	if cause := context.Cause(ctx); cause != nil && ctx.Err() != nil {
+		shutdownFields["cause"] = "signal"
+		shutdownFields["signal"] = cause.Error()
+	} else if runErr != nil {
+		shutdownFields["cause"] = "server_error"
+	} else {
+		shutdownFields["cause"] = "requested"
+	}
+	lifecycle.RecordError("daemon_shutdown_begin", runErr, shutdownFields)
 
 	// Both graceful shutdown paths (SIGTERM and POST /shutdown) funnel through
 	// srv.Run returning. Desktop exit, including loss of its supervisor, requests
