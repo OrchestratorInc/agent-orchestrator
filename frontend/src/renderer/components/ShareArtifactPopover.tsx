@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactElement, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactElement, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useQueryClient } from "@tanstack/react-query";
 import { Check, ChevronDown, Copy, Loader2, Share } from "@/components/app-icons";
@@ -164,14 +164,28 @@ function subscribeShareLinks(listener: () => void): () => void {
 	return () => shareLinksListeners.delete(listener);
 }
 
-/** The last link list read from each control plane, the revision it was read at, and when. */
+/**
+ * Whose link list: the control plane and the signed-in account. A list holds
+ * one account's links and plan, so it is never read for another.
+ */
+export interface ShareScope {
+	baseUrl: string;
+	/** The signed-in user's ID; empty while signed out. */
+	account: string;
+}
+
+function scopeKey(scope: ShareScope): string {
+	return JSON.stringify([scope.baseUrl, scope.account]);
+}
+
+/** The last link list read for each scope, the revision it was read at, and when. */
 interface CachedShareLinks {
 	links: CloudShareLinks;
 	revision: number;
 	at: number;
 }
 const shareLinksCache = new Map<string, CachedShareLinks>();
-/** Reads under way, one per control plane and revision, shared by every caller. */
+/** Reads under way, one per scope and revision, shared by every caller. */
 const shareLinksReads = new Map<string, Promise<CloudShareLinks>>();
 /** How long a list read lets the panel open without waiting for another. */
 const SHARE_LINKS_FRESH_MS = 5 * 60_000;
@@ -181,36 +195,62 @@ const SHARE_LINKS_FRESH_MS = 5 * 60_000;
  * request, and the answer is kept for the panel to open on at once. The main
  * process also brings this computer's publish records up to date with it.
  */
-function readShareLinks(baseUrl: string): Promise<CloudShareLinks> {
+function readShareLinks(scope: ShareScope): Promise<CloudShareLinks> {
 	const revision = shareLinksRevision;
-	const key = JSON.stringify([baseUrl, revision]);
+	const cacheKey = scopeKey(scope);
+	const key = JSON.stringify([cacheKey, revision]);
 	let read = shareLinksReads.get(key);
 	if (!read) {
-		read = aoBridge.cloudShare.list(baseUrl)
+		read = aoBridge.cloudShare.list(scope.baseUrl)
 			.then((links) => {
-				// A read started before a change never replaces one started after it.
-				const cached = shareLinksCache.get(baseUrl);
-				if (!cached || cached.revision <= revision) shareLinksCache.set(baseUrl, { links, revision, at: Date.now() });
+				// A read started before a change never replaces one started after
+				// it, and one started for an account no longer signed in is not kept.
+				const cached = shareLinksCache.get(cacheKey);
+				if (shareLinksReads.get(key) === read && (!cached || cached.revision <= revision)) {
+					shareLinksCache.set(cacheKey, { links, revision, at: Date.now() });
+				}
 				for (const listener of shareLinksListeners) listener();
 				return links;
 			})
-			.finally(() => shareLinksReads.delete(key));
+			.finally(() => {
+				if (shareLinksReads.get(key) === read) shareLinksReads.delete(key);
+			});
 		shareLinksReads.set(key, read);
 	}
 	return read;
 }
 
-/** The list last read, while no change was made since and it is recent; else undefined. */
-function freshShareLinks(baseUrl: string): CloudShareLinks | undefined {
-	const cached = shareLinksCache.get(baseUrl);
+/** The list last read for this scope, while no change was made since and it is recent; else undefined. */
+function freshShareLinks(scope: ShareScope): CloudShareLinks | undefined {
+	const cached = shareLinksCache.get(scopeKey(scope));
 	if (!cached || cached.revision !== shareLinksRevision || Date.now() - cached.at > SHARE_LINKS_FRESH_MS) return undefined;
 	return cached.links;
+}
+
+/** The scope the caches were last used for. */
+let lastShareScope: string | undefined;
+
+/**
+ * Forgets every cached and in-flight link list when the signed-in account or
+ * the control plane changes (sign-out included), and has every surface read
+ * the list again for the new one.
+ */
+function noteShareScope(scope: ShareScope): void {
+	const key = scopeKey(scope);
+	if (lastShareScope === key) return;
+	const switched = lastShareScope !== undefined;
+	lastShareScope = key;
+	if (!switched) return;
+	shareLinksCache.clear();
+	shareLinksReads.clear();
+	shareLinksChanged();
 }
 
 /** Forgets every cached link list; for tests. */
 export function resetShareCachesForTests(): void {
 	shareLinksCache.clear();
 	shareLinksReads.clear();
+	lastShareScope = undefined;
 }
 
 /** Who each active link opens for, by the URL a published artifact carries as its shareUrl. */
@@ -247,29 +287,37 @@ const reconciledReads = new WeakSet<Promise<CloudShareLinks>>();
  */
 export function useReconciledShareLinks(): ShareAccessByUrl {
 	const available = useShareAvailable();
-	const { baseUrl, signedIn } = useShareAccess();
+	const { signedIn, scope } = useShareAccess();
 	const queryClient = useQueryClient();
 	const revision = useSyncExternalStore(subscribeShareLinks, () => shareLinksRevision);
-	const cached = useSyncExternalStore(subscribeShareLinks, () => shareLinksCache.get(baseUrl));
+	const cached = useSyncExternalStore(subscribeShareLinks, () => shareLinksCache.get(scopeKey(scope)));
 	useEffect(() => {
 		if (!available || !signedIn) return;
-		const read = readShareLinks(baseUrl);
+		const read = readShareLinks(scope);
 		if (reconciledReads.has(read)) return;
 		reconciledReads.add(read);
 		read
 			.then(() => queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost() }))
 			// Offline or signed out: the records stay as they are until the next list.
 			.catch(() => undefined);
-	}, [available, signedIn, baseUrl, queryClient, revision]);
+	}, [available, signedIn, scope, queryClient, revision]);
 	return available && signedIn && cached ? shareAccessOf(cached.links) : NO_SHARE_ACCESS;
 }
 
 /** The control plane URL and whether the person is signed in to share. */
-export function useShareAccess(): { baseUrl: string; signedIn: boolean } {
+export function useShareAccess(): { baseUrl: string; signedIn: boolean; scope: ShareScope } {
 	const { settings } = useSettings();
-	const { status } = useCloudSession();
+	const { status, session } = useCloudSession();
 	const baseUrl = settings?.cloudControlPlaneUrl ?? "";
-	return { baseUrl, signedIn: status === "authenticated" && baseUrl !== "" };
+	const signedIn = status === "authenticated" && baseUrl !== "";
+	const account = signedIn ? session?.user.id ?? "" : "";
+	// While the session is still loading, nothing changed yet.
+	const known = status !== "loading";
+	useEffect(() => {
+		if (known) noteShareScope({ baseUrl, account });
+	}, [known, baseUrl, account]);
+	const scope = useMemo(() => ({ baseUrl, account }), [baseUrl, account]);
+	return { baseUrl, signedIn, scope };
 }
 
 /**
@@ -389,18 +437,19 @@ interface PublishedShare {
  * cached when it was read moments ago: the file itself is never opened.
  * Checked again whenever `revision` changes.
  */
-function usePublishedShare(file: CloudShareFile | null, revision: string): PublishedShare {
-	// Kept with the file it is for: a button reused for another file shows
-	// nothing published until that file is checked, never the last file's link.
+function usePublishedShare(file: CloudShareFile | null, scope: ShareScope, revision: string): PublishedShare {
+	// Kept with the file and account it is for: a button reused for another
+	// file, or after another account signs in, shows nothing published until
+	// it is checked again, never the last one's link.
 	const [state, setState] = useState<PublishedShare & { fileKey: string }>({ outdated: false, fileKey: "" });
-	const fileKey = file ? JSON.stringify(file) : "";
+	const fileKey = file ? JSON.stringify([file, scope.account]) : "";
 	useEffect(() => {
 		if (!file) return setState({ outdated: false, fileKey });
 		let cancelled = false;
 		void (async (): Promise<PublishedShare> => {
 			const inspection = await aoBridge.cloudShare.inspect(file);
 			if (!inspection.shareId) return { outdated: false };
-			const links = freshShareLinks(file.baseUrl) ?? await readShareLinks(file.baseUrl);
+			const links = freshShareLinks(scope) ?? await readShareLinks(scope);
 			const share = links.shares.find((candidate) => candidate.id === inspection.shareId && !candidate.revokedAt);
 			if (!share) return { outdated: false };
 			return { share, outdated: linkOutdated(share, inspection) };
@@ -444,10 +493,10 @@ export function ShareArtifactButton({ file, name, className, iconOnly = false, r
 	const [checks, setChecks] = useState(0);
 	const recheck = useCallback(() => setChecks((count) => count + 1), []);
 	const available = useShareAvailable();
-	const { baseUrl, signedIn } = useShareAccess();
+	const { baseUrl, signedIn, scope } = useShareAccess();
 	const video = VIDEO_FILE.test(file.path);
 	const publishing = usePublishing(pendingKey(baseUrl, file));
-	const { share, outdated, checked } = usePublishedShare(available && signedIn && !video ? { ...file, baseUrl } : null, `${revision}:${checks}:${publishing}`);
+	const { share, outdated, checked } = usePublishedShare(available && signedIn && !video ? { ...file, baseUrl } : null, scope, `${revision}:${checks}:${publishing}`);
 	// What the panel does on opening is fixed when it opens, so a check that
 	// lands while it is open never starts a second publish.
 	const [republishOnOpen, setRepublishOnOpen] = useState(false);
@@ -581,7 +630,7 @@ function SharePanel({
 		void queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost() });
 		shareLinksChanged();
 	};
-	const { baseUrl, signedIn } = useShareAccess();
+	const { baseUrl, signedIn, scope } = useShareAccess();
 	const owner = useCloudSession().session?.user;
 	const openSettings = useUiStore((state) => state.openGlobalSettings);
 	const [phase, setPhase] = useState<Phase>({ kind: "loading" });
@@ -719,14 +768,14 @@ function SharePanel({
 		// metadata, so it is quick. The list read moments ago (by an artifacts
 		// view or the open artifact) opens the panel at once; it is read again
 		// behind it, and a different answer decides the panel again.
-		const cached = freshShareLinks(baseUrl);
+		const cached = freshShareLinks(scope);
 		const openedRevision = shareLinksRevision;
-		Promise.all([aoBridge.cloudShare.inspect({ ...file, baseUrl }), cached ?? readShareLinks(baseUrl)])
+		Promise.all([aoBridge.cloudShare.inspect({ ...file, baseUrl }), cached ?? readShareLinks(scope)])
 			.then(([inspection, links]) => {
 				if (cancelled) return;
 				decide(inspection, links, publishNow);
 				if (!cached) return;
-				void readShareLinks(baseUrl)
+				void readShareLinks(scope)
 					.then((fresh) => {
 						// A publish this opening started is not second-guessed: its answer settles the panel.
 						// Nor is a change made in the panel since: that read predates it.
@@ -741,7 +790,7 @@ function SharePanel({
 		return () => {
 			cancelled = true;
 		};
-	}, [signedIn, baseUrl, key, file.projectId]); // eslint-disable-line react-hooks/exhaustive-deps
+	}, [signedIn, baseUrl, scope.account, key, file.projectId]); // eslint-disable-line react-hooks/exhaustive-deps
 
 	useEffect(() => load({ publishNow: !unpublishOnOpen }), [load]); // eslint-disable-line react-hooks/exhaustive-deps
 

@@ -11,6 +11,7 @@ import { TooltipProvider } from "./ui/tooltip";
 
 const mocks = vi.hoisted(() => ({
 	status: "authenticated" as string,
+	userId: "u-1",
 	baseUrl: "https://cp.test",
 	openSettings: vi.fn(),
 }));
@@ -19,7 +20,7 @@ vi.mock("../hooks/useSettings", () => ({ useSettings: () => ({ settings: { cloud
 vi.mock("../lib/cloud-session", () => ({
 	useCloudSession: () => ({
 		status: mocks.status,
-		session: mocks.status === "authenticated" ? { user: { id: "u-1", email: "aditi@acme.co", displayName: "Aditi Chauhan" } } : null,
+		session: mocks.status === "authenticated" ? { user: { id: mocks.userId, email: "aditi@acme.co", displayName: "Aditi Chauhan" } } : null,
 	}),
 }));
 vi.mock("../stores/ui-store", () => ({
@@ -72,6 +73,7 @@ async function openMenuPanel(file: Omit<CloudShareFile, "baseUrl" | "shareId"> =
 
 beforeEach(() => {
 	mocks.status = "authenticated";
+	mocks.userId = "u-1";
 	mocks.baseUrl = "https://cp.test";
 	mocks.openSettings.mockReset();
 	vi.restoreAllMocks();
@@ -723,6 +725,58 @@ describe("ShareArtifactButton states", () => {
 		render(<QueryClientProvider client={new QueryClient()}><TooltipProvider><ShareArtifactButton file={localFile} name="report.html" published /></TooltipProvider></QueryClientProvider>);
 		const button = await screen.findByRole("button", { name: "Published: report.html" });
 		expect(button.querySelector("svg")).toHaveClass("icon-share");
+	});
+
+	it("never reads one account's cached links after signing out and in again", async () => {
+		const { listSpy } = stub({ ...inspection, shareId: SHARE_ID }, { ...links, shares: [share] });
+		const first = renderButton(localFile);
+		expect(await screen.findByRole("button", { name: "Published: report.html" })).toBeTruthy();
+		// Signed out: the mounted button sees it, and the cached list is dropped.
+		mocks.status = "unauthenticated";
+		first.rerender(<QueryClientProvider client={new QueryClient()}><TooltipProvider><ShareArtifactButton file={localFile} name="report.html" /></TooltipProvider></QueryClientProvider>);
+		first.unmount();
+		// Signed in again; this time the list has no links.
+		mocks.status = "authenticated";
+		listSpy.mockResolvedValue({ ...links, shares: [] });
+		renderButton(localFile);
+		expect(await screen.findByRole("button", { name: "Publish: report.html" })).toBeTruthy();
+		expect(listSpy).toHaveBeenCalledTimes(2);
+	});
+
+	it("never reads another account's cached links, even without seeing a sign-out", async () => {
+		const { listSpy } = stub({ ...inspection, shareId: SHARE_ID }, { ...links, shares: [share] });
+		const first = renderButton(localFile);
+		expect(await screen.findByRole("button", { name: "Published: report.html" })).toBeTruthy();
+		first.unmount();
+		mocks.userId = "u-2";
+		listSpy.mockResolvedValue({ ...links, shares: [] });
+		renderButton(localFile);
+		expect(await screen.findByRole("button", { name: "Publish: report.html" })).toBeTruthy();
+		expect(listSpy).toHaveBeenCalledTimes(2);
+	});
+
+	it("drops a list read started for an account that signed out before it answered", async () => {
+		const { listSpy } = stub({ ...inspection, shareId: SHARE_ID }, { ...links, shares: [share] });
+		let answer: (value: CloudShareLinks) => void = () => undefined;
+		listSpy.mockReturnValueOnce(new Promise((resolve) => { answer = resolve; }));
+		const first = renderButton(localFile);
+		await waitFor(() => expect(listSpy).toHaveBeenCalledTimes(1));
+		mocks.status = "unauthenticated";
+		first.rerender(<QueryClientProvider client={new QueryClient()}><TooltipProvider><ShareArtifactButton file={localFile} name="report.html" /></TooltipProvider></QueryClientProvider>);
+		// The old read answers after the sign-out: it is not kept for the next sign-in.
+		await act(async () => answer({ ...links, shares: [share] }));
+		first.unmount();
+		mocks.status = "authenticated";
+		const inspectSpy = vi.mocked(aoBridge.cloudShare.inspect);
+		const checks = inspectSpy.mock.calls.length;
+		let empty: (value: CloudShareLinks) => void = () => undefined;
+		listSpy.mockReturnValue(new Promise((resolve) => { empty = resolve; }));
+		renderButton(localFile);
+		// The new button's check runs; it must ask for the list, not reuse the old answer.
+		await waitFor(() => expect(inspectSpy.mock.calls.length).toBeGreaterThan(checks));
+		await waitFor(() => expect(listSpy).toHaveBeenCalledTimes(2));
+		await act(async () => empty({ ...links, shares: [] }));
+		expect(screen.getByRole("button", { name: "Publish: report.html" })).toBeTruthy();
 	});
 
 	it("disables Publish for a video", async () => {
