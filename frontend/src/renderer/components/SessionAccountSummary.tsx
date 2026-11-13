@@ -29,6 +29,7 @@ export function SessionAccountSummary({ session }: { session: WorkspaceSession }
 	const { settings } = useSettings();
 	const [message, setMessage] = useState("");
 	const [confirming, setConfirming] = useState<string | null>(null);
+	const [savingStay, setSavingStay] = useState(false);
 	const accountMove = transition?.targetAccountId ? transition : undefined;
 	const moving = interfaceTransitionIsActive(accountMove);
 	const settledPhase = accountMove && !moving ? accountMove.phase : undefined;
@@ -67,20 +68,23 @@ export function SessionAccountSummary({ session }: { session: WorkspaceSession }
 
 	const setStay = async (stay: boolean) => {
 		setMessage("");
+		setSavingStay(true);
 		try {
 			await actions.setStayOnAccount(session.id, stay);
 		} catch (err) {
 			setMessage(err instanceof Error ? err.message : String(err));
+		} finally {
+			setSavingStay(false);
 		}
 	};
 
-	const status = moving
+	const status = message || (moving
 		? t("settings.agentAccounts.switching", { email: label(accountMove?.targetAccountId) })
 		: settledPhase === "completed" && accountMove?.targetAccountId === currentId && !messagedSinceMove
 			? t("settings.agentAccounts.moved", { from: label(accountMove?.sourceAccountId), to: label(currentId) })
 			: settledPhase === "failed" || settledPhase === "recovery_required"
 				? accountMove?.errorDetail || t("settings.agentAccounts.switchFailed")
-				: message;
+				: "");
 
 	return <section className="mt-3 border-t border-(--color-border-settings-input) pt-3" data-testid="session-account-summary">
 		<div className="flex items-center justify-between gap-3">
@@ -101,7 +105,7 @@ export function SessionAccountSummary({ session }: { session: WorkspaceSession }
 			<Switch
 				aria-label={t("settings.agentAccounts.stayOnAccount")}
 				checked={current.data?.stayOnAccount ?? false}
-				disabled={!current.data}
+				disabled={!current.data || savingStay}
 				onCheckedChange={(stay) => void setStay(stay)}
 			/>
 		</div> : null}

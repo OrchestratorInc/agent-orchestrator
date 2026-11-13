@@ -331,8 +331,8 @@ func TestAccountHandoffRespectsStayOnAccount(t *testing.T) {
 	}
 	source := failUsageLimitedTurn(t, hh.harness, timedUsageLimit)
 	hh.tick(t)
-	if len(hh.mover.moves()) != 0 || len(hh.accounts.models) != 0 {
-		t.Fatal("a pinned session was considered for a move")
+	if len(hh.mover.moves()) != 0 {
+		t.Fatal("a pinned session was moved")
 	}
 	stored, _ := hh.st.TurnByID(context.Background(), source.ID)
 	if !stored.UsageLimit.AutoResume {

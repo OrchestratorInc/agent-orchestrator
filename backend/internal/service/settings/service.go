@@ -105,7 +105,6 @@ type Service struct {
 	chatHibernation atomic.Bool
 	// versionRefresh caches the durable toggle: 0 unread, 1 on, 2 off.
 	versionRefresh atomic.Int32
-	accountHandoff atomic.Int32
 	// cuaInstalled reports whether Cua Driver is installed; nil skips the check.
 	cuaInstalled atomic.Pointer[func(context.Context) (bool, error)]
 }
@@ -138,33 +137,14 @@ func (s *Service) Get(ctx context.Context) (Snapshot, error) {
 	snapshot.ChatHibernationEnabled = s.chatHibernation.Load()
 	if err == nil {
 		s.cacheVersionRefresh(snapshot.VersionRefresh)
-		s.cacheAccountHandoff(snapshot.AccountHandoff)
 	}
 	return snapshot, err
 }
 
-func (s *Service) cacheAccountHandoff(enabled bool) {
-	if enabled {
-		s.accountHandoff.Store(1)
-	} else {
-		s.accountHandoff.Store(2)
-	}
-}
-
 // AccountHandoffEnabled reports the "Move to another account at a usage limit" setting.
 func (s *Service) AccountHandoffEnabled(ctx context.Context) bool {
-	switch s.accountHandoff.Load() {
-	case 1:
-		return true
-	case 2:
-		return false
-	}
 	snapshot, err := s.store.GetAppSettings(ctx)
-	if err != nil {
-		return false
-	}
-	s.cacheAccountHandoff(snapshot.AccountHandoff)
-	return snapshot.AccountHandoff
+	return err == nil && snapshot.AccountHandoff
 }
 
 // SetAccountHandoff turns the usage-limit account handoff on or off.
@@ -172,7 +152,6 @@ func (s *Service) SetAccountHandoff(ctx context.Context, enabled bool) (Snapshot
 	if err := s.store.SetAccountHandoff(ctx, enabled, s.now()); err != nil {
 		return Snapshot{}, err
 	}
-	s.cacheAccountHandoff(enabled)
 	return s.Get(ctx)
 }
 

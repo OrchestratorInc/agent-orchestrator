@@ -227,13 +227,8 @@ func (s *Service) selectAccountHandoff(ctx context.Context, store accountHandoff
 		}
 		return s.giveUpAfter(h, err)
 	}
-	if pinned, err := store.SessionAccountPinned(ctx, h.sessionID); err != nil {
-		return false, err
-	} else if pinned {
-		return s.stayOnAccount(ctx, source, "This session stays on its account.")
-	}
 	if source.RetryOfTurnID != "" && s.accountHandoffRetried(source.RetryOfTurnID) {
-		return s.stayOnAccount(ctx, source, "The retry on the new account was refused for a usage limit too.")
+		return s.stayOnAccount(ctx, h, source, "The retry on the new account was refused for a usage limit too.")
 	}
 	model := ""
 	if conversation, err := s.store.ConversationForSession(ctx, h.sessionID); err == nil {
@@ -247,11 +242,16 @@ func (s *Service) selectAccountHandoff(ctx context.Context, store accountHandoff
 		return s.giveUpAfter(h, err)
 	}
 	if target == "" {
-		return s.stayOnAccount(ctx, source, "No other signed-in account has room for this request.")
+		return s.stayOnAccount(ctx, h, source, "No other signed-in account has room for this request.")
+	}
+	if pinned, err := store.SessionAccountPinned(ctx, h.sessionID); err != nil {
+		return false, err
+	} else if pinned {
+		return s.stayOnAccount(ctx, h, source, "This session stays on its account.")
 	}
 	transition, err := deps.mover.StartAccountTransition(ctx, h.sessionID, target, domain.SessionInterfaceTransitionDrain)
 	if err != nil {
-		return s.stayOnAccount(ctx, source, "AO could not start the move: "+err.Error())
+		return s.stayOnAccount(ctx, h, source, "AO could not start the move: "+err.Error())
 	}
 	h.targetAccount, h.transitionID, h.stepAt = transition.TargetAccountID, transition.ID, s.now()
 	leftUntil := s.now().Add(accountHandoffCooldown)
@@ -303,8 +303,12 @@ func (s *Service) settleAccountHandoffMove(ctx context.Context, store accountHan
 	}
 	if transition.Phase != domain.SessionInterfaceTransitionCompleted {
 		if transition.Phase == domain.SessionInterfaceTransitionFailed {
-			if source, err := s.store.TurnByID(ctx, h.turnID); err == nil {
-				s.armUsageLimitFallback(ctx, source)
+			source, err := s.store.TurnByID(ctx, h.turnID)
+			if err == nil {
+				err = s.armUsageLimitFallback(ctx, source)
+			}
+			if err != nil && !permanentUsageLimitResumeError(err) {
+				return s.giveUpAfter(h, err)
 			}
 		}
 		s.log.Info("account handoff: move did not commit", "session", h.sessionID, "turn", h.turnID, "phase", transition.Phase)
@@ -439,20 +443,22 @@ func (c *Controller) retryAccountHandoffTurn(ctx context.Context, turnID string)
 	return c.retryTurnLocked(ctx, turnID, false)
 }
 
-func (s *Service) stayOnAccount(ctx context.Context, source domain.ConversationTurn, detail string) (bool, error) {
-	s.armUsageLimitFallback(ctx, source)
+func (s *Service) stayOnAccount(ctx context.Context, h *accountHandoff, source domain.ConversationTurn, detail string) (bool, error) {
+	if err := s.armUsageLimitFallback(ctx, source); err != nil {
+		return s.giveUpAfter(h, err)
+	}
 	s.log.Info("account handoff: session stays", "session", source.HandledBySessionID, "turn", source.ID, "detail", detail)
 	return true, nil
 }
 
-func (s *Service) armUsageLimitFallback(ctx context.Context, source domain.ConversationTurn) {
+func (s *Service) armUsageLimitFallback(ctx context.Context, source domain.ConversationTurn) error {
 	if source.UsageLimit == nil || source.UsageLimit.AutoResume {
-		return
+		return nil
 	}
-	err := s.SetTurnAutoResume(ctx, source.HandledBySessionID, source.ID, true)
-	if err != nil && !errors.Is(err, ErrUsageLimitResetUnknown) {
-		s.log.Info("account handoff: auto-resume fallback unavailable", "turn", source.ID, "error", err)
+	if err := s.SetTurnAutoResume(ctx, source.HandledBySessionID, source.ID, true); err != nil && !permanentUsageLimitResumeError(err) {
+		return err
 	}
+	return nil
 }
 
 func (s *Service) giveUpAfter(h *accountHandoff, cause error) (bool, error) {
