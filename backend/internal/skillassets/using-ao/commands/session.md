@@ -1,7 +1,7 @@
 # ao session
 
 Manage agent sessions: list, inspect, rename, kill, restore, exit or resume an
-agent, switch harnesses, clean up, and claim PRs.
+agent, switch harnesses, clean up, claim PRs, and turn automatic fixing on or off.
 
 ## In-app session links
 
@@ -325,7 +325,9 @@ ao session cleanup --dry-run
 
 Attach an existing PR to the current Orchestrator-managed session, or target another session explicitly.
 Use this for authorized implementation continuation. Reviewing someone else's PR
-does not require or permit a claim; use a normal review-only worker session.
+also claims it, after turning automatic fixing off with `ao session auto-fix`
+(see below), so the session gets none of that PR's CI failures, merge
+conflicts, or review comments.
 
 **Syntax:**
 ```
@@ -368,4 +370,51 @@ ao session claim-pr mer-3 88
 ```bash
 # Claim PR 88 for the current worker but refuse if another session owns it
 ao session claim-pr 88 --no-takeover
+```
+
+---
+
+### ao session auto-fix
+
+Turn a session's "Automatically fix CI failures" and "Automatically fix review
+comments" switches on or off. These are the same switches the session inspector
+shows.
+
+**Syntax:**
+```
+ao session auto-fix [<session-id>] [--ci on|off] [--reviews on|off]
+```
+
+With no session id, `AO_SESSION_ID` supplies the session. Pass at least one of
+`--ci` and `--reviews`.
+
+- `--ci off` stops CI failures and merge conflicts for every PR the session owns.
+- `--reviews off` stops review comments and change requests that arrive after
+  the change. Comments posted while it is off are never sent, even after it is
+  turned back on, so read them on the PR.
+
+To review someone else's PR, turn both off before claiming it, and use a
+session that owns no other PR, because the switches cover all of the session's
+PRs. The PR is not the user's: do not commit, push, rebase, or otherwise change
+it unless the user explicitly asks. To take it over, turn both back on.
+
+**Flags:**
+
+| Flag | Meaning | Default / Required |
+|---|---|---|
+| `--ci on\|off` | Send the session CI failures and merge conflicts for its PRs | Unchanged |
+| `--reviews on\|off` | Send the session new review comments and change requests | Unchanged |
+| `-p, --project string` | Project id to scope the lookup | - |
+
+**Examples:**
+
+```bash
+# Review someone else's PR from the current worker
+ao session auto-fix --ci off --reviews off
+ao session claim-pr 88 --no-takeover
+```
+
+```bash
+# Take the PR over
+ao session auto-fix --ci on --reviews on
 ```

@@ -91,6 +91,7 @@ without a terminal runs it in the background and reads its output; see
 | `ao session cleanup`                | `POST /api/v1/sessions/cleanup`                |
 | `ao session delete <id>`            | `DELETE /api/v1/sessions/{id}`                 |
 | `ao session claim-pr [<id>] <pr-ref>` | `POST /api/v1/sessions/{id}/pr/claim`        |
+| `ao session auto-fix [<id>]`        | `PATCH /api/v1/sessions/{id}/auto-inject-ci`, `PATCH /api/v1/sessions/{id}/auto-inject-review` |
 | `ao orchestrator ls`                | `GET /api/v1/orchestrators`                    |
 | `ao send`                           | `POST /api/v1/sessions/{id}/send`              |
 | `ao report ...`                     | `POST /api/v1/reports`                         |
@@ -118,6 +119,14 @@ branch, issue, or PR-claim options.
 `AO_SESSION_ID`. From an orchestrator or external shell, pass the target
 explicitly with `ao session claim-pr <session-id> <pr-ref>`. The explicit form
 remains supported for backward compatibility and cross-session coordination.
+
+To review someone else's PR, a session claims it with automatic fixing off:
+`ao session auto-fix --ci off --reviews off` before `ao session claim-pr <pr-ref>
+--no-takeover`, or `ao spawn --claim-pr <pr-ref> --no-takeover --no-auto-fix`,
+which turns both switches off before the claim. `--ci off` stops CI failures and
+merge conflicts for every PR the session owns; `--reviews off` stops review
+comments and change requests that arrive afterwards. To take the PR over, run
+`ao session auto-fix --ci on --reviews on`.
 
 Both `ao session claim-pr` and `ao spawn --claim-pr` claim ownership metadata
 only. The claim step does not check out a branch or change HEAD, so
