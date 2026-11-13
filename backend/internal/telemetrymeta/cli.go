@@ -174,6 +174,7 @@ var legacyActorlessUserCLICommands = map[string]struct{}{
 	"ao review trigger":                         {},
 	"ao send":                                   {},
 	"ao session":                                {},
+	"ao session auto-fix":                       {},
 	"ao session claim-pr":                       {},
 	"ao session cleanup":                        {},
 	"ao session delete":                         {},
