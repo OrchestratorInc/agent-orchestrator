@@ -76,7 +76,7 @@ function CloudSessionAccountSummary({ session, orgId }: { session: WorkspaceSess
 		options={options.map((option) => ({ id: option.id, name: cloudAgentAccountName(option, t), selectable: option.validationState === "valid" }))}
 		label={label}
 		limits={null}
-		onMove={(accountId, stopTurn) => actions.switchSession(orgId, session.id, accountId, stopTurn)}
+		onMove={(accountId, stopTurn) => actions.switchSession(orgId, session.id, accountId, stopTurn, session.mode !== "chat")}
 		onSettled={() => void actions.refreshSession(session.id)}
 	/>;
 }

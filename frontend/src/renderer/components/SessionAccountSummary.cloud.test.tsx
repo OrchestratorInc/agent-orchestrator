@@ -29,7 +29,7 @@ const account = (id: string, email: string, validationState = "valid") => ({
 });
 
 const session = (overrides: Partial<WorkspaceSession> = {}) => ({
-	id: "s-1", provider: "codex", isTerminated: false,
+	id: "s-1", provider: "codex", isTerminated: false, mode: "chat",
 	cloud: { orgId: "org-1", createdByUserId: "user-1" }, ...overrides,
 }) as WorkspaceSession;
 
@@ -76,6 +76,22 @@ describe("SessionAccountSummary on a Cloud session", () => {
 
 		await user.click(await screen.findByRole("button", { name: "Stop and move" }));
 		expect(cloud.switchSessionAgentAccount).toHaveBeenCalledWith("org-1", "s-1", { accountId: "a-2", policy: "interrupt" });
+	});
+
+	it("stops an idle terminal directly instead of draining it, and drains a working one", async () => {
+		const user = userEvent.setup();
+		cloud.getSession.mockResolvedValueOnce({ session: { activityState: "idle", status: "idle" } });
+		renderSummary(session({ mode: "tui" } as Partial<WorkspaceSession>));
+		const picker = await screen.findByRole("combobox", { name: "Account" });
+		await waitFor(() => expect(picker).toHaveTextContent("work@example.com"));
+		await user.click(picker);
+		await user.click(screen.getByRole("option", { name: "me@example.com" }));
+		await waitFor(() => expect(cloud.switchSessionAgentAccount).toHaveBeenCalledWith("org-1", "s-1", { accountId: "a-2", policy: "interrupt" }));
+
+		cloud.getSession.mockResolvedValueOnce({ session: { activityState: "active", status: "working" } });
+		await user.click(picker);
+		await user.click(screen.getByRole("option", { name: "me@example.com" }));
+		await waitFor(() => expect(cloud.switchSessionAgentAccount).toHaveBeenLastCalledWith("org-1", "s-1", { accountId: "a-2" }));
 	});
 
 	it("stays hidden for anyone but the creator, and without accounts", () => {

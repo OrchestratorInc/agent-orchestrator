@@ -77,11 +77,22 @@ export function useCloudAgentAccountActions() {
 			await client.removeAgentAccount(accountId);
 			await refresh();
 		},
-		/** Starts the move; the session's interface-transition status shows its progress. */
-		switchSession: async (orgId: string, sessionId: string, accountId: string, stopTurn = false) => {
+		/**
+		 * Starts the move; the session's interface-transition status shows its
+		 * progress. A terminal cannot prove it is idle, so a drain would wait out
+		 * its window and fail: as an agent switch does, a terminal whose agent's
+		 * latest activity is idle is stopped directly, and a working one drains.
+		 */
+		switchSession: async (orgId: string, sessionId: string, accountId: string, stopTurn = false, terminal = false) => {
+			let interrupt = stopTurn;
+			if (!interrupt && terminal) {
+				const { session: latest } = await client.getSession(orgId, sessionId);
+				interrupt = !["active", "waiting_input", "blocked"].includes(latest.activityState) &&
+					latest.status !== "working" && latest.status !== "needs_input";
+			}
 			const { transition } = await client.switchSessionAgentAccount(orgId, sessionId, {
 				accountId,
-				...(stopTurn ? { policy: "interrupt" as const } : {}),
+				...(interrupt ? { policy: "interrupt" as const } : {}),
 			});
 			await queryClient.invalidateQueries({ queryKey: sessionInterfaceTransitionQueryKey(sessionId, { orgId }) });
 			return transition;
