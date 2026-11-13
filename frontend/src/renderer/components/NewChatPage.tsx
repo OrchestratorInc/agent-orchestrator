@@ -425,10 +425,13 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 				centerInWindow
 				localEchos={echo ? [echo] : undefined}
 				openingStartedAt={echo?.createdAt}
-				// A Cloud task whose control plane takes no files offers none.
-				holdAttachments={!task.isCloudProject || Boolean(cloudFiles)}
+				// A Cloud task whose control plane takes no files offers none. A send
+				// whose answer was lost keeps the files it went with until its outcome
+				// is known: its retry carries them under the same request, and only a
+				// new send meets a target that takes none.
+				holdAttachments={!task.isCloudProject || Boolean(cloudFiles) || Boolean(pendingLaunch)}
 				cloudAttachments={cloudFiles}
-				attachmentsRefusal={attachmentsRefusal}
+				attachmentsRefusal={pendingLaunch ? undefined : attachmentsRefusal}
 				onHeldAttachmentsChange={onHeldAttachmentsChange}
 				onStageAttachments={workspaceReady ? stagePrepared : undefined}
 				filePaths={workspaceFiles.data?.paths}

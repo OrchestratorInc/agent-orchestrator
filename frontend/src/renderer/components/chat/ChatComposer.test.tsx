@@ -2369,6 +2369,31 @@ describe("attachments", () => {
 		expect(onSend.mock.calls[0]?.[0]).toBe("start without the file");
 	});
 
+	// A send whose answer was lost keeps its identity and its files until its
+	// outcome is known: a chat that takes no new files does not hold back its
+	// retry, which goes with the same id and the same files, and says nothing
+	// about files while that send is pending.
+	it("retries a pending send with its files even where new files are refused", async () => {
+		const reason = "Files can't start a standalone agent. Remove them to continue.";
+		const sessionId = "composer-files-pending-retry";
+		const onSend = vi.fn().mockRejectedValueOnce(new Error("response lost")).mockResolvedValue(undefined);
+		const first = render(<ChatComposer parkUnsentSends={false} draftSessionId={sessionId} holdAttachments onSend={onSend} />);
+		const field = screen.getByLabelText("Message the agent");
+		await typeInComposer(field, "read this file");
+		fireEvent.paste(field, { clipboardData: clipboardData([textFile()]) });
+		await screen.findByLabelText("Remove notes.txt");
+		fireEvent.keyDown(field, { key: "Enter" });
+		await waitFor(() => expect(screen.getByRole("button", { name: "Retry message safely" })).toBeEnabled());
+		first.unmount();
+		render(<ChatComposer parkUnsentSends={false} draftSessionId={sessionId} holdAttachments attachmentsRefusal={reason} onSend={onSend} />);
+		await screen.findByLabelText("Remove notes.txt");
+		expect(screen.queryByText(reason)).toBeNull();
+		await userEvent.click(screen.getByRole("button", { name: "Retry message safely" }));
+		await waitFor(() => expect(onSend).toHaveBeenCalledTimes(2));
+		expect(onSend.mock.calls[1]).toEqual(onSend.mock.calls[0]);
+		expect(onSend.mock.calls[1]?.[1]).toEqual([{ mimeType: "text/plain", data: btoa("hello"), name: "notes.txt" }]);
+	});
+
 	it("keeps held file bytes available after a definitive send rejection", async () => {
 		const onSend = vi.fn()
 			.mockRejectedValueOnce(Object.assign(new Error("Agent not installed"), { code: "TASK_CREATE_FAILED" }))

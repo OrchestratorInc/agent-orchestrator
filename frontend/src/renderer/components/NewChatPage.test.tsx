@@ -26,7 +26,7 @@ const h = vi.hoisted(() => ({
 	approvalModes: undefined as ApprovalMode[] | undefined,
 	modelWarning: undefined as string | undefined,
 	modelWarningRetries: true,
-	offering: { ready: false, org: undefined as { id: string } | undefined, features: [] as string[], maxAttachmentBytes: undefined as number | undefined },
+	offering: { ready: false, loaded: false, org: undefined as { id: string } | undefined, features: [] as string[], maxAttachmentBytes: undefined as number | undefined },
 	workspaces: [] as Array<Record<string, unknown>>,
 }));
 
@@ -105,7 +105,7 @@ beforeEach(() => {
 	h.approvalModes = undefined;
 	h.modelWarning = undefined;
 	h.modelWarningRetries = true;
-	h.offering = { ready: false, org: undefined, features: [], maxAttachmentBytes: undefined };
+	h.offering = { ready: false, loaded: false, org: undefined, features: [], maxAttachmentBytes: undefined };
 	h.workspaces = [{ id: "proj-1", name: "Project", kind: "project", sessions: [] }];
 	window.localStorage.clear();
 });
@@ -216,7 +216,7 @@ describe("NewChatPage", () => {
 		expect(await screen.findByRole("menuitem", { name: "Scratchpad" })).toBeInTheDocument();
 		expect(screen.queryByRole("menuitem", { name: "Cloud scratchpad" })).toBeNull();
 
-		h.offering = { ready: true, org: { id: "org-1" }, features: ["share", "standalone_agents"], maxAttachmentBytes: undefined };
+		h.offering = { ready: true, loaded: true, org: { id: "org-1" }, features: ["share", "standalone_agents"], maxAttachmentBytes: undefined };
 		await openPicker();
 		await user.click(await screen.findByRole("menuitem", { name: "Cloud scratchpad" }));
 		expect(h.navigate).toHaveBeenCalledWith(expect.objectContaining({ to: "/new", search: expect.objectContaining({ project: CLOUD_STANDALONE_WORKSPACE_ID }) }));
@@ -226,7 +226,7 @@ describe("NewChatPage", () => {
 	// with its session, so a start the files did not reach would leave it behind.
 	it("offers files on a Cloud project's task where the control plane takes them, and not on a Cloud standalone agent", () => {
 		h.isCloudProject = true;
-		h.offering = { ready: true, org: { id: "org-1" }, features: ["attachments", "standalone_agents"], maxAttachmentBytes: 25 * 1024 * 1024 };
+		h.offering = { ready: true, loaded: true, org: { id: "org-1" }, features: ["attachments", "standalone_agents"], maxAttachmentBytes: 25 * 1024 * 1024 };
 		renderPage();
 		expect(h.workspace?.holdAttachments).toBe(true);
 		expect(h.workspace?.cloudAttachments).toEqual({ maxBytes: 25 * 1024 * 1024 });
@@ -237,6 +237,26 @@ describe("NewChatPage", () => {
 		expect(h.workspace?.cloudAttachments).toBeUndefined();
 		// A draft that brought files from another target keeps them, with why this one takes none.
 		expect(h.workspace?.attachmentsRefusal).toBe("Files can't start a standalone agent. Remove them to continue.");
+	});
+
+	// A send whose answer was lost keeps the files it went with until its
+	// outcome is known, even if the target stopped taking files meanwhile:
+	// its retry carries them under the same request, and only a new send
+	// meets the refusal.
+	it("keeps a pending send's files held, without the refusal, until its outcome is known", async () => {
+		h.isCloudProject = true;
+		h.offering = { ready: true, loaded: true, org: { id: "org-1" }, features: [], maxAttachmentBytes: undefined };
+		const page = renderPage();
+		expect(h.workspace?.holdAttachments).toBe(false);
+		expect(h.workspace?.attachmentsRefusal).toBe("Files can't start a task in this Cloud project yet. Remove them to continue.");
+		prepareChatComposerDelivery(draftScope, { kind: "send", clientMessageId: "cid-1", requestText: "Read this", composerText: "Read this", attachments: [] });
+		h.launch.mockRejectedValue(new TypeError("Failed to fetch"));
+		await act(async () => {
+			await Promise.resolve(h.workspace?.onSend?.("Read this", [{ mimeType: "text/plain", data: "aGk=" }], "cid-1")).catch(() => undefined);
+		});
+		page.refresh();
+		expect(h.workspace?.holdAttachments).toBe(true);
+		expect(h.workspace?.attachmentsRefusal).toBeUndefined();
 	});
 
 	it("opens a new Cloud standalone agent on the project the control plane made for it", async () => {
