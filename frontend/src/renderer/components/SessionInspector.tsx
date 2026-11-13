@@ -1788,7 +1788,6 @@ function ReviewsSection({
 		return (
 			<CloudReviewsSection
 				onOpenReviewFile={onOpenReviewFile}
-				onOpenReviewerTerminal={onOpenReviewerTerminal}
 				onWorkerMessageSent={onWorkerMessageSent}
 				session={session}
 			/>
@@ -1939,17 +1938,8 @@ function LocalReviewsSection({
 			void queryClient.invalidateQueries({ queryKey: requestReviewsKey });
 			void queryClient.invalidateQueries({ queryKey: requestWorkspaceKey });
 			if (ownerKey !== reviewerOwnerKey) return;
-			const started = data?.reviews?.find((review) => review.status === "running" && review.latestRun);
-			if (!started?.latestRun) {
-				if (reused && !rerun) setRerunConfirmation({ ownerKey, heads: reviewHeads });
-				return;
-			}
-			if (data?.reviewerSurface?.mode === "chat" && data.reviewerSurface.reviewId) {
-				onOpenReviewerChat?.(data.reviewerSurface.reviewId);
-			} else if (data?.reviewerHandleId) {
-				const harness = started.latestRun.harness || "reviewer";
-				onOpenReviewerTerminal?.({ handleId: data.reviewerHandleId, harness });
-			}
+			const started = data?.reviews?.some((review) => review.status === "running" && review.latestRun);
+			if (!started && reused && !rerun) setRerunConfirmation({ ownerKey, heads: reviewHeads });
 		},
 		onError: (_error, _variables, context) => {
 			void queryClient.invalidateQueries({ queryKey: context?.reviewsKey ?? reviewsKey });
@@ -2086,12 +2076,10 @@ function LocalReviewsSection({
 function CloudReviewsSection({
 	session,
 	onOpenReviewFile,
-	onOpenReviewerTerminal,
 	onWorkerMessageSent,
 }: {
 	session: WorkspaceSession;
 	onOpenReviewFile?: (target: { line?: number; path: string }) => void;
-	onOpenReviewerTerminal?: OpenReviewerTerminal;
 	onWorkerMessageSent?: () => void;
 }) {
 	const { t } = useTranslation();
@@ -2135,13 +2123,7 @@ function CloudReviewsSection({
 		onMutate: () => setReviewNotice(null),
 		onSuccess: (data) => {
 			queryClient.setQueryData(["cloud-session-reviews", baseUrl, orgId, session.id], data);
-			const running = data.reviews.find((review) => review.status === "running");
-			if (running && data.reviewerHandleId) {
-				onOpenReviewerTerminal?.({
-					handleId: data.reviewerHandleId,
-					harness: data.reviewerHarness || defaultReviewer,
-				});
-			} else if (!running) {
+			if (!data.reviews.some((review) => review.status === "running")) {
 				setReviewNotice(t("inspector.reviewAlreadyRanForCommit"));
 			}
 		},
