@@ -952,13 +952,17 @@ describe("ArtifactsView", () => {
 		expect(preview).toHaveAttribute("data-src", "http://127.0.0.1:3002/report.pdf?v=2026-10-11T10%3A00%3A00Z");
 	});
 
-	it("shows image previews and falls back to a placeholder when the image fails", () => {
+	it("shows image previews and falls back to a placeholder when the image fails", async () => {
 		const image = session("ao-image", "Cover image", [{ name: "cover.png", kind: "file", updatedAt: "2026-10-11T10:00:00Z" }]);
 		image.artifactFiles![0].rawUrl = "http://127.0.0.1:3002/cover.png";
 		mocks.workspaces = [{ id: "ao", name: "AO", path: "/code/ao", sessions: [image] }];
+		// No small copy can be made here, so the card shows the original.
+		vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("offline")));
 		renderView();
 		const project = within(artifactList());
-		const preview = project.getByRole("button", { name: /^cover\.png/ }).closest("li")!.querySelector("img")!;
+		const card = project.getByRole("button", { name: /^cover\.png/ }).closest("li")!;
+		await waitFor(() => expect(card.querySelector("img")).not.toBeNull());
+		const preview = card.querySelector("img")!;
 		expect(preview).toHaveAttribute("src", image.artifactFiles![0].rawUrl);
 		fireEvent.error(preview);
 		expect(project.getByRole("button", { name: /^cover\.png/ }).closest("li")!.querySelector("img")).toBeNull();
