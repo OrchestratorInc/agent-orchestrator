@@ -30,7 +30,7 @@ export function artifactRecordKey(baseUrl: string, sessionId: string, artifactId
 /** One file's record: the link it was published to, and what it held then. */
 interface ShareLinkRecord {
 	shareId: string;
-	/** The file's fingerprint when it was published; see scanShareFile. */
+	/** The file's fingerprint when it was published; see shareFileFingerprint (a cloud file's SHA-256). */
 	fingerprint?: string;
 	url?: string;
 	/** Who the link opens for, as last known; the daemon serves it with the URL. */
