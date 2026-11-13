@@ -4,9 +4,13 @@ vi.mock("@react-native-async-storage/async-storage", () => ({ default: { getItem
 vi.mock("expo-secure-store", () => ({ getItemAsync: vi.fn(), setItemAsync: vi.fn(), deleteItemAsync: vi.fn() }));
 vi.mock("expo/fetch", () => ({ fetch: vi.fn() }));
 
-import { agentAccountOptions, agentAccountProvider, getAgentAccounts, getSessionAgentAccount, moveSessionAgentAccount } from "./agentAccounts";
+import { createElement } from "react";
+import { act, create, type ReactTestRenderer } from "react-test-renderer";
+import { agentAccountOptions, agentAccountProvider, getAgentAccounts, getSessionAgentAccount, moveSessionAgentAccount, useAgentAccounts } from "./agentAccounts";
 import { delegateTask, spawnSession } from "./api";
 import type { ServerConfig } from "./config";
+
+Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
 const cfg: ServerConfig = { host: "ao.test", httpPort: "3011", muxPort: "3011", secure: false, password: "secret12" };
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -49,5 +53,48 @@ describe("agent accounts on mobile", () => {
 		await delegateTask(cfg, { projectId: "p-1", brief: "Fix it", agent: "codex", mode: "chat", accountId: "x2" });
 		expect(JSON.parse(String(vi.mocked(fetch).mock.calls[0][1]?.body))).toMatchObject({ accountId: "x1" });
 		expect(JSON.parse(String(vi.mocked(fetch).mock.calls[1][1]?.body))).toMatchObject({ accountId: "x2" });
+	});
+});
+
+describe("useAgentAccounts", () => {
+	beforeEach(() => { vi.useFakeTimers(); vi.stubGlobal("fetch", vi.fn()); });
+	afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
+
+	const mount = () => {
+		let state!: ReturnType<typeof useAgentAccounts>;
+		function Probe() {
+			state = useAgentAccounts(cfg, "claude-code", "ao-1");
+			return null;
+		}
+		let renderer!: ReactTestRenderer;
+		act(() => { renderer = create(createElement(Probe)); });
+		return { get: () => state, unmount: () => act(() => renderer.unmount()) };
+	};
+
+	it("loads again after a failed first read, with the same config", async () => {
+		let down = true;
+		vi.mocked(fetch).mockImplementation(async (url) => {
+			if (down) throw new TypeError("Network request failed");
+			return String(url).includes("/sessions/")
+				? json({ claude: "c1" })
+				: json({ accounts: [{ id: "c1", provider: "claude", email: "a@x.dev", signedIn: true, default: true }] });
+		});
+		const probe = mount();
+		await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+		expect(probe.get().accounts).toEqual([]);
+		down = false;
+		await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+		expect(probe.get().accounts.map((account) => account.id)).toEqual(["c1"]);
+		expect(probe.get().current).toBe("c1");
+		probe.unmount();
+	});
+
+	it("does not retry a machine that refuses the phone", async () => {
+		vi.mocked(fetch).mockImplementation(async () => json({ code: "ORIGIN_FORBIDDEN", message: "Origin is not allowed" }, 403));
+		const probe = mount();
+		await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+		expect(vi.mocked(fetch)).toHaveBeenCalledTimes(2);
+		expect(probe.get().accounts).toEqual([]);
+		probe.unmount();
 	});
 });

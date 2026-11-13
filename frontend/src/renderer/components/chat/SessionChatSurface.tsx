@@ -762,6 +762,12 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 						message={apiErrorMessage(switchError)}
 						onDismiss={clearSwitchError}
 					/>
+				) : accountSwitch.error ? (
+					<ComposerErrorNotice
+						title={t("settings.agentAccounts.switchFailed")}
+						message={accountSwitch.error}
+						onDismiss={accountSwitch.clearError}
+					/>
 				) : undefined)}
 				onDecide={commands.resolve}
 				onResolveInput={commands.resolveInput}

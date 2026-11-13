@@ -95,7 +95,7 @@ export function useSessionAccountSwitch(session: WorkspaceSession, sessionHostId
 		onOpenChange={(open) => { if (!open) setConfirming(null); }}
 	/> : null;
 
-	return { shown, choice, account, moving, status, dialog };
+	return { shown, choice, account, moving, status, dialog, error: message, clearError: () => setMessage("") };
 }
 
 export function SessionAccountSummary({ session, hostId }: { session: WorkspaceSession; hostId?: string }) {

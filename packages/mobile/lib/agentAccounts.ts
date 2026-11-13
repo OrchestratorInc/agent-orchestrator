@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from "react";
-import { apiRequest } from "./api";
+import { ApiError, apiRequest } from "./api";
 import type { ServerConfig } from "./config";
 import type { PickerOption } from "./NativePickerList";
 
 const API = "/api/v1/agents/accounts";
+const READ_TIMEOUT_MS = 50_000;
+const RETRY_MS = [2_000, 5_000, 15_000, 30_000];
 
 export type AgentAccountProvider = "claude" | "codex";
 
@@ -27,13 +29,13 @@ export function agentAccountName(account: Pick<AgentAccount, "email" | "provider
 }
 
 export async function getAgentAccounts(cfg: ServerConfig, provider: AgentAccountProvider): Promise<AgentAccount[]> {
-	const res = await apiRequest(cfg, API);
+	const res = await apiRequest(cfg, API, undefined, READ_TIMEOUT_MS);
 	const accounts = ((await res.json())?.accounts ?? []) as AgentAccount[];
 	return accounts.filter((account) => account.provider === provider);
 }
 
 export async function getSessionAgentAccount(cfg: ServerConfig, sessionId: string, provider: AgentAccountProvider): Promise<string | undefined> {
-	const res = await apiRequest(cfg, `${API}/sessions/${encodeURIComponent(sessionId)}`);
+	const res = await apiRequest(cfg, `${API}/sessions/${encodeURIComponent(sessionId)}`, undefined, READ_TIMEOUT_MS);
 	return ((await res.json()) as Partial<Record<AgentAccountProvider, string>>)?.[provider];
 }
 
@@ -54,11 +56,17 @@ export function agentAccountOptions(accounts: readonly AgentAccount[]): PickerOp
 	}));
 }
 
+function accountReadRetryable(error: unknown): boolean {
+	return !(error instanceof ApiError) || error.status >= 500 || error.status === 408 || error.status === 429;
+}
+
 /** Reloads when `reloadKey` changes. An older machine that refuses the phone offers no accounts. */
 export function useAgentAccounts(cfg: ServerConfig | null | undefined, harness: string | undefined, sessionId?: string, reloadKey?: unknown) {
 	const provider = agentAccountProvider(harness);
 	const [accounts, setAccounts] = useState<AgentAccount[]>([]);
 	const [current, setCurrent] = useState<string>();
+	const [attempt, setAttempt] = useState(0);
+	const failures = useRef(0);
 	const cfgRef = useRef(cfg);
 	cfgRef.current = cfg;
 	const cfgKey = cfg ? JSON.stringify(cfg) : "";
@@ -70,14 +78,20 @@ export function useAgentAccounts(cfg: ServerConfig | null | undefined, harness: 
 		const cfg = cfgRef.current;
 		if (!cfg || !provider) return;
 		let cancelled = false;
+		let retry: ReturnType<typeof setTimeout> | undefined;
 		Promise.all([getAgentAccounts(cfg, provider), sessionId ? getSessionAgentAccount(cfg, sessionId, provider) : undefined])
 			.then(([list, id]) => {
 				if (cancelled) return;
+				failures.current = 0;
 				setAccounts(list);
 				setCurrent(id);
 			})
-			.catch(() => {});
-		return () => { cancelled = true; };
-	}, [cfgKey, provider, reloadKey, sessionId]);
+			.catch((error) => {
+				if (cancelled || !accountReadRetryable(error)) return;
+				const delay = RETRY_MS[Math.min(failures.current++, RETRY_MS.length - 1)];
+				retry = setTimeout(() => setAttempt((n) => n + 1), delay);
+			});
+		return () => { cancelled = true; clearTimeout(retry); };
+	}, [attempt, cfgKey, provider, reloadKey, sessionId]);
 	return { provider, accounts, current };
 }
