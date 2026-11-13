@@ -57,6 +57,9 @@ func (f *fakeTransferSessionService) ReceiveTransfer(_ context.Context, projectI
 }
 
 func (f *fakeTransferSessionService) SessionMovedTo(_ context.Context, id domain.SessionID) (domain.SessionMovedTo, bool, error) {
+	if id == "ao-3" {
+		return domain.SessionMovedTo{TransferID: "tr87654321", HostID: "host-b", Label: "MacBook B"}, true, nil
+	}
 	if id != "ao-1" {
 		return domain.SessionMovedTo{}, false, nil
 	}
@@ -117,6 +120,11 @@ func TestSessionsAPI_Transfer(t *testing.T) {
 	mustJSON(t, body, &state)
 	if status != http.StatusOK || state.MovedTo == nil || state.MovedTo.SessionID != "web-9" {
 		t.Fatalf("transfer state = %d %s", status, body)
+	}
+	var pending controllers.SessionTransferStateResponse
+	body, _, _ = doRequest(t, srv, http.MethodGet, "/api/v1/sessions/ao-3/transfer", "")
+	if mustJSON(t, body, &pending); pending.MovedTo != nil || pending.Pending == nil || pending.Pending.Label != "MacBook B" {
+		t.Fatalf("pending transfer state = %s, want pending only", body)
 	}
 	var unmoved controllers.SessionTransferStateResponse
 	body, _, _ = doRequest(t, srv, http.MethodGet, "/api/v1/sessions/ao-2/transfer", "")

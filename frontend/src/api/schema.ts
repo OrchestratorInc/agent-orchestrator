@@ -8746,6 +8746,8 @@ export interface components {
         };
         SessionTransferStateResponse: {
             movedTo?: components["schemas"]["SessionMovedTo"];
+            /** @description A move that was prepared but not finished. Resume is refused until it is finished or cancelled. */
+            pending?: components["schemas"]["SessionMovedTo"];
         };
         SessionWait: {
             /** @enum {string} */
