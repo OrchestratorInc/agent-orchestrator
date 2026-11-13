@@ -901,6 +901,8 @@ type legacyKimiAgent struct {
 	mu                 sync.Mutex
 	currentModel       string
 	availableModels    []legacyModelInfo
+	newConfig          []acpsdk.SessionConfigOption
+	options            map[string]string
 	rejectUnknownModel bool
 	model              string
 	modelCalls         int
@@ -964,7 +966,8 @@ func serveLegacyKimi(agent *legacyKimiAgent, in io.Reader, out io.Writer) {
 				}}
 			}
 			result = map[string]any{
-				"sessionId": "kimi-session-1",
+				"sessionId":     "kimi-session-1",
+				"configOptions": agent.newConfig,
 				"models": map[string]any{
 					"currentModelId":  currentModel,
 					"availableModels": availableModels,
@@ -1006,10 +1009,22 @@ func serveLegacyKimi(agent *legacyKimiAgent, in io.Reader, out io.Writer) {
 			agent.modeCalls++
 			agent.mu.Unlock()
 		case "session/set_config_option":
+			var params struct {
+				ConfigID string `json:"configId"`
+				Value    string `json:"value"`
+			}
+			_ = json.Unmarshal(request.Params, &params)
 			agent.mu.Lock()
 			agent.configCalls++
+			if agent.newConfig != nil {
+				if agent.options == nil {
+					agent.options = map[string]string{}
+				}
+				agent.options[params.ConfigID] = params.Value
+			} else {
+				responseError = map[string]any{"code": -32601, "message": "Method not found"}
+			}
 			agent.mu.Unlock()
-			responseError = map[string]any{"code": -32601, "message": "Method not found"}
 		default:
 			responseError = map[string]any{"code": -32601, "message": "Method not found"}
 		}
@@ -6308,5 +6323,47 @@ func TestModelAliasAdmissionUsesTheBindingHarness(t *testing.T) {
 				t.Fatalf("Hermes selected %q, want auto:model", agent.model)
 			}
 		})
+	}
+}
+
+func TestAgyCombinedModelUsesSeparateACPOptions(t *testing.T) {
+	agent := &legacyKimiAgent{currentModel: "gemini-4-argon-high", availableModels: []legacyModelInfo{
+		{ModelID: "gemini-4-argon-high", Name: "Gemini 4 Argon (High)"},
+		{ModelID: "gemini-3.8-flash-low", Name: "Gemini 3.8 Flash (Low)"},
+	}, newConfig: []acpsdk.SessionConfigOption{
+		selectConfigOption("model", "Model", "model", "gemini-4-argon", "gemini-4-argon", "gemini-3.8-flash"),
+		selectConfigOption("thinking_level", "Thinking Level", "thought_level", "high", "low", "high"),
+	}}
+	driver := New(Config{Harness: domain.HarnessAgy, Launch: func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil }, SessionOptions: func(settings ports.ChatTurnSettings) []SessionOption {
+		return []SessionOption{{ID: "model", Value: settings.Model}}
+	}}, slog.New(slog.DiscardHandler))
+	driver.useTestProcess(fakeLegacyKimiSpawn(agent))
+	opened, err := driver.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir(), Model: "gemini-3.8-flash-low"})
+	if err != nil {
+		t.Fatalf("start with combined model: %v", err)
+	}
+	defer opened.Close()
+	agent.mu.Lock()
+	defer agent.mu.Unlock()
+	if agent.options["model"] != "gemini-3.8-flash" || agent.options["thinking_level"] != "low" {
+		t.Fatalf("settings = %#v, want separate model and low thinking level", agent.options)
+	}
+}
+
+func TestAgyCombinedModelRejectsUnavailableChoice(t *testing.T) {
+	agent := &legacyKimiAgent{newConfig: []acpsdk.SessionConfigOption{
+		selectConfigOption("model", "Model", "model", "gemini-4-argon", "gemini-4-argon"),
+		selectConfigOption("thinking_level", "Thinking Level", "thought_level", "high", "low", "high"),
+	}}
+	driver := New(Config{Harness: domain.HarnessAgy, Launch: func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil }, SessionOptions: func(settings ports.ChatTurnSettings) []SessionOption {
+		return []SessionOption{{ID: "model", Value: settings.Model}}
+	}}, slog.New(slog.DiscardHandler))
+	driver.useTestProcess(fakeLegacyKimiSpawn(agent))
+	opened, err := driver.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir(), Model: "gemini-unknown-low"})
+	if opened != nil {
+		defer opened.Close()
+	}
+	if !errors.Is(err, ports.ErrChatConfigOptionInvalid) {
+		t.Fatalf("start with unavailable model: %v, want invalid model", err)
 	}
 }

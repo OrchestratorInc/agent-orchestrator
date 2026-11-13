@@ -579,6 +579,7 @@ func (c *conversation) applyTurnSettings(ctx context.Context, settings ports.Cha
 	// Prefer the modern selector when an agent (such as Grok) also advertises
 	// legacy models, matching SetConfigOption and preserving rebuilt catalogs.
 	legacyModel := c.legacyModel && !c.modelConfigOption
+	modelConfigOption := c.modelConfigOption
 	legacyMode := c.legacyMode
 	configOptions := cloneConfigOptions(c.configOptions)
 	c.mu.Unlock()
@@ -593,6 +594,34 @@ func (c *conversation) applyTurnSettings(ctx context.Context, settings ports.Cha
 	var options []SessionOption
 	if optionsFor != nil {
 		options = optionsFor(settings)
+	}
+	// Agy advertises legacy model-effort IDs alongside modern separate model
+	// and thinking-level options. Translate only combinations the live catalog
+	// confirms; preserve unknown values for the normal validation error.
+	if c.harness == domain.HarnessAgy && modelConfigOption {
+		for i := range options {
+			if options[i].ID != "model" || options[i].Value == "" {
+				continue
+			}
+			base, effort := "", ""
+			for _, level := range []string{"minimal", "low", "medium", "high", "xhigh"} {
+				if candidate, ok := strings.CutSuffix(options[i].Value, "-"+level); ok {
+					base, effort = candidate, level
+					break
+				}
+			}
+			if effort != "" {
+				modelOffered, _ := c.configOptionOffers("model", base)
+				effortOffered, _ := c.configOptionOffers("thinking_level", effort)
+				if modelOffered && effortOffered {
+					options[i].Value = base
+					options = append(options, SessionOption{ID: "thinking_level", Value: effort})
+				}
+			}
+			if offered, known := c.configOptionOffers("model", options[i].Value); known && !offered {
+				return fmt.Errorf("%w: ACP session model does not offer %q", ports.ErrChatConfigOptionInvalid, options[i].Value)
+			}
+		}
 	}
 	// A setting the session already has is skipped (some agents take seconds
 	// per change) unless session/set_model made the list stale.
