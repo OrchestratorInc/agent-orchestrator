@@ -526,7 +526,7 @@ func TestSessionKanbanIdleWorkerAfterAOReviewDeliveryRequestsChanges(t *testing.
 	}
 	const providerReviewID = "4876751117"
 	if err := st.WriteSCMObservation(ctx, domain.PullRequest{
-		URL: "pr/1", SessionID: rec.ID, Number: 1, HeadSHA: "head1", UpdatedAt: now, ObservedAt: now,
+		URL: "pr/1", SessionID: rec.ID, Number: 1, HeadSHA: "head1", UpdatedAt: now, ObservedAt: now, CreatedAtProvider: now,
 	}, nil, []domain.PullRequestReview{{
 		ID: "PRR_kwDOnode", Author: "ao", State: domain.ReviewNone, TargetSHA: "head1", SubmittedAt: now,
 	}}, nil, []domain.PullRequestComment{{

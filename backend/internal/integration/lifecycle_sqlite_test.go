@@ -337,6 +337,9 @@ func TestMergedPRUsesSessionManagerOnlyWhenOptedIn(t *testing.T) {
 	if ok, err := st.store.SetSessionTerminateOnPRMerge(ctx, sess2.ID, true, time.Now().UTC()); err != nil || !ok {
 		t.Fatalf("enable terminate-on-merge: ok=%v err=%v", ok, err)
 	}
+	if _, err := st.store.ClaimPR(ctx, domain.PullRequest{URL: "pr2", SessionID: sess2.ID, Number: 2}, nil, nil, nil, nil, ports.ReviewWritePreserve, false); err != nil {
+		t.Fatal(err)
+	}
 	if err := st.prm.ApplyObservation(ctx, sess2.ID, ports.PRObservation{Fetched: true, URL: "pr2", Number: 2, Merged: true}); err != nil {
 		t.Fatal(err)
 	}
