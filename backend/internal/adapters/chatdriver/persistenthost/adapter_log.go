@@ -22,11 +22,11 @@ const (
 // stderr writer would otherwise surface from the process wait and look like a
 // provider failure.
 type adapterLog struct {
-	mu   sync.Mutex
-	path string
-	max  int64
-	file *os.File
-	size int64
+	mu       sync.Mutex
+	path     string
+	maxBytes int64
+	file     *os.File
+	size     int64
 }
 
 func openAdapterLog(dir string, maxBytes int64) *adapterLog {
@@ -61,7 +61,7 @@ func (l *adapterLog) Write(p []byte) (int, error) {
 	if l.file == nil {
 		return len(p), nil
 	}
-	if l.size+int64(len(p)) > l.max && l.size > 0 {
+	if l.size+int64(len(p)) > l.maxBytes && l.size > 0 {
 		l.rotate()
 		if l.file == nil {
 			return len(p), nil
