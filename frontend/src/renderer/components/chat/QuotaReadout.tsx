@@ -1,22 +1,24 @@
 /**
  * The account's usage limit, shown in the model picker once it is close.
  *
- * Below the warning line the picker names the agent and model as usual. From
- * there the same control shows how much of the provider's usage window is gone,
- * because that has become the thing most likely to stop the next turn. The
- * picker still opens on click and names the model in its hover title.
- *
- * Close to the limit it is a warning; once the window is full, a clock and the
- * time until it resets, each in a softly tinted pill.
+ * Below the warning line the picker names the agent and model as usual. Close
+ * to the limit a warning pill takes the model's place for a few seconds, when a
+ * chat opens or when usage first crosses the line, then the model comes back;
+ * the open model menu keeps the warning at its top. Once the window is full a
+ * clock and the time until it resets stay in the picker, since nothing runs
+ * until then. The picker still opens on click and names the model on hover.
  */
 
 import type { TFunction } from "i18next";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { AlertTriangle, Clock } from "@/components/app-icons";
 import type { ConversationRateLimits } from "../../types/conversation";
 
 /** Where the warning replaces the model name. */
 export const QUOTA_WARN = 75;
+/** How long the warning pill holds before the model comes back. */
+export const QUOTA_FLASH_MS = 5_000;
 
 export type QuotaWindow = { percent: number; resetsIn?: number; kind: "session" | "weekly" };
 
@@ -74,6 +76,48 @@ export function QuotaReadout({ quota }: { quota: QuotaWindow }) {
 			<AlertTriangle aria-hidden="true" className="size-3 shrink-0" />
 			<span className="truncate">{t(kind)}</span>
 		</span>
+	);
+}
+
+/**
+ * Whether the picker should show the readout in place of the model right now.
+ *
+ * A full window always does. A warning shows for QUOTA_FLASH_MS each time it
+ * becomes true for a conversation: when the chat opens already close, when
+ * usage first crosses the line, or when the tighter window changes. Dropping
+ * back below the line re-arms it.
+ */
+export function useQuotaFlash(quota: QuotaWindow | undefined, scope: string): boolean {
+	const full = quota !== undefined && quota.percent >= 100;
+	const key = quota && !full ? `${scope}:${quota.kind}` : undefined;
+	const [dismissed, setDismissed] = useState<string>();
+	useEffect(() => {
+		if (!key) {
+			setDismissed(undefined);
+			return;
+		}
+		const timer = window.setTimeout(() => setDismissed(key), QUOTA_FLASH_MS);
+		return () => window.clearTimeout(timer);
+	}, [key]);
+	return full || (key !== undefined && key !== dismissed);
+}
+
+/** The warning at the top of the open model menu, which outlasts the pill. */
+export function QuotaMenuNotice({ quota }: { quota: QuotaWindow }) {
+	const { t } = useTranslation();
+	const full = quota.percent >= 100;
+	const resets = quota.resetsIn && quota.resetsIn > 0 ? formatQuotaReset(quota.resetsIn) : undefined;
+	const label = full
+		? t("chat.usageLimit.title")
+		: t(quota.kind === "session" ? "chat.quota.approaching" : "chat.quota.approachingWeekly");
+	return (
+		<div role="status" data-severity={full ? "full" : "warn"} className="quota-notice">
+			{full ? <Clock aria-hidden="true" /> : <AlertTriangle aria-hidden="true" />}
+			<span className="flex min-w-0 flex-1 flex-col gap-0.5">
+				<span className="quota-notice-title">{label}</span>
+				{resets ? <span className="quota-notice-meta">{t("chat.quota.resetsIn", { time: resets })}</span> : null}
+			</span>
+		</div>
 	);
 }
 

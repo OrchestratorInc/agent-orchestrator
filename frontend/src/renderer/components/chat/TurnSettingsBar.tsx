@@ -135,6 +135,7 @@ export function TurnSettingsBar({
 	agentSwitch,
 	beforePicker,
 	pickerOverride,
+	pickerNotice,
 	modelsLoading,
 	lastModel,
 	unsetModelLabel,
@@ -190,6 +191,8 @@ export function TurnSettingsBar({
 	beforePicker?: ReactNode;
 	/** Shown in the picker after the agent's logo, in place of the model and effort, such as the usage limit near its end. */
 	pickerOverride?: PickerOverride;
+	/** A note at the top of the open model menu, such as the usage limit near its end. */
+	pickerNotice?: ReactNode;
 	/** The agent is starting again; the picker names no model until it reports its own. */
 	modelsLoading?: boolean;
 	/** The model the chat's agent last reported running, when none is saved. */
@@ -499,6 +502,7 @@ export function TurnSettingsBar({
 								loadingModels={modelsLoading}
 								savedModel={settings.model || lastModel}
 								override={pickerOverride}
+								notice={pickerNotice}
 								title={reroute ? `The provider answered with ${rerouted} instead of ${reroute.fromModel ?? chosenLabel}` : undefined}
 								extras={pickerExtras}
 								onCloseAutoFocus={restoreComposerFocus}

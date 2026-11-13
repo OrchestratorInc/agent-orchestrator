@@ -1,6 +1,6 @@
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
-import { formatQuotaReset, nearQuotaWindow, QuotaReadout, tightestQuotaWindow } from "./QuotaReadout";
+import { act, render, renderHook, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { formatQuotaReset, nearQuotaWindow, QUOTA_FLASH_MS, QuotaMenuNotice, QuotaReadout, tightestQuotaWindow, useQuotaFlash, type QuotaWindow } from "./QuotaReadout";
 import type { ConversationRateLimits } from "../../types/conversation";
 
 function limits(over: Partial<ConversationRateLimits> = {}): ConversationRateLimits {
@@ -48,5 +48,55 @@ describe("QuotaReadout", () => {
 		expect(formatQuotaReset(7_200)).toBe("2h");
 		expect(formatQuotaReset(8_100)).toBe("2h 15m");
 		expect(formatQuotaReset(4 * 86_400)).toBe("4d");
+	});
+
+	it("keeps the warning and when it resets at the top of the open menu", () => {
+		const { rerender } = render(<QuotaMenuNotice quota={{ percent: 82, kind: "session", resetsIn: 8_100 }} />);
+		expect(screen.getByRole("status")).toHaveTextContent("Approaching limit");
+		expect(screen.getByRole("status")).toHaveTextContent("Resets in 2h 15m");
+
+		rerender(<QuotaMenuNotice quota={{ percent: 100, kind: "session", resetsIn: 8_100 }} />);
+		expect(screen.getByRole("status")).toHaveTextContent("Usage limit reached");
+		expect(screen.getByRole("status")).toHaveAttribute("data-severity", "full");
+	});
+});
+
+describe("useQuotaFlash", () => {
+	beforeEach(() => { vi.useFakeTimers(); });
+	afterEach(() => { vi.useRealTimers(); });
+
+	const warn: QuotaWindow = { percent: 80, kind: "session" };
+	const flash = (quota: QuotaWindow | undefined, scope = "chat-a") => ({ quota, scope });
+
+	it("shows the warning when a chat opens close to the limit, then steps aside", () => {
+		const { result } = renderHook(({ quota, scope }) => useQuotaFlash(quota, scope), { initialProps: flash(warn) });
+		expect(result.current).toBe(true);
+		act(() => { vi.advanceTimersByTime(QUOTA_FLASH_MS); });
+		expect(result.current).toBe(false);
+	});
+
+	it("does not flash again for a new reading in the same chat", () => {
+		const { result, rerender } = renderHook(({ quota, scope }) => useQuotaFlash(quota, scope), { initialProps: flash(warn) });
+		act(() => { vi.advanceTimersByTime(QUOTA_FLASH_MS); });
+		rerender(flash({ percent: 88, kind: "session" }));
+		expect(result.current).toBe(false);
+	});
+
+	it("flashes again when usage crosses the line anew, or another chat opens", () => {
+		const { result, rerender } = renderHook(({ quota, scope }) => useQuotaFlash(quota, scope), { initialProps: flash(warn) });
+		act(() => { vi.advanceTimersByTime(QUOTA_FLASH_MS); });
+		rerender(flash(undefined));
+		rerender(flash(warn));
+		expect(result.current).toBe(true);
+
+		act(() => { vi.advanceTimersByTime(QUOTA_FLASH_MS); });
+		rerender(flash(warn, "chat-b"));
+		expect(result.current).toBe(true);
+	});
+
+	it("holds a full window until it resets", () => {
+		const { result } = renderHook(({ quota, scope }) => useQuotaFlash(quota, scope), { initialProps: flash({ percent: 100, kind: "session" }) });
+		act(() => { vi.advanceTimersByTime(QUOTA_FLASH_MS * 3); });
+		expect(result.current).toBe(true);
 	});
 });

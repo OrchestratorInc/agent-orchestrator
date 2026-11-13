@@ -2114,17 +2114,56 @@ textarea,
 	box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--quota-tone) 24%, transparent);
 	animation: quota-in 180ms var(--ease-out);
 }
-.quota-pill[data-severity="full"] {
+.quota-pill[data-severity="full"],
+.quota-notice[data-severity="full"] {
 	--quota-tone: var(--color-status-exited);
 }
-.quota-pill > svg {
+.quota-pill > svg,
+.quota-notice > svg {
 	color: var(--quota-tone);
+}
+/* The same warning at the top of the open model menu, with when it resets. */
+.quota-notice {
+	--quota-tone: var(--color-status-in-review);
+	display: flex;
+	align-items: flex-start;
+	gap: 8px;
+	margin: 0 0 6px;
+	padding: 8px 10px;
+	border-radius: 7px;
+	color: var(--color-foreground);
+	background: color-mix(in srgb, var(--quota-tone) 10%, transparent);
+	box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--quota-tone) 18%, transparent);
+}
+.quota-notice > svg {
+	width: 14px;
+	height: 14px;
+	margin-top: 1px;
+	flex-shrink: 0;
+}
+.quota-notice-title {
+	font-weight: 500;
+	line-height: 16px;
+}
+.quota-notice-meta {
+	color: var(--color-muted-foreground);
+	font-size: 11.5px;
+	line-height: 15px;
+	font-variant-numeric: tabular-nums;
 }
 @keyframes quota-in {
 	from { opacity: 0; transform: scale(0.96); }
 }
+/* The model's name returning to the picker once the warning steps aside. */
+.picker-label-in {
+	animation: picker-label-in 220ms var(--ease-out);
+}
+@keyframes picker-label-in {
+	from { opacity: 0; transform: translateX(-3px); }
+}
 @media (prefers-reduced-motion: reduce) {
-	.quota-pill { animation: none; }
+	.quota-pill,
+	.picker-label-in { animation: none; }
 }
 
 @keyframes chat-live-label-in {

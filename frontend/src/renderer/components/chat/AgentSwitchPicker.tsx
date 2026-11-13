@@ -7,7 +7,7 @@
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { TFunction } from "i18next";
 import { Brain, ChevronRight, Loader2, Star, TriangleAlert, Zap } from "@/components/app-icons";
-import { Fragment, memo, useCallback, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { agentModelsQueryOptions, type AgentModelCatalog } from "../../hooks/useAgentModelsQuery";
 import { useAgentManagementMenu } from "../../hooks/useAgentManagementMenu";
@@ -211,10 +211,13 @@ export function AgentModelPicker({
 	terminal = false,
 	pendingFooter,
 	override,
+	notice,
 	onCloseAutoFocus,
 }: {
 	/** Shown after the agent's logo in place of the model and effort; the menu is unchanged. */
 	override?: PickerOverride;
+	/** A note at the top of the open menu, such as the usage limit near its end. */
+	notice?: ReactNode;
 	/** Shown under the settings of the agent picked to switch to, such as its Switch and Cancel buttons. */
 	pendingFooter?: ReactNode;
 	currentHarness: string;
@@ -404,6 +407,14 @@ export function AgentModelPicker({
 	const offersAutoCompact = compactsEarly(pending?.harness, pending?.model);
 	// Only while there is nothing to show yet: a reload after a pick keeps the rows in place.
 	const waiting = loading && !pending && source.efforts.length === 0 && source.fast === undefined && source.thinking === undefined;
+	// When an override steps aside, the model fades back in rather than snapping.
+	const overriding = Boolean(override && !terminal);
+	const wasOverriding = useRef(overriding);
+	const [labelReturn, setLabelReturn] = useState(0);
+	useEffect(() => {
+		if (wasOverriding.current && !overriding) setLabelReturn((count) => count + 1);
+		wasOverriding.current = overriding;
+	}, [overriding]);
 
 	return (
 		// Not modal, so one click on the composer both closes the menu and focuses it.
@@ -422,7 +433,8 @@ export function AgentModelPicker({
 				data-shortcut-target={terminal ? undefined : "model-picker"}
 			>
 				<ProviderMark provider={terminal ? currentHarness : shownHarness} className="size-3.5" />
-				{override && !terminal ? override.label : <>
+				{override && !terminal ? override.label : <span key={labelReturn}
+					className={cn("flex min-w-0 items-center gap-1.5", terminal ? "flex-1" : undefined, labelReturn > 0 ? "picker-label-in" : undefined)}>
 				{loadingModels && !savedLabel && !pending && !terminal ? (
 					<span className="flex items-center gap-1.5 text-muted-foreground">
 						<Loader2 aria-hidden="true" className="size-3 animate-spin" />
@@ -441,7 +453,7 @@ export function AgentModelPicker({
 					</>
 				)}
 				</>}
-				</>}
+				</span>}
 			</OptionMenuTrigger>
 			{/* Pinned to the trigger's left edge, which stays put while its label changes width. */}
 			<OptionMenuContent align="start" side={terminal ? "right" : "top"} steady className="chat-settings-menu w-64 text-[12px]!"
@@ -450,6 +462,7 @@ export function AgentModelPicker({
 					if (!event.defaultPrevented) onCloseAutoFocus?.(event);
 				}}
 			>
+				{notice && !terminal ? notice : null}
 				<ModelMenuChoices models={searchRows} searchable searchPlaceholder={t("agentSwitch.search")}>
 					{(matches, searchActiveID, optionID, query) => query ? matches.map((row) => (
 						<SearchRow
