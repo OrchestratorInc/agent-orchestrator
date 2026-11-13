@@ -185,12 +185,12 @@ export function DictationSection({ titleHidden }: { titleHidden?: boolean }) {
 							test.phase === "idle" &&
 							(busy || !status.data?.models.some((model) => model.id === status.data?.selected && model.installed))
 						}
-// The selected model is already usable here (the button is disabled otherwise), so this never
-							// reopens the first-use chooser, which could replace the user's selection.
-							onClick={() => {
-								if (test.phase === "idle") setTranscript("");
-								test.toggle();
-							}}
+						// The selected model is already usable here (the button is disabled otherwise), so this never
+						// reopens the first-use chooser, which could replace the user's selection.
+						onClick={() => {
+							if (test.phase === "idle") setTranscript("");
+							test.toggle();
+						}}
 					>
 						{test.phase === "idle"
 							? t("dictation.test")

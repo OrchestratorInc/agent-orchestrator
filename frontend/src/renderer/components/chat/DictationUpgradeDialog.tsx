@@ -287,12 +287,12 @@ export function useDictationUpgrade(ownerKey?: string) {
 		) : (
 			<Download className="size-6" aria-hidden="true" strokeWidth={1.6} />
 		);
-\1const busy = phase !== "choose";
-		// Closing the chooser abandons a choice still waiting on the daemon, so a late reply cannot start dictation.
-		const dismiss = () => {
-			operation.current += 1;
-			setOpen(false);
-		};
+	const busy = phase !== "choose";
+	// Closing the chooser abandons a choice still waiting on the daemon, so a late reply cannot start dictation.
+	const dismiss = () => {
+		operation.current += 1;
+		setOpen(false);
+	};
 	const installingProps = (model: string) => {
 		if (active !== model) return undefined;
 		// macOS dictation has nothing to download; its row waits on the system's permission prompts.
