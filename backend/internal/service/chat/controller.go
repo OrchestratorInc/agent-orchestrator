@@ -3269,9 +3269,6 @@ func (c *Controller) projectUnit(
 	return true
 }
 
-// reportExitedOnceStored marks the session exited after a failed projection
-// detached it, retrying until the store accepts the write. Opening an exited
-// chat resumes it, and the resumed controller replays the retained provider.
 func (c *Controller) reportExitedOnceStored(ctx context.Context) {
 	c.mu.Lock()
 	suppress := c.suppressStoppedActivity
