@@ -397,9 +397,9 @@ export interface ConversationQueryResult {
 
 type ConversationPageQuery = { beforeSequence?: number; afterSequence?: number; limit: number; outputLimit?: number };
 
-async function fetchConversationWire(sessionId: string, hostId: string | undefined, query: ConversationPageQuery): Promise<WireSnapshot> {
+async function fetchConversationWire(sessionId: string, hostId: string | undefined, query: ConversationPageQuery, compact = true): Promise<WireSnapshot> {
 	const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/conversation", {
-		params: { path: { sessionId }, query },
+		params: { path: { sessionId }, query: { ...query, compactDetails: compact ? "1" : undefined, dedupeBodies: compact ? "1" : undefined } },
 	});
 	if (error) throw error;
 	return data as WireSnapshot;
@@ -416,7 +416,7 @@ async function fetchConversationPage(sessionId: string, hostId?: string, beforeS
 
 /** The whole output of one activity, for a page that carries only its head and tail. */
 export async function fetchActivityOutput(sessionId: string, hostId: string | undefined, sequence: number, activityId: string): Promise<string | undefined> {
-	const wire = await fetchConversationWire(sessionId, hostId, { beforeSequence: sequence + 1, afterSequence: sequence > 1 ? sequence - 1 : undefined, limit: 1 });
+	const wire = await fetchConversationWire(sessionId, hostId, { beforeSequence: sequence + 1, afterSequence: sequence > 1 ? sequence - 1 : undefined, limit: 1 }, false);
 	const activity = wire.activities?.find((candidate) => candidate.id === activityId);
 	return (activity?.detail as { output?: unknown } | undefined)?.output as string | undefined;
 }
@@ -2155,7 +2155,7 @@ function toMessage(wire: WireMessage): ConversationMessage {
 	};
 }
 
-function toActivity(wire: WireActivity): ConversationActivity {
+export function toActivity(wire: WireActivity): ConversationActivity {
 	const detail = (wire.detail ?? {}) as Record<string, unknown>;
 	return {
 		kind: "activity",
@@ -2164,6 +2164,7 @@ function toActivity(wire: WireActivity): ConversationActivity {
 		sequence: wire.sequence,
 		revision: wire.revision,
 		activityKind: wire.activityKind as ActivityKind,
+		detailOmitted: wire.detailOmitted,
 		status: wire.status as ActivityStatus,
 		summary: wire.summary,
 		requestId: wire.requestId,

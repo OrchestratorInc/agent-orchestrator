@@ -1143,16 +1143,22 @@ type renderSourceQuery struct {
 	Source *string `query:"source,omitempty" enum:"1" description:"Set to 1 to read the page as the agent wrote it: the stored bytes as text/plain, without the theme bootstrap."`
 }
 
+type conversationActivityParam struct {
+	ActivityID string `path:"activityId"`
+}
+
 type conversationSnapshotQuery struct {
 	BeforeSequence *int64 `query:"beforeSequence,omitempty" minimum:"1" description:"Read items older than this conversation sequence. Omit for the newest page."`
 	Limit          *int64 `query:"limit,omitempty" minimum:"1" maximum:"500" description:"Maximum messages to return; tool activity between them comes along without counting. Defaults to 200."`
 }
 
 type sessionConversationSnapshotQuery struct {
-	BeforeSequence *int64 `query:"beforeSequence,omitempty" minimum:"1" description:"Read items older than this conversation sequence. Omit for the newest page."`
-	Limit          *int64 `query:"limit,omitempty" minimum:"1" maximum:"500" description:"Maximum messages to return; tool activity between them comes along without counting. Defaults to 200."`
-	AfterSequence  *int64 `query:"afterSequence,omitempty" minimum:"1" description:"Read only items newer than this conversation sequence. The response echoes afterSequence when it applied the floor. Omit for a whole page."`
-	OutputLimit    *int64 `query:"outputLimit,omitempty" minimum:"64" maximum:"65536" description:"Keep at most this many bytes of each command output: its head and tail. A cut output carries outputBytes, the full size. Omit for whole outputs."`
+	BeforeSequence *int64  `query:"beforeSequence,omitempty" minimum:"1" description:"Read items older than this conversation sequence. Omit for the newest page."`
+	Limit          *int64  `query:"limit,omitempty" minimum:"1" maximum:"500" description:"Maximum messages to return; tool activity between them comes along without counting. Defaults to 200."`
+	AfterSequence  *int64  `query:"afterSequence,omitempty" minimum:"1" description:"Read only items newer than this conversation sequence. The response echoes afterSequence when it applied the floor. Omit for a whole page."`
+	OutputLimit    *int64  `query:"outputLimit,omitempty" minimum:"64" maximum:"65536" description:"Keep at most this many bytes of each command output: its head and tail. A cut output carries outputBytes, the full size. Omit for whole outputs."`
+	CompactDetails *string `query:"compactDetails,omitempty" enum:"1" description:"Return 128-byte UTF-8 previews for settled tool and reasoning detail strings."`
+	DedupeBodies   *string `query:"dedupeBodies,omitempty" enum:"1" description:"Omit duplicate tool bodies with explicit source-field markers."`
 }
 
 func usageOperations() []operation {
@@ -1339,6 +1345,12 @@ func shellTerminalOperations() []operation {
 				{http.StatusInternalServerError, envelope.APIError{}},
 				{http.StatusNotImplemented, envelope.APIError{}},
 			},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/sessions/{sessionId}/conversation/activities/{activityId}", id: "getSessionConversationActivity", tag: "conversations",
+			summary:    "Read one full activity in the active conversation, with duplicate bodies omitted",
+			pathParams: []any{controllers.SessionIDParam{}, conversationActivityParam{}},
+			resps:      []respUnit{{http.StatusOK, controllers.ConversationActivityResponse{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusConflict, envelope.APIError{}}, {http.StatusInternalServerError, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
 		},
 		{
 			method: http.MethodGet, path: "/api/v1/sessions/{sessionId}/conversation", id: "getSessionConversation", tag: "conversations",

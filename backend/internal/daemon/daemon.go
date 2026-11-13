@@ -488,6 +488,7 @@ func Run(buildVersion string) (retErr error) {
 				BatchedDeliveries:                rows.BatchedDeliveries,
 			}, nil
 		}),
+		ActivityReader: store,
 		PageReader: chatsvc.SnapshotPageReaderFunc(func(ctx context.Context, conversationID string, beforeSequence, afterSequence, limit int64) (chatsvc.ConversationRows, error) {
 			rows, err := store.LoadConversationSnapshotRange(ctx, conversationID, beforeSequence, afterSequence, limit)
 			if err != nil {
