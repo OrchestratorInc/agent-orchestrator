@@ -179,9 +179,10 @@ function detach(drag: ActiveDrag): void {
 	drag.onDetach?.();
 	// The ghost is a copy of the tab itself at its exact size, measured from
 	// the tab's frame rather than the wrapper the press landed on.
-	const frame = (drag.source.matches("[data-terminal-tab-frame]")
+	const frameSelector = "[data-terminal-tab-frame], [data-pane-drag-chip]";
+	const frame = (drag.source.matches(frameSelector)
 		? drag.source
-		: drag.source.querySelector<HTMLElement>("[data-terminal-tab-frame]")) ?? drag.source;
+		: drag.source.querySelector<HTMLElement>(frameSelector)) ?? drag.source;
 	const box = frame.getBoundingClientRect();
 	drag.grabX = Math.min(Math.max(drag.x - box.left, 0), box.width);
 	drag.grabY = Math.min(Math.max(drag.y - box.top, 0), box.height);

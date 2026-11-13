@@ -365,7 +365,7 @@ export function SplitPaneHeader({
 		>
 			<span
 				className="pointer-events-none inline-flex min-w-0 items-center gap-1.5 rounded-md px-1 text-control leading-none"
-				data-terminal-tab-frame
+				data-pane-drag-chip
 			>
 				<GripVertical aria-hidden="true" className="size-icon-sm shrink-0 opacity-50" />
 				<span className="grid size-icon-base shrink-0 place-items-center">{shown.icon}</span>

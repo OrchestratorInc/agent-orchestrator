@@ -6536,6 +6536,7 @@ body.is-pane-dragging webview {
 }
 
 [data-pane-drag-source] [data-terminal-tab-frame],
+[data-pane-drag-source] [data-pane-drag-chip],
 [data-pane-drag-source][data-terminal-tab-frame] {
 	opacity: 0.4;
 	transition: opacity var(--duration-fast) ease-out;
@@ -6558,7 +6559,8 @@ body.is-pane-dragging webview {
 	transition: opacity var(--duration-fast) ease-out;
 }
 
-.pane-drag-ghost > [data-terminal-tab-frame] {
+.pane-drag-ghost > [data-terminal-tab-frame],
+.pane-drag-ghost > [data-pane-drag-chip] {
 	flex: 1;
 	min-width: 0;
 	max-width: none;
