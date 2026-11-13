@@ -3374,7 +3374,6 @@
 	"artifacts.share.cancel": "Cancel",
 	"artifacts.share.published": "Published",
 	"artifacts.share.republishHint": "Edited since you published. Republish to update the link.",
-	"artifacts.share.options": "Access and people: {{name}}",
 	"artifacts.share.title.publish": "Publish",
 	"artifacts.share.title.publishing": "Publishing",
 	"artifacts.share.title.published": "Published",

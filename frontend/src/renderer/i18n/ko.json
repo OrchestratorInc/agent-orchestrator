@@ -3388,7 +3388,6 @@
 	"artifacts.share.cancel": "취소",
 	"artifacts.share.published": "게시됨",
 	"artifacts.share.republishHint": "게시한 후 수정되었습니다. 다시 게시하면 링크가 업데이트됩니다.",
-	"artifacts.share.options": "액세스 및 사용자: {{name}}",
 	"artifacts.share.title.publish": "게시",
 	"artifacts.share.title.publishing": "게시 중",
 	"artifacts.share.title.published": "게시됨",

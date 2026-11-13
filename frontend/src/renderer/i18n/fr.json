@@ -3452,7 +3452,6 @@
 	"artifacts.share.cancel": "Annuler",
 	"artifacts.share.published": "Publié",
 	"artifacts.share.republishHint": "Modifié depuis la publication. Republiez pour mettre à jour le lien.",
-	"artifacts.share.options": "Accès et personnes : {{name}}",
 	"artifacts.share.title.publish": "Publier",
 	"artifacts.share.title.publishing": "Publication de",
 	"artifacts.share.title.published": "Publié",
