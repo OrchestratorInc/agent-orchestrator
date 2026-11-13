@@ -39,7 +39,8 @@ describe("session header controls", () => {
 	});
 
 	it("opens the session's files from the composer's changes strip", () => {
-		expect(session).toContain("changes={changeSummary?.files ? { ...changeSummary, onOpen: filesNavigation.openChanges } : undefined}");
+		expect(session).toContain("changeSummary?.files ? { ...changeSummary, onOpen: filesNavigation.openChanges } : undefined");
+		expect(session).toContain("changes={composerChanges}");
 	});
 
 	// Pull Requests is a page of its own, opened over the session so back
