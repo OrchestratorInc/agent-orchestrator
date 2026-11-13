@@ -19,6 +19,8 @@ func testPlugin() *Plugin {
 }
 
 func TestLaunchAndRestore(t *testing.T) {
+	// An exported LLM_API_KEY would add --override-with-envs.
+	t.Setenv("LLM_API_KEY", "")
 	p := testPlugin()
 	ctx := context.Background()
 	cmd, err := p.GetLaunchCommand(ctx, ports.LaunchConfig{Prompt: "-fix this", NativeSessionID: "ignored", Permissions: ports.PermissionModeBypassPermissions})
@@ -84,6 +86,8 @@ func TestProviderKeyEnablesOpenHandsEnvironmentOverride(t *testing.T) {
 }
 
 func TestPermissions(t *testing.T) {
+	// An exported LLM_API_KEY would add --override-with-envs.
+	t.Setenv("LLM_API_KEY", "")
 	for _, tc := range []struct {
 		mode ports.PermissionMode
 		want string
