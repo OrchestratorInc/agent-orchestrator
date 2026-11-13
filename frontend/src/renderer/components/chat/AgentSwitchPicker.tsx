@@ -411,6 +411,7 @@ export function AgentModelPicker({
 	const offersAutoCompact = compactsEarly(pending?.harness, pending?.model);
 	// Only while there is nothing to show yet: a reload after a pick keeps the rows in place.
 	const waiting = loading && !pending && source.efforts.length === 0 && source.fast === undefined && source.thinking === undefined;
+	const focusFromMenu = useRef(false);
 	// The agent's model, effort and flags as the trigger shows them.
 	const labelContent = () => (<>
 		{loadingModels && !savedLabel && !pending && !terminal ? (
@@ -437,7 +438,9 @@ export function AgentModelPicker({
 		// Not modal, so one click on the composer both closes the menu and focuses it.
 		<OptionMenu open={open} onOpenChange={setOpen} modal={false}>
 			{/* Always mounted, so the trigger (and its label's crossfade) never remounts; it only has content during an override. */}
-			<TooltipProvider><Tooltip><TooltipTrigger asChild>
+			<TooltipProvider><Tooltip><TooltipTrigger asChild
+				// Focus handed back by the closing menu is not a request for the tooltip; a later Tab still is.
+				onFocus={(event) => { if (focusFromMenu.current) event.preventDefault(); focusFromMenu.current = false; }}>
 			<OptionMenuTrigger variant="ghost"
 				ref={management.triggerRef}
 				disabled={disabled && agentSwitch.disabled}
@@ -468,6 +471,8 @@ export function AgentModelPicker({
 				onCloseAutoFocus={(event) => {
 					management.onCloseAutoFocus(event);
 					if (!event.defaultPrevented) onCloseAutoFocus?.(event);
+					// Focus about to return to the trigger: keep its tooltip shut for that one focus.
+					focusFromMenu.current = !event.defaultPrevented;
 				}}
 			>
 				<ModelMenuChoices models={searchRows} searchable searchPlaceholder={t("agentSwitch.search")}>
