@@ -1610,6 +1610,8 @@
 	"settings.sideChatsHint": "Open separate side conversations in the inspector, and use /btw to ask one a question.",
 	"settings.splitPanes": "Split panes",
 	"settings.splitPanesHint": "Drag a tab to an edge of the center pane to show it beside the current one.",
+	"settings.privateLinks": "Private links",
+	"settings.privateLinksHint": "Publish artifacts privately and share them with people by email. Off, artifacts publish to public links.",
 	"settings.newSidebarDesign": "New sidebar design",
 	"settings.newSidebarDesignHint": "Status icons, hover previews and repository avatars in the left sidebar, with the matching board colours. Turn off to go back to the previous sidebar.",
 	"settings.chromeAgents.label": "Use agents in my Chrome",

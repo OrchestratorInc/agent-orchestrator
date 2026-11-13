@@ -2659,6 +2659,8 @@
 	"settings.sideChatsHint": "Ouvrir des conversations annexes distinctes dans l’inspecteur et utiliser /btw pour y poser une question.",
 	"settings.splitPanes": "Volets partagés",
 	"settings.splitPanesHint": "Faites glisser un onglet sur un bord du volet central pour l’afficher à côté de l’onglet actuel.",
+	"settings.privateLinks": "Liens privés",
+	"settings.privateLinksHint": "Publiez des artefacts en privé et partagez-les avec des personnes par e-mail. Désactivé, les artefacts sont publiés avec des liens publics.",
 	"settings.newSidebarDesign": "Nouveau design de la barre latérale",
 	"settings.newSidebarDesignHint": "Icônes d'état, aperçus au survol et avatars de dépôt dans la barre latérale gauche, avec les couleurs du tableau assorties. Désactivez pour revenir à l'ancienne barre latérale.",
 	"settings.chromeAgents.label": "Utiliser les agents dans mon Chrome",

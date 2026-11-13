@@ -2659,6 +2659,8 @@
 	"settings.sideChatsHint": "Abra conversas laterais separadas no inspetor e use /btw para fazer uma pergunta.",
 	"settings.splitPanes": "Painéis divididos",
 	"settings.splitPanesHint": "Arraste uma aba para uma borda do painel central para mostrá-la ao lado da atual.",
+	"settings.privateLinks": "Links privados",
+	"settings.privateLinksHint": "Publique artefatos de forma privada e compartilhe-os com pessoas por e-mail. Desativado, os artefatos são publicados em links públicos.",
 	"settings.newSidebarDesign": "Novo design da barra lateral",
 	"settings.newSidebarDesignHint": "Ícones de status, prévias ao passar o mouse e avatares de repositório na barra lateral esquerda, com as cores do quadro combinando. Desative para voltar à barra lateral anterior.",
 	"settings.chromeAgents.label": "Usar agentes no meu Chrome",

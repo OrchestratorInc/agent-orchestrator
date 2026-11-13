@@ -19,6 +19,7 @@ import { useSettings } from "../hooks/useSettings";
 import { aoBridge } from "../lib/bridge";
 import type { ArtifactRow } from "../lib/artifacts";
 import { useCloudSession } from "../lib/cloud-session";
+import { usePrivateLinksEnabled } from "../lib/private-links";
 import { cn } from "../lib/utils";
 import { useUiStore } from "../stores/ui-store";
 import { STANDALONE_WORKSPACE_ID } from "../types/workspace";
@@ -531,6 +532,8 @@ function SharePanel({
 		shareLinksChanged();
 	};
 	const { baseUrl, signedIn } = useShareAccess();
+	const privateLinksAllowed = useRef(false);
+	privateLinksAllowed.current = usePrivateLinksEnabled();
 	const owner = useCloudSession().session?.user;
 	const openSettings = useUiStore((state) => state.openGlobalSettings);
 	const [phase, setPhase] = useState<Phase>({ kind: "loading" });
@@ -624,7 +627,10 @@ function SharePanel({
 		}
 		setPhase({ kind: "loading" });
 		Promise.all([aoBridge.cloudShare.inspect({ ...file, baseUrl }), aoBridge.cloudShare.list(baseUrl)])
-			.then(([inspection, links]) => {
+			.then(([inspection, listed]) => {
+				// Private links are a Developer mode preview: off, the panel offers
+				// public links only, as where the control plane has none.
+				const links = privateLinksAllowed.current ? listed : { ...listed, privateLinks: false };
 				if (cancelled) return;
 				setPrivateLinks(links.privateLinks);
 				if (inspection.unsupported) return setPhase({ kind: "unsupported" });

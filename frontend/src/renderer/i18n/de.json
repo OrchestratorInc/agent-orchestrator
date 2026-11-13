@@ -2619,6 +2619,8 @@
 	"settings.sideChatsHint": "Separate Seitenunterhaltungen im Inspektor öffnen und mit /btw eine Frage stellen.",
 	"settings.splitPanes": "Geteilte Bereiche",
 	"settings.splitPanesHint": "Ziehe einen Tab an einen Rand des mittleren Bereichs, um ihn neben dem aktuellen anzuzeigen.",
+	"settings.privateLinks": "Private Links",
+	"settings.privateLinksHint": "Artefakte privat veröffentlichen und per E-Mail mit Personen teilen. Aus: Artefakte werden als öffentliche Links veröffentlicht.",
 	"settings.newSidebarDesign": "Neues Seitenleisten-Design",
 	"settings.newSidebarDesignHint": "Statussymbole, Hover-Vorschauen und Repository-Avatare in der linken Seitenleiste, mit den passenden Board-Farben. Ausschalten, um zur vorherigen Seitenleiste zurückzukehren.",
 	"settings.chromeAgents.label": "Agenten in meinem Chrome verwenden",

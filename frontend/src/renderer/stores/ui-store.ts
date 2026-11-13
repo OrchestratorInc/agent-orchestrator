@@ -209,6 +209,12 @@ export type UiState = {
 	sessionImportOfferClosed: boolean;
 	/** Drag center tabs side by side into split panes. Only takes effect in Developer mode. Default off. */
 	splitPanes: boolean;
+	/**
+	 * Publish artifacts privately and share them with people by email. Only
+	 * takes effect in Developer mode, and where the control plane offers
+	 * private links. Default off: links are public, as before.
+	 */
+	privateLinks: boolean;
 	/** Developer Mode, macOS only: blur the desktop behind a translucent window. */
 	windowTranslucency: boolean;
 	/** Copy the terminal selection to the clipboard on mouse-up, like native terminals. Default on. */
@@ -299,6 +305,7 @@ export type UiState = {
 	setSideChats: (enabled: boolean) => void;
 	closeSessionImportOffer: () => void;
 	setSplitPanes: (enabled: boolean) => void;
+	setPrivateLinks: (enabled: boolean) => void;
 	setWindowTranslucency: (enabled: boolean) => void;
 	setTerminalCopyOnSelect: (enabled: boolean) => void;
 	setTerminalClickMode: (mode: TerminalClickMode) => void;
@@ -379,6 +386,7 @@ const diagnosticsStorageKey = "ao.diagnostics";
 const sideChatsStorageKey = "ao.sideChats";
 const sessionImportOfferClosedStorageKey = "ao.sessionImport.offerClosed";
 const splitPanesStorageKey = "ao.splitPanes";
+const privateLinksStorageKey = "ao.privateLinks";
 const terminalCopyOnSelectStorageKey = "ao.terminalCopyOnSelect";
 const terminalClickModeStorageKey = "ao.terminalClickMode";
 const terminalSelectHintShownStorageKey = "ao.terminalSelectHintShown";
@@ -497,6 +505,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 	sideChats: initialSideChats(),
 	sessionImportOfferClosed: initialSessionImportOfferClosed(),
 	splitPanes: getLocalStorage()?.getItem(splitPanesStorageKey) === "true",
+	privateLinks: getLocalStorage()?.getItem(privateLinksStorageKey) === "true",
 	windowTranslucency: readStoredWindowTranslucency(),
 	terminalCopyOnSelect: initialTerminalCopyOnSelect(),
 	terminalClickMode: initialTerminalClickMode(),
@@ -585,6 +594,10 @@ export const useUiStore = create<UiState>((set, get) => ({
 	setSplitPanes: (splitPanes) => {
 		getLocalStorage()?.setItem(splitPanesStorageKey, String(splitPanes));
 		set({ splitPanes });
+	},
+	setPrivateLinks: (privateLinks) => {
+		getLocalStorage()?.setItem(privateLinksStorageKey, String(privateLinks));
+		set({ privateLinks });
 	},
 	setWindowTranslucency: (windowTranslucency) => {
 		getLocalStorage()?.setItem(windowTranslucencyStorageKey, String(windowTranslucency));

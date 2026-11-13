@@ -2619,6 +2619,8 @@
 	"settings.sideChatsHint": "インスペクターで別のサイド会話を開き、/btw で質問します。",
 	"settings.splitPanes": "分割ペイン",
 	"settings.splitPanesHint": "タブを中央ペインの端にドラッグすると、現在のタブと並べて表示します。",
+	"settings.privateLinks": "非公開リンク",
+	"settings.privateLinksHint": "アーティファクトを非公開で公開し、メールで相手と共有します。オフの場合は公開リンクで公開されます。",
 	"settings.newSidebarDesign": "新しいサイドバーデザイン",
 	"settings.newSidebarDesignHint": "左サイドバーのステータスアイコン、ホバープレビュー、リポジトリのアバターと、それに合わせたボードの色。オフにすると以前のサイドバーに戻ります。",
 	"settings.chromeAgents.label": "自分の Chrome でエージェントを使う",

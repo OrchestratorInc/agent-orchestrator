@@ -2689,6 +2689,8 @@
 	"settings.sideChatsHint": "在检查器中打开独立的侧边对话，并使用 /btw 提问。",
 	"settings.splitPanes": "分屏",
 	"settings.splitPanesHint": "将标签页拖到中间面板的边缘，即可与当前标签页并排显示。",
+	"settings.privateLinks": "私密链接",
+	"settings.privateLinksHint": "私密发布工件，并通过邮箱与他人共享。关闭时，工件以公开链接发布。",
 	"settings.newSidebarDesign": "新侧边栏设计",
 	"settings.newSidebarDesignHint": "左侧边栏中的状态图标、悬停预览和仓库头像，以及与之匹配的看板颜色。关闭后恢复为之前的侧边栏。",
 	"settings.chromeAgents.label": "在我的 Chrome 中使用智能体",

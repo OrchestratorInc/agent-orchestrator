@@ -519,6 +519,7 @@ export function GeneralSettingsSection({
 				<CliShadowSettingsRow />
 				{developerMode && <SideChatsRow />}
 				{developerMode && <SplitPanesRow />}
+				{developerMode && <PrivateLinksRow />}
 				{developerMode && <NewSidebarDesignRow />}
 				{developerMode && <ChromeAgentsRow />}
 			</SettingsSection>
@@ -632,6 +633,18 @@ function SplitPanesRow() {
 	return (
 		<SettingsRow label={t("settings.splitPanes")} description={t("settings.splitPanesHint")}>
 			<Switch aria-label={t("settings.splitPanes")} checked={splitPanes} onCheckedChange={setSplitPanes} />
+		</SettingsRow>
+	);
+}
+
+/** Developer Mode-only switch for publishing artifacts privately, shared by email. Off by default. */
+function PrivateLinksRow() {
+	const { t } = useTranslation();
+	const privateLinks = useUiStore((state) => state.privateLinks);
+	const setPrivateLinks = useUiStore((state) => state.setPrivateLinks);
+	return (
+		<SettingsRow label={t("settings.privateLinks")} description={t("settings.privateLinksHint")}>
+			<Switch aria-label={t("settings.privateLinks")} checked={privateLinks} onCheckedChange={setPrivateLinks} />
 		</SettingsRow>
 	);
 }
