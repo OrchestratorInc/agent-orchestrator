@@ -1198,6 +1198,29 @@ func (e promptStalledError) Unwrap() error { return e.error }
 
 func (e promptStalledError) Is(target error) bool { return target == ports.ErrChatPromptStalled }
 
+// acpSessionNotFoundDetail is the text claude-agent-acp throws from every
+// session-scoped handler (session/prompt, set_config_option, set_mode, close,
+// steering) once its sessions map no longer holds the id.
+const acpSessionNotFoundDetail = "session not found"
+
+// isACPSessionMissing reports the agent answering that it holds no session with
+// the id AO sent. The adapter throws a plain Error, which the ACP SDK delivers
+// as -32603 with the text in data.details; AO's persistent host wraps prompt
+// error data as data.providerData, so both shapes are checked. Nothing else is
+// inferred from a generic -32603.
+func isACPSessionMissing(err error) bool {
+	var requestErr *acpsdk.RequestError
+	if !errors.As(err, &requestErr) || requestErr.Code != -32603 {
+		return false
+	}
+	data, _ := requestErr.Data.(map[string]any)
+	if provider, ok := data["providerData"].(map[string]any); ok {
+		data = provider
+	}
+	details, _ := data["details"].(string)
+	return strings.EqualFold(strings.TrimSpace(details), acpSessionNotFoundDetail)
+}
+
 func normalizeACPError(operation string, err error) error {
 	if isACPAuthRequired(err) {
 		return fmt.Errorf("%w: %s: %w", ports.ErrChatAuthRequired, operation, err)
