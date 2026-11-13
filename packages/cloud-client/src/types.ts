@@ -175,6 +175,10 @@ export type WorkerCheckoutGrantResponse =
   Schemas["WorkerCheckoutGrantResponse"];
 export type CreateWorkerChildInput = Schemas["CreateWorkerChildInput"];
 export type SendMessageInput = Schemas["SendMessageInput"];
+export type SteerTurnInput = Schemas["SteerTurnInput"];
+export type MentionToken = Schemas["MentionToken"];
+export type EventMention = Schemas["EventMention"];
+export type MentionCandidates = Schemas["MentionCandidates"];
 export type ChatMessageInput = Schemas["ChatMessageInput"];
 export type ChatApprovalDecisionInput = Schemas["ChatApprovalDecisionInput"];
 export type TurnSteeredEvent = Schemas["TurnSteeredEvent"];
