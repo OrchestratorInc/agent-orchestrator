@@ -32,6 +32,11 @@ const (
 	// promptStallCheckInterval is how often the host re-checks for a stalled
 	// prompt.
 	promptStallCheckInterval = 30 * time.Second
+
+	// promptStallCancelGrace is how long the relay waits, after cancelling a
+	// stalled prompt, for the adapter to answer it before giving up on the
+	// adapter and settling the prompt itself.
+	promptStallCancelGrace = 30 * time.Second
 )
 
 type acpClientRequest struct {
@@ -100,6 +105,10 @@ type acpRelay struct {
 	// client answer to an adapter request, so the stall watchdog can tell a
 	// live turn from a lost one.
 	lastActivityAt time.Time
+	// stallCancelledAt is when the watchdog cancelled the active prompt for
+	// silence. The prompt stays active until the adapter answers it, so output
+	// the cancelled turn still emits is not attributed to the next prompt.
+	stallCancelledAt time.Time
 	// abandonedPrompts holds provider ids of prompts the watchdog failed. The
 	// adapter's own late answer to one is dropped, not forwarded.
 	abandonedPrompts map[string]struct{}
@@ -424,6 +433,14 @@ func (r *acpRelay) providerFrame(
 	r.captureResponse(request, envelope)
 
 	if request.method == "session/prompt" {
+		if !r.stallCancelledAt.IsZero() {
+			// The adapter has answered the prompt the watchdog cancelled. Whatever
+			// it says, the turn ended because the adapter went silent.
+			r.stallCancelledAt = time.Time{}
+			failure := map[string]json.RawMessage{}
+			_ = json.Unmarshal(stalledPromptFailure(id), &failure)
+			envelope = failure
+		}
 		r.state.ActivePrompt = false
 		r.state.ActiveCompaction = false
 		r.cancelRequested = false
@@ -450,47 +467,69 @@ func (r *acpRelay) providerFrame(
 // from the adapter for promptStallTimeout. It gives the turn a terminal state
 // instead of leaving the session's Working indicator hanging until the next
 // controller restart. A turn waiting on the client (a permission prompt or an
-// elicitation) is not silent; the daemon owns that wait. The prompt may
-// belong to an earlier controller generation: providerFrame then turns the
-// failure into the private prompt result, which the reattached controller
-// finishes against the turn it adopted.
+// elicitation) is not silent; the daemon owns that wait.
 //
-// It returns the controller-facing failure (nil while detached; replay
-// delivers it on attach) and a session/cancel for the adapter, which still
-// owns the turn. The adapter's late answer to that prompt is dropped. Callers
-// must hold the host mutex.
+// It works in two steps. The first sends the adapter a session/cancel and keeps
+// the prompt active: the adapter still owns the turn, and anything it emits
+// until it answers belongs to that turn, not to the prompt the controller sends
+// next. When the adapter answers, providerFrame turns its answer into the stall
+// failure. If it has not answered after promptStallCancelGrace it is wedged, and
+// the second step settles the prompt without it; its late answer is dropped.
+//
+// The prompt may belong to an earlier controller generation: providerFrame then
+// turns the failure into the private prompt result, which the reattached
+// controller finishes against the turn it adopted. The returned client frame is
+// nil while detached; replay delivers it on attach. Callers must hold the host
+// mutex.
 func (r *acpRelay) failStalledPrompt(
 	ctx context.Context,
 	generation uint64,
 	attached bool,
 	now time.Time,
 ) (acpClientFrames, error) {
-	if !r.state.ActivePrompt || len(r.serverRequests) > 0 || now.Sub(r.lastActivityAt) < promptStallTimeout {
+	if !r.state.ActivePrompt {
+		return acpClientFrames{}, nil
+	}
+	cancelling := !r.stallCancelledAt.IsZero()
+	if !cancelling && (len(r.serverRequests) > 0 || now.Sub(r.lastActivityAt) < promptStallTimeout) {
+		return acpClientFrames{}, nil
+	}
+	if cancelling && now.Sub(r.stallCancelledAt) < promptStallCancelGrace {
 		return acpClientFrames{}, nil
 	}
 	for providerID, request := range r.pending {
 		if request.method != "session/prompt" {
 			continue
 		}
-		failure := rpcErrorFrame(json.RawMessage(providerID), -32603, fmt.Sprintf(
-			"provider stopped responding: no ACP output for %s; failing the stalled prompt", promptStallTimeout),
-			map[string]any{ACPPromptStalledDataKey: true})
-		completion, _, err := r.providerFrame(ctx, failure, generation, attached)
+		if !cancelling {
+			r.stallCancelledAt = now
+			var prompt struct {
+				SessionID string `json:"sessionId"`
+			}
+			_ = json.Unmarshal(request.params, &prompt)
+			params, _ := json.Marshal(prompt)
+			cancel := marshalFrame(map[string]json.RawMessage{
+				"jsonrpc": json.RawMessage(`"2.0"`), "method": json.RawMessage(`"session/cancel"`), "params": params,
+			}, nil)
+			return acpClientFrames{provider: cancel}, nil
+		}
+		completion, _, err := r.providerFrame(ctx, stalledPromptFailure(json.RawMessage(providerID)), generation, attached)
 		if err != nil {
 			return acpClientFrames{}, err
 		}
 		r.abandonedPrompts[providerID] = struct{}{}
-		var prompt struct {
-			SessionID string `json:"sessionId"`
-		}
-		_ = json.Unmarshal(request.params, &prompt)
-		params, _ := json.Marshal(prompt)
-		cancel := marshalFrame(map[string]json.RawMessage{
-			"jsonrpc": json.RawMessage(`"2.0"`), "method": json.RawMessage(`"session/cancel"`), "params": params,
-		}, nil)
-		return acpClientFrames{provider: cancel, client: completion}, nil
+		return acpClientFrames{client: completion}, nil
 	}
 	return acpClientFrames{}, nil
+}
+
+// stalledPromptFailure is the error a prompt ends with when the watchdog
+// cancelled it for silence. The data marker lets the daemon tell it from a
+// provider that answered with an error.
+func stalledPromptFailure(id json.RawMessage) []byte {
+	return rpcErrorFrame(id, -32603, fmt.Sprintf(
+		"provider stopped responding: no ACP output for %s; failing the stalled prompt", promptStallTimeout),
+		map[string]any{ACPPromptStalledDataKey: true})
 }
 
 func (r *acpRelay) providerRequest(
