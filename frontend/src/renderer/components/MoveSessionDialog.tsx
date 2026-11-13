@@ -7,6 +7,7 @@ import { useCloudOffering } from "../hooks/useCloudOffering";
 import { useCloudOrg } from "../hooks/useCloudOrg";
 import { cloudSessionsQueryKey, useCloudProjectsQuery, useCloudSessionsQuery, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { apiErrorException } from "../lib/api-error-exception";
+import { uploadCloudTranscript } from "../lib/cloud-attachments";
 import { CLOUD_AGENT_PROVIDERS } from "../lib/cloud-agents";
 import { clientForSessionHost, labelForHost } from "../lib/host-clients";
 import { LOCAL_HOST, type HostId } from "../lib/hosts";
@@ -16,6 +17,7 @@ import { repoKey } from "../lib/repo-key";
 import { cn } from "../lib/utils";
 import { useUiStore } from "../stores/ui-store";
 import type { WorkspaceSession } from "../types/workspace";
+import { formatBytes } from "./ReadOnlyFileView";
 import { Button } from "./ui/button";
 import {
 	Dialog,
@@ -38,6 +40,9 @@ export function MoveSessionDialog() {
 /** The session-move feature AO Cloud advertises once createSession takes a branch. */
 const CLOUD_BRANCH_FEATURE = "session.branch";
 
+/** The feature AO Cloud advertises once a moved session can resume its conversation. */
+const CLOUD_TRANSCRIPT_FEATURE = "session.transcriptImport";
+
 const STEPS: MoveStep[] = ["stop", "export", "import", "complete"];
 
 /** Uncommitted paths listed before the rest are summed up as a count. */
@@ -51,7 +56,7 @@ function MoveSessionDialogBody({ session, onClose }: { session: WorkspaceSession
 	const queryClient = useQueryClient();
 	const navigateToSession = useNavigateToSession();
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
-	const { client: cloudClient } = useCloudCp();
+	const { client: cloudClient, baseUrl: cloudBaseUrl } = useCloudCp();
 	const { org } = useCloudOrg();
 	const offering = useCloudOffering();
 	const cloudProjects = useCloudProjectsQuery();
@@ -117,6 +122,10 @@ function MoveSessionDialogBody({ session, onClose }: { session: WorkspaceSession
 	const target: MoveTarget | undefined =
 		org && project && !loading && !unavailable ? { orgId: org.id, projectId: project.id, harness } : undefined;
 	const changes = preview.data?.changes ?? [];
+	const transcript = preview.data?.transcript;
+	// Cloud resumes the agent's conversation; without it the session starts from the handoff note.
+	const carriesTranscript =
+		offering.features.includes(CLOUD_TRANSCRIPT_FEATURE) && Boolean(transcript && !transcript.unavailable && transcript.bytes > 0);
 
 	const start = async () => {
 		if (!target || !cloudClient) return;
@@ -125,7 +134,15 @@ function MoveSessionDialogBody({ session, onClose }: { session: WorkspaceSession
 		try {
 			const moved = await moveSession(
 				{ sessionId: session.id, moveId, target, ...(sourceHost !== LOCAL_HOST ? { sourceLabel: labelForHost(sourceHost) } : {}) },
-				{ source: clientForSessionHost(sourceHost), cloud: cloudClient, onStep: setStep, cloudRequest },
+				{
+					source: clientForSessionHost(sourceHost),
+					cloud: cloudClient,
+					onStep: setStep,
+					cloudRequest,
+					...(carriesTranscript
+						? { uploadTranscript: (importId: string, agentSessionId: string, gzip: Uint8Array) => uploadCloudTranscript(cloudBaseUrl, target.orgId, importId, agentSessionId, gzip) }
+						: {}),
+				},
 			);
 			if (moved.completeError) {
 				setResult(moved);
@@ -133,7 +150,8 @@ function MoveSessionDialogBody({ session, onClose }: { session: WorkspaceSession
 			}
 			onClose();
 			navigateToSession(target.projectId, moved.sessionId);
-			showGlobalToast(t("move.done"), undefined, { tone: "success" });
+			// Say so when the conversation was to move but only the note did.
+			showGlobalToast(t("move.done"), carriesTranscript && moved.conversation === "note" ? t("move.doneNote") : undefined, { tone: "success" });
 		} catch (failure) {
 			setError(failure instanceof Error ? failure : new Error(String(failure)));
 		} finally {
@@ -186,6 +204,14 @@ function MoveSessionDialogBody({ session, onClose }: { session: WorkspaceSession
 									<dd className="min-w-0 truncate font-mono text-settings-label">{branch}</dd>
 									<dt className="text-settings-muted">{t("move.cloudProject")}</dt>
 									<dd className="min-w-0 truncate text-settings-label">{project?.displayName}</dd>
+									<dt className="text-settings-muted">{t("move.conversation")}</dt>
+									<dd className="text-settings-label">
+										{carriesTranscript && transcript
+											? t("move.conversationTranscript", { size: formatBytes(transcript.bytes) })
+											: transcript?.unavailable === "too_large"
+												? t("move.conversationTooLarge")
+												: t("move.conversationNote")}
+									</dd>
 									<dt className="text-settings-muted">{t("move.uncommitted")}</dt>
 									<dd className="text-settings-label">{changes.length || t("move.uncommittedNone")}</dd>
 								</dl>

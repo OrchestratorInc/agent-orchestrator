@@ -1,11 +1,14 @@
 package session
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"slices"
 	"strings"
@@ -13,7 +16,9 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
+	"github.com/aoagents/agent-orchestrator/backend/internal/nativetransfer"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
 	"github.com/aoagents/agent-orchestrator/backend/internal/sessionmove"
 )
 
@@ -140,8 +145,26 @@ func (s *Service) ExportMove(ctx context.Context, id domain.SessionID, in MoveEx
 
 // MovePreview is what a move to AO Cloud would push now.
 type MovePreview struct {
-	Branch  string
-	Changes []sessionmove.Change
+	Branch     string
+	Changes    []sessionmove.Change
+	Transcript MoveTranscriptInfo
+}
+
+// MoveTranscriptInfo says whether a move would carry the agent's conversation.
+type MoveTranscriptInfo struct {
+	Bytes int64
+	// Unavailable is why it would not: "unsupported", "not_found" or "too_large".
+	Unavailable string
+}
+
+// CloudTranscriptMaxBytes is the largest conversation a move carries: AO Cloud
+// keeps a session's transcript up to 64 MiB.
+const CloudTranscriptMaxBytes = 64 << 20
+
+// cloudTranscripts reads a session's agent conversation for a move to AO Cloud.
+type cloudTranscripts interface {
+	CloudTranscriptSize(ctx context.Context, rec domain.SessionRecord, project domain.ProjectRecord) (int64, error)
+	WriteCloudTranscript(ctx context.Context, rec domain.SessionRecord, project domain.ProjectRecord, w io.Writer, maxBytes int64) (string, error)
 }
 
 // PreviewMove captures the session's worktree as ExportMove would, without
@@ -160,7 +183,7 @@ func (s *Service) PreviewMove(ctx context.Context, id domain.SessionID) (MovePre
 	if err := sessionmove.CheckPush(ctx, wt, c, sessionmove.GitHubFileLimit); err != nil {
 		return MovePreview{}, moveAPIError(err)
 	}
-	return MovePreview{Branch: c.Branch, Changes: c.Changes}, nil
+	return MovePreview{Branch: c.Branch, Changes: c.Changes, Transcript: s.moveTranscriptInfo(ctx, rec, project)}, nil
 }
 
 // moveSource loads a session that can move to AO Cloud and its project.
@@ -374,4 +397,57 @@ func moveAPIError(err error) error {
 		}
 	}
 	return err
+}
+
+func (s *Service) moveTranscriptInfo(ctx context.Context, rec domain.SessionRecord, project domain.ProjectRecord) MoveTranscriptInfo {
+	t, ok := s.manager.(cloudTranscripts)
+	if !ok {
+		return MoveTranscriptInfo{Unavailable: "unsupported"}
+	}
+	size, err := t.CloudTranscriptSize(ctx, rec, project)
+	switch {
+	case errors.Is(err, sessionmanager.ErrCloudTranscriptUnsupported):
+		return MoveTranscriptInfo{Unavailable: "unsupported"}
+	case err != nil:
+		return MoveTranscriptInfo{Unavailable: "not_found"}
+	case size > CloudTranscriptMaxBytes:
+		return MoveTranscriptInfo{Bytes: size, Unavailable: "too_large"}
+	}
+	return MoveTranscriptInfo{Bytes: size}
+}
+
+// MoveTranscript is a stopped session's conversation for AO Cloud.
+type MoveTranscript struct {
+	AgentSessionID string
+	// Gzip is the transcript, gzipped, with this machine's paths replaced by
+	// the placeholders AO Cloud's worker fills in.
+	Gzip []byte
+}
+
+// MoveTranscript returns a stopped session's agent conversation for a move to
+// AO Cloud, which resumes it instead of starting from the handoff note.
+func (s *Service) MoveTranscript(ctx context.Context, id domain.SessionID) (MoveTranscript, error) {
+	rec, project, _, err := s.moveSource(ctx, id, true)
+	if err != nil {
+		return MoveTranscript{}, err
+	}
+	t, ok := s.manager.(cloudTranscripts)
+	if !ok {
+		return MoveTranscript{}, apierr.NotImplemented("MOVE_UNSUPPORTED", "This build cannot read agent conversations")
+	}
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	nativeID, err := t.WriteCloudTranscript(ctx, rec, project, zw, CloudTranscriptMaxBytes)
+	if err == nil {
+		err = zw.Close()
+	}
+	switch {
+	case errors.Is(err, sessionmanager.ErrCloudTranscriptUnsupported):
+		return MoveTranscript{}, apierr.Conflict("MOVE_TRANSCRIPT_UNSUPPORTED", "Orchestrator Cloud can resume only Claude Code conversations.", nil)
+	case errors.Is(err, nativetransfer.ErrTooLarge):
+		return MoveTranscript{}, apierr.Conflict("MOVE_TRANSCRIPT_TOO_LARGE", "The conversation is over Orchestrator Cloud's 64 MiB limit.", map[string]any{"detail": err.Error()})
+	case err != nil:
+		return MoveTranscript{}, apierr.Conflict("MOVE_TRANSCRIPT_UNAVAILABLE", "The agent's conversation could not be read.", map[string]any{"detail": err.Error()})
+	}
+	return MoveTranscript{AgentSessionID: nativeID, Gzip: buf.Bytes()}, nil
 }

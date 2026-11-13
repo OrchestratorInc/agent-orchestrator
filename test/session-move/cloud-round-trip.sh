@@ -2,7 +2,9 @@
 # Moves one session local -> Cloud -> local -> Cloud -> local, against a real
 # AO daemon and a real AO Cloud control plane with Docker sandboxes. At every
 # hop it checks the destination's branch, its HEAD commit and every file that
-# is not ignored, and that ignored files stayed behind.
+# is not ignored, and that ignored files stayed behind. On each move to Cloud
+# it also checks that the local agent's conversation was placed, with this
+# machine's paths replaced, and that the Cloud agent resumed it.
 #
 # GitHub is replaced by a git server container on the compose network
 # (AO_CLOUD_DEVELOPMENT_GITHUB_URL); the local repository reaches the same
@@ -176,6 +178,9 @@ CLOUD_PROJECT=$(echo "$out" | json "d['project']['id']") || { echo "$out"; fail 
 step "start the local daemon"
 PORT=$(free_port)
 mkdir -p "$W/daemon"
+# Run from inside a Claude Code session, the agent would inherit that session's
+# variables, run as its child and save no transcript of its own.
+while read -r name; do unset "$name"; done < <(compgen -e | grep -E '^(CLAUDECODE|CLAUDE_)')
 AO_DATA_DIR="$W/daemon" AO_RUN_FILE="$W/daemon/running.json" AO_PORT=$PORT AO_CLOUD_OFFERING=off \
 	"$W/bin/ao" daemon > "$W/daemon.log" 2>&1 &
 pids+=($!)
@@ -200,6 +205,11 @@ session_state() { api GET "/sessions/$1" | json "d['session']['activity']['state
 stop_agent() {
 	local state=""
 	for _ in $(seq 1 120); do state=$(session_state "$1"); [[ "$state" != "spawning" && -n "$state" ]] && break; sleep 0.5; done
+	# Claude Code writes its conversation once it has answered; a move carries it.
+	for _ in $(seq 1 120); do
+		[[ "$(api GET "/sessions/$1/move/preview" | json "d['transcript']['bytes']" 2>/dev/null || echo 0)" -gt 0 ]] && break
+		sleep 1
+	done
 	api POST "/sessions/$1/exit-agent" >/dev/null
 	for _ in $(seq 1 120); do [[ "$(session_state "$1")" == "exited" ]] && return 0; sleep 0.5; done
 	fail "local session $1 did not stop"
@@ -242,20 +252,54 @@ check_local() { # want-tip want-snapshot-file
 	echo "  local $wt: $BRANCH at ${1:0:12}, $(wc -l < "$2" | tr -d ' ') files identical"
 }
 
-# local_to_cloud moves local session $1 to a new Cloud session and sets NEXT to its id.
+# check_cloud_conversation checks Cloud placed conversation $1 for its agent,
+# with this machine's paths ($2) replaced, and resumed it.
+check_cloud_conversation() {
+	local file
+	for _ in $(seq 1 60); do
+		file=$(cloud_exec 'ls "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"/projects/*/"$1".jsonl 2>/dev/null | head -1' "$1" || true)
+		[[ -n "$file" ]] && break
+		sleep 1
+	done
+	[[ -n "$file" ]] || fail "Cloud did not place conversation $1"
+	cloud_exec 'grep -q "/ao-moved/" "$1"' "$file" && fail "placeholders left in Cloud's $file"
+	cloud_exec 'grep -qF "$2" "$1"' "$file" "$2" && fail "Cloud's $file still names this machine's $2"
+	cloud_exec 'grep -qF "\"cwd\":\"$2\"" "$1"' "$file" "$CLOUD_REPO" || fail "Cloud's $file does not run in $CLOUD_REPO"
+	for _ in $(seq 1 60); do
+		cloud_exec 'ps -eo args | grep -v grep | grep -q -- "--resume $1"' "$1" && {
+			echo "  Cloud agent resumed conversation $1 from $file"
+			return 0
+		}
+		sleep 1
+	done
+	cloud_exec 'ps -eo args' >&2 || true
+	fail "the Cloud agent did not resume conversation $1"
+}
+
+# local_to_cloud moves local session $1, with its agent's conversation, to a
+# new Cloud session and sets NEXT to its id.
 local_to_cloud() {
-	local sid=$1 move="m-$2" wt out tip cid body
+	local sid=$1 move="m-$2" wt out tip cid body aid import code
 	wt=$(worktree_for)
 	sh -c "$SNAPSHOT" _ "$wt" > "$W/want.snap"
 	out=$(api POST "/sessions/$sid/move/export" "{\"moveId\":\"$move\",\"sourceLabel\":\"MacBook\"}")
 	tip=$(echo "$out" | json "d['manifest']['tip']") || { echo "$out"; fail "local export"; }
 	[[ "$(remote_tip)" == "$tip" ]] || fail "origin $BRANCH is $(remote_tip), want the exported $tip"
 	echo "$out" | python3 -c "import json,sys; json.dump(json.load(sys.stdin), open('$W/export.json','w'))"
-	body=$(python3 - "$W/export.json" "$CLOUD_PROJECT" <<'PY'
+	out=$(api GET "/sessions/$sid/move/transcript")
+	aid=$(echo "$out" | json "d['agentSessionId']") || { echo "$out"; fail "local transcript"; }
+	echo "$out" | python3 -c "import base64,json,sys; sys.stdout.buffer.write(base64.b64decode(json.load(sys.stdin)['transcriptGzip']))" > "$W/transcript.gz"
+	import=$(python3 -c 'import uuid; print(uuid.uuid4())')
+	code=$(curl -sS -o "$W/import.out" -w '%{http_code}' -X PUT \
+		"http://127.0.0.1:$AO_CLOUD_PORT/api/cloud/v1/orgs/$ORG/transcript-imports/$import?harness=claude-code&agentSessionId=$aid" \
+		-H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/gzip' --data-binary @"$W/transcript.gz")
+	[[ "$code" == 204 ]] || { cat "$W/import.out"; fail "transcript upload answered $code"; }
+	body=$(python3 - "$W/export.json" "$CLOUD_PROJECT" "$import" <<'PY'
 import json, sys
 d = json.load(open(sys.argv[1])); m = d["manifest"]
 print(json.dumps({"projectId": sys.argv[2], "kind": "worker", "harness": "claude-code",
-                  "displayName": m.get("displayName") or "Move test", "prompt": d["handoffNote"], "branch": m["branch"]}))
+                  "displayName": m.get("displayName") or "Move test", "prompt": d["handoffNote"], "branch": m["branch"],
+                  "transcriptImportId": sys.argv[3]}))
 PY
 )
 	out=$(cloud POST "/orgs/$ORG/sessions" "$body" "$move")
@@ -263,6 +307,7 @@ PY
 	out=$(api POST "/sessions/$sid/move/complete" "{\"moveId\":\"$move\",\"orgId\":\"$ORG\",\"sessionId\":\"$cid\"}")
 	[[ "$(echo "$out" | json "d['session']['movedTo']['sessionId']")" == "$cid" ]] || { echo "$out"; fail "local complete"; }
 	check_cloud "$cid" "$tip" "$W/want.snap"
+	check_cloud_conversation "$aid" "$wt"
 	NEXT=$cid
 }
 

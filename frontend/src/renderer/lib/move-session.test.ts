@@ -4,16 +4,15 @@ import { MoveError, moveSession, type MoveDeps } from "./move-session";
 
 type Reply = { data?: unknown; error?: unknown };
 
-// fakeDaemon answers POSTs by route and records each call in order.
+// fakeDaemon answers requests by route and records each call in order.
 function fakeDaemon(replies: Record<string, Reply>, calls: string[]) {
-	return {
-		POST: vi.fn(async (route: string, init?: { body?: unknown }) => {
-			calls.push(route);
-			const reply = replies[route];
-			if (!reply) throw new Error(`unexpected ${route}`);
-			return { ...reply, request: init };
-		}),
-	} as unknown as MoveDeps["source"];
+	const answer = vi.fn(async (route: string, init?: { body?: unknown }) => {
+		calls.push(route);
+		const reply = replies[route];
+		if (!reply) throw new Error(`unexpected ${route}`);
+		return { ...reply, request: init };
+	});
+	return { POST: answer, GET: answer } as unknown as MoveDeps["source"];
 }
 
 const exported = {
@@ -38,7 +37,7 @@ describe("moveSession", () => {
 		const cp = cloud();
 		const steps: string[] = [];
 		const result = await moveSession({ sessionId: "app-1", moveId: "m-2", target }, { source, cloud: cp, onStep: (step) => steps.push(step) });
-		expect(result).toEqual({ sessionId: "cloud-9" });
+		expect(result).toEqual({ sessionId: "cloud-9", conversation: "note" });
 		expect(calls).toEqual([
 			"/api/v1/sessions/{sessionId}/exit-agent",
 			"/api/v1/sessions/{sessionId}/move/export",
@@ -127,5 +126,50 @@ describe("moveSession", () => {
 		const result = await moveSession({ sessionId: "app-1", target }, { source, cloud: cloud() });
 		expect(result).toMatchObject({ sessionId: "cloud-9", completeError: "disk full" });
 		expect(calls).not.toContain("/api/v1/sessions/{sessionId}/resume-agent");
+	});
+
+	describe("the agent's conversation", () => {
+		const replies = {
+			"/api/v1/sessions/{sessionId}/exit-agent": ok(),
+			"/api/v1/sessions/{sessionId}/move/export": ok(exported),
+			"/api/v1/sessions/{sessionId}/move/transcript": ok({ agentSessionId: "aid-1", transcriptGzip: btoa("gz") }),
+			"/api/v1/sessions/{sessionId}/move/complete": ok(),
+			"/api/v1/sessions/{sessionId}/resume-agent": ok(),
+		};
+
+		it("uploads it after the push and has Cloud resume it", async () => {
+			const calls: string[] = [];
+			const uploadTranscript = vi.fn(async () => {});
+			const cp = cloud();
+			const result = await moveSession({ sessionId: "app-1", moveId: "m-5", target }, { source: fakeDaemon(replies, calls), cloud: cp, uploadTranscript });
+			expect(result).toEqual({ sessionId: "cloud-9", conversation: "transcript" });
+			expect(calls.indexOf("/api/v1/sessions/{sessionId}/move/transcript")).toBe(calls.indexOf("/api/v1/sessions/{sessionId}/move/export") + 1);
+			const [importId, agentSessionId, gzip] = uploadTranscript.mock.calls[0] as unknown as [string, string, Uint8Array];
+			expect([importId, agentSessionId, Array.from(gzip)]).toEqual(["m-5", "aid-1", [103, 122]]);
+			// The note stays the prompt: Cloud starts from it if it cannot place the conversation.
+			expect(cp.createSession.mock.calls[0][1]).toMatchObject({ transcriptImportId: "m-5", prompt: exported.handoffNote });
+		});
+
+		it("moves the handoff note alone when the upload fails", async () => {
+			const cp = cloud();
+			const uploadTranscript = vi.fn(async () => { throw new Error("The file is larger than 32 MiB"); });
+			const result = await moveSession({ sessionId: "app-1", moveId: "m-6", target }, { source: fakeDaemon(replies, []), cloud: cp, uploadTranscript });
+			expect(result.conversation).toBe("note");
+			expect(cp.createSession.mock.calls[0][1]).not.toHaveProperty("transcriptImportId");
+		});
+
+		it("is not uploaded again when a retry resends the first Cloud request", async () => {
+			const calls: string[] = [];
+			const uploadTranscript = vi.fn(async () => {});
+			const cloudRequest: MoveDeps["cloudRequest"] = {};
+			const cp = cloud(async () => { throw new CloudCpError("busy", { status: 503 }); });
+			await expect(moveSession({ sessionId: "app-1", moveId: "m-7", target }, { source: fakeDaemon(replies, calls), cloud: cp, cloudRequest, uploadTranscript }))
+				.rejects.toMatchObject({ step: "import" });
+			cp.createSession.mockImplementation(async () => ({ session: { id: "cloud-9" } }));
+			const result = await moveSession({ sessionId: "app-1", moveId: "m-7", target }, { source: fakeDaemon(replies, calls), cloud: cp, cloudRequest, uploadTranscript });
+			expect(uploadTranscript).toHaveBeenCalledTimes(1);
+			expect(result.conversation).toBe("transcript");
+			expect(cp.createSession.mock.calls[1][1]).toEqual(cp.createSession.mock.calls[0][1]);
+		});
 	});
 });

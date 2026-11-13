@@ -9,8 +9,9 @@ import type { WorkspaceSession } from "../types/workspace";
 
 type Reply = { data?: unknown; error?: unknown };
 
-const { daemon, navigate, cloud } = vi.hoisted(() => ({
-	daemon: { posts: {} as Record<string, Reply>, repo: "", preview: {} as Reply },
+const { daemon, navigate, cloud, uploadCloudTranscript } = vi.hoisted(() => ({
+	daemon: { posts: {} as Record<string, Reply>, repo: "", preview: {} as Reply, transcript: {} as Reply },
+	uploadCloudTranscript: vi.fn(),
 	navigate: vi.fn(),
 	cloud: { features: [] as string[], projects: [] as unknown[], sessions: [] as unknown[], createSession: vi.fn(), signedIn: true },
 }));
@@ -18,13 +19,20 @@ const { daemon, navigate, cloud } = vi.hoisted(() => ({
 vi.mock("../lib/host-clients", () => ({
 	clientForSessionHost: () => ({
 		GET: vi.fn(async (path: string) =>
-			path === "/api/v1/sessions/{sessionId}/move/preview" ? daemon.preview : { data: { project: { id: "app", repo: daemon.repo } } }),
+			path === "/api/v1/sessions/{sessionId}/move/preview"
+				? daemon.preview
+				: path === "/api/v1/sessions/{sessionId}/move/transcript"
+					? daemon.transcript
+					: { data: { project: { id: "app", repo: daemon.repo } } }),
 		POST: vi.fn(async (path: string) => daemon.posts[path] ?? { error: { code: "UNEXPECTED", message: path } }),
 	}),
 	labelForHost: () => undefined,
 }));
 vi.mock("../lib/navigate-to-session", () => ({ useNavigateToSession: () => navigate }));
-vi.mock("../hooks/useCloudCp", () => ({ useCloudCp: () => ({ client: cloud.signedIn ? { createSession: cloud.createSession } : null }) }));
+vi.mock("../hooks/useCloudCp", () => ({
+	useCloudCp: () => ({ client: cloud.signedIn ? { createSession: cloud.createSession } : null, baseUrl: "http://cp.test" }),
+}));
+vi.mock("../lib/cloud-attachments", () => ({ uploadCloudTranscript }));
 vi.mock("../hooks/useCloudOrg", () => ({ useCloudOrg: () => ({ org: cloud.signedIn ? { id: "org-1" } : undefined }) }));
 vi.mock("../hooks/useCloudOffering", () => ({ useCloudOffering: () => ({ features: cloud.features }) }));
 vi.mock("../hooks/useWorkspaceQuery", () => ({
@@ -58,6 +66,8 @@ function renderDialog() {
 beforeEach(() => {
 	navigate.mockReset();
 	cloud.createSession.mockReset();
+	uploadCloudTranscript.mockReset();
+	daemon.transcript = { data: { agentSessionId: "aid-1", transcriptGzip: btoa("gz") } };
 	cloud.signedIn = true;
 	cloud.features = ["session.branch"];
 	cloud.projects = [{ id: "cloud-proj", displayName: "app", repositoryUrl: "https://github.com/Acme/App" }];
@@ -130,4 +140,45 @@ it.each([
 	renderDialog();
 	expect(await screen.findByText(message)).toBeTruthy();
 	await waitFor(() => expect(screen.getByRole("button", { name: "Move to Orchestrator Cloud" }).hasAttribute("disabled")).toBe(true));
+});
+
+it("moves the conversation when Orchestrator Cloud can resume it", async () => {
+	daemon.posts = moveReplies;
+	cloud.features = ["session.branch", "session.transcriptImport"];
+	daemon.preview = { data: { branch: "feat/x", changes: [], transcript: { bytes: 2048 } } };
+	uploadCloudTranscript.mockResolvedValue(undefined);
+	cloud.createSession.mockResolvedValue({ session: { id: "cloud-9" } });
+	renderDialog();
+	const user = userEvent.setup();
+	expect(await screen.findByText("Full transcript, 2 KB")).toBeTruthy();
+	await user.click(screen.getByRole("button", { name: "Move to Orchestrator Cloud" }));
+	await waitFor(() => expect(navigate).toHaveBeenCalledWith("cloud-proj", "cloud-9"));
+	const [baseUrl, orgId, importId, agentSessionId] = uploadCloudTranscript.mock.calls[0];
+	expect([baseUrl, orgId, agentSessionId]).toEqual(["http://cp.test", "org-1", "aid-1"]);
+	expect(cloud.createSession.mock.calls[0][1]).toMatchObject({ transcriptImportId: importId });
+	expect(useUiStore.getState().globalToast?.body).toBeFalsy();
+});
+
+it("says the conversation moved as a note when its upload fails", async () => {
+	daemon.posts = moveReplies;
+	cloud.features = ["session.branch", "session.transcriptImport"];
+	daemon.preview = { data: { branch: "feat/x", changes: [], transcript: { bytes: 2048 } } };
+	uploadCloudTranscript.mockRejectedValue(new Error("Couldn’t reach Orchestrator Cloud."));
+	cloud.createSession.mockResolvedValue({ session: { id: "cloud-9" } });
+	renderDialog();
+	const user = userEvent.setup();
+	await user.click(await screen.findByRole("button", { name: "Move to Orchestrator Cloud" }));
+	await waitFor(() => expect(navigate).toHaveBeenCalled());
+	expect(cloud.createSession.mock.calls[0][1]).not.toHaveProperty("transcriptImportId");
+	expect(useUiStore.getState().globalToast?.body).toBe("The conversation moved as a summary note.");
+});
+
+it.each([
+	["an agent Cloud cannot resume", { bytes: 0, unavailable: "unsupported" }, "Summary note"],
+	["a transcript over 64 MiB", { bytes: 70 << 20, unavailable: "too_large" }, "Summary note: the transcript is over 64 MiB"],
+])("shows a summary note for %s", async (_, transcript, text) => {
+	cloud.features = ["session.branch", "session.transcriptImport"];
+	daemon.preview = { data: { branch: "feat/x", changes: [], transcript } };
+	renderDialog();
+	expect(await screen.findByText(text)).toBeTruthy();
 });
