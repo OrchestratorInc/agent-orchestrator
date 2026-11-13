@@ -91,6 +91,7 @@ function QueuedMessageRowContent({
 	busy,
 	steady = false,
 	onRunAction,
+	showGrip,
 	reorderEnabled,
 	dragHandleRef,
 	dragHandleProps,
@@ -110,6 +111,8 @@ function QueuedMessageRowContent({
 	/** Busy only while the composer sends: the actions wait without dimming. */
 	steady?: boolean;
 	onRunAction: (turnId: string, action: () => Promise<unknown>) => void;
+	/** The grip stays put whenever the dock can reorder; only dragging is gated. */
+	showGrip?: boolean;
 	reorderEnabled?: boolean;
 	dragHandleRef?: (element: HTMLButtonElement | null) => void;
 	dragHandleProps?: Record<string, unknown>;
@@ -232,15 +235,12 @@ function QueuedMessageRowContent({
 						<Trash2 aria-hidden="true" className="size-3.5 shrink-0" />
 					</Button>
 				) : null}
-				{reorderEnabled ? (
+				{showGrip ? (
 					<Pressable
 						ref={dragHandleRef}
 						{...dragHandleProps}
-						disabled={busy}
-						className={cn(
-							"flex size-7 cursor-grab items-center justify-center rounded-md text-muted-foreground touch-none active:cursor-grabbing disabled:pointer-events-none disabled:opacity-50",
-							steadyClass,
-						)}
+						disabled={busy || !reorderEnabled}
+						className="flex size-7 cursor-grab items-center justify-center rounded-md text-muted-foreground touch-none transition-none active:cursor-grabbing disabled:pointer-events-none"
 						aria-label="Drag to reorder queued message"
 						title="Drag to reorder"
 					>
@@ -267,6 +267,7 @@ function SortableQueuedMessageRow({
 	steady,
 	error,
 	onRunAction,
+	showGrip,
 	reorderEnabled,
 	isReordering,
 	dragSnapshot,
@@ -286,6 +287,7 @@ function SortableQueuedMessageRow({
 	steady?: boolean;
 	error?: string;
 	onRunAction: (turnId: string, action: () => Promise<unknown>) => void;
+	showGrip?: boolean;
 	reorderEnabled?: boolean;
 	isReordering?: boolean;
 	dragSnapshot?: DragRowSnapshot | null;
@@ -335,6 +337,7 @@ function SortableQueuedMessageRow({
 				onCancelQueuedTurn={onCancelQueuedTurn}
 				onPromoteQueuedTurn={onPromoteQueuedTurn}
 				onRunAction={onRunAction}
+				showGrip={showGrip}
 				reorderEnabled={reorderEnabled}
 				showHoverSteer={frozenActions?.showHoverSteer}
 				showPersistentSteer={frozenActions?.showPersistentSteer ?? showPersistentSteer}
@@ -455,6 +458,9 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 	);
 	const reorderEnabled =
 		Boolean(onReorderQueuedTurns) && fifoTurnIds.length > 1 && isOpen;
+	// Grips appear with the second row, a send still in flight included, and
+	// then stay put while sends come and go; only dragging waits.
+	const showGrip = Boolean(onReorderQueuedTurns) && displayMessages.length > 1 && isOpen;
 	const nextQueuedTurnId = fifoTurnIds[0];
 
 	const suppressHoverSteer = useCallback(() => {
@@ -679,16 +685,12 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 											error={errors[turnId] ?? steerErrors?.[turnId]}
 											isReordering={isReordering}
 											onRowHoverChange={setHoveredTurnId}
+											showGrip={showGrip}
 											reorderEnabled={reorderEnabled && !busy && !pending}
 											{...rowProps}
-											{...(pending
-												? {
-														canSteer: false,
-														onPromoteQueuedTurn: undefined,
-														onBeginQueuedEdit: undefined,
-														onCancelQueuedTurn: undefined,
-													}
-												: null)}
+											// A send the daemon has not confirmed yet shows the same actions,
+											// held until it has a turn, so confirming it shifts nothing.
+											{...(pending ? { busy: true, steady: true } : null)}
 										/>
 									);
 								})}

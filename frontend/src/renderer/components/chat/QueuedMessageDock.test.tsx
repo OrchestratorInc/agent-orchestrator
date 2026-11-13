@@ -183,6 +183,40 @@ describe("QueuedMessageDock order and steering", () => {
 		expect(texts).toEqual(["first queued", "second queued", "just sent"]);
 	});
 
+	it("keeps every row's actions and grip in place while a new message is sent", () => {
+		const props = {
+			canSteer: true,
+			onPromoteQueuedTurn: vi.fn().mockResolvedValue(undefined),
+			onCancelQueuedTurn: vi.fn().mockResolvedValue(undefined),
+			onReorderQueuedTurns: vi.fn().mockResolvedValue(undefined),
+		};
+		const confirmed = queuedMessages(["first queued", "second queued"]);
+		const pending = { ...queuedMessages(["just sent"])[0]!, turnId: "local:pending", pending: true };
+		const { rerender } = render(<QueuedMessageDock {...props} messages={confirmed} />);
+		const grips = () => screen.getAllByRole("button", { name: "Drag to reorder queued message" });
+		const deletes = () => screen.getAllByRole("button", { name: "Delete queued message" });
+		const steers = () => screen.getAllByRole("button", { name: "Steer this queued message into the running turn" });
+		expect(grips()).toHaveLength(2);
+		for (const grip of grips()) expect(grip).toBeEnabled();
+
+		rerender(<QueuedMessageDock {...props} messages={[...confirmed, pending]} sending />);
+
+		// Every row, the unconfirmed one included, keeps the same controls.
+		expect(grips()).toHaveLength(3);
+		expect(deletes()).toHaveLength(3);
+		expect(steers()).toHaveLength(3);
+		const pendingRow = screen.getByTestId("queued-message-local:pending");
+		for (const button of within(pendingRow).getAllByRole("button")) {
+			expect(button).toBeDisabled();
+		}
+
+		rerender(<QueuedMessageDock {...props} messages={[...confirmed, pending]} />);
+		expect(grips()[0]).toBeEnabled();
+		for (const button of within(pendingRow).getAllByRole("button")) {
+			expect(button).toBeDisabled();
+		}
+	});
+
 	it("keeps Steer on every row while a turn can be steered", () => {
 		render(
 			<QueuedMessageDock
