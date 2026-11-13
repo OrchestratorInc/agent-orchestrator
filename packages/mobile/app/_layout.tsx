@@ -27,6 +27,10 @@ import { symbolFonts } from "../lib/symbolFonts";
 import { ThemeProvider, useTheme, useThemeState } from "../lib/ThemeProvider";
 import { loadThemeSettings, type ThemeSettings } from "../lib/themeStore";
 import { sheetCornerRadius } from "../lib/tokens";
+import { DemoMachineManager, installDemoTransport } from "../lib/demoMachine";
+
+// Development builds only: lets the in-app demo machine answer its own address.
+installDemoTransport();
 
 // Sheet routes, and how tall each is allowed to be.
 //
@@ -177,6 +181,8 @@ function Shell() {
 			<UpdatesManager />
 			<StoreUpdateManager />
 			<OnboardingGate />
+			{/* Does nothing outside a development build. */}
+			<DemoMachineManager />
 			{/* The navigator paints surfaces of its own, and it reads them from *its*
 			    theme, not from the palette above. Two of those surfaces are visible
 			    only while a page moves: the stack's own container, which shows

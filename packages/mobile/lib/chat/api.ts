@@ -1,4 +1,5 @@
 import { fetch as expoFetch } from "expo/fetch";
+import { demoEventStream, isDemoUrl } from "../demoMachine/transport";
 import { ApiError, ATTACHMENT_REQUEST_TIMEOUT_MS, apiRequest } from "../api";
 import { authHeaders, httpBase, type ServerConfig } from "../config";
 import { resolveDefaultChoices } from "./turnSettingsModel";
@@ -470,10 +471,12 @@ export async function streamGlobalConversationEvents(
 	onCursorReset?: (cursor: number) => void,
 	options?: ConversationStreamOptions,
 ): Promise<number> {
-	const res = await expoFetch(`${httpBase(cfg)}${API}/events?after=${Math.max(0, after)}`, {
-		headers: { ...authHeaders(cfg), Accept: "text/event-stream" },
-		signal,
-	});
+	const url = `${httpBase(cfg)}${API}/events?after=${Math.max(0, after)}`;
+	const init = { headers: { ...authHeaders(cfg), Accept: "text/event-stream" }, signal };
+	// The in-app demo machine (development builds only) streams its own events.
+	const res = isDemoUrl(url)
+		? (await demoEventStream(url, init)) as unknown as Awaited<ReturnType<typeof expoFetch>>
+		: await expoFetch(url, init);
 	if (!res.ok) throw await streamError(res);
 	if (!res.body) throw new Error("Couldn't open live updates from your machine.");
 	const advertisedAfterHeader = res.headers.get("X-AO-Event-After");

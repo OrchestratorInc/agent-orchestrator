@@ -16,6 +16,7 @@ import { formatVersionLine, type BuildInfo } from "../../lib/appInfo";
 import { bugReportClipboard, bugReportOpenUrl, bugReportUrl } from "../../lib/bugReport";
 import { isConfigured, type ServerConfig } from "../../lib/config";
 import { classifyConnectionFailure } from "../../lib/connectionError";
+import { addDemoMachine, chooseDemoNetwork, DEMO_HOST_ID, DEMO_NETWORKS, removeDemoMachine, useDemoNetwork, type DemoNetwork } from "../../lib/demoMachine";
 import { describeDesktopStatus } from "../../lib/desktopStatus";
 import { discordFeatureRequestURL } from "../../lib/discord";
 import { isEmulatedHost, setEmulatedMachines, useEmulatedMachines } from "../../lib/emulatedMachines";
@@ -276,6 +277,7 @@ export default function SettingsScreen() {
 					<FeatureRequestRow />
 				</SettingsSection>
 
+				{__DEV__ ? <DemoMachineSection /> : null}
 				{/* Last, and never in a release build. */}
 				{__DEV__ ? (
 					<SettingsSection title="Developer" footer="Development builds only. Adds fake machines to the machine chips and the Machines list above, to check how the app looks with many machines. Nothing is paired, saved or sent anywhere.">
@@ -294,6 +296,60 @@ export default function SettingsScreen() {
 			</SettingsForm>
 			<ToastHost toast={toast} />
 		</View>
+	);
+}
+
+const DEMO_NETWORK_OPTIONS: readonly SettingsOption<DemoNetwork>[] = (Object.keys(DEMO_NETWORKS) as DemoNetwork[]).map((value) => ({ value, label: DEMO_NETWORKS[value].label }));
+
+/**
+ * Development builds only. A paired machine answered from inside the app, with
+ * generated projects, workers and chats, and a network delay to choose, for
+ * checking the app on a slow link without a daemon.
+ */
+function DemoMachineSection() {
+	const { hostStates, reloadConfig, reloadHostMetadata, switchHost } = useApp();
+	const network = useDemoNetwork();
+	const paired = hostStates.some((host) => host.hostId === DEMO_HOST_ID);
+	const [busy, setBusy] = useState(false);
+	const toggle = async (next: boolean) => {
+		haptics.select();
+		setBusy(true);
+		try {
+			if (next) {
+				await addDemoMachine();
+				await reloadHostMetadata();
+				await switchHost(DEMO_HOST_ID);
+			} else {
+				await removeDemoMachine();
+				await reloadHostMetadata();
+				await reloadConfig();
+			}
+		} finally {
+			setBusy(false);
+		}
+	};
+	return (
+		<SettingsSection title="Demo machine" footer="Development builds only. Pairs a machine that lives inside the app, with made-up projects, workers and chats; two chats keep replying. Network sets the delay on every request to it; Machine off fails them. Chat fetches are logged in Metro as [demo].">
+			<SettingsToggleRow
+				icon="laptop"
+				label="Demo machine"
+				value={paired}
+				disabled={busy}
+				onValueChange={(next) => void toggle(next)}
+				testID="settings-demo-machine"
+			/>
+			<SettingsPickerRow
+				icon="status"
+				label="Network"
+				options={DEMO_NETWORK_OPTIONS}
+				selectedValue={network}
+				onValueChange={(next) => {
+					haptics.select();
+					chooseDemoNetwork(next);
+				}}
+				testID="settings-demo-network"
+			/>
+		</SettingsSection>
 	);
 }
 

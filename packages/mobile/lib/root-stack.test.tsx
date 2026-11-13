@@ -29,6 +29,7 @@ vi.mock("./themeStore", () => ({ loadThemeSettings: async () => ({ preference: "
 vi.mock("./store", () => ({ AppProvider: "AppProvider" }));
 vi.mock("./cloud/CloudProvider", () => ({ CloudProvider: "CloudProvider" }));
 vi.mock("./OnboardingGate", () => ({ OnboardingGate: () => null }));
+vi.mock("./demoMachine", () => ({ DemoMachineManager: () => null, installDemoTransport: () => {} }));
 vi.mock("./TelemetryManager", () => ({ TelemetryManager: () => null }));
 vi.mock("./PushManager", () => ({ PushManager: () => null }));
 vi.mock("./UpdatesManager", () => ({ UpdatesManager: () => null }));
