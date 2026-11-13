@@ -13,6 +13,7 @@ import (
 
 type limitReadingStore interface {
 	ListAgentLimitReadings(ctx context.Context, since time.Time) ([]domain.AgentLimitReading, error)
+	ListAgentAccounts(ctx context.Context) ([]domain.AgentAccount, error)
 }
 
 // LimitHistoryReader turns the limit readings AO took into the windows each login went through.
@@ -52,29 +53,59 @@ func (r *LimitHistoryReader) History(ctx context.Context, days int) (domain.Usag
 			out.FirstReadingAt = &at
 		}
 	}
-	out.Logins = limitLogins(readings, until)
+	saved, err := r.store.ListAgentAccounts(ctx)
+	if err != nil {
+		return domain.UsageLimitHistory{}, err
+	}
+	out.Logins = limitLogins(readings, heldLogins(readings, saved), until)
 	return out, nil
 }
 
-func limitLogins(readings []domain.AgentLimitReading, now time.Time) []domain.UsageLimitLogin {
-	type loginKey struct {
-		provider domain.AgentAccountProvider
-		who      string
+type loginKey struct {
+	provider domain.AgentAccountProvider
+	who      string
+}
+
+func readingLogin(reading domain.AgentLimitReading) loginKey {
+	who := strings.ToLower(strings.TrimSpace(reading.Email))
+	if who == "" {
+		who = "account:" + reading.AccountID
 	}
+	return loginKey{reading.Provider, who}
+}
+
+func heldLogins(readings []domain.AgentLimitReading, saved []domain.AgentAccount) map[loginKey]bool {
+	exists := map[string]bool{}
+	for _, p := range domain.AgentAccountProviders {
+		exists[domain.DeviceAgentAccountID(p)] = true
+	}
+	for _, account := range saved {
+		exists[account.ID] = true
+	}
+	latest := map[string]domain.AgentLimitReading{}
+	for _, reading := range readings {
+		if last, seen := latest[reading.AccountID]; exists[reading.AccountID] && (!seen || reading.ReadAt.After(last.ReadAt)) {
+			latest[reading.AccountID] = reading
+		}
+	}
+	held := map[loginKey]bool{}
+	for _, reading := range latest {
+		held[readingLogin(reading)] = true
+	}
+	return held
+}
+
+func limitLogins(readings []domain.AgentLimitReading, held map[loginKey]bool, now time.Time) []domain.UsageLimitLogin {
 	byLogin := map[loginKey][]domain.AgentLimitReading{}
 	for _, reading := range readings {
 		if reading.ResetsAt == nil {
 			continue
 		}
-		who := strings.ToLower(strings.TrimSpace(reading.Email))
-		if who == "" {
-			who = "account:" + reading.AccountID
-		}
-		key := loginKey{reading.Provider, who}
+		key := readingLogin(reading)
 		byLogin[key] = append(byLogin[key], reading)
 	}
 	logins := make([]domain.UsageLimitLogin, 0, len(byLogin))
-	for _, group := range byLogin {
+	for key, group := range byLogin {
 		sort.SliceStable(group, func(i, j int) bool { return group[i].ReadAt.Before(group[j].ReadAt) })
 		latest := group[len(group)-1]
 		login := domain.UsageLimitLogin{Provider: latest.Provider, Email: latest.Email, AccountID: latest.AccountID, Windows: []domain.UsageLimitSpan{}}
@@ -90,7 +121,7 @@ func limitLogins(readings []domain.AgentLimitReading, now time.Time) []domain.Us
 			byWindow[reading.WindowID] = append(byWindow[reading.WindowID], reading)
 		}
 		for _, id := range order {
-			login.Windows = append(login.Windows, limitSpans(byWindow[id], now)...)
+			login.Windows = append(login.Windows, limitSpans(byWindow[id], held[key], now)...)
 		}
 		sort.SliceStable(login.Windows, func(i, j int) bool { return login.Windows[i].ResetsAt.Before(login.Windows[j].ResetsAt) })
 		logins = append(logins, login)
@@ -104,7 +135,7 @@ func limitLogins(readings []domain.AgentLimitReading, now time.Time) []domain.Us
 	return logins
 }
 
-func limitSpans(readings []domain.AgentLimitReading, now time.Time) []domain.UsageLimitSpan {
+func limitSpans(readings []domain.AgentLimitReading, held bool, now time.Time) []domain.UsageLimitSpan {
 	var spans []domain.UsageLimitSpan
 	var hours []string
 	for _, reading := range readings {
@@ -155,7 +186,7 @@ func limitSpans(readings []domain.AgentLimitReading, now time.Time) []domain.Usa
 			continue
 		}
 		switch {
-		case span.ResetsAt.After(now):
+		case held && span.ResetsAt.After(now):
 			span.State = domain.UsageLimitSpanOpen
 		case span.ResetsAt.Sub(span.LastReadAt) <= finalWithin:
 			span.State = domain.UsageLimitSpanFinal

@@ -20,6 +20,59 @@ func (f fakeLimitReadings) ListAgentLimitReadings(_ context.Context, since time.
 	return out, nil
 }
 
+func (fakeLimitReadings) ListAgentAccounts(context.Context) ([]domain.AgentAccount, error) {
+	return nil, nil
+}
+
+type fakeLimitStore struct {
+	fakeLimitReadings
+	saved []domain.AgentAccount
+}
+
+func (f fakeLimitStore) ListAgentAccounts(context.Context) ([]domain.AgentAccount, error) {
+	return f.saved, nil
+}
+
+func TestLimitHistoryLoginNoAccountHoldsStopsEarly(t *testing.T) {
+	now := time.Date(2026, 11, 13, 12, 0, 0, 0, time.UTC)
+	reset := now.AddDate(0, 0, 2)
+	weekly := func(account, email string, readAt time.Time) domain.AgentLimitReading {
+		return domain.AgentLimitReading{
+			AccountID: account, Provider: domain.AgentAccountProviderClaude, Email: email, WindowID: "seven_day",
+			DurationMinutes: 10080, UsedPercent: 40, ResetsAt: &reset, ReadAt: readAt,
+		}
+	}
+	reader := NewLimitHistoryReader(fakeLimitStore{
+		fakeLimitReadings: fakeLimitReadings{
+			weekly("device-claude", "old@example.com", now.Add(-25*time.Hour)),
+			weekly("device-claude", "new@example.com", now.Add(-24*time.Hour)),
+			weekly("acct-removed", "gone@example.com", now.Add(-3*time.Hour)),
+			weekly("acct-kept", "kept@example.com", now.Add(-3*time.Hour)),
+		},
+		saved: []domain.AgentAccount{{ID: "acct-kept", Provider: domain.AgentAccountProviderClaude}},
+	})
+	reader.now = func() time.Time { return now }
+
+	history, err := reader.History(context.Background(), 7)
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	want := map[string]string{
+		"gone@example.com": domain.UsageLimitSpanPartial,
+		"kept@example.com": domain.UsageLimitSpanOpen,
+		"new@example.com":  domain.UsageLimitSpanOpen,
+		"old@example.com":  domain.UsageLimitSpanPartial,
+	}
+	if len(history.Logins) != len(want) {
+		t.Fatalf("logins = %+v, want %d", history.Logins, len(want))
+	}
+	for _, login := range history.Logins {
+		if len(login.Windows) != 1 || login.Windows[0].State != want[login.Email] {
+			t.Errorf("%s windows = %+v, want one %s week", login.Email, login.Windows, want[login.Email])
+		}
+	}
+}
+
 func TestLimitHistoryWindows(t *testing.T) {
 	now := time.Date(2026, 10, 28, 20, 0, 0, 0, time.UTC)
 	at := func(h, m int) time.Time { return time.Date(2026, 10, 28, h, m, 0, 0, time.UTC) }
