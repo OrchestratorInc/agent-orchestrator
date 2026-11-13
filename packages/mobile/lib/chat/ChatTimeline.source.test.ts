@@ -396,3 +396,22 @@ describe("plan activity row", () => {
 		expect(planActivity).not.toMatch(/<TurnPlan[^>]*\b(title|live)=/);
 	});
 });
+
+// Each keyboard frame committed the keyboard's transforms through React's
+// shadow tree, and every Compose host re-measured for the keyboard's insets.
+describe("keyboard frames on Android", () => {
+	const read = (path: string) => readFileSync(new URL(path, import.meta.url), "utf8");
+
+	it("applies Reanimated's non-layout props without a shadow tree commit", () => {
+		const pkg = JSON.parse(read("../../package.json")) as { reanimated?: { staticFeatureFlags?: Record<string, boolean> } };
+		expect(pkg.reanimated?.staticFeatureFlags?.ANDROID_SYNCHRONOUSLY_UPDATE_UI_PROPS).toBe(true);
+	});
+
+	it("keeps the keyboard from Compose hosts that ignore it", () => {
+		const patch = read("../../patches/@expo+ui+57.0.26.patch");
+		expect(patch).toContain("+    if (previous != null && previous != insets && sameButKeyboard(previous, insets)) {");
+		expect(patch).toContain("+    return super.dispatchApplyWindowInsets(withoutKeyboard(insets))");
+		expect(patch).toContain("+    if (heldInsetsAnimations.remove(animation)) return");
+		expect(patch).toContain("restProps.ignoreSafeAreaKeyboardInsets ?? !restProps.useViewportSizeMeasurement");
+	});
+});

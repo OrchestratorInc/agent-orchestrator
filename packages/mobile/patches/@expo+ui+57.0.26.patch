@@ -26,7 +26,18 @@ diff --git a/node_modules/@expo/ui/android/src/main/java/expo/modules/ui/HostVie
 index 5b3e528..9368a9e 100644
 --- a/node_modules/@expo/ui/android/src/main/java/expo/modules/ui/HostView.kt
 +++ b/node_modules/@expo/ui/android/src/main/java/expo/modules/ui/HostView.kt
-@@ -50,6 +50,10 @@ import expo.modules.kotlin.views.ComposableScope
+@@ -4,7 +4,10 @@
+ 
+ import android.annotation.SuppressLint
+ import android.content.Context
++import android.os.Build
+ import android.view.MotionEvent
++import android.view.WindowInsetsAnimation
++import androidx.annotation.RequiresApi
+ import androidx.compose.foundation.isSystemInDarkTheme
+ import androidx.compose.foundation.layout.WindowInsets
+ import androidx.compose.foundation.layout.displayCutout
+@@ -50,6 +53,10 @@
  import expo.modules.kotlin.views.ComposeProps
  import expo.modules.kotlin.views.ExpoComposeView
  import expo.modules.kotlin.views.OptimizedComposeProps
@@ -37,7 +48,120 @@ index 5b3e528..9368a9e 100644
  import expo.modules.ui.colors.isDynamicColorSupported
  import expo.modules.ui.colors.seedColorScheme
  
-@@ -137,9 +141,17 @@ internal class HostView(context: Context, appContext: AppContext) :
+@@ -122,9 +129,112 @@
+       return super.dispatchTouchEvent(ev)
+     } finally {
+       isDispatchingCancelFromParent = false
++    }
++  }
++
++  /**
++   * A Host that ignores the keyboard's insets keeps the keyboard from its Compose content
++   * altogether: the insets it passes down have no keyboard in them, and the keyboard's animation
++   * stops here.
++   *
++   * Compose follows every frame of an insets animation, and every change of insets: it updates
++   * its insets state, then re-measures and redraws, in every Host on screen. A few Hosts on one
++   * screen took a large share of each keyboard frame, most of all the first one, where the
++   * keyboard's end state arrives.
++   */
++  override fun dispatchApplyWindowInsets(insets: android.view.WindowInsets): android.view.WindowInsets {
++    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R || !props.ignoreSafeAreaKeyboardInsets.value) {
++      lastInsets = null
++      return super.dispatchApplyWindowInsets(insets)
++    }
++    val previous = lastInsets
++    lastInsets = insets
++    // Only the keyboard moved: nothing this Host passes down changed. Compose would still write
++    // every inset into its state and re-measure. A dispatch with nothing changed at all (a view
++    // asking for insets) still goes through.
++    if (previous != null && previous != insets && sameButKeyboard(previous, insets)) {
++      return insets
++    }
++    return super.dispatchApplyWindowInsets(withoutKeyboard(insets))
++  }
++
++  /** The last insets dispatched to this Host while it ignores the keyboard. */
++  private var lastInsets: android.view.WindowInsets? = null
++
++  /**
++   * Whether two insets differ in the keyboard alone. `WindowInsets.equals` cannot say: it also
++   * compares the keyboard's largest insets, which no builder can clear.
++   */
++  @RequiresApi(Build.VERSION_CODES.R)
++  private fun sameButKeyboard(a: android.view.WindowInsets, b: android.view.WindowInsets): Boolean {
++    if (a.displayCutout != b.displayCutout || a.isRound != b.isRound) return false
++    return intArrayOf(
++      android.view.WindowInsets.Type.statusBars(),
++      android.view.WindowInsets.Type.navigationBars(),
++      android.view.WindowInsets.Type.captionBar(),
++      android.view.WindowInsets.Type.systemGestures(),
++      android.view.WindowInsets.Type.mandatorySystemGestures(),
++      android.view.WindowInsets.Type.tappableElement(),
++      android.view.WindowInsets.Type.displayCutout()
++    ).all { t ->
++      a.getInsets(t) == b.getInsets(t) &&
++        a.getInsetsIgnoringVisibility(t) == b.getInsetsIgnoringVisibility(t) &&
++        a.isVisible(t) == b.isVisible(t)
++    }
++  }
++
++  override fun onDetachedFromWindow() {
++    super.onDetachedFromWindow()
++    // Back on a window, the content takes its insets afresh.
++    lastInsets = null
++    heldInsetsAnimations.clear()
++  }
++
++  @RequiresApi(Build.VERSION_CODES.R)
++  private fun withoutKeyboard(insets: android.view.WindowInsets): android.view.WindowInsets {
++    val keyboard = android.view.WindowInsets.Type.ime()
++    return android.view.WindowInsets.Builder(insets)
++      .setInsets(keyboard, android.graphics.Insets.NONE)
++      .setVisible(keyboard, false)
++      .build()
++  }
++
++  /** Insets animations (the keyboard's) this Host keeps from its Compose content. */
++  private val heldInsetsAnimations = HashSet<WindowInsetsAnimation>()
++
++  @RequiresApi(Build.VERSION_CODES.R)
++  override fun dispatchWindowInsetsAnimationPrepare(animation: WindowInsetsAnimation) {
++    if (props.ignoreSafeAreaKeyboardInsets.value) {
++      heldInsetsAnimations.add(animation)
++      return
+     }
++    super.dispatchWindowInsetsAnimationPrepare(animation)
+   }
+ 
++  @RequiresApi(Build.VERSION_CODES.R)
++  override fun dispatchWindowInsetsAnimationStart(
++    animation: WindowInsetsAnimation,
++    bounds: WindowInsetsAnimation.Bounds
++  ): WindowInsetsAnimation.Bounds {
++    if (animation in heldInsetsAnimations) return bounds
++    return super.dispatchWindowInsetsAnimationStart(animation, bounds)
++  }
++
++  @RequiresApi(Build.VERSION_CODES.R)
++  override fun dispatchWindowInsetsAnimationProgress(
++    insets: android.view.WindowInsets,
++    runningAnimations: MutableList<WindowInsetsAnimation>
++  ): android.view.WindowInsets {
++    if (runningAnimations.isNotEmpty() && runningAnimations.all { it in heldInsetsAnimations }) return insets
++    return super.dispatchWindowInsetsAnimationProgress(insets, runningAnimations)
++  }
++
++  @RequiresApi(Build.VERSION_CODES.R)
++  override fun dispatchWindowInsetsAnimationEnd(animation: WindowInsetsAnimation) {
++    if (heldInsetsAnimations.remove(animation)) return
++    super.dispatchWindowInsetsAnimationEnd(animation)
++  }
++
+   @Composable
+   override fun ComposableScope.Content() {
+     val context = LocalContext.current
+@@ -137,9 +247,17 @@
      val seededScheme = remember(seedArgb, isDark) {
        seedArgb?.let { seedColorScheme(it, isDark) }
      }
@@ -56,7 +180,7 @@ index 5b3e528..9368a9e 100644
      val layoutDirection = props.layoutDirection.value.toLayoutDirection()
  
      // Material3's `MaterialTheme` does not provide `LocalContentColor` — only `Surface` does — so
-@@ -149,7 +161,7 @@ internal class HostView(context: Context, appContext: AppContext) :
+@@ -149,7 +267,7 @@
        LocalLayoutDirection provides layoutDirection,
        LocalContentColor provides colorScheme.onSurface
      ) {
@@ -408,3 +532,20 @@ index fe05cb3..5f69512 100644
            }
          }
        }
+diff --git a/node_modules/@expo/ui/src/jetpack-compose/Host/index.tsx b/node_modules/@expo/ui/src/jetpack-compose/Host/index.tsx
+index c38eb76..2cc8471 100644
+--- a/node_modules/@expo/ui/src/jetpack-compose/Host/index.tsx
++++ b/node_modules/@expo/ui/src/jetpack-compose/Host/index.tsx
+@@ -111,6 +111,12 @@ export function Host(props: HostProps) {
+       <TextInputHostProvider hostRef={hostRef}>
+         <HostNativeView
+           {...restProps}
++          // The keyboard's inset only clamps a host measured against the viewport.
++          // Read by every other host, it recomposed and remeasured each one on
++          // every frame of the keyboard's animation, on the UI thread that drives it.
++          ignoreSafeAreaKeyboardInsets={
++            restProps.ignoreSafeAreaKeyboardInsets ?? !restProps.useViewportSizeMeasurement
++          }
+           modifiers={modifiers}
+           matchContentsVertical={
+             typeof matchContents === 'object' ? matchContents.vertical : matchContents
