@@ -181,6 +181,23 @@ export function useMobileConversation(
 	const harnessRef = useRef(snapshot?.harness);
 	harnessRef.current = snapshot?.harness;
 	const hasConversation = Boolean(snapshot);
+	// A new agent's catalog starts empty: the outgoing agent's models and
+	// options are never offered for it, even when its first load fails. Loads
+	// started for the outgoing agent no longer count (desktop's
+	// clearConversationProviderCatalogs).
+	const harnessShown = useRef<{ cacheKey: string; harness: string } | undefined>(undefined);
+	const snapshotHarness = snapshot?.harness;
+	useEffect(() => {
+		if (!snapshotHarness) return;
+		const previous = harnessShown.current;
+		harnessShown.current = { cacheKey, harness: snapshotHarness };
+		if (previous?.cacheKey !== cacheKey || previous.harness === snapshotHarness) return;
+		turnOptionsRequest.current++;
+		turnOptionsLoaded.current = false;
+		turnOptionsCache.delete(cacheKey);
+		setModels([]);
+		setConfigOptions([]);
+	}, [cacheKey, snapshotHarness]);
 
 	const refresh = useCallback(async () => {
 		if (!cfg) return;
@@ -277,6 +294,8 @@ export function useMobileConversation(
 			if (turnOptionsLoaded.current) return rememberedTurnOptions(cacheKey, harnessRef.current) ?? { models, configOptions };
 		}
 		const request = ++turnOptionsRequest.current;
+		// The agent this load is for: its answer is applied and remembered for it alone.
+		const harness = harnessRef.current;
 		if (options?.refresh) turnOptionsCache.delete(cacheKey);
 		// An empty catalog is usually a provider that is not up yet: it is not
 		// cached, so the next load asks again, and what it offered before stays.
@@ -299,10 +318,10 @@ export function useMobileConversation(
 		const empty = isEmptyTurnOptionCatalog(catalog);
 		// Only the same agent's: after an agent switch the outgoing agent's
 		// models would be wrong, so an empty catalog then shows empty.
-		const shown = empty ? rememberedTurnOptions(cacheKey, harnessRef.current) ?? catalog : catalog;
-		if (request !== turnOptionsRequest.current) return shown;
+		const shown = empty ? rememberedTurnOptions(cacheKey, harness) ?? catalog : catalog;
+		if (request !== turnOptionsRequest.current || harnessRef.current !== harness) return shown;
 		turnOptionsLoaded.current = !empty;
-		if (!empty) rememberTurnOptions(cacheKey, catalog, harnessRef.current);
+		if (!empty) rememberTurnOptions(cacheKey, catalog, harness);
 		if (mounted.current) {
 			setModels(shown.models);
 			setConfigOptions(shown.configOptions);

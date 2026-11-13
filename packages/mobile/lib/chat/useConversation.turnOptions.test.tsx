@@ -190,3 +190,34 @@ it("drops a config change's answer that lands after the chat switched agents", a
 	await act(async () => { await conversation.loadTurnOptions({ refresh: true }); });
 	expect(conversation.configOptions).toEqual([]);
 });
+
+// After a switch the outgoing agent's catalog never stands in for the new
+// one's, even when the new agent's first catalog request fails.
+it("clears the outgoing agent's catalog at a switch, and keeps it clear when the new agent's load fails", async () => {
+	fixture.options = [modelOption];
+	await open("switch-then-fail");
+	await act(async () => { await conversation.loadTurnOptions(); });
+	expect(conversation.configOptions.map((option) => option.id)).toEqual(["model"]);
+
+	fixture.harness = "codex";
+	await act(async () => { await conversation.refresh(); });
+	expect(conversation.configOptions).toEqual([]);
+	expect(conversation.models).toEqual([]);
+
+	fixture.options = new Error("CHAT_CONTROLLER_NOT_READY");
+	await act(async () => { await expect(conversation.loadTurnOptions({ refresh: true })).rejects.toThrow("CHAT_CONTROLLER_NOT_READY"); });
+	expect(conversation.configOptions).toEqual([]);
+});
+
+// A load started for the outgoing agent answers for it, not for the new one.
+it("drops a catalog load that was started for the outgoing agent", async () => {
+	await open("switch-during-load");
+	let answer!: (options: unknown[]) => void;
+	fixture.request.mockImplementationOnce(async () => ({ json: async () => ({ options: await new Promise<unknown[]>((resolve) => { answer = resolve; }) }) }));
+	let load: Promise<unknown> | undefined;
+	await act(async () => { load = conversation.loadTurnOptions({ refresh: true }); });
+	fixture.harness = "codex";
+	await act(async () => { await conversation.refresh(); });
+	await act(async () => { answer([modelOption]); await load; });
+	expect(conversation.configOptions).toEqual([]);
+});
