@@ -91,9 +91,6 @@ type AgentAccountLimits struct {
 	FetchedAt time.Time             `json:"fetchedAt"`
 }
 
-// HandoffMaxUsedPercent is the fullest a relevant meter may be on an account that receives a moved session.
-const HandoffMaxUsedPercent = 90
-
 // HandoffHeadroom reports the room left in the meters a request for model draws on.
 func (l AgentAccountLimits) HandoffHeadroom(p AgentAccountProvider, model string) (float64, bool) {
 	model = normalizeLimitScope(model)
@@ -110,7 +107,7 @@ func (l AgentAccountLimits) HandoffHeadroom(p AgentAccountProvider, model string
 		relevant = true
 		fullest = max(fullest, w.UsedPercent)
 	}
-	if !relevant || fullest >= HandoffMaxUsedPercent {
+	if !relevant || fullest >= 100 {
 		return 0, false
 	}
 	return 100 - fullest, true

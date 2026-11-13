@@ -53,6 +53,7 @@ func TestHandoffTargetPicksMostVerifiedRoomForTheModel(t *testing.T) {
 	}{
 		{"most room wins", "claude-sonnet-5", nil, "c"},
 		{"excluded account is skipped", "claude-sonnet-5", map[string]bool{"c": true}, "b"},
+		{"a nearly full account is picked when nothing has more room", "claude-sonnet-5", map[string]bool{"b": true, "c": true}, "full"},
 		{"the model's full meter rules every account out", "claude-opus-5", nil, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

@@ -23,12 +23,13 @@ func TestHandoffHeadroomSelectsRequestBucket(t *testing.T) {
 	}{
 		{"claude sonnet ignores the full opus meter", claude, AgentAccountProviderClaude, "claude-sonnet-5", true, 60},
 		{"claude opus counts its own meter", claude, AgentAccountProviderClaude, "claude-opus-5", false, 0},
-		{"claude alias matches a display scope", AgentAccountLimits{Windows: []AgentAccountLimitWindow{{UsedPercent: 5}, {UsedPercent: 95, Scope: "Claude Opus 5"}}}, AgentAccountProviderClaude, "opus", false, 0},
+		{"claude alias matches a display scope", AgentAccountLimits{Windows: []AgentAccountLimitWindow{{UsedPercent: 5}, {UsedPercent: 95, Scope: "Claude Opus 5"}}}, AgentAccountProviderClaude, "opus", true, 5},
 		{"claude default model counts every meter", claude, AgentAccountProviderClaude, "", false, 0},
 		{"codex default model counts the overall bucket", codex, AgentAccountProviderCodex, "", true, 70},
 		{"codex model bucket counts for its model", codex, AgentAccountProviderCodex, "gpt-5.3-codex-spark", false, 0},
 		{"codex other model ignores the spark bucket", codex, AgentAccountProviderCodex, "gpt-5.5", true, 70},
-		{"near the limit is not room", AgentAccountLimits{Windows: []AgentAccountLimitWindow{{UsedPercent: HandoffMaxUsedPercent}}}, AgentAccountProviderCodex, "", false, 0},
+		{"a nearly full account still has room", AgentAccountLimits{Windows: []AgentAccountLimitWindow{{UsedPercent: 98}}}, AgentAccountProviderCodex, "", true, 2},
+		{"a full account has no room", AgentAccountLimits{Windows: []AgentAccountLimitWindow{{UsedPercent: 100}}}, AgentAccountProviderCodex, "", false, 0},
 		{"no meter verifies nothing", AgentAccountLimits{}, AgentAccountProviderClaude, "claude-opus-5", false, 0},
 		{"only another model's meter verifies nothing", AgentAccountLimits{Windows: []AgentAccountLimitWindow{{UsedPercent: 1, Scope: "spark"}}}, AgentAccountProviderCodex, "gpt-5.5", false, 0},
 	} {
