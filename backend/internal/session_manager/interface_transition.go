@@ -22,8 +22,13 @@ const (
 	interfaceInterruptSettle              = 2 * time.Second
 	interfaceTransitionStopLimit          = 15 * time.Second
 	interfaceTransitionStepLimit          = 45 * time.Second
-	interfaceDeliveryRetry                = 2 * time.Second
-	interfaceDeliveryIdlePoll             = 30 * time.Second
+	// interfaceTransitionHistoryStartLimit bounds starting a Chat target that
+	// must import native history: a step to launch the provider and make its
+	// first load, then the whole settle wait that follows. With only a step,
+	// a slow launch spent the settle wait and its reload was cancelled mid-load.
+	interfaceTransitionHistoryStartLimit = interfaceTransitionStepLimit + ports.ChatNativeHistorySettleLimit
+	interfaceDeliveryRetry               = 2 * time.Second
+	interfaceDeliveryIdlePoll            = 30 * time.Second
 )
 
 var (
@@ -1430,13 +1435,23 @@ func (m *Manager) stopSourceControllerConclusive(rec domain.SessionRecord) error
 	return fmt.Errorf("could not prove the source controller stopped after retry: %w", errors.Join(failures...))
 }
 
+// transitionTargetStartLimit bounds starting a transition target. Only a
+// resumed target that must import native history waits for it to settle after
+// launching, so only that start gets the settle wait on top of the step.
+func transitionTargetStartLimit(fresh, requireNativeHistory bool) time.Duration {
+	if requireNativeHistory && !fresh {
+		return interfaceTransitionHistoryStartLimit
+	}
+	return interfaceTransitionStepLimit
+}
+
 func (m *Manager) startTransitionTarget(
 	ctx context.Context,
 	id domain.SessionID,
 	fresh, requireNativeHistory bool,
 	historyPolicy domain.SessionInterfaceTransitionHistoryPolicy,
 ) error {
-	ctx, cancel := context.WithTimeout(ctx, interfaceTransitionStepLimit)
+	ctx, cancel := context.WithTimeout(ctx, transitionTargetStartLimit(fresh, requireNativeHistory))
 	defer cancel()
 	rec, ok, err := m.store.GetSession(ctx, id)
 	if err != nil {

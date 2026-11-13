@@ -2399,6 +2399,51 @@ func TestACPDriverHistoryRefreshMapsProviderInternalErrorToLoadFailed(t *testing
 	}
 }
 
+// A provider that answers session/load with -32602 carrying a context deadline
+// — its own handler timed out while AO's context is still live — gave no
+// verdict on the transcript, so the refresh must be retryable-within-budget,
+// not a load rejection.
+func TestACPDriverHistoryRefreshMapsProviderDeadlineErrorToRetryable(t *testing.T) {
+	userID := "11111111-1111-4111-8111-111111111111"
+	user := acpsdk.UpdateUserMessageText("Inspect the repository")
+	user.UserMessageChunk.MessageId = &userID
+	agent := &fakeAgent{
+		capabilities: &acpsdk.AgentCapabilities{LoadSession: true},
+		loadUpdates:  []acpsdk.SessionUpdate{user},
+		failLoadFrom: 2,
+		failLoadErr: &acpsdk.RequestError{Code: -32602, Message: "Internal error",
+			Data: map[string]any{"error": "context deadline exceeded"}},
+	}
+	driver := New(Config{
+		Harness:      domain.HarnessClaudeCode,
+		Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
+		Probe:        func(context.Context) error { return nil },
+		Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeSpawn(agent))
+
+	conv, err := driver.Resume(context.Background(), ports.ChatResumeConfig{
+		ProviderConversationID: "provider-session-1",
+		WorkspacePath:          t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	defer conv.Close()
+
+	_, err = conv.(ports.ChatHistoryRefresher).RefreshHistory(context.Background())
+	if !errors.Is(err, ports.ErrChatHistoryLoadDeadline) {
+		t.Fatalf("RefreshHistory error = %v, want ErrChatHistoryLoadDeadline", err)
+	}
+	if errors.Is(err, ports.ErrChatHistoryLoadFailed) {
+		t.Fatalf("RefreshHistory error = %v, a provider deadline must not read as a load rejection", err)
+	}
+	var requestErr *acpsdk.RequestError
+	if !errors.As(err, &requestErr) || requestErr.Code != -32602 {
+		t.Fatalf("RefreshHistory error = %v, want the provider's -32602 preserved", err)
+	}
+}
+
 // When AO's own deadline ends a session/load, the SDK reports a synthetic
 // -32603 carrying "context deadline exceeded". That is AO's timeout, not a
 // provider failure, and must keep its context error classification.
@@ -2439,6 +2484,35 @@ func TestACPDriverHistoryRefreshKeepsOwnDeadlineAsContextError(t *testing.T) {
 	}
 }
 
+// The resume's own first session/load keeps that classification too: a slow
+// provider cut off by AO's deadline is a timeout, not a rejected replay.
+func TestACPDriverResumeKeepsOwnLoadDeadlineAsContextError(t *testing.T) {
+	agent := &fakeAgent{
+		capabilities:  &acpsdk.AgentCapabilities{LoadSession: true},
+		blockLoadCall: 1,
+	}
+	driver := New(Config{
+		Harness:      domain.HarnessClaudeCode,
+		Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
+		Probe:        func(context.Context) error { return nil },
+		Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeSpawn(agent))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	_, err := driver.Resume(ctx, ports.ChatResumeConfig{
+		ProviderConversationID: "provider-session-1",
+		WorkspacePath:          t.TempDir(),
+	})
+	if !errors.Is(err, ports.ErrChatResumeFailed) || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Resume error = %v, want ErrChatResumeFailed wrapping AO's own deadline", err)
+	}
+	if errors.Is(err, ports.ErrChatHistoryLoadFailed) {
+		t.Fatalf("Resume error = %v, AO's own deadline must not read as a provider load failure", err)
+	}
+}
+
 // The initial resume load takes the same mapping so a transition that fails
 // before the first refresh also reports the rejection.
 func TestACPDriverResumeMapsProviderInternalLoadErrorToLoadFailed(t *testing.T) {
@@ -2472,6 +2546,13 @@ func TestNormalizeACPLoadErrorKeepsOtherCodes(t *testing.T) {
 	}{
 		{name: "auth required", err: acpsdk.NewAuthRequired(nil), want: ports.ErrChatAuthRequired},
 		{name: "internal", err: acpsdk.NewInternalError(map[string]any{"error": "context deadline exceeded"}), want: ports.ErrChatHistoryLoadFailed},
+		{
+			name: "deadline in -32602 data",
+			err: &acpsdk.RequestError{Code: -32602, Message: "Internal error",
+				Data: map[string]any{"error": "context deadline exceeded"}},
+			want: ports.ErrChatHistoryLoadDeadline,
+		},
+		{name: "deadline in -32602 message", err: &acpsdk.RequestError{Code: -32602, Message: "Context deadline exceeded"}, want: ports.ErrChatHistoryLoadDeadline},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -2481,8 +2562,17 @@ func TestNormalizeACPLoadErrorKeepsOtherCodes(t *testing.T) {
 			}
 		})
 	}
-	plain := errors.New("peer disconnected before response")
-	if err := normalizeACPLoadError("ACP session/load", plain); errors.Is(err, ports.ErrChatHistoryLoadFailed) || !errors.Is(err, plain) {
+	deadline := &acpsdk.RequestError{Code: -32602, Message: "Internal error",
+		Data: map[string]any{"error": "context deadline exceeded"}}
+	if err := normalizeACPLoadError("ACP session/load", deadline); errors.Is(err, ports.ErrChatHistoryLoadFailed) {
+		t.Fatalf("normalizeACPLoadError(-32602 deadline) = %v, a provider deadline must not read as a load rejection", err)
+	}
+	plain := &acpsdk.RequestError{Code: -32602, Message: "Invalid params"}
+	if err := normalizeACPLoadError("ACP session/load", plain); errors.Is(err, ports.ErrChatHistoryLoadDeadline) || errors.Is(err, ports.ErrChatHistoryLoadFailed) {
+		t.Fatalf("normalizeACPLoadError(-32602 without deadline) = %v, want the provider error untouched", err)
+	}
+	transportErr := errors.New("peer disconnected before response")
+	if err := normalizeACPLoadError("ACP session/load", transportErr); errors.Is(err, ports.ErrChatHistoryLoadFailed) || !errors.Is(err, transportErr) {
 		t.Fatalf("normalizeACPLoadError(plain) = %v, want the transport error untouched", err)
 	}
 	if err := normalizeACPError("ACP session/prompt", acpsdk.NewInternalError(nil)); errors.Is(err, ports.ErrChatHistoryLoadFailed) {
