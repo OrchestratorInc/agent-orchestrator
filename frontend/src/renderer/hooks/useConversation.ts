@@ -1150,13 +1150,14 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 	});
 
 	const rollback = useMutation({
-		mutationFn: async (turnId: string) => {
+		mutationFn: async ({ turnId, filePlanId }: { turnId: string; filePlanId?: string }) => {
 			const { data, error } = await clientForSessionHost(hostId).POST(
 				"/api/v1/sessions/{sessionId}/conversation/turns/{turnId}/rollback",
 				{
 					params: {
 						path: { sessionId: sessionId as string, turnId },
 					},
+					body: filePlanId ? { restoreFiles: true, planId: filePlanId } : { restoreFiles: false },
 				},
 			);
 			if (error) throw error;
@@ -1378,9 +1379,29 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 				: apiErrorCode(compact.error) === "CHAT_COMPACTION_BUSY"
 					? "Stop the current turn before compacting"
 					: undefined,
-		rollback: (turnId: string) => rollback.mutateAsync(turnId),
+		/** Rolls back to a turn, restoring the files a preview listed when given
+		 *  that preview's planId. */
+		rollback: (turnId: string, filePlanId?: string) => rollback.mutateAsync({ turnId, filePlanId }),
+		/** What rolling back to a turn would restore on disk, read fresh each time
+		 *  the confirmation opens because the worktree keeps changing. */
+		previewRollback: async (turnId: string) => {
+			const { data, error } = await clientForSessionHost(hostId).GET(
+				"/api/v1/sessions/{sessionId}/conversation/turns/{turnId}/rollback",
+				{
+					params: { path: { sessionId: sessionId as string, turnId } },
+					signal: AbortSignal.timeout(10_000),
+				},
+			);
+			if (error) throw error;
+			return data;
+		},
 		rollbackPending: rollback.isPending,
-		rollbackError: rollback.error ? apiErrorMessage(rollback.error) : undefined,
+		rollbackError:
+			apiErrorCode(rollback.error) === "CHAT_ROLLBACK_FILES_CHANGED"
+				? "Files changed while this was open. Check the updated list, then roll back again."
+				: rollback.error
+					? apiErrorMessage(rollback.error)
+					: undefined,
 		retryControl: {
 			setAutoResume: (turnId: string, enabled: boolean) => {
 				if (!sessionId) return Promise.reject(new Error("No conversation session is selected."));

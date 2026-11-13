@@ -4192,6 +4192,45 @@ type ConversationBranchIDParam struct {
 	BranchID string `path:"branchId" description:"Conversation branch identifier, from a snapshot branch navigation point."`
 }
 
+// RollbackConversationRequest is the optional body of a conversation rollback.
+// RestoreFiles also puts the worktree back to how it was before the turn; a
+// client sets it only after showing the user which files will change, and sends
+// that preview's PlanID with it. Without it only the conversation is rolled
+// back, which is all an older client promises.
+type RollbackConversationRequest struct {
+	RestoreFiles bool `json:"restoreFiles,omitempty"`
+	// PlanID is the planId of the preview the user confirmed, required with
+	// RestoreFiles. If the files changed since, the rollback is refused with
+	// CHAT_ROLLBACK_FILES_CHANGED and nothing changes.
+	PlanID string `json:"planId,omitempty"`
+}
+
+// RollbackPreviewResponse says what rolling back to a turn would do to the
+// worktree.
+type RollbackPreviewResponse struct {
+	// FilesRestorable is false when AO cannot put the files back; Reason says why,
+	// and a rollback then changes only the conversation.
+	FilesRestorable bool   `json:"filesRestorable"`
+	Reason          string `json:"reason,omitempty"`
+	// Files lists every path a restore changes; TotalFiles counts them.
+	Files      []RollbackFileChange `json:"files"`
+	TotalFiles int                  `json:"totalFiles"`
+	// CommitsSince counts commits made on the branch after the turn. A restore
+	// leaves them in place, so their changes come back as uncommitted edits.
+	CommitsSince int `json:"commitsSince"`
+	// PlanID identifies this list of files; a rollback that restores them sends it
+	// back. Empty when the files cannot be restored.
+	PlanID string `json:"planId,omitempty"`
+}
+
+// RollbackFileChange is one file a rollback would restore.
+type RollbackFileChange struct {
+	Path string `json:"path"`
+	// Change is restored (deleted since, comes back), reverted (edited since, its
+	// earlier contents come back) or removed (created since, deleted).
+	Change string `json:"change" enum:"restored,reverted,removed"`
+}
+
 // RollbackConversationResponse reports what an undo discarded.
 type RollbackConversationResponse struct {
 	// TurnsDiscarded counts the turns the agent no longer remembers, including the
