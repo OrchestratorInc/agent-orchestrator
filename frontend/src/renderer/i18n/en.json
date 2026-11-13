@@ -3381,7 +3381,6 @@
 	"artifacts.share.unpublishedDescriptionPublic": "The old link no longer works and the uploaded copy is deleted. Click Publish to make a new link.",
 	"artifacts.share.people.title": "People with access",
 	"artifacts.share.people.addByEmail": "Add people by email",
-	"artifacts.share.people.invite": "Invite",
 	"artifacts.share.people.add": "Add",
 	"artifacts.share.people.notEmail": "“{{email}}” isn't an email address.",
 	"artifacts.share.people.removeChip": "Remove {{email}}",

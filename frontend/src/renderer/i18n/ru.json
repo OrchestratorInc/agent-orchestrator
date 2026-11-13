@@ -3523,7 +3523,6 @@
 	"artifacts.share.unpublishedDescriptionPublic": "Старая ссылка больше не работает, а загруженная копия удалена. Нажмите «Опубликовать», чтобы создать новую ссылку.",
 	"artifacts.share.people.title": "У кого есть доступ",
 	"artifacts.share.people.addByEmail": "Добавить людей по эл. почте",
-	"artifacts.share.people.invite": "Пригласить",
 	"artifacts.share.people.add": "Добавить",
 	"artifacts.share.people.notEmail": "«{{email}}» — не адрес эл. почты.",
 	"artifacts.share.people.removeChip": "Убрать {{email}}",

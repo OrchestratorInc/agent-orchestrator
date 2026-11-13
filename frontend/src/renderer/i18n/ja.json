@@ -3396,7 +3396,6 @@
 	"artifacts.share.unpublishedDescriptionPublic": "以前のリンクは使えなくなり、アップロードしたコピーは削除されました。「公開」をクリックすると新しいリンクを作成できます。",
 	"artifacts.share.people.title": "アクセスできるユーザー",
 	"artifacts.share.people.addByEmail": "メールでユーザーを追加",
-	"artifacts.share.people.invite": "招待",
 	"artifacts.share.people.add": "追加",
 	"artifacts.share.people.notEmail": "「{{email}}」はメールアドレスではありません。",
 	"artifacts.share.people.removeChip": "{{email}} を削除",

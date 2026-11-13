@@ -434,6 +434,8 @@ export function ShareArtifactMenuPopover({ file, name, open, onOpenChange, inten
 interface PublishedShare {
 	share?: CloudShareLink;
 	outdated: boolean;
+	/** The check for this file has answered. */
+	checked?: boolean;
 }
 
 /**
@@ -467,7 +469,7 @@ function usePublishedShare(file: CloudShareFile | null, revision: string): Publi
 			cancelled = true;
 		};
 	}, [fileKey, revision]); // eslint-disable-line react-hooks/exhaustive-deps
-	return state.fileKey === fileKey ? { share: state.share, outdated: state.outdated } : { outdated: false };
+	return state.fileKey === fileKey ? { share: state.share, outdated: state.outdated, checked: true } : { outdated: false, checked: false };
 }
 
 /**
@@ -476,18 +478,21 @@ function usePublishedShare(file: CloudShareFile | null, revision: string): Publi
  * popover anchored to it on the published link: invite people, choose who it
  * opens for, copy it or unpublish it. A file on this computer opens the
  * popover first, to choose who it is for, and its Publish there uploads it.
- * Once published, the button reads Published with a lock or a globe. Once the
- * file changed since, it splits: Republish puts the newer version on the same
- * link, and the lock or globe opens the popover without republishing. For a
- * video the button is disabled and says why.
+ * Once published, the button reads Published, with the same Publish icon: who
+ * the link opens for is shown in the popover, not guessed at on the button.
+ * Once the file changed since, it splits: Republish puts the newer version on
+ * the same link, and the chevron opens the popover without republishing. For
+ * a video the button is disabled and says why.
  */
-export function ShareArtifactButton({ file, name, className, iconOnly = false, revision = "" }: {
+export function ShareArtifactButton({ file, name, className, iconOnly = false, revision = "", published = false }: {
 	file: Omit<CloudShareFile, "baseUrl" | "shareId">;
 	name: string;
 	className?: string;
 	iconOnly?: boolean;
 	/** The file's last change, e.g. its updatedAt: a new value checks again whether it needs Republish. */
 	revision?: string;
+	/** Whether the artifact list has the file published: the label until the button's own check answers. */
+	published?: boolean;
 }) {
 	const { t } = useTranslation();
 	const [open, setOpen] = useState(false);
@@ -501,7 +506,7 @@ export function ShareArtifactButton({ file, name, className, iconOnly = false, r
 	// Pointing at the button starts what its panel opens on.
 	const prefetch = usePrefetchShare(file);
 	const prefetchProps = { onFocus: prefetch, onPointerEnter: prefetch };
-	const { share, outdated } = usePublishedShare(available && signedIn && !video ? { ...file, baseUrl } : null, `${revision}:${checks}:${publishing}`);
+	const { share, outdated, checked } = usePublishedShare(available && signedIn && !video ? { ...file, baseUrl } : null, `${revision}:${checks}:${publishing}`);
 	// What the panel does on opening is fixed when it opens, so a check that
 	// lands while it is open never starts a second publish.
 	const [republishOnOpen, setRepublishOnOpen] = useState(false);
@@ -515,17 +520,11 @@ export function ShareArtifactButton({ file, name, className, iconOnly = false, r
 		setOpen(next);
 	};
 	useCloseWhenFrameFocused(open, () => onOpenChange(false));
-	const isPublic = Boolean(share && !isPrivateShare(share));
-	// A public link's green globe or a private link's amber link, as on every artifact list.
-	const accessMark = shareAccessIcon(isPublic ? "anyone" : "restricted");
-	const AccessIcon = accessMark.Icon;
-	const accessIconClass = cn("size-icon-sm", accessMark.className);
 	const label = publishing ? t("artifacts.share.publishing")
 		: outdated ? t("artifacts.share.republish")
-		: share ? t("artifacts.share.published")
+		: share || (!checked && published) ? t("artifacts.share.published")
 		: t("artifacts.share.publish");
 	const icon = publishing ? <Loader2 aria-hidden="true" className="size-icon-sm animate-spin motion-reduce:animate-none" />
-		: share && !outdated ? <AccessIcon aria-hidden="true" className={accessIconClass} />
 		: <Share aria-hidden="true" className="size-icon-sm" />;
 	const amberDot = <span aria-hidden="true" className="pointer-events-none absolute top-0.5 right-0.5 size-1.5 rounded-full bg-status-in-review ring-1 ring-background" data-share-outdated="" />;
 	const panel = (
@@ -577,7 +576,6 @@ export function ShareArtifactButton({ file, name, className, iconOnly = false, r
 							variant="quiet"
 							{...prefetchProps}
 						>
-							<AccessIcon aria-hidden="true" className={accessIconClass} />
 							<ChevronDown aria-hidden="true" className="size-3" />
 						</Button>
 					</span>
@@ -1118,7 +1116,7 @@ function SharePanel({
 					<div className="mt-3.5 flex flex-col gap-3.5">
 						{privateLinks ? (
 							<>
-								<InviteField actionLabel={t("artifacts.share.people.invite")} busy={inviting} onSubmit={(emails) => invite(phase, emails)} />
+								<InviteField actionLabel={t("artifacts.share.people.add")} busy={inviting} onSubmit={(emails) => invite(phase, emails)} />
 								{viewersNote}
 								{phase.grantsError ? (
 									<div className="-mt-1 flex items-center justify-between gap-2" role="alert" data-share-grants-error="">

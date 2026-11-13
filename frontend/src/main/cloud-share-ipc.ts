@@ -39,7 +39,7 @@ import {
 	unpublishShareLink,
 	uploadShare,
 } from "./cloud-share";
-import { type ShareLinkRecordStore, artifactRecordKey, shareRecordKey } from "./cloud-share-links";
+import { type ShareLinkRecordStore, artifactRecordKey, shareAccess, shareRecordKey } from "./cloud-share-links";
 
 export interface CloudShareIpcDeps extends CloudShareApi {
 	ipcMain: Pick<IpcMain, "handle">;
@@ -203,7 +203,7 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 			// for the link's warning once the file changes.
 			const key = await cloudRecordKey(deps.records, file.baseUrl, file);
 			const findings = scannedCloudVersions.get(JSON.stringify([key, file.fingerprint]));
-			await deps.records.set(key, result.share.id, file.fingerprint, artifactShareUrl(result.share), findings);
+			await deps.records.set(key, result.share.id, file.fingerprint, artifactShareUrl(result.share), findings, shareAccess(result.share));
 			return { status: "published", share: result.share, replaced: result.replaced };
 		} catch (error) {
 			if (error instanceof CloudShareError && error.code === "artifact_share_source_changed") {
@@ -258,7 +258,10 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 		requireMainFrame(event);
 		const access = accessArgument((value as { access?: unknown } | null)?.access);
 		if (!access) throw new CloudShareError("invalid_request", "Not who a link opens for.");
-		return setShareLinkAccess(deps, baseUrlArgument(value), shareIdArgument(value), access);
+		const share = await setShareLinkAccess(deps, baseUrlArgument(value), shareIdArgument(value), access);
+		// The daemon serves the artifact's access from the record, so every list marks it at once.
+		await deps.records.setAccess(share.id, shareAccess(share));
+		return share;
 	});
 
 	deps.ipcMain.handle("cloudShare:grants", async (_event, value: unknown): Promise<CloudShareGrant[]> =>
@@ -344,7 +347,7 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 				access: file.access,
 				emails: file.emails,
 			}, (sentBytes) => progress(taken.size + sentBytes, taken.size * 2), controller.signal);
-			await deps.records.set(key, result.share.id, taken.fingerprint, artifactShareUrl(result.share), taken.secretFindings);
+			await deps.records.set(key, result.share.id, taken.fingerprint, artifactShareUrl(result.share), taken.secretFindings, shareAccess(result.share));
 			return { status: "published", share: result.share, replaced: result.replaced };
 		} catch (error) {
 			if (controller.signal.aborted) return { status: "cancelled" };

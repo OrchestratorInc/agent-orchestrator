@@ -152,7 +152,10 @@ describe("cloudShare IPC", () => {
 		await fs.writeFile(path.join(dataDir, "share-links.json"), JSON.stringify({ [key]: SHARE_ID }));
 		const share = { id: SHARE_ID, slug: "abc", name: "report.html", contentUrl: "https://abc.share.test/", viewerUrl: "https://share.test/abc" };
 		await setup({ shares: [share] }).invoke("cloudShare:list", { baseUrl: "https://cp.test" });
-		expect(await stored()).toEqual({ shareId: SHARE_ID, url: "https://share.test/abc" });
+		// With who it opens for: a link listed with no access is public.
+		expect(await stored()).toEqual({ shareId: SHARE_ID, url: "https://share.test/abc", access: "anyone" });
+		await setup({ shares: [{ ...share, access: "restricted" }] }).invoke("cloudShare:list", { baseUrl: "https://cp.test" });
+		expect(await stored()).toEqual({ shareId: SHARE_ID, url: "https://share.test/abc", access: "restricted" });
 
 		const { invoke, file } = setup({ shares: [{ ...share, revokedAt: "2026-11-01T00:00:00Z" }] });
 		await invoke("cloudShare:list", { baseUrl: "https://cp.test" });
@@ -374,6 +377,15 @@ describe("cloudShare IPC", () => {
 
 		await expect(plain.invoke("cloudShare:publish", { ...plain.file, access: "everyone" })).rejects.toThrow("Not who a link opens for");
 		await expect(plain.invoke("cloudShare:publish", { ...plain.file, emails: "dev@acme.co" })).rejects.toThrow("Not a list of emails");
+	});
+
+	it("records a live link's new access, so the daemon marks its artifact at once", async () => {
+		const key = shareRecordKey("https://cp.test", "sess-1", "docs/report.html");
+		await fs.writeFile(path.join(dataDir, "share-links.json"), JSON.stringify({ [key]: { shareId: SHARE_ID, url: "https://share.test/abc", access: "restricted" } }));
+		const { invoke } = setup();
+		await invoke("cloudShare:setAccess", { baseUrl: "https://cp.test", shareId: SHARE_ID, access: "anyone" });
+		const stored = JSON.parse(await fs.readFile(path.join(dataDir, "share-links.json"), "utf8"))[key];
+		expect(stored).toEqual({ shareId: SHARE_ID, url: "https://share.test/abc", access: "anyone" });
 	});
 
 	it("changes a live link's access and who it is shared with", async () => {

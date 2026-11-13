@@ -137,7 +137,7 @@ describe("ShareArtifactButton on a cloud session's file", () => {
 		await openPopover(cloudFile, "report.html", "Published");
 		const field = await screen.findByRole("textbox", { name: "Add people by email" });
 		await userEvent.type(field, "Maya@acme.co,");
-		await userEvent.click(screen.getByRole("button", { name: "Invite" }));
+		await userEvent.click(screen.getByRole("button", { name: "Add" }));
 		expect(invite).toHaveBeenCalledExactlyOnceWith("https://cp.test", SHARE_ID, ["Maya@acme.co"]);
 		expect(await screen.findByText("maya@acme.co")).toBeTruthy();
 		expect(screen.getByText("Can view")).toBeTruthy();
@@ -149,16 +149,16 @@ describe("ShareArtifactButton on a cloud session's file", () => {
 		expect(screen.getByText("Only you")).toBeTruthy();
 	});
 
-	it("keeps Invite disabled while a chip is not an email address, and says which", async () => {
+	it("keeps Add disabled while a chip is not an email address, and says which", async () => {
 		stub({ ...inspection, shareId: SHARE_ID }, { ...links, shares: [share] });
 		const invite = vi.spyOn(aoBridge.cloudShare, "invite").mockResolvedValue([]);
 		await openPopover(cloudFile, "report.html", "Published");
 		const field = await screen.findByRole("textbox", { name: "Add people by email" });
 		await userEvent.type(field, "maya@acme.co ravi@acme ");
 		expect(screen.getByRole("alert").textContent).toBe("“ravi@acme” isn't an email address.");
-		expect(screen.getByRole("button", { name: "Invite" })).toBeDisabled();
+		expect(screen.getByRole("button", { name: "Add" })).toBeDisabled();
 		await userEvent.click(screen.getByRole("button", { name: "Remove ravi@acme" }));
-		expect(screen.getByRole("button", { name: "Invite" })).toBeEnabled();
+		expect(screen.getByRole("button", { name: "Add" })).toBeEnabled();
 		expect(invite).not.toHaveBeenCalled();
 	});
 
@@ -385,7 +385,7 @@ describe("ShareArtifactButton on a cloud session's file", () => {
 		vi.spyOn(aoBridge.cloudShare, "invite").mockResolvedValue([maya, dev]);
 		const popover = await openPopover(cloudFile, "report.html", "Published");
 		await userEvent.type(await within(popover).findByRole("textbox", { name: "Add people by email" }), "dev@acme.co{Enter}");
-		await userEvent.click(within(popover).getByRole("button", { name: "Invite" }));
+		await userEvent.click(within(popover).getByRole("button", { name: "Add" }));
 		expect(await within(popover).findByText("dev@acme.co")).toBeTruthy();
 		// The read started on opening lands last, without dev.
 		act(() => answerRead([maya]));
@@ -733,15 +733,21 @@ describe("ShareArtifactButton states", () => {
 		expect(inspectSpy).toHaveBeenCalledTimes(2);
 	});
 
-	it.each([
-		["restricted", "icon-link", "text-status-in-review"],
-		["anyone", "icon-globe", "text-success"],
-	] as const)("marks a %s link's Published button as every artifact list does", async (access, icon, color) => {
+	it.each(["restricted", "anyone"] as const)("keeps the Publish icon on a %s link's Published button", async (access) => {
 		stub({ ...inspection, shareId: SHARE_ID }, { ...links, shares: [{ ...share, access }] });
 		renderButton(localFile);
 		const button = await screen.findByRole("button", { name: "Published: report.html" });
-		const mark = button.querySelector("svg")!;
-		expect(mark).toHaveClass(icon, color);
+		// Who the link opens for is in the popover, not on the button.
+		expect(button.querySelector("svg")).toHaveClass("icon-share");
+		expect(button.querySelector(".icon-globe, .icon-link, .icon-lock")).toBeNull();
+	});
+
+	it("reads Published at once for a file the artifact list has published, before its check answers", async () => {
+		const { inspectSpy } = stub({ ...inspection, shareId: SHARE_ID }, { ...links, shares: [share] });
+		inspectSpy.mockReturnValue(new Promise(() => undefined));
+		render(<QueryClientProvider client={new QueryClient()}><TooltipProvider><ShareArtifactButton file={localFile} name="report.html" published /></TooltipProvider></QueryClientProvider>);
+		const button = await screen.findByRole("button", { name: "Published: report.html" });
+		expect(button.querySelector("svg")).toHaveClass("icon-share");
 	});
 
 	it("disables Publish for a video", async () => {

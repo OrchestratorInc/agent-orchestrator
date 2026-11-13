@@ -36,8 +36,9 @@ export type ArtifactRow = {
 	/** The file's link while it is published; unset when it is not shared. */
 	shareUrl?: string;
 	/**
-	 * Who that link opens for, once the link list is read: restricted, only
-	 * the owner and the people invited. Unset reads as a public link.
+	 * Who that link opens for, as recorded with the link and corrected by the
+	 * link list once it is read: restricted, only the owner and the people
+	 * invited, or anyone. Unset while not known.
 	 */
 	shareAccess?: CloudShareAccess;
 };
@@ -115,6 +116,7 @@ export function groupArtifactsByProject(workspaces: readonly WorkspaceSummary[],
 					projectId: isScratchpad ? undefined : workspace.id,
 					bundle: artifact.bundle,
 					...(artifact.shareUrl ? { shareUrl: artifact.shareUrl } : {}),
+					...(artifact.shareUrl && artifact.shareAccess ? { shareAccess: artifact.shareAccess } : {}),
 				})),
 			)
 			.sort(newestFirst);

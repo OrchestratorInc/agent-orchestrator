@@ -3462,7 +3462,6 @@
 	"artifacts.share.unpublishedDescriptionPublic": "O link antigo não funciona mais e a cópia enviada foi excluída. Clique em Publicar para criar um novo link.",
 	"artifacts.share.people.title": "Pessoas com acesso",
 	"artifacts.share.people.addByEmail": "Adicionar pessoas por e-mail",
-	"artifacts.share.people.invite": "Convidar",
 	"artifacts.share.people.add": "Adicionar",
 	"artifacts.share.people.notEmail": "“{{email}}” não é um endereço de e-mail.",
 	"artifacts.share.people.removeChip": "Remover {{email}}",

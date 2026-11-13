@@ -3378,7 +3378,6 @@
 	"artifacts.share.unpublishedDescriptionPublic": "旧链接已失效，上传的副本已删除。点击“发布”可创建新链接。",
 	"artifacts.share.people.title": "有访问权限的人",
 	"artifacts.share.people.addByEmail": "通过邮箱添加人员",
-	"artifacts.share.people.invite": "邀请",
 	"artifacts.share.people.add": "添加",
 	"artifacts.share.people.notEmail": "“{{email}}”不是邮箱地址。",
 	"artifacts.share.people.removeChip": "移除 {{email}}",

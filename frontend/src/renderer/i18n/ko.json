@@ -3396,7 +3396,6 @@
 	"artifacts.share.unpublishedDescriptionPublic": "이전 링크는 더 이상 작동하지 않으며 업로드된 사본은 삭제되었습니다. 게시를 클릭하면 새 링크가 만들어집니다.",
 	"artifacts.share.people.title": "액세스 권한이 있는 사용자",
 	"artifacts.share.people.addByEmail": "이메일로 사용자 추가",
-	"artifacts.share.people.invite": "초대",
 	"artifacts.share.people.add": "추가",
 	"artifacts.share.people.notEmail": "“{{email}}”은(는) 이메일 주소가 아닙니다.",
 	"artifacts.share.people.removeChip": "{{email}} 삭제",

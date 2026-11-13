@@ -878,12 +878,14 @@ export function SessionArtifactsView({
 							<ShareArtifactButton
 								file={{ source: "cloud", orgId: session.cloud.orgId, sessionId: session.id, path: selected.path, projectId: "", ...(selected.id ? { artifactId: selected.id } : {}) }}
 								name={selected.name}
+								published={Boolean(selected.shareUrl)}
 								revision={listed?.updatedAt}
 							/>
 						)) : !hostId ? (
 							<ShareArtifactButton
 								file={{ sessionId: session.id, path: selected.path, projectId: session.workspaceId, ...(selected.id ? { artifactId: selected.id } : {}) }}
 								name={selected.name}
+								published={Boolean(selected.shareUrl)}
 								revision={listed?.updatedAt}
 							/>
 						) : null}
