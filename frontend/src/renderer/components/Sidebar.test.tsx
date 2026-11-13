@@ -2744,6 +2744,24 @@ describe("Sidebar", () => {
 		expect(dialog).toHaveTextContent("repository folder");
 	});
 
+	it("names a Cloud project's removal as a permanent delete, unlike a local one", async () => {
+		const user = userEvent.setup();
+		const cloudProject: WorkspaceSummary = { ...workspace, id: "cloud-1", name: "Cloud One", kind: "cloud", cloudOrgId: "org-1", path: "", sessions: [] };
+		const onRemoveProject = renderSidebar({ workspaces: [cloudProject] });
+
+		await user.click(screen.getByLabelText("Project actions for Cloud One"));
+		expect(screen.queryByRole("menuitem", { name: "Remove project" })).not.toBeInTheDocument();
+		await user.click(await screen.findByRole("menuitem", { name: "Delete project" }));
+
+		const dialog = await screen.findByRole("dialog", { name: "Delete project" });
+		expect(dialog).toHaveTextContent("This will permanently delete Cloud One");
+		// No grey explainer under the lead: it said what the lead already says.
+		expect(dialog).not.toHaveTextContent("sandboxes");
+		expect(within(dialog).queryByRole("button", { name: "Remove" })).not.toBeInTheDocument();
+		await user.click(within(dialog).getByRole("button", { name: "Delete permanently" }));
+		await waitFor(() => expect(onRemoveProject).toHaveBeenCalledWith("cloud-1", true));
+	});
+
 	it("warns when removing a project would hide open pull requests", async () => {
 		const user = userEvent.setup();
 		const workspaceWithPullRequests = {

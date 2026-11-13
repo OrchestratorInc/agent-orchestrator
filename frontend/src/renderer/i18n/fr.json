@@ -2078,7 +2078,6 @@
 	"shell.restart": "Redémarrer",
 	"shell.remove": "Supprimer",
 	"shell.removeProjectBody": "Cela arrête ses sessions actives et le retire de la barre latérale, mais conserve le dossier du dépôt et l'historique stocké sur le disque.",
-	"shell.removeCloudProjectBody": "Cela supprime le projet et toutes ses sessions cloud de votre espace de travail, et le retire de la barre latérale.",
 	"shell.removeProjectLead": "Cela supprimera {{name}} d'Orchestrator",
 	"shell.removeProjectOpenPrWarning_one": "Ce projet comporte {{count}} pull request ouverte. Sa suppression masquera cette pull request dans Orchestrator, mais ne la fermera pas.",
 	"shell.removeProjectOpenPrWarning_many": "Ce projet comporte {{count}} pull requests ouvertes. Sa suppression masquera ces pull requests dans Orchestrator, mais ne les fermera pas.",
@@ -5008,5 +5007,9 @@
 	"settings.project.stepRepository": "Dépôt de l’étape {{number}}",
 	"settings.project.stepRepositoryHint": "Chaque étape s’exécute dans le dépôt choisi pour elle, une fois tous les dépôts clonés.",
 	"settings.project.repositories": "Dépôts",
-	"settings.project.instructions": "Instructions"
+	"settings.project.instructions": "Instructions",
+	"shell.deleteCloudProjectTitle": "Supprimer le projet",
+	"shell.deleteCloudProjectLead": "Cela supprimera définitivement {{name}}",
+	"shell.deleteCloudProjectConfirm": "Supprimer définitivement",
+	"shell.cloudProjectDeleted": "{{name}} supprimé définitivement"
 }

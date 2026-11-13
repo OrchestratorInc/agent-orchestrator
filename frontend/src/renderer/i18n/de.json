@@ -2047,7 +2047,6 @@
 	"shell.restart": "Neu starten",
 	"shell.remove": "Entfernen",
 	"shell.removeProjectBody": "Dadurch werden live laufende Sitzungen gestoppt und das Projekt aus der Seitenleiste entfernt, der Repository-Ordner und der gespeicherte Verlauf bleiben jedoch auf dem Datenträger.",
-	"shell.removeCloudProjectBody": "Dadurch werden das Projekt und alle seine Cloud-Sitzungen aus deinem Arbeitsbereich gelöscht und es wird aus der Seitenleiste entfernt.",
 	"shell.removeProjectLead": "Dadurch wird {{name}} aus Orchestrator entfernt",
 	"shell.removeProjectOpenPrWarning_one": "Zu diesem Projekt gehört {{count}} offener Pull Request. Durch das Entfernen wird dieser Pull Request in Orchestrator ausgeblendet, aber nicht geschlossen.",
 	"shell.removeProjectOpenPrWarning_other": "Zu diesem Projekt gehören {{count}} offene Pull Requests. Durch das Entfernen werden diese Pull Requests in Orchestrator ausgeblendet, aber nicht geschlossen.",
@@ -4889,5 +4888,9 @@
 	"settings.project.stepRepository": "Repository für Schritt {{number}}",
 	"settings.project.stepRepositoryHint": "Jeder Schritt läuft in dem für ihn gewählten Repository, nachdem alle Repositorys ausgecheckt sind.",
 	"settings.project.repositories": "Repositorys",
-	"settings.project.instructions": "Anweisungen"
+	"settings.project.instructions": "Anweisungen",
+	"shell.deleteCloudProjectTitle": "Projekt löschen",
+	"shell.deleteCloudProjectLead": "Dadurch wird {{name}} endgültig gelöscht",
+	"shell.deleteCloudProjectConfirm": "Endgültig löschen",
+	"shell.cloudProjectDeleted": "{{name}} gelöscht"
 }

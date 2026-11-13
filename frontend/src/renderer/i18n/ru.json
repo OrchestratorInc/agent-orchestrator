@@ -2487,7 +2487,6 @@
 	"shell.restart": "Перезапустить",
 	"shell.remove": "Удалить",
 	"shell.removeProjectBody": "Живые сессии проекта будут остановлены, а проект удалён с боковой панели, но папка репозитория и сохранённая история останутся на диске.",
-	"shell.removeCloudProjectBody": "Проект и все его облачные сессии будут удалены из рабочего пространства и с боковой панели.",
 	"shell.removeProjectLead": "{{name}} будет удалён из Orchestrator",
 	"shell.removeProjectOpenPrWarning_one": "У этого проекта {{count}} открытый pull request. После удаления проекта pull request исчезнет из Orchestrator, но не будет закрыт.",
 	"shell.removeProjectOpenPrWarning_few": "У этого проекта {{count}} открытых pull request. После удаления проекта они исчезнут из Orchestrator, но не будут закрыты.",
@@ -5119,5 +5118,9 @@
 	"settings.project.stepRepository": "Репозиторий для шага {{number}}",
 	"settings.project.stepRepositoryHint": "Каждый шаг выполняется в выбранном для него репозитории, после того как клонированы все репозитории.",
 	"settings.project.repositories": "Репозитории",
-	"settings.project.instructions": "Инструкции"
+	"settings.project.instructions": "Инструкции",
+	"shell.deleteCloudProjectTitle": "Удалить проект навсегда",
+	"shell.deleteCloudProjectLead": "Проект {{name}} будет удалён навсегда",
+	"shell.deleteCloudProjectConfirm": "Удалить навсегда",
+	"shell.cloudProjectDeleted": "Проект {{name}} удалён навсегда"
 }

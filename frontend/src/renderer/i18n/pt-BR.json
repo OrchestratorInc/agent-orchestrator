@@ -2078,7 +2078,6 @@
 	"shell.restart": "Reiniciar",
 	"shell.remove": "Remover",
 	"shell.removeProjectBody": "Isso interrompe as sessões ativas e remove o projeto da barra lateral, mas mantém a pasta do repositório e o histórico armazenado em disco.",
-	"shell.removeCloudProjectBody": "Isso exclui o projeto e todas as suas sessões na nuvem do seu espaço de trabalho e o remove da barra lateral.",
 	"shell.removeProjectLead": "Isso removerá {{name}} do Orchestrator",
 	"shell.removeProjectOpenPrWarning_one": "Este projeto tem {{count}} pull request aberto. A remoção ocultará esse pull request no Orchestrator, mas não o fechará.",
 	"shell.removeProjectOpenPrWarning_many": "Este projeto tem {{count}} pull requests abertos. A remoção ocultará esses pull requests no Orchestrator, mas não os fechará.",
@@ -5008,5 +5007,9 @@
 	"settings.project.stepRepository": "Repositório da etapa {{number}}",
 	"settings.project.stepRepositoryHint": "Cada etapa é executada no repositório escolhido para ela, depois que todos os repositórios forem clonados.",
 	"settings.project.repositories": "Repositórios",
-	"settings.project.instructions": "Instruções"
+	"settings.project.instructions": "Instruções",
+	"shell.deleteCloudProjectTitle": "Excluir projeto",
+	"shell.deleteCloudProjectLead": "Isso excluirá {{name}} permanentemente",
+	"shell.deleteCloudProjectConfirm": "Excluir permanentemente",
+	"shell.cloudProjectDeleted": "{{name}} excluído"
 }

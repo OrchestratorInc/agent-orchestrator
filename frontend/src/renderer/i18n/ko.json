@@ -2047,7 +2047,6 @@
 	"shell.restart": "다시 시작",
 	"shell.remove": "제거",
 	"shell.removeProjectBody": "실행 중인 세션을 중지하고 사이드바에서 제거하지만, 저장소 폴더와 저장된 기록은 디스크에 유지됩니다.",
-	"shell.removeCloudProjectBody": "프로젝트와 모든 클라우드 세션을 워크스페이스에서 삭제하고 사이드바에서 제거합니다.",
 	"shell.removeProjectLead": "Orchestrator에서 {{name}}을(를) 제거합니다",
 	"shell.removeProjectOpenPrWarning_one": "이 프로젝트에 열려 있는 풀 리퀘스트가 {{count}}개 있습니다. 프로젝트를 제거하면 Orchestrator에서 숨겨지지만 풀 리퀘스트는 닫히지 않습니다.",
 	"shell.removeProjectOpenPrWarning_other": "이 프로젝트에 열려 있는 풀 리퀘스트가 {{count}}개 있습니다. 프로젝트를 제거하면 Orchestrator에서 숨겨지지만 풀 리퀘스트는 닫히지 않습니다.",
@@ -4889,5 +4888,9 @@
 	"settings.project.stepRepository": "{{number}}단계의 저장소",
 	"settings.project.stepRepositoryHint": "각 단계는 모든 저장소가 체크아웃된 후 해당 단계에 선택한 저장소에서 실행됩니다.",
 	"settings.project.repositories": "저장소",
-	"settings.project.instructions": "지침"
+	"settings.project.instructions": "지침",
+	"shell.deleteCloudProjectTitle": "프로젝트 삭제",
+	"shell.deleteCloudProjectLead": "{{name}}을(를) 영구적으로 삭제합니다",
+	"shell.deleteCloudProjectConfirm": "영구 삭제",
+	"shell.cloudProjectDeleted": "{{name}}을(를) 삭제했습니다"
 }

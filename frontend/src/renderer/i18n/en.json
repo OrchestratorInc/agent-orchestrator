@@ -2413,7 +2413,6 @@
 	"shell.restart": "Restart",
 	"shell.remove": "Remove",
 	"shell.removeProjectBody": "This stops its live sessions and removes it from the sidebar, but keeps the repository folder and stored history on disk.",
-	"shell.removeCloudProjectBody": "This deletes the project and all of its cloud sessions from your workspace, and removes it from the sidebar.",
 	"shell.removeProjectLead": "This will remove {{name}} from Orchestrator",
 	"shell.removeProjectOpenPrWarning_one": "{{count}} open pull request belongs to this project. Removing it will hide that pull request from Orchestrator, but will not close it.",
 	"shell.removeProjectOpenPrWarning_other": "{{count}} open pull requests belong to this project. Removing it will hide those pull requests from Orchestrator, but will not close them.",
@@ -4869,5 +4868,9 @@
 	"settings.project.stepRepository": "Repository for step {{number}}",
 	"settings.project.stepRepositoryHint": "Each step runs in the repository chosen for it, after every repository is checked out.",
 	"settings.project.repositories": "Repositories",
-	"settings.project.instructions": "Instructions"
+	"settings.project.instructions": "Instructions",
+	"shell.deleteCloudProjectTitle": "Delete project",
+	"shell.deleteCloudProjectLead": "This will permanently delete {{name}}",
+	"shell.deleteCloudProjectConfirm": "Delete permanently",
+	"shell.cloudProjectDeleted": "Deleted {{name}}"
 }

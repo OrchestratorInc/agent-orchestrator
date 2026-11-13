@@ -2035,7 +2035,6 @@
 	"shell.restart": "重启",
 	"shell.remove": "移除",
 	"shell.removeProjectBody": "会停止其活跃会话并从侧边栏移除，但保留磁盘上的仓库文件夹与历史记录。",
-	"shell.removeCloudProjectBody": "这将从你的工作区中删除该项目及其所有云会话，并将其从侧边栏中移除。",
 	"shell.removeProjectLead": "这将从 Orchestrator 中移除 {{name}}",
 	"shell.removeProjectOpenPrWarning_one": "此项目有 {{count}} 个未关闭的拉取请求。移除项目后，该拉取请求将在 Orchestrator 中隐藏，但不会被关闭。",
 	"shell.removeProjectOpenPrWarning_other": "此项目有 {{count}} 个未关闭的拉取请求。移除项目后，这些拉取请求将在 Orchestrator 中隐藏，但不会被关闭。",
@@ -4871,5 +4870,9 @@
 	"settings.project.stepRepository": "步骤 {{number}} 的仓库",
 	"settings.project.stepRepositoryHint": "所有仓库检出后，每个步骤在为其选择的仓库中运行。",
 	"settings.project.repositories": "仓库",
-	"settings.project.instructions": "指令"
+	"settings.project.instructions": "指令",
+	"shell.deleteCloudProjectTitle": "删除项目",
+	"shell.deleteCloudProjectLead": "这将永久删除 {{name}}",
+	"shell.deleteCloudProjectConfirm": "永久删除",
+	"shell.cloudProjectDeleted": "已永久删除 {{name}}"
 }

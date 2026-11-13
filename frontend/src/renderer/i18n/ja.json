@@ -2047,7 +2047,6 @@
 	"shell.restart": "再起動",
 	"shell.remove": "削除",
 	"shell.removeProjectBody": "稼働中のセッションを停止し、サイドバーから削除しますが、リポジトリフォルダーと保存済み履歴はディスクに残ります。",
-	"shell.removeCloudProjectBody": "プロジェクトとそのすべてのクラウドセッションをワークスペースから削除し、サイドバーから取り除きます。",
 	"shell.removeProjectLead": "{{name}} を Orchestrator から削除します",
 	"shell.removeProjectOpenPrWarning_one": "このプロジェクトには未完了のプルリクエストが {{count}} 件あります。プロジェクトを削除すると Orchestrator では表示されなくなりますが、プルリクエストは閉じられません。",
 	"shell.removeProjectOpenPrWarning_other": "このプロジェクトには未完了のプルリクエストが {{count}} 件あります。プロジェクトを削除すると Orchestrator では表示されなくなりますが、プルリクエストは閉じられません。",
@@ -4889,5 +4888,9 @@
 	"settings.project.stepRepository": "ステップ {{number}} のリポジトリ",
 	"settings.project.stepRepositoryHint": "各ステップは、すべてのリポジトリがチェックアウトされた後、そのステップに選んだリポジトリで実行されます。",
 	"settings.project.repositories": "リポジトリ",
-	"settings.project.instructions": "指示"
+	"settings.project.instructions": "指示",
+	"shell.deleteCloudProjectTitle": "プロジェクトを完全に削除",
+	"shell.deleteCloudProjectLead": "{{name}} を完全に削除します",
+	"shell.deleteCloudProjectConfirm": "完全に削除",
+	"shell.cloudProjectDeleted": "{{name}} を完全に削除しました"
 }
