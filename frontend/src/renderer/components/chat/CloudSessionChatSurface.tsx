@@ -264,6 +264,25 @@ export function ownMessageTurns(events: readonly CloudCpClientEvent[] | undefine
 	return turns;
 }
 
+/**
+ * What a refused delete of a queued message says (cancelTurn), or undefined
+ * when there is nothing left to delete: the agent already ran it, and the
+ * dock lets it go with the next read.
+ */
+function queuedDeleteRefusal(error: unknown): Error | undefined {
+	if (!(error instanceof CloudCpError)) return error instanceof Error ? error : new Error("The message could not be deleted. Try again.");
+	switch (error.code) {
+		case "TURN_FINISHED":
+			return undefined;
+		case "SESSION_TERMINATED":
+			return new Error("This session has ended, so this message can no longer be deleted.");
+		case "forbidden":
+			return new Error("Only the person who sent this message, whoever started the session, or a workspace admin can delete it.");
+		default:
+			return error;
+	}
+}
+
 export function appendCloudEvents(existing: CloudCpClientEvent[], incoming: CloudCpClientEvent[]): CloudCpClientEvent[] {
 	const lastSequence = existing.at(-1)?.sequence ?? 0;
 	return [...existing, ...incoming.filter((event) => event.sequence > lastSequence)];
@@ -1542,6 +1561,30 @@ export function CloudSessionChatSurface({
 		(message: ConversationMessage) => Boolean(message.turnId && ownTurns.has(message.turnId) && !message.content?.length),
 		[ownTurns],
 	);
+	// A queued message is deleted by stopping its turn (cancelTurn) before the
+	// agent starts on it. The control plane lets whoever may direct the turn do
+	// that: the message's author, whoever started the session, the
+	// organization's owners and admins, and the composer lease holder.
+	const cancelQueued = useMutation({
+		mutationFn: async (turnId: string) => {
+			if (!cloud) throw new Error("Cloud session context is unavailable.");
+			try {
+				await client.cancelTurn(cloud.orgId, session.id, turnId);
+			} catch (error) {
+				const refusal = queuedDeleteRefusal(error);
+				if (refusal) throw refusal;
+			}
+		},
+		onSettled: () => void invalidate(),
+	});
+	const directsEveryTurn = Boolean(cloud && (
+		(me && cloud.createdByUserId === me) || lease.holding ||
+		(!cloud.shared && offering.org?.id === cloud.orgId && (offering.org.role === "owner" || offering.org.role === "admin"))
+	));
+	const canCancelQueuedMessage = useCallback(
+		(message: ConversationMessage) => Boolean(message.turnId && (directsEveryTurn || ownTurns.has(message.turnId))),
+		[directsEveryTurn, ownTurns],
+	);
 	// A pick the session no longer allows (its mode dropped while Chat was
 	// open) is neither sent nor shown. One the selected model cannot run shows
 	// as the mode that runs instead, the one the worker would step down to.
@@ -1861,6 +1904,9 @@ export function CloudSessionChatSurface({
 			onEditQueuedTurn={queuedEditOffered ? (turnId, text) => editQueued.mutateAsync({ turnId, text }) : undefined}
 			canEditQueuedMessage={canEditQueuedMessage}
 			editQueuedTurnPendingTurnId={editQueued.isPending ? editQueued.variables?.turnId : undefined}
+			onCancelQueuedTurn={readOnly || session.isTerminated === true ? undefined : (turnId) => cancelQueued.mutateAsync(turnId)}
+			canCancelQueuedMessage={canCancelQueuedMessage}
+			cancelQueuedTurnPendingTurnId={cancelQueued.isPending ? cancelQueued.variables : undefined}
 			showSteerButton
 			excerptsEnabled
 			fileReferencesEnabled

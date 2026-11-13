@@ -637,6 +637,8 @@ export interface ChatWorkspaceProps {
 	/** Which queued human messages onEditQueuedTurn can edit; every one when absent. */
 	canEditQueuedMessage?: (message: ConversationMessage) => boolean;
 	onCancelQueuedTurn?: (turnId: string) => Promise<unknown>;
+	/** Which queued messages onCancelQueuedTurn can delete; every one when absent. */
+	canCancelQueuedMessage?: (message: ConversationMessage) => boolean;
 	onReorderQueuedTurns?: (turnIds: string[]) => Promise<unknown>;
 	promoteQueuedTurnPendingTurnId?: string;
 	cancelQueuedTurnPendingTurnId?: string;
@@ -872,6 +874,7 @@ function ChatWorkspaceContent({
 	onEditQueuedTurn,
 	canEditQueuedMessage,
 	onCancelQueuedTurn,
+	canCancelQueuedMessage,
 	onReorderQueuedTurns,
 	promoteQueuedTurnPendingTurnId,
 	cancelQueuedTurnPendingTurnId,
@@ -1305,7 +1308,7 @@ function ChatWorkspaceContent({
 			const current = queueEditRef.current;
 			if (current?.turnId === turnId && !current.clientMessageId) updateQueueDraft(undefined, current.revision);
 		},
-		[queueEdit, stableCancelQueuedTurn, updateQueueDraft],
+		[onCancelQueuedTurn, queueEdit, stableCancelQueuedTurn, updateQueueDraft],
 	);
 	// Keep the dispatch target with this composer instance while attachment staging
 	// awaits. A newer queue editor must not redirect an older ordinary send.
@@ -1804,7 +1807,10 @@ function ChatWorkspaceContent({
 						newWorkDisabled || !draftPersistenceAvailable || !onEditQueuedTurn ? undefined : beginQueuedEdit
 					}
 					canEditMessage={canEditQueuedMessage}
-					onCancelQueuedTurn={newWorkDisabled ? undefined : handleCancelQueuedTurn}
+					// Delete only where the chat can stop the message's turn: without
+					// that it would do nothing.
+					onCancelQueuedTurn={newWorkDisabled || !onCancelQueuedTurn ? undefined : handleCancelQueuedTurn}
+					canCancelMessage={canCancelQueuedMessage}
 					onReorderQueuedTurns={newWorkDisabled || !onReorderQueuedTurns ? undefined : reorderQueuedTurns}
 					promotePendingTurnId={promoteQueuedTurnPendingTurnId}
 					cancelPendingTurnId={cancelQueuedTurnPendingTurnId}
@@ -1813,12 +1819,14 @@ function ChatWorkspaceContent({
 			) : null,
 		[
 			beginQueuedEdit,
+			canCancelQueuedMessage,
 			canEditQueuedMessage,
 			canSteerQueuedMessage,
 			cancelQueuedTurnPendingTurnId,
 			draftPersistenceAvailable,
 			handleCancelQueuedTurn,
 			newWorkDisabled,
+			onCancelQueuedTurn,
 			onEditQueuedTurn,
 			onReorderQueuedTurns,
 			reorderQueuedTurns,

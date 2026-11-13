@@ -483,6 +483,59 @@ describe("CloudSessionChatSurface", () => {
 		expect(editable).toEqual({ plain: true, quoted: false, theirs: false });
 	});
 
+	// Delete stops a queued message's turn before the agent starts on it
+	// (cancelTurn). The control plane lets its author, the session's creator,
+	// the organization's owners and admins and the composer lease holder do
+	// that, so Delete shows for those, and a refusal reads for a person.
+	it("deletes a queued message by stopping its turn, where the control plane lets this person", async () => {
+		const message = (sequence: number, turnId: string, authorUserId: string) =>
+			({ sessionId: session.id, sequence, type: "chat.user_message", payload: { turnId, text: turnId, authorUserId }, createdAt: session.updatedAt });
+		const events = [
+			{ sessionId: session.id, sequence: 1, type: "chat.turn_started", payload: { turnId: "running" }, createdAt: session.updatedAt },
+			message(2, "mine", "user-1"),
+			message(3, "theirs", "teammate"),
+		];
+		cloudMocks.listChatEvents.mockReset().mockResolvedValue({ events, hasMore: false, nextAfter: 3, hasOlder: false, nextBefore: 1 });
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		const deletable = async (cloud: { orgId: string; createdByUserId?: string }) => {
+			cloudMocks.chatProps.mockClear();
+			const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+			const view = render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, cloud }} /></QueryClientProvider>);
+			await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].snapshot.items.filter((item: { kind: string }) => item.kind === "message")).toHaveLength(2));
+			const props = cloudMocks.chatProps.mock.lastCall?.[0];
+			const verdicts = Object.fromEntries(props.snapshot.items
+				.filter((item: { kind: string }) => item.kind === "message")
+				.map((item: { turnId: string }) => [item.turnId, props.canCancelQueuedMessage(item)]));
+			return { props, verdicts, view };
+		};
+		// A teammate started the session: only the viewer's own message.
+		const asMember = await deletable({ orgId: "org-1", createdByUserId: "teammate" });
+		expect(asMember.verdicts).toEqual({ mine: true, theirs: false });
+		asMember.view.unmount();
+		// The viewer started it: every queued message.
+		const asCreator = await deletable({ orgId: "org-1", createdByUserId: "user-1" });
+		expect(asCreator.verdicts).toEqual({ mine: true, theirs: true });
+
+		const cancel = (turnId: string) => asCreator.props.onCancelQueuedTurn(turnId) as Promise<unknown>;
+		cloudMocks.cancelTurn.mockReset().mockResolvedValue({ ok: true });
+		await act(async () => { await cancel("mine"); });
+		expect(cloudMocks.cancelTurn).toHaveBeenCalledWith("org-1", session.id, "mine");
+		const outcome = async (error: Error) => {
+			cloudMocks.cancelTurn.mockReset().mockRejectedValue(error);
+			let thrown: unknown = "resolved";
+			await act(async () => { thrown = await cancel("mine").then(() => "resolved", (reason: unknown) => reason); });
+			return thrown;
+		};
+		// It ran meanwhile: nothing is left to delete, and the dock lets it go.
+		expect(await outcome(new CloudCpError("The turn is already finished.", { status: 409, code: "TURN_FINISHED" }))).toBe("resolved");
+		expect(await outcome(new CloudCpError("This session was deleted. Restore it to continue.", { status: 409, code: "SESSION_TERMINATED" })))
+			.toMatchObject({ message: "This session has ended, so this message can no longer be deleted." });
+		expect(await outcome(new CloudCpError("You do not have access to this organization.", { status: 403, code: "forbidden" })))
+			.toMatchObject({ message: "Only the person who sent this message, whoever started the session, or a workspace admin can delete it." });
+		expect(await outcome(new CloudCpError("The request could not be completed.", { status: 500, code: "internal_error" })))
+			.toMatchObject({ message: "The request could not be completed." });
+	});
+
 	// The control plane lets only a message's author edit it.
 	it("knows the turns of the viewer's own messages", () => {
 		const events: CloudCpClientEvent[] = [

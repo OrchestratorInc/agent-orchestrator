@@ -87,6 +87,7 @@ function QueuedMessageRowContent({
 	onBeginQueuedEdit,
 	canEditMessage,
 	onCancelQueuedTurn,
+	canCancelMessage,
 	turnId,
 	busy,
 	onRunAction,
@@ -103,6 +104,7 @@ function QueuedMessageRowContent({
 	onBeginQueuedEdit?: (turnId: string, text: string) => void;
 	canEditMessage?: (message: ConversationMessage) => boolean;
 	onCancelQueuedTurn?: (turnId: string) => Promise<unknown>;
+	canCancelMessage?: (message: ConversationMessage) => boolean;
 	turnId: string;
 	busy?: boolean;
 	onRunAction: (turnId: string, action: () => Promise<unknown>) => void;
@@ -197,7 +199,7 @@ function QueuedMessageRowContent({
 						<Pencil aria-hidden="true" className="size-3.5 shrink-0" />
 					</Button>
 				) : null}
-				{onCancelQueuedTurn ? (
+				{onCancelQueuedTurn && (canCancelMessage?.(message) ?? true) ? (
 					<Button
 						type="button"
 						variant="destructive-ghost"
@@ -240,6 +242,7 @@ function SortableQueuedMessageRow({
 	onBeginQueuedEdit,
 	canEditMessage,
 	onCancelQueuedTurn,
+	canCancelMessage,
 	busy,
 	error,
 	onRunAction,
@@ -258,6 +261,7 @@ function SortableQueuedMessageRow({
 	onBeginQueuedEdit?: (turnId: string, text: string) => void;
 	canEditMessage?: (message: ConversationMessage) => boolean;
 	onCancelQueuedTurn?: (turnId: string) => Promise<unknown>;
+	canCancelMessage?: (message: ConversationMessage) => boolean;
 	busy?: boolean;
 	error?: string;
 	onRunAction: (turnId: string, action: () => Promise<unknown>) => void;
@@ -307,6 +311,7 @@ function SortableQueuedMessageRow({
 				onBeginQueuedEdit={onBeginQueuedEdit}
 				canEditMessage={canEditMessage}
 				onCancelQueuedTurn={onCancelQueuedTurn}
+				canCancelMessage={canCancelMessage}
 				onPromoteQueuedTurn={onPromoteQueuedTurn}
 				onRunAction={onRunAction}
 				reorderEnabled={reorderEnabled}
@@ -335,6 +340,7 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 	onBeginQueuedEdit,
 	canEditMessage,
 	onCancelQueuedTurn,
+	canCancelMessage,
 	onReorderQueuedTurns,
 	promotePendingTurnId,
 	cancelPendingTurnId,
@@ -351,6 +357,8 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 	/** Which human messages Edit is offered on; every one when absent. */
 	canEditMessage?: (message: ConversationMessage) => boolean;
 	onCancelQueuedTurn?: (turnId: string) => Promise<unknown>;
+	/** Which messages Delete is offered on; every one when absent. */
+	canCancelMessage?: (message: ConversationMessage) => boolean;
 	onReorderQueuedTurns?: (turnIds: string[]) => Promise<unknown>;
 	promotePendingTurnId?: string;
 	cancelPendingTurnId?: string;
@@ -558,6 +566,7 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 		onBeginQueuedEdit,
 		canEditMessage,
 		onCancelQueuedTurn,
+		canCancelMessage,
 		onRunAction: runAction,
 		suppressHoverSteer: hoverSteerSuppressed || isReordering,
 	};

@@ -790,7 +790,7 @@ describe("ChatWorkspace timeline", () => {
 			streaming: false,
 			createdAt: "2026-09-09T00:00:05Z",
 		});
-		view.rerender(<ChatWorkspace snapshot={durable} localEchos={localEchos} />);
+		view.rerender(<ChatWorkspace snapshot={durable} localEchos={localEchos} onCancelQueuedTurn={vi.fn()} />);
 
 		// The daemon's row replaces the pending one: still one row, now with its actions.
 		expect(screen.getAllByText("Do this next")).toHaveLength(1);
@@ -6601,6 +6601,19 @@ describe("durable queued edits", () => {
 		expect(screen.getByRole("button", { name: "Cancel edit" })).toBeEnabled();
 		expect(readChatSessionDraft(snapshot.sessionId).queuedEdit).toMatchObject({ text: "queued text refused" });
 		expect(readChatSessionDraft(snapshot.sessionId).queuedEdit?.clientMessageId).toBeUndefined();
+	});
+
+	// Delete stops the message's turn through the chat; a chat that cannot do
+	// that, or not for this message, offers no Delete that would do nothing.
+	it("offers Delete only where the chat can delete the queued message", async () => {
+		const view = render(<ChatWorkspace snapshot={queuedSnapshot()} onSend={vi.fn()} />);
+		expect(screen.queryByRole("button", { name: "Delete queued message" })).toBeNull();
+		const cancel = vi.fn().mockResolvedValue(undefined);
+		view.rerender(<ChatWorkspace snapshot={queuedSnapshot()} onSend={vi.fn()} onCancelQueuedTurn={cancel} canCancelQueuedMessage={() => false} />);
+		expect(screen.queryByRole("button", { name: "Delete queued message" })).toBeNull();
+		view.rerender(<ChatWorkspace snapshot={queuedSnapshot()} onSend={vi.fn()} onCancelQueuedTurn={cancel} canCancelQueuedMessage={(message) => message.turnId === "queued"} />);
+		await userEvent.click(screen.getByRole("button", { name: "Delete queued message" }));
+		await waitFor(() => expect(cancel).toHaveBeenCalledWith("queued"));
 	});
 
 	// A chat may narrow which queued messages it can edit (a Cloud chat: its
