@@ -51,6 +51,8 @@ func volumeClones(path string) bool {
 // with CopyFile, which clones within one ReFS volume on supported builds.
 // Links and junctions are not recreated (that can need privileges); a tree
 // holding one is reported unsupported so the caller falls back to Setup.
+//
+//nolint:gosec // G122: src is a tree AO itself moved under its data dir; links are recreated, never followed.
 func cloneTree(src, dst string) error {
 	if !volumeClones(src) || !strings.EqualFold(filepath.VolumeName(src), filepath.VolumeName(dst)) {
 		return errCloneUnsupported
