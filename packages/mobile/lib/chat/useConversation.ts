@@ -38,7 +38,7 @@ import { conversationActionError, conversationErrorCode, conversationErrorIsPerm
 import { subscribeConversationEvents } from "./conversationEvents";
 import { conversationPollIntervalFor } from "./conversationPoll";
 import { createAsyncValueCache } from "./asyncValueCache";
-import { createRequestGate } from "./requestGate";
+import { createRefreshQueue } from "./refreshQueue";
 import { withAttachmentReferences } from "./messageAttachments";
 import { isEmptyTurnOptionCatalog, loadTurnOptionCatalog } from "./turnOptionsCatalog";
 import { rememberedTurnOptions, rememberTurnOptions, type TurnOptions } from "./lastTurnOptions";
@@ -177,7 +177,7 @@ export function useMobileConversation(
 	const turnOptionsRequest = useRef(0);
 	const turnOptionsInFlight = useRef<Promise<unknown> | undefined>(undefined);
 	const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-	const refreshGate = useRef(createRequestGate()).current;
+	const refreshQueue = useRef(createRefreshQueue()).current;
 
 	const snapshot = useMemo(() => mergeConversationPages(pages), [pages]);
 	// The agent the chat runs, for a retried switch's send (see deliver).
@@ -213,32 +213,34 @@ export function useMobileConversation(
 
 	const refresh = useCallback(async () => {
 		if (!cfg) return;
-		const request = refreshGate.begin();
-		setRefreshing(true);
-		try {
-			const live = options?.reviewId
-				? await getReviewerConversationPage(cfg, options.reviewId)
-				: await getConversationPage(cfg, sessionId);
-			if (!mounted.current || !refreshGate.isCurrent(request)) return;
-			setPages((old) => {
-				const next = withLivePage(old, live);
-				conversationPageCache.set(cacheKey, next);
-				return next;
-			});
-			setUnavailable(undefined);
-			setError(undefined);
-		} catch (cause) {
-			if (!mounted.current || !refreshGate.isCurrent(request)) return;
-			const classified = classifyConversationError(cause, Boolean(options?.reviewId));
-			if (classified.permanent) setUnavailable({ code: classified.code, message: classified.message });
-			else setError(classified.message);
-		} finally {
-			if (mounted.current && refreshGate.isCurrent(request)) {
-				setLoading(false);
-				setRefreshing(false);
+		// One read at a time, at most one more queued (see refreshQueue): every
+		// answer is shown, where a newer request used to discard the older one's.
+		// On a slow link that left the transcript still for the whole reply.
+		if (!refreshQueue.busy()) setRefreshing(true);
+		await refreshQueue.run(async (isCurrent) => {
+			try {
+				const live = options?.reviewId
+					? await getReviewerConversationPage(cfg, options.reviewId)
+					: await getConversationPage(cfg, sessionId);
+				if (!mounted.current || !isCurrent()) return;
+				setPages((old) => {
+					const next = withLivePage(old, live);
+					conversationPageCache.set(cacheKey, next);
+					return next;
+				});
+				setUnavailable(undefined);
+				setError(undefined);
+			} catch (cause) {
+				if (!mounted.current || !isCurrent()) return;
+				const classified = classifyConversationError(cause, Boolean(options?.reviewId));
+				if (classified.permanent) setUnavailable({ code: classified.code, message: classified.message });
+				else setError(classified.message);
+			} finally {
+				if (mounted.current && isCurrent()) setLoading(false);
 			}
-		}
-	}, [cacheKey, cfg, options?.reviewId, refreshGate, sessionId]);
+		});
+		if (mounted.current && !refreshQueue.busy()) setRefreshing(false);
+	}, [cacheKey, cfg, options?.reviewId, refreshQueue, sessionId]);
 
 	const scheduleRefresh = useCallback(() => {
 		if (refreshTimer.current) clearTimeout(refreshTimer.current);
@@ -278,10 +280,10 @@ export function useMobileConversation(
 		void refresh();
 		return () => {
 			mounted.current = false;
-			refreshGate.invalidate();
+			refreshQueue.invalidate();
 			if (refreshTimer.current) clearTimeout(refreshTimer.current);
 		};
-	}, [refresh, refreshGate]);
+	}, [refresh, refreshQueue]);
 
 	useEffect(() => {
 		setPendingSends([]);
