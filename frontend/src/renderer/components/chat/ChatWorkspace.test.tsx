@@ -588,6 +588,47 @@ describe("ChatWorkspace timeline", () => {
 		expect(log.scrollTop).toBe(4000);
 	});
 
+	// A Cloud chat shows a send only once the control plane has it, so no local echo appears.
+	describe("in a chat that shows no local echo of a send", () => {
+		const running = (snapshot: ConversationSnapshot): ConversationSnapshot => ({
+			...snapshot,
+			turns: snapshot.turns.map((turn, index) => index === snapshot.turns.length - 1 ? { ...turn, state: "running" as const, completedAt: undefined } : turn),
+		});
+		const readBack = () => {
+			const log = screen.getByRole("log");
+			stubGeometry(log, { scrollHeight: 4000, clientHeight: 800, scrollTop: 1000 });
+			fireEvent.wheel(log, { deltaY: -120 });
+			fireEvent.scroll(log);
+			expect(screen.getByRole("button", { name: "Jump to latest" })).toBeInTheDocument();
+			return log;
+		};
+
+		it.each([
+			["a message", chatFixtureLongHistory(8)],
+			["a message that queues behind the running turn", running(chatFixtureLongHistory(8))],
+		])("brings the reader to the end when they send %s after scrolling away", async (_name, snapshot) => {
+			const onSend = vi.fn().mockResolvedValue(undefined);
+			render(<ChatWorkspace snapshot={snapshot} onSend={onSend} />);
+			const log = readBack();
+			await typeInLexicalEditor(screen.getByRole("combobox", { name: "Message the agent" }), "New question");
+			await userEvent.keyboard("{Enter}");
+			await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+			expect(screen.queryByRole("button", { name: "Jump to latest" })).not.toBeInTheDocument();
+			expect(log.scrollTop).toBe(4000);
+		});
+
+		it("brings the reader to the end when they steer the running turn after scrolling away", async () => {
+			const onSteer = vi.fn().mockResolvedValue({ status: "accepted" });
+			render(<ChatWorkspace snapshot={running(chatFixtureLongHistory(8))} onSend={vi.fn()} onSteer={onSteer} />);
+			const log = readBack();
+			await typeInLexicalEditor(screen.getByRole("combobox", { name: "Message the agent" }), "Only the unit ones");
+			await userEvent.keyboard("{Control>}{Enter}{/Control}");
+			await waitFor(() => expect(onSteer).toHaveBeenCalledTimes(1));
+			expect(screen.queryByRole("button", { name: "Jump to latest" })).not.toBeInTheDocument();
+			expect(log.scrollTop).toBe(4000);
+		});
+	});
+
 	it("releases on a small nudge up from the end and re-latches when the reader scrolls back down", () => {
 		render(<ChatWorkspace snapshot={chatFixtureLongHistory(8)} />);
 		const log = screen.getByRole("log");
