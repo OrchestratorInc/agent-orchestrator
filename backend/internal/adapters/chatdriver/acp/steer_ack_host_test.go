@@ -1,6 +1,7 @@
 package acp
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -230,5 +231,53 @@ func TestACPSteerPromptRunAfterNoActiveTurnStaysInTheTurn(t *testing.T) {
 	done := completionsOf(t, conv, turn)
 	if len(done) != 1 || done[0].TurnState != domain.TurnStateCompleted || done[0].ProviderEventID != "acp-host:18" {
 		t.Fatalf("turn completions = %+v, want one completed with the host's receipt", done)
+	}
+}
+
+// A steer command's answer that outlives its turn, and a later steered turn
+// too, is dropped. It must not end the old turn a second time or close the
+// running turn's items under the old turn's id.
+func TestACPSteerPromptLateAnswerAfterALaterSteeredTurnIsDropped(t *testing.T) {
+	conv, host := startScriptedAckConversation(t, "")
+	conv.stragglerWait = 100 * time.Millisecond
+	_ = nextEvent(t, conv.Events()) // controller.ready
+
+	first, firstRoot := startScriptedTurn(t, conv, host)
+	lateSteer, outcome := steerAsync(t, conv, host, first)
+	host.send(ackNote("ACK: queued for the active turn"))
+	if err := steerOutcome(t, outcome); err != nil {
+		t.Fatalf("first Steer = %v, want delivered", err)
+	}
+	host.send(receiptResult(firstRoot, "acp-host:19"))
+	if done := completionsOf(t, conv, first); len(done) != 1 {
+		t.Fatalf("first turn completions = %+v, want one", done)
+	}
+	if err := conv.AcknowledgeProviderEvent(context.Background(), "acp-host:19"); err != nil {
+		t.Fatalf("AcknowledgeProviderEvent: %v", err)
+	}
+
+	second, secondRoot := startScriptedTurn(t, conv, host)
+	secondSteer, outcome := steerAsync(t, conv, host, second)
+	host.send(ackNote("ACK: queued for the active turn"))
+	if err := steerOutcome(t, outcome); err != nil {
+		t.Fatalf("second Steer = %v, want delivered", err)
+	}
+	host.send(plainResult(secondSteer))
+	host.send(receiptResult(secondRoot, "acp-host:20"))
+	if done := completionsOf(t, conv, second); len(done) != 1 {
+		t.Fatalf("second turn completions = %+v, want one", done)
+	}
+
+	host.send(plainResult(lateSteer))
+	deadline := time.After(300 * time.Millisecond)
+	for {
+		select {
+		case event := <-conv.Events():
+			if event.Kind == ports.ChatEventTurnCompleted || event.Kind == ports.ChatEventControllerState {
+				t.Fatalf("a late steer answer from an earlier turn emitted %+v", event)
+			}
+		case <-deadline:
+			return
+		}
 	}
 }

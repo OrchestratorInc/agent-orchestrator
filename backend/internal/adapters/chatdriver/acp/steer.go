@@ -652,7 +652,11 @@ func hostResultEventID(resp acpsdk.PromptResponse, err error) string {
 func (c *conversation) finishTurnPrompt(turnID string, seq int, resp acpsdk.PromptResponse, err error) {
 	c.mu.Lock()
 	if c.activeTurn != turnID || c.settlingTurn == turnID {
-		lateAnswer := c.steerSettledTurn == turnID
+		// The turn is over. A steer prompt's late answer never ends a turn: its
+		// turn ended without it, and another turn may be running now. The
+		// turn's own prompt keeps the path to finishPrompt it had before
+		// steering, unless its steered turn has already settled.
+		lateAnswer := seq > 0 || c.steerSettledTurn == turnID
 		c.mu.Unlock()
 		if !lateAnswer {
 			c.finishPrompt(turnID, resp, err)
