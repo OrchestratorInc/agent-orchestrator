@@ -23,11 +23,37 @@ func readLog(t *testing.T, path string) string {
 // log must land in its data dir and survive the process.
 func TestNewLoggerPersistsToDataDir(t *testing.T) {
 	dataDir := t.TempDir()
-	newLogger(dataDir).Error("reconcile: live pass failed, skipping", "sessionID", "mer-1")
+	log, openFile := newDaemonLogger()
+	log.Info("waiting for another AO process to release the data dir")
+	openFile(dataDir)
+	log.Error("reconcile: live pass failed, skipping", "sessionID", "mer-1")
 
 	got := readLog(t, filepath.Join(dataDir, daemonLogName))
 	if !strings.Contains(got, "reconcile: live pass failed, skipping") || !strings.Contains(got, "sessionID=mer-1") {
 		t.Fatalf("daemon.log = %q, want the logged record", got)
+	}
+	// Before the data-dir lock, a predecessor may still rotate daemon.log.
+	if strings.Contains(got, "waiting for another AO process") {
+		t.Fatalf("daemon.log = %q, want nothing logged before the file was opened", got)
+	}
+}
+
+func TestRotatingLogFileBoundsAnOversizedRecord(t *testing.T) {
+	path := filepath.Join(t.TempDir(), daemonLogName)
+	file, err := openRotatingLogFile(path, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, record := range []string{"aaaaaaaaaaaaaaaaaaaa\n", "bbbbbbbbbbbbbbbbbbbb\n"} {
+		if n, err := file.Write([]byte(record)); err != nil || n != len(record) {
+			t.Fatalf("Write = %d, %v; want %d, nil", n, err, len(record))
+		}
+	}
+	if got := readLog(t, path); got != "bbbbbbbbb\n" {
+		t.Fatalf("daemon.log = %q, want the newest record cut to the cap", got)
+	}
+	if got := readLog(t, path+".1"); got != "aaaaaaaaa\n" {
+		t.Fatalf("daemon.log.1 = %q, want the earlier record cut to the cap", got)
 	}
 }
 

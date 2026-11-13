@@ -58,7 +58,13 @@ func (l *rotatingLogFile) open(truncate bool) error {
 func (l *rotatingLogFile) Write(p []byte) (int, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if l.file != nil && l.size > 0 && l.size+int64(len(p)) > l.maxBytes {
+	// One record never holds more than the cap: an oversized one keeps its
+	// start and ends with a newline. The whole record still counts as written.
+	record := p
+	if l.maxBytes > 0 && int64(len(record)) > l.maxBytes {
+		record = append(record[:l.maxBytes-1:l.maxBytes-1], '\n')
+	}
+	if l.file != nil && l.size > 0 && l.size+int64(len(record)) > l.maxBytes {
 		_ = l.file.Close()
 		l.file = nil
 		// A rename can fail when another process still holds the file open on
@@ -74,9 +80,37 @@ func (l *rotatingLogFile) Write(p []byte) (int, error) {
 			return 0, err
 		}
 	}
-	n, err := l.file.Write(p)
+	n, err := l.file.Write(record)
 	l.size += int64(n)
-	return n, err
+	if err != nil {
+		return min(n, len(p)), err
+	}
+	return len(p), nil
+}
+
+// deferredLogFile drops writes until a file is attached. The daemon attaches
+// daemon.log only once it holds the data-dir lock: a predecessor still shutting
+// down can rotate the file, which would leave this process writing into the
+// backup.
+type deferredLogFile struct {
+	mu   sync.Mutex
+	file io.Writer
+}
+
+func (d *deferredLogFile) Write(p []byte) (int, error) {
+	d.mu.Lock()
+	file := d.file
+	d.mu.Unlock()
+	if file == nil {
+		return len(p), nil
+	}
+	return file.Write(p)
+}
+
+func (d *deferredLogFile) attach(file io.Writer) {
+	d.mu.Lock()
+	d.file = file
+	d.mu.Unlock()
 }
 
 // teeLogWriter writes every record to stderr and the log file. A failing file

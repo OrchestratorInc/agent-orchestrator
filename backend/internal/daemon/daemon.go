@@ -206,7 +206,7 @@ func Run(buildVersion string) (retErr error) {
 		lifecycle.Record("daemon_exit", fields)
 	}()
 
-	log := newLogger(cfg.DataDir)
+	log, openLogFile := newDaemonLogger()
 	var browserRuntimeToken string
 	if os.Getenv(browserruntime.RuntimeTokenStdinEnv) == "1" {
 		browserRuntimeToken, err = browserruntime.ReadRuntimeToken(os.Stdin)
@@ -270,6 +270,7 @@ func Run(buildVersion string) (retErr error) {
 	if err != nil {
 		return err
 	}
+	openLogFile(cfg.DataDir)
 	defer func() { _ = dataDirLock.Release() }()
 
 	// Open the durable store and bring up the CDC substrate: DB triggers capture
@@ -1756,18 +1757,22 @@ func usagePipelineWatchRoots(roots usagesvc.SourceRoots) []string {
 	}
 }
 
-// newLogger returns the daemon's slog logger. It writes to stderr so supervisors
-// can capture it separately from any structured stdout protocol added later,
-// and to $AO_DATA_DIR/daemon.log so the log outlives the process that read it.
-func newLogger(dataDir string) *slog.Logger {
-	options := &slog.HandlerOptions{Level: slog.LevelDebug}
-	file, err := openRotatingLogFile(filepath.Join(dataDir, daemonLogName), maxDaemonLogBytes)
-	if err != nil {
-		log := slog.New(slog.NewTextHandler(os.Stderr, options))
-		log.Warn("daemon log file unavailable; logging to stderr only", "error", err)
-		return log
+// newDaemonLogger returns the daemon's slog logger. It writes to stderr so
+// supervisors can capture it separately from any structured stdout protocol
+// added later, and, from when openFile is called, to $AO_DATA_DIR/daemon.log so
+// the log outlives the process that read it. Run opens the file only after it
+// holds the data-dir lock (see deferredLogFile).
+func newDaemonLogger() (*slog.Logger, func(dataDir string)) {
+	file := &deferredLogFile{}
+	log := slog.New(slog.NewTextHandler(teeLogWriter{stderr: os.Stderr, file: file}, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	return log, func(dataDir string) {
+		rotating, err := openRotatingLogFile(filepath.Join(dataDir, daemonLogName), maxDaemonLogBytes)
+		if err != nil {
+			log.Warn("daemon log file unavailable; logging to stderr only", "error", err)
+			return
+		}
+		file.attach(rotating)
 	}
-	return slog.New(slog.NewTextHandler(teeLogWriter{stderr: os.Stderr, file: file}, options))
 }
 
 // dataDirTakeoverWait covers the capped shutdown stages plus one ordinary
