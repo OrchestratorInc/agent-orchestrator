@@ -1,4 +1,3 @@
-import { useVirtualizer } from "@tanstack/react-virtual";
 import { useLayoutEffect, useState, type CSSProperties } from "react";
 
 /** The grid as laid out: how many cards a row holds and the distance from one row's top to the next. */
@@ -13,8 +12,12 @@ export type GridLayout = {
 	viewport: number;
 };
 
-/** Rows kept above and below the screen, so a scroll never shows a blank row. */
-const OVERSCAN_ROWS = 2;
+/**
+ * Rows built above and below the screen. The built rows move only once the
+ * screen comes within a row of their edge, so a scroll changes the list every
+ * few rows rather than at every row: each change lays the page out again.
+ */
+const OVERSCAN_ROWS = 4;
 /** Cards built before the grid has been measured: more than a screen holds, far fewer than a long list. */
 export const FIRST_RENDER_CARDS = 24;
 
@@ -48,6 +51,15 @@ function measure(list: HTMLElement, scroller: HTMLElement): GridLayout | undefin
 	return { columns, pitch: height + gap, gap, offset, viewport: scroller.clientHeight };
 }
 
+/** The rows to build for the scroll position: `current` while it still covers the screen with a row to spare. */
+function rowsOnScreen(layout: GridLayout, scroller: HTMLElement, current?: { first: number; last: number }) {
+	const top = Math.max(0, scroller.scrollTop - layout.offset);
+	const first = Math.floor(top / layout.pitch);
+	const last = Math.ceil((top + layout.viewport) / layout.pitch);
+	if (current && (current.first === 0 || first - current.first >= 1) && current.last - last >= 1) return current;
+	return { first: Math.max(0, first - OVERSCAN_ROWS), last: last + OVERSCAN_ROWS };
+}
+
 function sameLayout(a: GridLayout, b: GridLayout): boolean {
 	return a.columns === b.columns && a.gap === b.gap && a.viewport === b.viewport
 		&& Math.abs(a.pitch - b.pitch) < 0.5 && Math.abs(a.offset - b.offset) < 0.5;
@@ -67,15 +79,9 @@ export function useVirtualGridRows(count: number, scrollElement?: HTMLElement | 
 	const scroller = scrollElement === undefined ? list : scrollElement;
 	// undefined until measured; null once measuring found no layout.
 	const [layout, setLayout] = useState<GridLayout | null>();
-	const rows = layout ? Math.ceil(count / layout.columns) : 0;
-	const virtualizer = useVirtualizer({
-		count: rows,
-		getScrollElement: () => scroller,
-		estimateSize: () => layout?.pitch ?? 1,
-		overscan: OVERSCAN_ROWS,
-		scrollMargin: layout?.offset ?? 0,
-		enabled: Boolean(layout),
-	});
+	// The rows on screen, two either side included. Set only when a row comes or goes, never on
+	// every scroll event: a re-render of the list per scroll frame would cost more than it saves.
+	const [rows, setRows] = useState<{ first: number; last: number }>();
 
 	useLayoutEffect(() => {
 		if (!list || !scroller) return;
@@ -91,19 +97,36 @@ export function useVirtualGridRows(count: number, scrollElement?: HTMLElement | 
 		return () => observer.disconnect();
 	}, [list, scroller, count]);
 
-	// Every row has the same height, so a new pitch re-measures them all at once.
 	useLayoutEffect(() => {
-		if (layout) virtualizer.measure();
-	}, [layout, virtualizer]);
+		if (!layout || !scroller) return;
+		const read = () => {
+			setRows((current) => {
+				const next = rowsOnScreen(layout, scroller, current);
+				return current?.first === next.first && current.last === next.last ? current : next;
+			});
+		};
+		read();
+		let frame = 0;
+		const onScroll = () => {
+			if (frame) return;
+			frame = requestAnimationFrame(() => {
+				frame = 0;
+				read();
+			});
+		};
+		scroller.addEventListener("scroll", onScroll, { passive: true });
+		return () => {
+			scroller.removeEventListener("scroll", onScroll);
+			cancelAnimationFrame(frame);
+		};
+	}, [layout, scroller]);
 
 	const range = (() => {
 		if (layout === undefined) return { start: 0, end: Math.min(count, FIRST_RENDER_CARDS), before: 0, after: 0 };
-		if (layout === null) return { start: 0, end: count, before: 0, after: 0 };
-		const items = virtualizer.getVirtualItems();
-		if (items.length > 0) return gridWindow(count, layout, items[0].index, items[items.length - 1].index);
-		// The virtualizer reads the scroll position after its first render; until then, the rows on screen now.
-		const top = Math.max(0, (scroller?.scrollTop ?? 0) - layout.offset);
-		return gridWindow(count, layout, Math.floor(top / layout.pitch) - OVERSCAN_ROWS, Math.ceil((top + layout.viewport) / layout.pitch) + OVERSCAN_ROWS);
+		if (layout === null || !scroller) return { start: 0, end: count, before: 0, after: 0 };
+		// Right after a new layout the scroll listener has not read the rows yet.
+		const visible = rows ?? rowsOnScreen(layout, scroller);
+		return gridWindow(count, layout, visible.first, visible.last);
 	})();
 	return { ...range, listRef: setList };
 }

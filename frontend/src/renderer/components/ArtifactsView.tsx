@@ -4,7 +4,7 @@ import { useProjectAvatars } from "../hooks/useProjectAvatars";
 import { ProjectIcon } from "./ProjectIcon";
 import { ScrollArea } from "radix-ui";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useId, useMemo, useState, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useId, useMemo, useState, type ReactNode } from "react";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useCloudMeUserId } from "../hooks/useCloudMeUserId";
 import { useTranslation } from "react-i18next";
@@ -107,7 +107,7 @@ export function ArtifactsView() {
 	const [types, setTypes] = useState<readonly ArtifactType[]>([]);
 	const [sharings, setSharings] = useState<readonly ArtifactSharing[]>([]);
 	const [preview, setPreview] = useState<{ row: ArtifactRow; projectName: string } | null>(null);
-	const openPreview = (row: ArtifactRow, projectName: string) => setPreview({ row, projectName });
+	const openPreview = useCallback((row: ArtifactRow, projectName: string) => setPreview({ row, projectName }), []);
 	// The open preview follows its row as the list refreshes, so a file an
 	// agent rewrites shows its new content.
 	const previewRow = useMemo(() => {
@@ -485,7 +485,8 @@ function FilterOption({ checked, onToggle, children }: { checked: boolean; onTog
  * Published mark and last change, with Pin, Open in session and its menu.
  * Opening it previews the file on this page; while selecting it toggles.
  */
-function ArtifactCard({ row, projectName, pinned, view, previewLive = true, onPreview, selection }: { row: ArtifactRow; projectName: string; pinned: boolean; view: ArtifactViewMode; previewLive?: boolean; onPreview: (row: ArtifactRow, projectName: string) => void; selection?: ArtifactCardSelection }) {
+// Memoized: a row scrolling into view re-renders the list, and only the new cards need to render.
+const ArtifactCard = memo(function ArtifactCard({ row, projectName, pinned, view, previewLive = true, onPreview, selection }: { row: ArtifactRow; projectName: string; pinned: boolean; view: ArtifactViewMode; previewLive?: boolean; onPreview: (row: ArtifactRow, projectName: string) => void; selection?: ArtifactCardSelection }) {
 	const { t } = useTranslation();
 	const id = artifactKey(row);
 	const togglePinnedArtifact = useArtifactsViewStore((state) => state.togglePinnedArtifact);
@@ -604,7 +605,7 @@ function ArtifactCard({ row, projectName, pinned, view, previewLive = true, onPr
 			)}
 		/>
 	);
-}
+});
 
 function EmptyArtifacts({ workspaces }: { workspaces: readonly WorkspaceSummary[] }) {
 	const { t } = useTranslation();
