@@ -123,7 +123,10 @@ export function useVirtualGridRows(count: number, scrollElement?: HTMLElement | 
 
 	const range = (() => {
 		if (layout === undefined) return { start: 0, end: Math.min(count, FIRST_RENDER_CARDS), before: 0, after: 0 };
-		if (layout === null || !scroller) return { start: 0, end: count, before: 0, after: 0 };
+		if (layout === null) return { start: 0, end: count, before: 0, after: 0 };
+		// The list is coming back (the gallery after the viewer closes) and not attached yet: build
+		// what the first render would, rather than every card, until it is measured again.
+		if (!scroller) return { start: 0, end: Math.min(count, FIRST_RENDER_CARDS), before: 0, after: 0 };
 		// Right after a new layout the scroll listener has not read the rows yet.
 		const visible = rows ?? rowsOnScreen(layout, scroller);
 		return gridWindow(count, layout, visible.first, visible.last);

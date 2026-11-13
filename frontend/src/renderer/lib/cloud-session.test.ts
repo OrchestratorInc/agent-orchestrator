@@ -1,4 +1,4 @@
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { isCloudSignInConfigured } from "./cloud-session";
 
@@ -74,6 +74,38 @@ describe("useCloudSession", () => {
     await waitFor(() => expect(cards[49].result.current.status).toBe("unauthenticated"));
     cards.forEach((card) => card.unmount());
     expect(changeListeners.size).toBe(0);
+    vi.doUnmock("./bridge");
+  });
+
+  it("drops a read that finishes after a newer session change", async () => {
+    vi.resetModules();
+    const account = { authProvider: "workos", user: { id: "user-1" } };
+    let answer!: (s: unknown) => void;
+    const getSession = vi.fn(() => new Promise((resolve) => { answer = resolve; }));
+    const changeListeners = new Set<(s: unknown) => void>();
+    vi.doMock("./bridge", () => ({
+      aoBridge: {
+        cloud: {
+          getSession,
+          onSessionChanged: (listener: (s: unknown) => void) => {
+            changeListeners.add(listener);
+            return () => changeListeners.delete(listener);
+          },
+          signIn: () => undefined,
+          signOut: () => Promise.resolve(),
+        },
+      },
+    }));
+    const { useCloudSession } = await import("./cloud-session");
+    const card = renderHook(() => useCloudSession());
+    expect(getSession).toHaveBeenCalledTimes(1);
+    // Main signs the user out while the read is still on its way back.
+    act(() => changeListeners.forEach((listener) => listener(null)));
+    expect(card.result.current.status).toBe("unauthenticated");
+    await act(async () => answer({ ...account }));
+    expect(card.result.current.status).toBe("unauthenticated");
+    expect(card.result.current.session).toBeNull();
+    card.unmount();
     vi.doUnmock("./bridge");
   });
 });
