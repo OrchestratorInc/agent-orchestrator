@@ -6643,20 +6643,6 @@ body.is-pane-dragging webview {
 	cursor: grabbing;
 }
 
-/* Unfocused panes of a split rest under a light veil of the background, so
- * the focused one stands out in either theme. */
-.pane-split-dim {
-	z-index: 5;
-	pointer-events: none;
-	background: color-mix(in oklch, var(--background) 45%, transparent);
-	opacity: 0;
-	transition: opacity var(--duration-fast) ease-out;
-}
-
-.pane-split-dim[data-dimmed] {
-	opacity: 1;
-}
-
 /* Divider between the panes: a hairline, with the shared hover-only grip line. */
 .pane-split-divider {
 	position: absolute;
@@ -6734,7 +6720,6 @@ body.is-pane-dragging webview {
 @media (prefers-reduced-motion: reduce) {
 	.pane-drag-ghost,
 	.pane-drop-preview,
-	.pane-split-dim,
 	.pane-split-divider::after {
 		transition: none;
 	}

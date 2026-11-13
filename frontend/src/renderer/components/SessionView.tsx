@@ -2987,20 +2987,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 										</>									)}
 								</div>
 							) : null}
-							{/* Panes other than the focused one rest under a light veil, so
-							    the one taking keys stands out; the veil never takes the pointer.
-							    The session's own chat or agent is never dimmed. */}
-							{shownGroup && shownLayout
-								? [...shownLayout.leaves.keys()].filter((key) => key !== SESSION_TAB_KEY).map((key) => (
-									<div
-										aria-hidden="true"
-										className="pane-split-dim"
-										data-dimmed={key === selectedTabKey ? undefined : ""}
-										key={`dim:${key}`}
-										style={paneStyle(key)}
-									/>
-								))
-								: null}
 							{/* Every pane of a split has a title bar: it names the pane as the
 							    tab it is, is the handle to drag it. */}
 							{shownGroup && shownLayout
