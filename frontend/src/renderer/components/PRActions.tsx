@@ -187,7 +187,14 @@ export function PRActionButton({ canMerge, git, hostId, pr, sessionId }: {
 	};
 
 	// The next step: the branch's work first, then what the PR is waiting for.
-	const gitPrimary = git?.pending
+	// Being behind the base is not work that holds a PR back: when the provider
+	// can merge it as it stands, Merge keeps the button and the update waits in
+	// the menu. A provider that requires an up-to-date branch reports the PR as
+	// not mergeable, so the update takes the button there.
+	const mergeFirst = pr.state === "open" && mergeAllowed && !git?.pending && git?.primary?.kind === "updateBase";
+	const gitPrimary = mergeFirst
+		? undefined
+		: git?.pending
 		? { label: git.pending, aria: git.pending, icon: Loader2, run: () => {}, disabled: true, tone: "secondary" as const, spinning: true }
 		: git?.primary
 			? { label: git.primary.label, aria: git.primary.label, icon: gitIcon[git.primary.kind], run: () => git.run(git.primary!.kind), disabled: busy, tone: "secondary" as const, spinning: false }
@@ -198,7 +205,7 @@ export function PRActionButton({ canMerge, git, hostId, pr, sessionId }: {
 			? { label: t("pr.state.action.reopen"), aria: t("pr.state.action.reopen"), icon: GitPullRequest, run: () => change.mutate("reopen"), disabled: busy, tone: "secondary" as const }
 			: { label: merging ? t("pr.merge.merging") : mergeLabel, aria: severalLayers ? mergeLabel : t("pr.merge.methodFor", { method: methodLabel, number: pr.number }), icon: GitMerge, run: mergeNow, disabled: busy || !mergeAllowed, tone: mergeAllowed ? "go" as const : "secondary" as const };
 	const primary = gitPrimary ?? { ...prPrimary, spinning: false };
-	const gitMenu = (git?.menu ?? []).filter((step) => step.kind !== git?.primary?.kind);
+	const gitMenu = mergeFirst && git?.primary ? [git.primary, ...git.menu] : (git?.menu ?? []).filter((step) => step.kind !== git?.primary?.kind);
 	// Ready for review, when branch work holds the button on a draft.
 	const stateSteps = pr.state === "draft" && gitPrimary ? [{ key: "ready" as const, label: t("pr.state.action.ready"), icon: GitPullRequest }] : [];
 	const errorText = [merge.error, change.error, confirmStack ? null : mergeStack.error].find((value): value is Error => value instanceof Error && !confirmClose)?.message ?? git?.error ?? null;

@@ -6123,6 +6123,52 @@ describe("SessionInspector branch summary", () => {
     expect(await within(screen.getByTestId("pr-card")).findByRole("button", { name: "Resolving conflicts…" })).toBeDisabled();
   });
 
+  it("keeps Merge on the button for a mergeable PR that is behind its base, with the update in the menu", async () => {
+    const ready = prSummary(7, "open", {
+      sourceBranch: "feat/ns",
+      headSha: "head-7",
+      ci: { autoInjectCI: true, state: "passing", failingChecks: [], checks: [] },
+      mergeability: { state: "mergeable", reasons: [], prUrl: "https://github.com/acme/repo/pull/7", conflictFiles: [] },
+    });
+    mockGitState({ committed: [changedFile("src/a.ts", 5, 0)], prs: [ready] });
+    renderWithQuery(
+      <SessionInspector session={session([pr(7, "open")], { branchState: { ...pushed(2), base: "main", behind: 2 } })} />,
+      undefined,
+      (client) => seedPRSummaries(client, [ready]),
+    );
+
+    const card = within(await screen.findByTestId("pr-card"));
+    expect(await card.findByRole("button", { name: "Squash and merge: PR #7" })).toBeEnabled();
+    expect(card.queryByRole("button", { name: "Update from main" })).not.toBeInTheDocument();
+    await userEvent.click(card.getByRole("button", { name: "More actions for PR #7" }));
+    // Merge is the button, so the menu doesn't repeat it.
+    expect(screen.queryByRole("menuitem", { name: "Squash and merge" })).not.toBeInTheDocument();
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Update from main" }));
+
+    await waitFor(() => expect(sendCalls()).toHaveLength(1));
+    expect(sendCalls()[0][1].body.message).toContain("Bring this branch up to date with `main`");
+    expect(await card.findByRole("button", { name: "Updating from main…" })).toBeDisabled();
+  });
+
+  it("keeps the update on the button when the PR can't merge as it stands", async () => {
+    const blocked = prSummary(7, "open", {
+      sourceBranch: "feat/ns",
+      headSha: "head-7",
+      mergeability: { state: "blocked", reasons: [], prUrl: "https://github.com/acme/repo/pull/7", conflictFiles: [] },
+    });
+    mockGitState({ committed: [changedFile("src/a.ts", 5, 0)], prs: [blocked] });
+    renderWithQuery(
+      <SessionInspector session={session([pr(7, "open")], { branchState: { ...pushed(2), base: "main", behind: 2 } })} />,
+      undefined,
+      (client) => seedPRSummaries(client, [blocked]),
+    );
+
+    const card = within(await screen.findByTestId("pr-card"));
+    expect(await card.findByRole("button", { name: "Update from main" })).toBeEnabled();
+    await userEvent.click(card.getByRole("button", { name: "More actions for PR #7" }));
+    expect(await screen.findByRole("menuitem", { name: "Squash and merge" })).toHaveAttribute("aria-disabled", "true");
+  });
+
   it("keeps committing first and puts the update in the menu while work is uncommitted", async () => {
     mockGitState({ uncommitted: [changedFile("src/c.ts", 1, 0)], committed: [changedFile("src/a.ts", 5, 0)] });
     renderWithQuery(<SessionInspector session={session([pr(7, "open")], { branchState: { ...pushed(2), base: "main", behind: 3 } })} />);
