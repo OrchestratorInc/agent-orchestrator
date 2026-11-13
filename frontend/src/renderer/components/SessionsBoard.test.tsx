@@ -810,7 +810,7 @@ describe("SessionsBoard", () => {
 		});
 		view.rerender(<QueryClientProvider client={queryClient}><TooltipProvider><SessionsBoard projectId="p1" /></TooltipProvider></QueryClientProvider>);
 		expect(within(card()).queryByRole("status")).not.toBeInTheDocument();
-		expect(within(card()).getByText("ao/composer-review/root")).toBeInTheDocument();
+		expect(within(card()).getByText("composer-review")).toBeInTheDocument();
 	});
 
 	it("shows start failure instead of Idle on a failed card", () => {
