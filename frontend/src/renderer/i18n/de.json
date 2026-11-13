@@ -4112,5 +4112,7 @@
 	"settings.harness.troubleshoot.result.ready": "Die Einrichtung wurde erfolgreich geprüft",
 	"settings.harness.troubleshoot.next.ready": "AO hat die Installation erkannt und die Anmeldung bestätigt oder festgestellt, dass keine Anmeldung nötig ist. Besteht das Problem weiter, nutze einen Helfer oder erstelle einen Berichtsentwurf.",
 	"settings.harness.troubleshoot.openSetup": "{{agent}} einrichten",
-	"settings.harness.troubleshoot.returnAfterSetup": "Kehre nach der Einrichtung zu diesem Fehlerbehebungs-Tab zurück. Deine Prüfergebnisse bleiben hier erhalten."
+	"settings.harness.troubleshoot.returnAfterSetup": "Kehre nach der Einrichtung zu diesem Fehlerbehebungs-Tab zurück. Deine Prüfergebnisse bleiben hier erhalten.",
+	"settings.harness.troubleshoot.launchIncomplete": "AO konnte nicht bestätigen, dass der frühere Start des Hilfsagenten abgeschlossen wurde. Versuche es erneut, um dich mit ihm zu verbinden, oder starte einen neuen Hilfsagenten. Wenn der frühere Hilfsagent in deiner Aufgabenliste erscheint, stoppe ihn dort.",
+	"settings.harness.troubleshoot.newLaunch": "Stattdessen neuen Hilfsagenten starten"
 }

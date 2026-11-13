@@ -4112,5 +4112,7 @@
 	"settings.harness.troubleshoot.result.ready": "設定の確認に成功しました",
 	"settings.harness.troubleshoot.next.ready": "AO がインストールとログイン、またはログイン不要であることを確認しました。問題が続く場合は、ヘルパーを使うか問題報告の下書きを作成してください。",
 	"settings.harness.troubleshoot.openSetup": "{{agent}} の設定を開く",
-	"settings.harness.troubleshoot.returnAfterSetup": "設定後、このトラブルシューティングタブに戻ってください。確認結果はここに保持されます。"
+	"settings.harness.troubleshoot.returnAfterSetup": "設定後、このトラブルシューティングタブに戻ってください。確認結果はここに保持されます。",
+	"settings.harness.troubleshoot.launchIncomplete": "以前の補助エージェントの起動が完了したことを AO で確認できませんでした。再試行して再接続するか、新しい補助エージェントを起動してください。以前の補助エージェントがタスク一覧に表示されている場合は、そこで停止してください。",
+	"settings.harness.troubleshoot.newLaunch": "代わりに新しい補助エージェントを起動"
 }

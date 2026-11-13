@@ -4094,5 +4094,7 @@
 	"settings.harness.troubleshoot.result.ready": "设置检查已通过",
 	"settings.harness.troubleshoot.next.ready": "AO 已检测到安装，并确认已登录或无需登录。如果问题仍然存在，请使用助手或准备问题草稿。",
 	"settings.harness.troubleshoot.openSetup": "打开 {{agent}} 设置",
-	"settings.harness.troubleshoot.returnAfterSetup": "完成设置后，返回此“排查问题”标签页。检查结果会保留在这里。"
+	"settings.harness.troubleshoot.returnAfterSetup": "完成设置后，返回此“排查问题”标签页。检查结果会保留在这里。",
+	"settings.harness.troubleshoot.launchIncomplete": "AO 无法确认之前的辅助智能体启动是否已完成。请重试以重新连接，或启动一个新的辅助智能体。如果之前的辅助智能体出现在任务列表中，请在那里停止它。",
+	"settings.harness.troubleshoot.newLaunch": "改为启动新的辅助智能体"
 }

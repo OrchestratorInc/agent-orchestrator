@@ -132,6 +132,48 @@ it("retries the exact pending payload after rechecks and reopening, even if no h
 	expect(post).toHaveBeenCalledTimes(2);
 });
 
+it("releases a launch the daemon definitively rejected so a changed request gets a new identity", async () => {
+	mockChecks();
+	const post = mockSessionPost().mockResolvedValueOnce({ error: { code: "SPAWN_INTERNAL", message: "Spawn failed" } });
+	setup();
+	await collect();
+	fireEvent.click(screen.getByRole("button", { name: "Troubleshoot with agent" }));
+	await screen.findByRole("alert");
+	expect(screen.queryByRole("button", { name: "Retry helper launch" })).not.toBeInTheDocument();
+	const symptom = screen.getByRole("combobox", { name: "What are you experiencing?" });
+	expect(symptom).toBeEnabled();
+	fireEvent.change(symptom, { target: { value: "installation" } });
+	fireEvent.click(screen.getByRole("button", { name: "Troubleshoot with agent" }));
+	await screen.findByTestId("helper-terminal");
+	const launches = post.mock.calls.filter(([path]) => path === "/api/v1/sessions");
+	expect(launches).toHaveLength(2);
+	expect(launches[1][1]?.body?.clientRequestId).not.toBe(launches[0][1]?.body?.clientRequestId);
+	expect(launches[1][1]?.body?.prompt).toContain("I installed this harness");
+});
+
+it("keeps Retry for an unfinished earlier launch and offers a safe new launch", async () => {
+	mockChecks();
+	const post = mockSessionPost()
+		.mockResolvedValueOnce({ error: { code: "CLIENT_REQUEST_INCOMPLETE", message: "Prior launch did not finish" } })
+		.mockResolvedValueOnce({ error: { code: "CLIENT_REQUEST_INCOMPLETE", message: "Prior launch did not finish" } });
+	setup();
+	await collect();
+	fireEvent.click(screen.getByRole("button", { name: "Troubleshoot with agent" }));
+	await screen.findByText(/could not confirm that the earlier helper launch finished/);
+	expect(screen.getByRole("combobox", { name: "What are you experiencing?" })).toBeDisabled();
+	fireEvent.click(screen.getByRole("button", { name: "Retry helper launch" }));
+	await waitFor(() => expect(post).toHaveBeenCalledTimes(2));
+	expect(post.mock.calls[1]).toEqual(post.mock.calls[0]);
+	await screen.findByRole("button", { name: "Start a new helper instead" });
+	fireEvent.click(screen.getByRole("button", { name: "Start a new helper instead" }));
+	expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+	expect(screen.getByRole("combobox", { name: "What are you experiencing?" })).toBeEnabled();
+	fireEvent.click(screen.getByRole("button", { name: "Troubleshoot with agent" }));
+	await screen.findByTestId("helper-terminal");
+	expect(post).toHaveBeenCalledTimes(3);
+	expect(post.mock.calls[2][1]?.body?.clientRequestId).not.toBe(post.mock.calls[0][1]?.body?.clientRequestId);
+});
+
 it.each(["stop", "exit"])("allows a replacement helper with a new request after %s", async (ending) => {
 	mockChecks();
 	const post = mockSessionPost();

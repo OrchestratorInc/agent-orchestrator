@@ -4194,5 +4194,7 @@
 	"settings.harness.troubleshoot.result.ready": "As verificações da configuração passaram",
 	"settings.harness.troubleshoot.next.ready": "O AO detectou a instalação e confirmou o login ou que ele não é necessário. Se o problema continuar, use um assistente ou prepare um rascunho do relatório.",
 	"settings.harness.troubleshoot.openSetup": "Abrir configuração de {{agent}}",
-	"settings.harness.troubleshoot.returnAfterSetup": "Após configurar, volte a esta aba de solução de problemas. Os resultados ficam salvos aqui."
+	"settings.harness.troubleshoot.returnAfterSetup": "Após configurar, volte a esta aba de solução de problemas. Os resultados ficam salvos aqui.",
+	"settings.harness.troubleshoot.launchIncomplete": "O AO não conseguiu confirmar que a inicialização anterior do agente auxiliar terminou. Tente novamente para reconectar ou inicie um novo agente auxiliar. Se o anterior aparecer na sua lista de tarefas, pare-o por lá.",
+	"settings.harness.troubleshoot.newLaunch": "Iniciar um novo agente auxiliar"
 }

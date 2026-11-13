@@ -4093,5 +4093,7 @@
 	"settings.harness.troubleshoot.result.ready": "Your setup checks passed",
 	"settings.harness.troubleshoot.next.ready": "AO detected the installation and confirmed sign-in or that sign-in is not needed. If the problem continues, use a helper or prepare an issue draft.",
 	"settings.harness.troubleshoot.openSetup": "Open {{agent}} setup",
-	"settings.harness.troubleshoot.returnAfterSetup": "After setup, return to this Troubleshoot tab. Your check results stay here."
+	"settings.harness.troubleshoot.returnAfterSetup": "After setup, return to this Troubleshoot tab. Your check results stay here.",
+	"settings.harness.troubleshoot.launchIncomplete": "AO could not confirm that the earlier helper launch finished. Retry to reconnect to it, or start a new helper. If the earlier helper appears in your task list, stop it there.",
+	"settings.harness.troubleshoot.newLaunch": "Start a new helper instead"
 }

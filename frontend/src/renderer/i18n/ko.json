@@ -4112,5 +4112,7 @@
 	"settings.harness.troubleshoot.result.ready": "설정 확인을 통과했습니다",
 	"settings.harness.troubleshoot.next.ready": "AO가 설치와 로그인 또는 로그인 불필요 상태를 확인했습니다. 문제가 계속되면 도우미를 사용하거나 문제 보고서 초안을 준비하세요.",
 	"settings.harness.troubleshoot.openSetup": "{{agent}} 설정 열기",
-	"settings.harness.troubleshoot.returnAfterSetup": "설정을 마친 후 이 문제 해결 탭으로 돌아오세요. 확인 결과는 여기에 유지됩니다."
+	"settings.harness.troubleshoot.returnAfterSetup": "설정을 마친 후 이 문제 해결 탭으로 돌아오세요. 확인 결과는 여기에 유지됩니다.",
+	"settings.harness.troubleshoot.launchIncomplete": "이전 도우미 실행이 완료되었는지 AO가 확인하지 못했습니다. 다시 시도해 연결하거나 새 도우미를 시작하세요. 이전 도우미가 작업 목록에 보이면 그곳에서 중지하세요.",
+	"settings.harness.troubleshoot.newLaunch": "대신 새 도우미 시작"
 }

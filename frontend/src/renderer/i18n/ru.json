@@ -4269,5 +4269,7 @@
 	"settings.harness.troubleshoot.result.ready": "Проверки настройки пройдены",
 	"settings.harness.troubleshoot.next.ready": "AO обнаружил установку и подтвердил вход либо отсутствие необходимости входа. Если проблема сохраняется, используйте помощника или подготовьте черновик отчёта.",
 	"settings.harness.troubleshoot.openSetup": "Открыть настройку {{agent}}",
-	"settings.harness.troubleshoot.returnAfterSetup": "После настройки вернитесь на эту вкладку устранения неполадок. Результаты проверок сохранятся здесь."
+	"settings.harness.troubleshoot.returnAfterSetup": "После настройки вернитесь на эту вкладку устранения неполадок. Результаты проверок сохранятся здесь.",
+	"settings.harness.troubleshoot.launchIncomplete": "AO не удалось подтвердить, что предыдущий запуск помощника завершился. Повторите попытку, чтобы переподключиться, или запустите нового помощника. Если предыдущий помощник есть в списке задач, остановите его там.",
+	"settings.harness.troubleshoot.newLaunch": "Запустить нового помощника"
 }

@@ -4194,5 +4194,7 @@
 	"settings.harness.troubleshoot.result.ready": "Les vérifications de configuration ont réussi",
 	"settings.harness.troubleshoot.next.ready": "AO a détecté l’installation et confirmé la connexion ou qu’elle n’est pas nécessaire. Si le problème persiste, utilisez un assistant ou préparez un brouillon de rapport.",
 	"settings.harness.troubleshoot.openSetup": "Configurer {{agent}}",
-	"settings.harness.troubleshoot.returnAfterSetup": "Après la configuration, revenez à cet onglet de dépannage. Les résultats seront conservés ici."
+	"settings.harness.troubleshoot.returnAfterSetup": "Après la configuration, revenez à cet onglet de dépannage. Les résultats seront conservés ici.",
+	"settings.harness.troubleshoot.launchIncomplete": "AO n’a pas pu confirmer que le lancement précédent de l’agent d’assistance s’est terminé. Réessayez pour vous y reconnecter, ou lancez un nouvel agent d’assistance. Si l’ancien apparaît dans votre liste de tâches, arrêtez-le depuis celle-ci.",
+	"settings.harness.troubleshoot.newLaunch": "Lancer plutôt un nouvel agent d’assistance"
 }
