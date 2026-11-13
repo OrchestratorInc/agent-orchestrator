@@ -1512,6 +1512,45 @@ describe("toSnapshot", () => {
 	});
 });
 
+it("loads a small initial page and keeps older history through refreshes and revisits", async () => {
+	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	const local = ({ children }: { children: ReactNode }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+	const message = (sequence: number, text = `Message ${sequence}`, revision = 1) => ({
+		id: `m${sequence}`, sequence, revision, role: "assistant", origin: "provider", text,
+		streaming: false, createdAt: "2026-11-12T00:00:00Z",
+	});
+	let latest = [message(31), message(32)];
+	getMock.mockImplementation((_path, options) => {
+		const older = options.params.query.beforeSequence !== undefined;
+		return Promise.resolve({ data: {
+			conversationId: "conv-1", sessionId: "ao-1", harness: "codex", mode: "chat", controller: "ready", settings: {},
+			latestSequence: 32, oldestSequence: older ? 1 : 31, hasMoreBefore: !older,
+			turns: [], messages: older ? [message(1), message(2)] : latest, activities: [],
+		} });
+	});
+	const first = renderHook(() => useConversation("ao-1"), { wrapper: local });
+	await waitFor(() => expect(first.result.current.snapshot?.items).toHaveLength(2));
+	expect(getMock.mock.calls[0][1].params.query).toEqual({ limit: 30, beforeSequence: undefined });
+	expect(first.result.current.hasOlder).toBe(true);
+
+	act(() => first.result.current.loadOlder());
+	await waitFor(() => expect(first.result.current.snapshot?.items.map((item) => item.id)).toEqual(["m1", "m2", "m31", "m32"]));
+	expect(getMock.mock.calls[1][1].params.query).toEqual({ limit: 200, beforeSequence: 31 });
+	expect(first.result.current.hasOlder).toBe(false);
+
+	latest = [message(31), message(32, "Updated answer", 2)];
+	await act(async () => { await queryClient.invalidateQueries({ queryKey: ["conversation", "ao-1"] }); });
+	await waitFor(() => expect(first.result.current.snapshot?.items.at(-1)).toMatchObject({ text: "Updated answer", revision: 2 }));
+	expect(first.result.current.snapshot?.items.map((item) => item.id)).toEqual(["m1", "m2", "m31", "m32"]);
+	first.unmount();
+	getMock.mockClear();
+	const revisit = renderHook(() => useConversation("ao-1"), { wrapper: local });
+	expect(revisit.result.current.snapshot?.items).toHaveLength(4);
+	expect(getMock).not.toHaveBeenCalled();
+	revisit.unmount();
+	queryClient.clear();
+});
+
 it("keeps a live refresh that is in flight when older history starts loading", async () => {
 	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	const local = ({ children }: { children: ReactNode }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;

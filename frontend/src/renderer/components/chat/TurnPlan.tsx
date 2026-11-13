@@ -242,7 +242,7 @@ function activeStepIndex(plan: ConversationPlan): number {
  *
  * The arc shows only while the turn runs. A turn that has ended, failed or been
  * stopped is not working on anything, so its unfinished step keeps only the faint
- * ring. The arc keeps turning as it fades, so it does not jump back first.
+ * ring.
  */
 function StepMark({ status, live }: { status: PlanStepStatus; live: boolean }) {
 	const shown = (mark: PlanStepStatus) =>
@@ -275,7 +275,8 @@ function StepMark({ status, live }: { status: PlanStepStatus; live: boolean }) {
 						strokeLinecap="round"
 						strokeDasharray="12 43"
 						className={cn(
-							"origin-center animate-spin transition-opacity duration-200 [transform-box:fill-box] motion-reduce:animate-none motion-reduce:transition-none",
+							"origin-center transition-opacity duration-200 [transform-box:fill-box] motion-reduce:animate-none motion-reduce:transition-none",
+							live && status === "in_progress" && "animate-spin",
 							!live && "opacity-0",
 						)}
 					/>
