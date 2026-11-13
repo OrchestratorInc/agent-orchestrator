@@ -3,9 +3,11 @@
 Show or change how this session's tabs are split in the AO desktop window,
 and run commands in this session's terminal tabs where the user can watch.
 The window can show tabs side by side or stacked: your own chat or terminal,
-shell terminals, reviewers and open files. Use it when the user asks for a
-split ("open a terminal next to the chat", "put the test output below") or when
-showing two things at once helps them follow your work.
+shell terminals, reviewers and open files. Use it only when the user asks for
+a split ("open a terminal next to the chat", "put the test output below") or
+asks to run something where they can watch. Never open, move or close splits or
+terminals on your own initiative: the window is the user's, and they did not
+ask for a layout change.
 
 When the user asks you to run something "in a terminal", "on the right", or
 anywhere they can see it, run it in a terminal tab with `ao pane run` or

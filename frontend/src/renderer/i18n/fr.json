@@ -2858,7 +2858,7 @@
 	"settings.sideChats": "Conversations annexes",
 	"settings.sideChatsHint": "Ouvrir des conversations annexes distinctes dans l’inspecteur et utiliser /btw pour y poser une question.",
 	"settings.splitPanes": "Volets partagés",
-	"settings.splitPanesHint": "Faites glisser un onglet sur un bord du volet central pour l’afficher à côté de l’onglet actuel.",
+	"settings.splitPanesHint": "Faites glisser un onglet sur un bord du volet central pour l’afficher à côté de l’onglet actuel. Les agents de vos sessions peuvent aussi diviser les volets et exécuter des commandes dans des terminaux (ao pane).",
 	"settings.prView": "Vue PR",
 	"settings.prViewHint": "Ouvrir une pull request dans son propre onglet, avec sa description, ses commentaires, ses vérifications et sa pile.",
 	"settings.chromeAgents.label": "Utiliser les agents dans mon Chrome",

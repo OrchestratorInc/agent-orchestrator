@@ -1797,7 +1797,7 @@
 	"settings.sideChats": "Side chats",
 	"settings.sideChatsHint": "Open separate side conversations in the inspector, and use /btw to ask one a question.",
 	"settings.splitPanes": "Split panes",
-	"settings.splitPanesHint": "Drag a tab to an edge of the center pane to show it beside the current one.",
+	"settings.splitPanesHint": "Drag a tab to an edge of the center pane to show it beside the current one. Agents in your sessions can also split panes and run commands in terminals with ao pane.",
 	"settings.prView": "PR view",
 	"settings.prViewHint": "Open a pull request in its own tab, with its description, comments, checks and stack.",
 	"settings.chromeAgents.label": "Use agents in my Chrome",
