@@ -31,7 +31,8 @@ export function nearQuotaWindow(limits: ConversationRateLimits | undefined): Quo
 	];
 	const tightest = windows
 		.filter((w) => Number.isFinite(w.percent) && w.percent >= 0)
-		.reduce<QuotaWindow | undefined>((worst, w) => (!worst || w.percent > worst.percent ? w : worst), undefined);
+		.reduce<QuotaWindow | undefined>((worst, w) => (!worst || w.percent > worst.percent ||
+			(w.percent === worst.percent && (w.resetsIn ?? 0) > (worst.resetsIn ?? 0)) ? w : worst), undefined);
 	return tightest && tightest.percent >= QUOTA_WARN ? tightest : undefined;
 }
 
@@ -63,6 +64,16 @@ export function QuotaReadout({ quota }: { quota: QuotaWindow }) {
 			{full && resets
 				? <span className="tabular-nums" aria-label={t("chat.quota.resetsIn", { time: resets })}>{resets}</span>
 				: <span className="truncate">{label}</span>}
+		</span>
+	);
+}
+
+/** Stays mounted outside the animated model label so only quota changes speak. */
+export function QuotaStatus({ quota }: { quota: QuotaWindow | undefined }) {
+	const { t, label, resets } = useQuotaText(quota ?? { percent: 0, kind: "session" });
+	return (
+		<span role="status" aria-live="polite" aria-atomic="true" className="sr-only">
+			{quota ? `${label}${resets ? `. ${t("chat.quota.resetsIn", { time: resets })}` : ""}` : ""}
 		</span>
 	);
 }
@@ -101,7 +112,8 @@ export function useQuotaFlash(quota: QuotaWindow | undefined, scope: string): bo
 	const key = quota && !full ? `${scope}:${quota.kind}` : undefined;
 	const [dismissed, setDismissed] = useState<string>();
 	useEffect(() => {
-		if (!key) return setDismissed(undefined);
+		setDismissed(undefined);
+		if (!key) return;
 		const timer = window.setTimeout(() => setDismissed(key), QUOTA_FLASH_MS);
 		return () => window.clearTimeout(timer);
 	}, [key]);

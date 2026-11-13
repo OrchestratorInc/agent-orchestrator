@@ -506,9 +506,9 @@ export function AgentModelPicker({
 							<div className={setups.length > 0 ? DIVIDER : undefined}>
 								<OptionMenuSub closeOnSelect>
 									<OptionMenuSubTrigger label={t("agentSwitch.agent")} value={agentLabel(shownHarness)}
-										className={notice && !terminal ? "flex-col items-stretch gap-1" : undefined}>
+										className={notice && !terminal && !pending ? "flex-col items-stretch gap-1" : undefined}>
 										{/* The agent's account note sits inside its row, under the agent it belongs to. */}
-										{notice && !terminal ? <>
+										{notice && !terminal && !pending ? <>
 											<span className="flex items-center justify-between gap-3">
 												<span>{t("agentSwitch.agent")}</span>
 												<span className="flex min-w-0 items-center gap-1.5 text-muted-foreground">

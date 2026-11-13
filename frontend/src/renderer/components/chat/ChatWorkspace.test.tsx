@@ -217,6 +217,19 @@ beforeEach(() => {
 	useUiStore.setState({ isSidebarOpen: true, inspectorSessions: {} });
 });
 
+describe("ChatWorkspace quota fallback", () => {
+	it("retains quota and reset information without agent switching, including exhaustion", async () => {
+		const snapshot = { ...chatFixtureSettled, rateLimits: { primaryUsedPercent: 80, secondaryUsedPercent: -1, primaryResetsInSeconds: 8100 } };
+		const { container, rerender } = render(<ChatWorkspace snapshot={snapshot} />);
+		expect(container.querySelector("[data-quota-readout]")).toHaveTextContent("Approaching limit");
+		rerender(<ChatWorkspace snapshot={{ ...snapshot, rateLimits: { ...snapshot.rateLimits, primaryUsedPercent: 100 } }} />);
+		const pill = container.querySelector("[data-quota-readout]")!;
+		expect(pill).toHaveTextContent("2h 15m");
+		expect(pill).toHaveAttribute("data-severity", "full");
+		expect(screen.getAllByRole("status").some((node) => node.textContent?.includes("Usage limit reached. Resets in 2h 15m"))).toBe(true);
+	});
+});
+
 describe("ChatWorkspace prompt suggestions", () => {
 	it("forwards the Cloud message budget to its composer", async () => {
 		const snapshot = { ...chatFixtureSettled, sessionId: "cloud-budget-workspace" };
@@ -959,16 +972,16 @@ describe("ChatWorkspace timeline", () => {
 	});
 
 	// The meter can warn about the account's quota, but only if it is handed it.
-	it("flashes the usage warning beside the composer's own model controls", () => {
+	it("keeps the usage warning beside the composer's own model controls after the flash expires", () => {
 		vi.useFakeTimers();
 		try {
 			render(<ChatWorkspace snapshot={{ ...idleSnapshot(chatFixture), rateLimits: { primaryUsedPercent: 82, secondaryUsedPercent: -1 } }} />);
 			const composer = screen.getByLabelText("Message the agent").closest("form") as HTMLElement;
-			expect(within(composer).getByText("Approaching limit")).toBeInTheDocument();
-			// The flash, then the outgoing layer's fade.
+			expect(composer.querySelector("[data-quota-readout]")).toHaveTextContent("Approaching limit");
+			// Expiring the picker flash must not remove the standalone notice.
 			act(() => { vi.advanceTimersByTime(5_000); });
 			act(() => { vi.advanceTimersByTime(300); });
-			expect(within(composer).queryByText("Approaching limit")).not.toBeInTheDocument();
+			expect(composer.querySelector("[data-quota-readout]")).toHaveTextContent("Approaching limit");
 		} finally {
 			vi.useRealTimers();
 		}

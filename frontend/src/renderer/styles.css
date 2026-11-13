@@ -2182,6 +2182,7 @@ textarea,
 }
 @media (prefers-reduced-motion: reduce) {
 	.smooth-swap { transition: none; }
+	.smooth-swap[data-moving] { mask-image: none; }
 	.smooth-swap-layer[data-enter] { animation: none; }
 	.smooth-swap-layer[data-leave] { display: none; }
 }

@@ -33,7 +33,7 @@ vi.mock("../../hooks/useAgentModelsQuery", () => ({
 	}),
 }));
 
-function open(pending?: PendingAgentSwitch, terminal = false, harness = "claude-code", extra: Partial<PickerSource> = {}, loading = false, loadingModels = false, savedModel?: string) {
+function open(pending?: PendingAgentSwitch, terminal = false, harness = "claude-code", extra: Partial<PickerSource> = {}, loading = false, loadingModels = false, savedModel?: string, notice?: string) {
 	const onPendingChange = vi.fn();
 	const current: PickerSource = {
 		models: [{ id: "opus", label: "Opus" }, { id: "sonnet", label: "Sonnet" }],
@@ -54,6 +54,7 @@ function open(pending?: PendingAgentSwitch, terminal = false, harness = "claude-
 				loading={loading}
 				loadingModels={loadingModels}
 				savedModel={savedModel}
+				notice={notice}
 				agentSwitch={{ projectId: "p", pending, onPendingChange }}
 			/>
 		</QueryClientProvider>,
@@ -66,6 +67,13 @@ describe("AgentModelPicker", () => {
 		useUiStore.setState({ developerMode: false });
 		unavailableGet.mockReset().mockResolvedValue({ data: { agents: [] }, error: undefined });
 		window.localStorage.clear();
+	});
+
+	it.each([undefined, { harness: "codex" as const }])("only shows the running account notice without a pending switch (%j)", async (pending) => {
+		open(pending, false, "claude-code", {}, false, false, undefined, "Account quota warning");
+		await userEvent.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+		if (pending) expect(screen.queryByText("Account quota warning")).not.toBeInTheDocument();
+		else expect(screen.getByText("Account quota warning")).toBeInTheDocument();
 	});
 
 	it("is one menu of Agent, Model and Effort rows for the running agent", async () => {

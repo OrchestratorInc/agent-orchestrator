@@ -1,6 +1,6 @@
 import { act, render, renderHook, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { formatQuotaReset, nearQuotaWindow, QUOTA_FLASH_MS, QuotaMenuNotice, QuotaReadout, useQuotaFlash, type QuotaWindow } from "./QuotaReadout";
+import { formatQuotaReset, nearQuotaWindow, QUOTA_FLASH_MS, QuotaMenuNotice, QuotaReadout, QuotaStatus, useQuotaFlash, type QuotaWindow } from "./QuotaReadout";
 import type { ConversationRateLimits } from "../../types/conversation";
 
 function limits(over: Partial<ConversationRateLimits> = {}): ConversationRateLimits {
@@ -18,6 +18,32 @@ describe("QuotaReadout", () => {
 		expect(nearQuotaWindow(limits({ primaryUsedPercent: 30, secondaryUsedPercent: 88 }))?.kind).toBe("weekly");
 		// Negative is the daemon's "not reported"; it must never count as usage.
 		expect(nearQuotaWindow(limits({ primaryUsedPercent: -1, secondaryUsedPercent: -1 }))).toBeUndefined();
+	});
+
+	it("breaks equal usage ties with the later reported reset", () => {
+		expect(nearQuotaWindow(limits({ primaryUsedPercent: 100, secondaryUsedPercent: 100 }))?.kind).toBe("weekly");
+		expect(nearQuotaWindow(limits({ primaryUsedPercent: 100, secondaryUsedPercent: 100, primaryResetsInSeconds: 500_000 }))?.kind).toBe("session");
+		expect(nearQuotaWindow(limits({ primaryUsedPercent: 100, secondaryUsedPercent: 99 }))?.kind).toBe("session");
+		expect(nearQuotaWindow(limits({ primaryUsedPercent: 100, secondaryUsedPercent: 100, secondaryResetsInSeconds: undefined }))?.kind).toBe("session");
+	});
+
+	it("keeps a polite region mounted across warnings, exhaustion and model changes", () => {
+		const view = (quota: QuotaWindow | undefined, model = "Opus") => <><span>{model}</span><QuotaStatus quota={quota} /></>;
+		const { rerender } = render(view(undefined));
+		const status = screen.getByRole("status");
+		expect(status).toBeEmptyDOMElement();
+		expect(status).toHaveAttribute("aria-live", "polite");
+		rerender(view({ percent: 80, kind: "session" }));
+		expect(screen.getByRole("status")).toBe(status);
+		expect(status).toHaveTextContent("Approaching limit");
+		rerender(view({ percent: 100, kind: "session", resetsIn: 8100 }));
+		expect(status).toHaveTextContent("Usage limit reached. Resets in 2h 15m");
+		const text = status.textContent;
+		rerender(view({ percent: 100, kind: "session", resetsIn: 8100 }, "Sonnet"));
+		expect(status.textContent).toBe(text);
+		rerender(view(undefined));
+		expect(screen.getByRole("status")).toBe(status);
+		expect(status).toBeEmptyDOMElement();
 	});
 
 	it("warns without a percentage once close", () => {
@@ -92,6 +118,20 @@ describe("useQuotaFlash", () => {
 		act(() => { vi.advanceTimersByTime(QUOTA_FLASH_MS); });
 		rerender(flash(warn, "chat-b"));
 		expect(result.current).toBe(true);
+	});
+
+	it("re-arms a dismissed chat after briefly visiting another chat", () => {
+		const { result, rerender } = renderHook(({ quota, scope }) => useQuotaFlash(quota, scope), { initialProps: flash(warn) });
+		act(() => { vi.advanceTimersByTime(QUOTA_FLASH_MS); });
+		expect(result.current).toBe(false);
+		rerender(flash(warn, "chat-b"));
+		act(() => { vi.advanceTimersByTime(1000); });
+		rerender(flash(warn));
+		expect(result.current).toBe(true);
+		act(() => { vi.advanceTimersByTime(QUOTA_FLASH_MS); });
+		expect(result.current).toBe(false);
+		rerender(flash({ ...warn, percent: 85 }));
+		expect(result.current).toBe(false);
 	});
 
 	it("holds a full window until it resets", () => {
