@@ -62,12 +62,15 @@ func newAccountServer(t *testing.T, final string) (*httptest.Server, *accountSer
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/sessions/demo-1/interface-transition":
 			state.mu.Lock()
 			state.polls++
-			phase := "draining"
+			id, phase := "t-1", "draining"
 			if state.polls > 1 {
 				phase = state.final
 			}
+			if phase == "superseded" {
+				id, phase = "t-2", "draining"
+			}
 			state.mu.Unlock()
-			_, _ = io.WriteString(w, `{"supported":true,"targetMode":"chat","transition":{"id":"t-1","phase":"`+phase+`","errorDetail":"the account is signed out"}}`)
+			_, _ = io.WriteString(w, `{"supported":true,"targetMode":"chat","transition":{"id":"`+id+`","phase":"`+phase+`","errorDetail":"the account is signed out"}}`)
 		default:
 			http.NotFound(w, r)
 		}
@@ -178,5 +181,19 @@ func TestAccountSwitchWaits(t *testing.T) {
 	_, _, err = runAccountCLI(t, "failed", "account", "switch", "demo-1", "work", "--wait")
 	if err == nil || !strings.Contains(err.Error(), "ended failed: the account is signed out") {
 		t.Fatalf("failed move error = %v", err)
+	}
+}
+
+func TestAccountSwitchWaitStopsWhenSuperseded(t *testing.T) {
+	old := accountSwitchPoll
+	accountSwitchPoll = time.Millisecond
+	t.Cleanup(func() { accountSwitchPoll = old })
+
+	_, state, err := runAccountCLI(t, "superseded", "account", "switch", "demo-1", "work", "--wait", "--timeout", "5s")
+	if err == nil || !strings.Contains(err.Error(), "later change (transition t-2) replaced it") {
+		t.Fatalf("superseded move error = %v", err)
+	}
+	if state.polls != 2 {
+		t.Fatalf("polled %d times, want 2", state.polls)
 	}
 }

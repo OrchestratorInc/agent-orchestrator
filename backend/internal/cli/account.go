@@ -290,7 +290,10 @@ func (c *commandContext) awaitAccountSwitch(ctx context.Context, sessionID strin
 		if err := c.getJSON(ctx, "sessions/"+url.PathEscape(sessionID)+"/interface-transition", &status); err != nil {
 			return current, err
 		}
-		if status.Transition != nil && status.Transition.ID == started.ID {
+		if status.Transition != nil && status.Transition.ID != started.ID {
+			return current, fmt.Errorf("move of %s ended, but a later change (transition %s) replaced it before its outcome was read; check it with `ao account show %s`", sessionID, status.Transition.ID, sessionID)
+		}
+		if status.Transition != nil {
 			current = *status.Transition
 		}
 	}
