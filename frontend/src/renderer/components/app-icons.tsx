@@ -214,6 +214,7 @@ import {
 	Check as LucideCheck,
 	Ellipsis as LucideEllipsis,
 	EllipsisVertical as LucideEllipsisVertical,
+	MessagesSquare as LucideMessagesSquare,
 	GripVertical as LucideGripVertical,
 	Pause as LucidePause,
 	Play as LucidePlay,
@@ -414,6 +415,7 @@ export const Monitor = fromMyna(MynaMonitor, "monitor");
 export const MonitorCog = fromLucide(LucideMonitorCog, "monitor-cog");
 export const MonitorSmartphone = fromLucide(LucideMonitorSmartphone, "monitor-smartphone");
 export const MoreHorizontal = fromLucide(LucideEllipsis, "ellipsis");
+export const MessagesSquare = fromLucide(LucideMessagesSquare, "messages-square");
 export const MoreVertical = fromLucide(LucideEllipsisVertical, "ellipsis-vertical");
 export const Music = fromMyna(MynaMusic, "music");
 export const MousePointer2 = fromMyna(MynaMousePointer, "mouse-pointer-2", "full");

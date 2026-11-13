@@ -474,6 +474,8 @@ export interface ChatWorkspaceProps {
 	) => void | Promise<unknown>;
 	/** People and teams in the composer's @ menu (a shared Cloud session). */
 	composerMentions?: ComposerMentionSource;
+	/** Shown beside the conversation, under the tabs: a shared Cloud chat's open aside. */
+	sidePane?: ReactNode;
 	/**
 	 * Open the chat at this message: scroll to it and give it a brief glow
 	 * (opening a mention). A new key asks again; onFocusMessageDone reports
@@ -850,6 +852,7 @@ function ChatWorkspaceContent({
 	settingsLocked = false,
 	onComposerInput,
 	composerMentions,
+	sidePane,
 	focusMessage,
 	onFocusMessageDone,
 	onChooseSettings,
@@ -2104,10 +2107,12 @@ function ChatWorkspaceContent({
 						</div>
 					</div>
 				) : null}
+				{/* The conversation, and beside it the pane a shared Cloud chat opens an aside in. */}
+				<div className="flex min-h-0 min-w-0 flex-1" data-chat-conversation-row="" hidden={reviewerActive || shellActive}>
 				<div
 					aria-hidden={reviewerActive || shellActive}
 					aria-label="Chat conversation"
-					className="flex min-h-0 flex-1 flex-col"
+					className="flex min-h-0 min-w-0 flex-1 flex-col"
 					data-testid="chat-conversation-panel"
 					hidden={reviewerActive || shellActive}
 					inert={
@@ -2408,6 +2413,8 @@ function ChatWorkspaceContent({
 						</div>
 					</div>
 				</HoldWhileHidden>
+				</div>
+				{reviewerActive || shellActive ? null : sidePane}
 				</div>
 			</div>
 

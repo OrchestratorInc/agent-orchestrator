@@ -79,8 +79,9 @@ import {
 import { messageTokenScope, recordSentComposerTokens, sessionTokenScope } from "./sentComposerTokens";
 import { MAX_SUGGESTIONS, moveHighlight, rankFiles, rankSkills, type Suggestion } from "./composerSuggest";
 import { useTranslation } from "react-i18next";
-import { MAX_MENTIONS, isPathQuery, mentionSections, type ComposerMention } from "../../lib/cloud-mentions";
+import { MAX_MENTIONS, isPathQuery, type ComposerMention } from "../../lib/cloud-mentions";
 import type { CloudCpMentionPerson, CloudCpMentionTeam } from "../../lib/cloud-cp/types";
+import { mentionSuggestions } from "./mentionSuggestions";
 import { readDraftMentions, writeDraftMentions } from "../../lib/chat-draft-mentions";
 import {
 	isSupportedImageAttachment,
@@ -802,24 +803,13 @@ export const ChatComposer = memo(function ChatComposer({
 		const files = rankFiles(filePaths, currentTrigger.query);
 		// A path query (a slash or a dot) is about files: people and teams hide.
 		if (!mentionsOffered || isPathQuery(currentTrigger.query)) return files;
-		const sections = mentionSections(mentionCandidates, currentTrigger.query, mentionSelf);
-		const person = (row: CloudCpMentionPerson, section: string): Suggestion => ({
-			value: `person:${row.userId}`,
-			label: row.name,
-			section,
-			badge: row.present ? t("mention.hereNow") : undefined,
-			mention: { kind: "person", id: row.userId, name: row.name },
-		});
-		const workspace = mentionWorkspaceName ? t("mention.section.workspace", { name: mentionWorkspaceName }) : t("mention.section.workspaceUnnamed");
 		return [
-			...sections.inSession.map((row) => person(row, t("mention.section.inSession"))),
-			...sections.teams.map((team): Suggestion => ({
-				value: `team:${team.teamId}`,
-				label: team.name,
-				section: t("mention.section.teams"),
-				mention: { kind: "team", id: team.teamId, name: team.name },
-			})),
-			...sections.workspace.map((row) => person(row, workspace)),
+			...mentionSuggestions(mentionCandidates, currentTrigger.query, mentionSelf, {
+				inSession: t("mention.section.inSession"),
+				teams: t("mention.section.teams"),
+				workspace: mentionWorkspaceName ? t("mention.section.workspace", { name: mentionWorkspaceName }) : t("mention.section.workspaceUnnamed"),
+				hereNow: t("mention.hereNow"),
+			}),
 			...files.map((file) => ({ ...file, section: t("mention.section.files") })),
 		].slice(0, MAX_SUGGESTIONS);
 	}, [slashCommands, filePaths, mentionsOffered, mentionCandidates, mentionSelf, mentionWorkspaceName, t]);

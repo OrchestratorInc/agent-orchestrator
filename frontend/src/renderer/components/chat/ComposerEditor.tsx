@@ -104,6 +104,8 @@ export type ComposerEditorHandle = {
 	endDictation(keep: boolean): void;
 	/** Inserts a file reference chip at the caret (or the end) that sends `wire`. */
 	insertReference(path: string, display: string, wire: string): void;
+	/** Types text at the caret (or the end), as if the person had: `@` opens the mention menu. */
+	insertText(text: string): void;
 	/**
 	 * Hold the caret's place for images still being staged. Returns a reservation
 	 * for fillImages, so the chips land where the user pasted, not wherever the
@@ -802,6 +804,16 @@ const EditorBridge = forwardRef<
 					$insertComposerReference(path, display, wire);
 				}, { discrete: true });
 			},
+			insertText: (text) => {
+				editor.update(() => {
+					let selection = $getSelection();
+					if (!$isRangeSelection(selection)) {
+						$getRoot().selectEnd();
+						selection = $getSelection();
+					}
+					if ($isRangeSelection(selection)) selection.insertText(text);
+				}, { discrete: true });
+			},
 			reserveImages: () => {
 				let reservation: string | undefined;
 				editor.update(() => {
@@ -997,6 +1009,8 @@ export const ComposerEditor = forwardRef<
 		images?: ComposerImage[];
 		/** The mentions a restored draft held; read when text is set, not at render. */
 		savedMentions?: () => readonly ComposerMention[];
+		/** A short box (one line at rest), for a reply rather than a message to the agent. */
+		compact?: boolean;
 		onChange: (snapshot: ComposerEditorSnapshot) => void;
 		onComplete: (snapshot: ComposerEditorSnapshot, key: "Enter" | "Tab") => string | ComposerMention | undefined;
 		onEnter: (snapshot: ComposerEditorSnapshot, event: globalThis.KeyboardEvent) => boolean;
@@ -1018,6 +1032,7 @@ export const ComposerEditor = forwardRef<
 		activeIndex,
 		images = [],
 		savedMentions,
+		compact = false,
 		onChange,
 		onComplete,
 		onEnter,
@@ -1062,7 +1077,8 @@ export const ComposerEditor = forwardRef<
 	const placeholderNode = useCallback(
 		() => (
 			<div className={cn(
-				"py-1 text-base! leading-relaxed text-muted-foreground",
+				"py-1 leading-relaxed text-muted-foreground",
+				compact ? "text-sm!" : "text-base!",
 				COMPOSER_TEXT_INSET,
 				suggestion
 					? "min-h-[4.5rem] whitespace-pre-wrap break-words"
@@ -1082,7 +1098,7 @@ export const ComposerEditor = forwardRef<
 				)}
 			</div>
 		),
-		[dictating, placeholder, suggestion, t],
+		[compact, dictating, placeholder, suggestion, t],
 	);
 
 	return (
@@ -1114,7 +1130,8 @@ export const ComposerEditor = forwardRef<
 								if (event.defaultPrevented) event.stopPropagation();
 							}}
 							className={cn(
-								"max-h-40 min-h-[4.5rem] w-full overflow-y-auto overscroll-contain bg-transparent py-1 text-base! leading-relaxed text-foreground caret-foreground outline-none selection:bg-foreground selection:text-on-foreground",
+								"max-h-40 w-full overflow-y-auto overscroll-contain bg-transparent py-1 text-base! leading-relaxed text-foreground caret-foreground outline-none selection:bg-foreground selection:text-on-foreground",
+								compact ? "min-h-9 text-sm!" : "min-h-[4.5rem]",
 								COMPOSER_TEXT_INSET,
 								COMPOSER_SCROLL_GUTTER,
 								suggestion && "absolute inset-0 overflow-visible overscroll-auto",
