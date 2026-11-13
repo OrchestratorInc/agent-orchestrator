@@ -230,7 +230,7 @@ export function useMobileConversation(
 				if (!mounted.current || !isCurrent()) return;
 				setPages((old) => {
 					const next = withLivePage(old, live);
-					conversationPageCache.set(cacheKey, next);
+					if (next !== old) conversationPageCache.set(cacheKey, next);
 					return next;
 				});
 				setUnavailable(undefined);

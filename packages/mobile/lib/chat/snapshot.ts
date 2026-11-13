@@ -1,3 +1,4 @@
+import { sameJson } from "../keepUnchanged";
 import type { ConversationItem, ConversationSnapshot, ConversationTurn } from "./types";
 
 export type ConversationPage = ConversationSnapshot;
@@ -107,7 +108,50 @@ export function withLivePage(pages: ConversationPage[], live: ConversationPage):
 	if (!current) return [live];
 	if (current.conversationId && current.conversationId !== live.conversationId) return [live];
 	if (current.activeBranchId && live.activeBranchId && current.activeBranchId !== live.activeBranchId) return [live];
-	return [live, ...pages.slice(1)];
+	const shared = reuseUnchangedRows(pages, live);
+	// Nothing moved: the same pages, so the screen does not render again.
+	if (shared === current) return pages;
+	return [shared, ...pages.slice(1)];
+}
+
+/**
+ * The fresh live page, with every item and turn that has not changed replaced
+ * by the object already on screen; the page already on screen when nothing at
+ * all changed.
+ *
+ * Each refresh parses a new page, so every row used to arrive as a new object
+ * and every row's memo missed: one streamed word re-rendered (and re-parsed
+ * the Markdown of) the whole visible transcript. With the old objects kept,
+ * only the rows that really changed render.
+ */
+export function reuseUnchangedRows(pages: ConversationPage[], live: ConversationPage): ConversationPage {
+	const current = pages[0];
+	if (!current) return live;
+	const items = new Map<string, ConversationItem>();
+	const turns = new Map<string, ConversationTurn>();
+	for (const page of pages) {
+		for (const item of page.items) if (!items.has(itemKey(item))) items.set(itemKey(item), item);
+		for (const turn of page.turns) if (!turns.has(turn.id)) turns.set(turn.id, turn);
+	}
+	let changed = live.items.length !== current.items.length || live.turns.length !== current.turns.length;
+	const nextItems = live.items.map((item, index) => {
+		const previous = items.get(itemKey(item));
+		const kept = previous && sameJson(previous, item) ? previous : item;
+		if (kept !== current.items[index]) changed = true;
+		return kept;
+	});
+	const nextTurns = live.turns.map((turn, index) => {
+		const previous = turns.get(turn.id);
+		const kept = previous && sameJson(previous, turn) ? previous : turn;
+		if (kept !== current.turns[index]) changed = true;
+		return kept;
+	});
+	if (!changed && sameJson({ ...live, items: [], turns: [] }, { ...current, items: [], turns: [] })) return current;
+	return { ...live, items: nextItems, turns: nextTurns };
+}
+
+function itemKey(item: ConversationItem): string {
+	return `${item.kind}:${item.id}`;
 }
 
 /** Whether an older page still belongs behind the live one; a branch switch while it loaded makes it stale. */

@@ -70,6 +70,23 @@ describe("live page and branch changes", () => {
 		expect(withLivePage([page(), older], page())).toHaveLength(2);
 	});
 
+	it("keeps every unchanged row as the same object, so its view skips a render", () => {
+		const settled = message("settled", 1);
+		const live = page({ items: [settled, { ...message("reply", 2), text: "hel" }] });
+		const refreshed = page({ items: [message("settled", 1), { ...message("reply", 2), revision: 2, text: "hello" }] });
+		const [next] = withLivePage([live], refreshed);
+		expect(next.items[0]).toBe(settled);
+		expect(next.items[1]).toBe(refreshed.items[1]);
+	});
+
+	it("returns the same pages when a refresh changed nothing, so the screen does not render", () => {
+		const live = page({ items: [message("a", 1)], turns: [{ id: "t", state: "completed", requestedAt: "2026-01-01" }] });
+		const older = page({ items: [message("old", 0)] });
+		const pages = [live, older];
+		expect(withLivePage(pages, page({ items: [message("a", 1)], turns: [{ id: "t", state: "completed", requestedAt: "2026-01-01" }] }))).toBe(pages);
+		expect(withLivePage(pages, page({ items: [message("a", 1)], controller: { state: "busy" } }))).not.toBe(pages);
+	});
+
 	it("refuses an older page that loaded for a branch no longer active", () => {
 		expect(olderPageFits([page({ activeBranchId: "child" })], page({ activeBranchId: "root" }))).toBe(false);
 		expect(olderPageFits([page({ activeBranchId: "child" })], page({ activeBranchId: "child" }))).toBe(true);
