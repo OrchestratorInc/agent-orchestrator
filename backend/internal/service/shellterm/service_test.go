@@ -2085,10 +2085,12 @@ func TestCloseShellTerminalKeepsRowWhenRuntimeStaysAlive(t *testing.T) {
 // terminal mux to forget.
 type fakeTerminalInputForgetter struct {
 	forgotten []string
+	err       error
 }
 
-func (f *fakeTerminalInputForgetter) ForgetTerminalInput(terminalID string) {
+func (f *fakeTerminalInputForgetter) ForgetTerminalInput(_ context.Context, terminalID string) error {
 	f.forgotten = append(f.forgotten, terminalID)
+	return f.err
 }
 
 // TestCloseShellTerminalForgetsInputTimestampOnceDestroyed pins #5691 for
@@ -2136,6 +2138,30 @@ func TestCloseShellTerminalForgetsInputTimestampWhenDestroyErrorsButRuntimeIsGon
 	}
 	if !slices.Equal(forgetter.forgotten, []string{term.HandleID}) {
 		t.Fatalf("forgotten = %v, want [%s]", forgetter.forgotten, term.HandleID)
+	}
+}
+
+// A forget that gives up (its context ended on the write fence) only leaves a
+// stale timestamp behind: the shell is confirmed dead, so its row still goes.
+func TestCloseShellTerminalDeletesRowWhenForgettingInputFails(t *testing.T) {
+	rt := newFakeShellRuntime()
+	st := &fakeShellTerminalStore{}
+	svc := newTestService(rt, st, &fakeProjectRootLocator{})
+	forgetter := &fakeTerminalInputForgetter{err: context.DeadlineExceeded}
+	svc.SetTerminalInputForgetter(forgetter)
+
+	term, err := svc.OpenShellTerminal(context.Background(), OpenShellTerminalInput{})
+	if err != nil {
+		t.Fatalf("OpenShellTerminal: %v", err)
+	}
+	if err := svc.CloseShellTerminal(context.Background(), term.HandleID); err != nil {
+		t.Fatalf("CloseShellTerminal: %v", err)
+	}
+	if !slices.Equal(forgetter.forgotten, []string{term.HandleID}) {
+		t.Fatalf("forgotten = %v, want [%s]", forgetter.forgotten, term.HandleID)
+	}
+	if len(st.records) != 0 {
+		t.Fatalf("records = %v, want the row deleted", st.records)
 	}
 }
 

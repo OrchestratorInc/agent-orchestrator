@@ -302,9 +302,10 @@ type TerminalInputFencer interface {
 // TerminalInputForgetter is an optional TerminalInputGate capability: it drops
 // one terminal's input bookkeeping. Session Manager calls it only after a
 // runtime Destroy succeeded, since the timestamp must outlive viewers while the
-// runtime (and any draft in it) may still be live (#5691).
+// runtime (and any draft in it) may still be live (#5691). It waits on the
+// terminal's write fence, so it returns ctx's error if ctx ends first.
 type TerminalInputForgetter interface {
-	ForgetTerminalInput(terminalID string)
+	ForgetTerminalInput(ctx context.Context, terminalID string) error
 }
 
 // ReviewerTerminator tears down a worker's reviewer pane when the worker leaves
@@ -748,7 +749,9 @@ func (m *Manager) fenceTerminalInput(rec domain.SessionRecord) (lastInputAt time
 // destroySessionRuntime destroys a session's runtime and, only once Destroy
 // succeeded, tells the terminal mux to drop that terminal's input timestamp
 // (keyed by the runtime handle id). A failed Destroy may leave the runtime and
-// its draft live, so the timestamp stays.
+// its draft live, so the timestamp stays. The forget waits on the terminal's
+// write fence under ctx; if ctx ends first the runtime is still destroyed, so
+// only one stale timestamp is left behind and the teardown goes on.
 func (m *Manager) destroySessionRuntime(ctx context.Context, handle ports.RuntimeHandle) error {
 	if err := m.runtime.Destroy(ctx, handle); err != nil {
 		return err
@@ -757,7 +760,9 @@ func (m *Manager) destroySessionRuntime(ctx context.Context, handle ports.Runtim
 	forgetter, ok := m.terminalInputGate.(TerminalInputForgetter)
 	m.terminalInputGateMu.Unlock()
 	if ok {
-		forgetter.ForgetTerminalInput(handle.ID)
+		if err := forgetter.ForgetTerminalInput(ctx, handle.ID); err != nil {
+			m.logger.Warn("forget terminal input after runtime destroy failed", "handleID", handle.ID, "error", err)
+		}
 	}
 	return nil
 }

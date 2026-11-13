@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -1172,7 +1173,7 @@ func TestForgetTerminalInputDropsTheTimestamp(t *testing.T) {
 
 	typeInto(t, mgr, conn, "t1")
 	typeInto(t, mgr, conn, "t2")
-	mgr.ForgetTerminalInput("t1")
+	forgetInput(t, mgr, "t1")
 	if hasLastInput(mgr, "t1") {
 		t.Fatal("t1 input timestamp kept after ForgetTerminalInput")
 	}
@@ -1187,8 +1188,8 @@ func TestForgetTerminalInputDropsTheTimestamp(t *testing.T) {
 func TestForgetTerminalInputIgnoresUnknownTerminals(t *testing.T) {
 	mgr := NewManager(&fakeSource{alive: true}, nil, testLogger(), WithHeartbeat(0))
 	defer mgr.Close()
-	mgr.ForgetTerminalInput("never-seen")
-	mgr.ForgetTerminalInput("")
+	forgetInput(t, mgr, "never-seen")
+	forgetInput(t, mgr, "")
 	if n := len(mgr.lastInputAt); n != 0 {
 		t.Fatalf("lastInputAt has %d entries, want 0", n)
 	}
@@ -1210,7 +1211,7 @@ func TestForgetTerminalInputWaitsForTheWriteFence(t *testing.T) {
 	_, release := mgr.HoldInput("t1")
 	done := make(chan struct{})
 	go func() {
-		mgr.ForgetTerminalInput("t1")
+		forgetInput(t, mgr, "t1")
 		close(done)
 	}()
 	select {
@@ -1250,13 +1251,160 @@ func TestForgetTerminalInputIsSafeAlongsideInputAndReaders(t *testing.T) {
 				_ = mgr.LastInputAt("t1")
 				_, release := mgr.HoldInput("t1")
 				release()
-				mgr.ForgetTerminalInput("t1")
+				forgetInput(t, mgr, "t1")
 			}
 		}()
 	}
 	wg.Wait()
 	eventually(t, time.Second, func() bool {
-		mgr.ForgetTerminalInput("t1")
+		forgetInput(t, mgr, "t1")
 		return !hasLastInput(mgr, "t1")
 	})
+}
+
+func forgetInput(t *testing.T, mgr *Manager, id string) {
+	t.Helper()
+	if err := mgr.ForgetTerminalInput(context.Background(), id); err != nil {
+		t.Errorf("ForgetTerminalInput(%q): %v", id, err)
+	}
+}
+
+// Session Manager tears a runtime down under a deadline, so forgetting its
+// input must give up when the context ends instead of waiting out a held fence.
+func TestForgetTerminalInputStopsWaitingForTheFenceWhenTheContextEnds(t *testing.T) {
+	mgr := NewManager(&fakeSource{alive: true}, nil, testLogger(), WithHeartbeat(0))
+	defer mgr.Close()
+	mgr.recordInputAt("t1", []byte("x"))
+	_, release := mgr.HoldInput("t1")
+	defer release()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- mgr.ForgetTerminalInput(ctx, "t1") }()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("ForgetTerminalInput = %v, want context.DeadlineExceeded", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ForgetTerminalInput kept waiting on the held fence after its context ended")
+	}
+	if !hasLastInput(mgr, "t1") {
+		t.Fatal("a cancelled ForgetTerminalInput dropped the timestamp without the fence")
+	}
+
+	release()
+	mgr.fencesMu.Lock()
+	n := len(mgr.fences)
+	mgr.fencesMu.Unlock()
+	if n != 0 {
+		t.Fatalf("fences has %d entries after the cancelled wait and release, want 0", n)
+	}
+}
+
+// A view still open on a destroyed runtime must not bring its input timestamp
+// back: keystrokes written after the forget are dropped, not recorded (#5691).
+func TestForgetTerminalInputDropsLaterInputForTheDestroyedRuntime(t *testing.T) {
+	pty := newFakePTY()
+	mgr := NewManager(&fakeSource{alive: true, spawner: &fakeSpawner{ptys: []*fakePTY{pty}}}, nil, testLogger(), WithHeartbeat(0))
+	defer mgr.Close()
+	conn := newFakeConn()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go mgr.Serve(ctx, conn)
+
+	typeInto(t, mgr, conn, "t1")
+	forgetInput(t, mgr, "t1")
+	conn.in <- clientMsg{Ch: chTerminal, ID: "t1", Type: msgData, Data: base64.StdEncoding.EncodeToString([]byte("late"))}
+	// The close is queued behind the keystroke, so once the attachment is gone
+	// the writer has handled it.
+	conn.in <- clientMsg{Ch: chTerminal, ID: "t1", Type: msgClose}
+	eventually(t, time.Second, func() bool {
+		mgr.mu.Lock()
+		defer mgr.mu.Unlock()
+		return len(mgr.attachments) == 0
+	})
+	if hasLastInput(mgr, "t1") {
+		t.Fatal("a keystroke written after ForgetTerminalInput re-created the timestamp")
+	}
+	if got := string(pty.writtenBytes()); strings.Contains(got, "late") {
+		t.Fatalf("keystroke reached the destroyed runtime's pane: %q", got)
+	}
+}
+
+// A write that never reaches the pane (the attachment already exited) is not
+// input acceptance, so it must not record a timestamp.
+func TestWriteInputDoesNotRecordInputRefusedByAnExitedAttachment(t *testing.T) {
+	mgr := NewManager(&fakeSource{alive: true}, nil, testLogger(), WithHeartbeat(0))
+	defer mgr.Close()
+	a := newAttachment("t1", ports.RuntimeHandle{ID: "t1"}, mgr.src, nil, nil, nil, testLogger())
+	a.markExited()
+	released := false
+	mgr.writeInput("t1", a, []byte("late"), func() { released = true })
+	if !released {
+		t.Fatal("the refused write kept its input lease")
+	}
+	if hasLastInput(mgr, "t1") {
+		t.Fatal("a write refused by an exited attachment recorded a timestamp")
+	}
+}
+
+// Keystrokes queued behind a held fence must not record a timestamp once a
+// forget wins the fence, whichever of them takes it first.
+func TestForgetTerminalInputInvalidatesInputQueuedBehindTheFence(t *testing.T) {
+	pty := newFakePTY()
+	mgr := NewManager(&fakeSource{alive: true, spawner: &fakeSpawner{ptys: []*fakePTY{pty}}}, nil, testLogger(), WithHeartbeat(0))
+	defer mgr.Close()
+	conn := newFakeConn()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go mgr.Serve(ctx, conn)
+
+	typeInto(t, mgr, conn, "t1")
+	_, release := mgr.HoldInput("t1")
+	for range 8 {
+		conn.in <- clientMsg{Ch: chTerminal, ID: "t1", Type: msgData, Data: base64.StdEncoding.EncodeToString([]byte("q"))}
+	}
+	conn.in <- clientMsg{Ch: chSystem, Type: msgPing}
+	recv(t, conn, chSystem, msgPong, time.Second)
+	done := make(chan error, 1)
+	go func() { done <- mgr.ForgetTerminalInput(context.Background(), "t1") }()
+	time.Sleep(10 * time.Millisecond)
+	release()
+	if err := <-done; err != nil {
+		t.Fatalf("ForgetTerminalInput: %v", err)
+	}
+	conn.in <- clientMsg{Ch: chTerminal, ID: "t1", Type: msgClose}
+	eventually(t, time.Second, func() bool {
+		mgr.mu.Lock()
+		defer mgr.mu.Unlock()
+		return len(mgr.attachments) == 0
+	})
+	if hasLastInput(mgr, "t1") {
+		t.Fatal("input queued behind the fence re-created the timestamp after ForgetTerminalInput")
+	}
+}
+
+// A forgotten view does not re-attach once its pane goes away, even if a
+// runtime with the same id is live again: it exits, and the client reopens a
+// fresh view whose input is recorded as usual.
+func TestForgottenViewExitsInsteadOfReattaching(t *testing.T) {
+	first, second := newFakePTY(), newFakePTY()
+	mgr := NewManager(&fakeSource{alive: true, spawner: &fakeSpawner{ptys: []*fakePTY{first, second}}}, nil, testLogger(), WithHeartbeat(0))
+	defer mgr.Close()
+	conn := newFakeConn()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go mgr.Serve(ctx, conn)
+
+	typeInto(t, mgr, conn, "t1")
+	forgetInput(t, mgr, "t1")
+	_ = first.Close()
+	recv(t, conn, chTerminal, msgExited, 2*time.Second)
+
+	typeInto(t, mgr, conn, "t1")
+	if !hasLastInput(mgr, "t1") {
+		t.Fatal("a fresh view's input was not recorded after the old one was forgotten")
+	}
 }

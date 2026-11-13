@@ -4546,16 +4546,18 @@ func TestKill_RuntimeDestroyErrorFailsClosedEvenWhenProbeReadsGone(t *testing.T)
 type forgettingInputGate struct {
 	mu        sync.Mutex
 	forgotten []string
+	err       error
 }
 
 func (g *forgettingInputGate) BeginInputDrain(string) (time.Time, func()) {
 	return time.Time{}, func() {}
 }
 
-func (g *forgettingInputGate) ForgetTerminalInput(terminalID string) {
+func (g *forgettingInputGate) ForgetTerminalInput(_ context.Context, terminalID string) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.forgotten = append(g.forgotten, terminalID)
+	return g.err
 }
 
 func (g *forgettingInputGate) calls() []string {
@@ -4615,6 +4617,23 @@ func TestCleanup_ForgetsTerminalInputOfTerminatedSessions(t *testing.T) {
 	}
 	if got := gate.calls(); !slices.Equal(got, []string{"h-mer-1"}) {
 		t.Fatalf("forgotten terminals = %v, want [h-mer-1]", got)
+	}
+}
+
+// Forgetting waits on the terminal's write fence under the caller's context.
+// If that fails the runtime is still destroyed, so the kill must not fail: the
+// only cost is one stale input timestamp.
+func TestKill_SucceedsWhenForgettingTerminalInputFails(t *testing.T) {
+	m, st, _, _ := newManager()
+	gate := &forgettingInputGate{err: context.DeadlineExceeded}
+	m.SetTerminalInputGate(gate)
+	st.sessions["mer-1"] = mkLive("mer-1")
+
+	if _, err := m.Kill(ctx, "mer-1"); err != nil {
+		t.Fatalf("kill failed after the runtime was destroyed: %v", err)
+	}
+	if got := gate.calls(); !slices.Equal(got, []string{"h1"}) {
+		t.Fatalf("forgotten terminals = %v, want [h1]", got)
 	}
 }
 

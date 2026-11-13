@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"regexp"
 	"sync"
@@ -92,10 +93,11 @@ type Manager struct {
 	fences   map[string]*inputFence
 }
 
-// inputFence serializes one terminal's pane writes. refs counts holders and
-// waiters so the entry is dropped once nobody needs it.
+// inputFence serializes one terminal's pane writes. sem is a one-slot
+// semaphore rather than a mutex so a waiter can give up when its context ends.
+// refs counts holders and waiters so the entry is dropped once nobody needs it.
 type inputFence struct {
-	mu   sync.Mutex
+	sem  chan struct{}
 	refs int
 }
 
@@ -186,24 +188,40 @@ func NewManager(src Source, events EventSource, log *slog.Logger, opts ...Option
 
 // lockInputFence takes terminalID's write fence and returns its unlock.
 func (m *Manager) lockInputFence(terminalID string) (unlock func()) {
+	unlock, _ = m.lockInputFenceContext(context.Background(), terminalID)
+	return unlock
+}
+
+// lockInputFenceContext takes terminalID's write fence, or gives up with
+// ctx's error once ctx ends first.
+func (m *Manager) lockInputFenceContext(ctx context.Context, terminalID string) (unlock func(), err error) {
 	m.fencesMu.Lock()
 	f := m.fences[terminalID]
 	if f == nil {
-		f = &inputFence{}
+		f = &inputFence{sem: make(chan struct{}, 1)}
 		m.fences[terminalID] = f
 	}
 	f.refs++
 	m.fencesMu.Unlock()
-	f.mu.Lock()
-	return func() {
-		f.mu.Unlock()
-		m.fencesMu.Lock()
-		f.refs--
-		if f.refs == 0 {
-			delete(m.fences, terminalID)
-		}
-		m.fencesMu.Unlock()
+	select {
+	case f.sem <- struct{}{}:
+	case <-ctx.Done():
+		m.unrefInputFence(terminalID, f)
+		return nil, ctx.Err()
 	}
+	return func() {
+		<-f.sem
+		m.unrefInputFence(terminalID, f)
+	}, nil
+}
+
+func (m *Manager) unrefInputFence(terminalID string, f *inputFence) {
+	m.fencesMu.Lock()
+	f.refs--
+	if f.refs == 0 {
+		delete(m.fences, terminalID)
+	}
+	m.fencesMu.Unlock()
 }
 
 // BeginInputDrain blocks new user input for one terminal while Session Manager
@@ -263,19 +281,40 @@ func (m *Manager) HoldInput(terminalID string) (lastInputAt time.Time, release f
 	return lastInputAt, func() { once.Do(unlock) }
 }
 
-// ForgetTerminalInput drops one terminal's input timestamp. Session Manager
-// calls it only after it destroyed the runtime behind the terminal: the
-// timestamp must outlive viewers (a draft typed before switching tabs still
-// guards the idle and draft proofs), so nothing here drops it on detach
-// (#5691). It takes the write fence first so a keystroke write already in
-// flight finishes before the entry goes. A drain's inputBlocked count is left
-// alone: its holder releases it.
-func (m *Manager) ForgetTerminalInput(terminalID string) {
-	unlock := m.lockInputFence(terminalID)
+// ForgetTerminalInput drops one terminal's input timestamp. Callers use it only
+// after they destroyed the runtime behind the terminal: the timestamp must
+// outlive viewers (a draft typed before switching tabs still guards the idle
+// and draft proofs), so nothing here drops it on detach (#5691).
+//
+// It takes the write fence first so a keystroke write already in flight
+// finishes before the entry goes, and gives up with ctx's error, changing
+// nothing, if ctx ends while it waits. Under the fence it also stops every view
+// still open on that runtime from taking input: their buffered and queued
+// keystrokes are dropped, and so is anything typed later, so none of them can
+// record the timestamp again. A fresh view (a new runtime under the same id)
+// records as usual. A drain's inputBlocked count is left alone: its holder
+// releases it.
+func (m *Manager) ForgetTerminalInput(ctx context.Context, terminalID string) error {
+	unlock, err := m.lockInputFenceContext(ctx, terminalID)
+	if err != nil {
+		return err
+	}
 	defer unlock()
+	m.mu.Lock()
+	var views []*attachment
+	for a := range m.attachments {
+		if a.id == terminalID {
+			views = append(views, a)
+		}
+	}
+	m.mu.Unlock()
+	for _, a := range views {
+		a.forgetInput()
+	}
 	m.inputMu.Lock()
 	delete(m.lastInputAt, terminalID)
 	m.inputMu.Unlock()
+	return nil
 }
 
 // TerminalOnScreen reports whether a client is showing the terminal. A client
@@ -310,7 +349,11 @@ func (m *Manager) writeInput(terminalID string, a *attachment, raw []byte, relea
 		release()
 		return
 	}
-	_ = a.writeLeased(raw, release)
+	if err := a.writeLeased(raw, release); errors.Is(err, errInputRefused) {
+		// Nothing reached the pane, so nothing was accepted. This also keeps a
+		// view forgotten by ForgetTerminalInput from recording its terminal again.
+		return
+	}
 	m.recordInputAt(terminalID, raw)
 }
 

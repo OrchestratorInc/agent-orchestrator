@@ -41,9 +41,10 @@ type ShellRuntime interface {
 // terminal mux. *terminal.Manager satisfies it. Shell terminals destroy their
 // own runtimes (Session Manager never sees them) and every tab gets a fresh
 // random handle id, so without this each closed tab would leave one input
-// timestamp behind forever (#5691).
+// timestamp behind forever (#5691). It waits on the terminal's write fence, so
+// it returns ctx's error if ctx ends first.
 type TerminalInputForgetter interface {
-	ForgetTerminalInput(terminalID string)
+	ForgetTerminalInput(ctx context.Context, terminalID string) error
 }
 
 // ProjectRootLocator resolves a project id to the directory a shell should
@@ -263,10 +264,15 @@ func (s *Service) SetTerminalInputForgetter(f TerminalInputForgetter) {
 
 // forgetTerminalInput tells the terminal mux, if wired, to drop handleID's
 // input timestamp. Call it only after the runtime is confirmed destroyed: a
-// live runtime may still hold a draft the timestamp guards.
-func (s *Service) forgetTerminalInput(handleID string) {
-	if s.inputForgetter != nil {
-		s.inputForgetter.ForgetTerminalInput(handleID)
+// live runtime may still hold a draft the timestamp guards. A failure (ctx
+// ended while it waited on the write fence) only leaves one stale timestamp,
+// so it is logged and teardown goes on.
+func (s *Service) forgetTerminalInput(ctx context.Context, handleID string) {
+	if s.inputForgetter == nil {
+		return
+	}
+	if err := s.inputForgetter.ForgetTerminalInput(ctx, handleID); err != nil {
+		s.log.Warn("shell terminal: forget input timestamp failed", "handleId", handleID, "error", err)
 	}
 }
 
@@ -1072,7 +1078,7 @@ func (s *Service) destroyConfirmed(ctx context.Context, rec ShellTerminalRecord)
 	}
 	// Death is confirmed: nothing reads a destroyed shell's input timestamp,
 	// and its random handle id never comes back.
-	s.forgetTerminalInput(handleID)
+	s.forgetTerminalInput(ctx, handleID)
 	if deleted, err := s.store.DeleteShellTerminalByHandleID(ctx, handleID); err != nil {
 		s.log.Warn("shell terminal: delete row after destroy failed", "handleId", handleID, "error", err)
 	} else if deleted {
