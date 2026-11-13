@@ -55,9 +55,9 @@ export function cloudChatHistoryKey(orgId: string, sessionId: string) {
 	return ["cloud-chat-history", orgId, sessionId] as const;
 }
 
-/** Drops every Cloud chat's cached events, history window and step log: on sign-out or an account switch. */
+/** Drops every Cloud chat's cached events, history window, step log and asides: on sign-out or an account switch. */
 export function clearCloudChatCaches(queryClient: QueryClient): void {
-	for (const key of ["cloud-chat-events", "cloud-chat-history", "cloud-script-steps"]) queryClient.removeQueries({ queryKey: [key] });
+	for (const key of ["cloud-chat-events", "cloud-chat-history", "cloud-script-steps", "cloud-asides", "cloud-aside"]) queryClient.removeQueries({ queryKey: [key] });
 }
 
 /** The cached list lacks the session's oldest events. */

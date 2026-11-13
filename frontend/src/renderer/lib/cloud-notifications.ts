@@ -1,5 +1,6 @@
 import { CloudCpError } from "./cloud-cp/errors";
 import type {
+	CloudCpAsideReplyNotificationMetadata,
 	CloudCpMentionNotificationMetadata,
 	CloudCpNotification,
 	CloudCpNotificationEvent,
@@ -25,6 +26,8 @@ export const cloudInboxQueryKey = (baseUrl: string, userId: string) =>
 
 /** A mention notification: someone named the recipient, or a team they are in. */
 export const MENTIONED = "mentioned";
+/** Someone replied in an aside the recipient is in: one row per aside, replaced by a newer reply. */
+export const ASIDE_REPLY = "aside_reply";
 
 /**
  * Whether the control plane predates mentions and the personal inbox: it has
@@ -140,18 +143,44 @@ export function mentionMetadata(row: Pick<CloudCpNotification, "type" | "metadat
 		teamName: text("teamName"),
 		sessionTitle: text("sessionTitle"),
 		projectName: text("projectName"),
+		asideId: text("asideId"),
+		replyId: text("replyId"),
 	};
 }
 
+/** An aside reply notification's metadata, read defensively like a mention's. */
+export function asideReplyMetadata(row: Pick<CloudCpNotification, "type" | "metadata">): CloudCpAsideReplyNotificationMetadata | undefined {
+	if (row.type !== ASIDE_REPLY) return undefined;
+	const raw = row.metadata ?? {};
+	const text = (key: string) => (typeof raw[key] === "string" && raw[key] !== "" ? raw[key] as string : undefined);
+	const sequence = typeof raw.sequence === "number" && Number.isFinite(raw.sequence) ? raw.sequence : undefined;
+	return {
+		asideId: text("asideId"),
+		replyId: text("replyId"),
+		authorUserId: text("authorUserId"),
+		authorName: text("authorName"),
+		sequence,
+		turnId: text("turnId"),
+		sessionTitle: text("sessionTitle"),
+		projectName: text("projectName"),
+	};
+}
+
+/** The session and project a mention or aside reply row names, for its "session · project" line. */
+export function sessionRowMetadata(row: Pick<CloudCpNotification, "type" | "metadata">): { sessionTitle?: string; projectName?: string } | undefined {
+	return mentionMetadata(row) ?? asideReplyMetadata(row);
+}
+
 /** The preferences a person has before they change any: every alert on. */
-export const DEFAULT_NOTIFICATION_PREFERENCES: CloudCpNotificationPreferences = { mentions: true, teamMentions: true };
+export const DEFAULT_NOTIFICATION_PREFERENCES: CloudCpNotificationPreferences = { mentions: true, teamMentions: true, asideReplies: true };
 
 /**
- * Whether a live event deserves a desktop alert: a mention that is new or
- * newly repeated (a newer mention in the same session replaces the row and
- * arrives as notification_created), still unread and unresolved, and the
- * matching preference is on (`teamMentions` when only a team named them).
- * The bell lists it either way.
+ * Whether a live event deserves a desktop alert: a mention or an aside reply
+ * that is new or newly repeated (a newer one replaces the row and arrives as
+ * notification_created), still unread and unresolved, and the matching
+ * preference is on (`teamMentions` when only a team named them,
+ * `asideReplies` for a reply; a control plane that predates that switch
+ * leaves it on). The bell lists it either way.
  */
 export function shouldAlertCloudNotification(
 	event: CloudCpNotificationEvent,
@@ -159,9 +188,25 @@ export function shouldAlertCloudNotification(
 ): boolean {
 	if (event.kind !== "notification_created") return false;
 	const row = event.notification;
-	if (row.type !== MENTIONED || row.status !== "unread" || row.resolvedAt) return false;
+	if (row.status !== "unread" || row.resolvedAt) return false;
+	if (row.type === ASIDE_REPLY) return preferences.asideReplies !== false;
+	if (row.type !== MENTIONED) return false;
 	const viaTeam = Boolean(mentionMetadata(row)?.teamId);
 	return viaTeam ? preferences.teamMentions : preferences.mentions;
+}
+
+/**
+ * Whether the person is looking at the session a mention or aside reply is
+ * about, so it raises no alert (and no badge): that session is on screen on
+ * this machine, in a visible and focused window. Anywhere else it alerts,
+ * even while AO's window is focused on another session.
+ */
+export function cloudSessionWatched(
+	route: { hostId?: string; sessionId?: string },
+	sessionId: string | undefined,
+	attention: { visible: boolean; focused: boolean },
+): boolean {
+	return Boolean(sessionId) && !route.hostId && route.sessionId === sessionId && attention.visible && attention.focused;
 }
 
 /**

@@ -10,7 +10,8 @@ import {
 } from "./cloud-chat-history";
 import type { CloudCpClient } from "./cloud-cp/client";
 import type { CloudCpClientEvent, CloudCpNotification, CloudCpSession } from "./cloud-cp/types";
-import { mentionMetadata } from "./cloud-notifications";
+import { asideReplyMetadata, mentionMetadata } from "./cloud-notifications";
+import { prefetchAside } from "./cloud-asides";
 
 // Opening a mention is instant: when a mention notification arrives, the
 // session it points at is read into the React Query cache (its header, the
@@ -20,10 +21,16 @@ import { mentionMetadata } from "./cloud-notifications";
 // after the click and only adds what is newer. With nothing cached (after a
 // restart, say) the session still opens at once, showing the message from
 // the notification's own text until the rest loads.
+//
+// A mention or a reply in an aside opens the same way, with the aside open
+// beside the conversation and its reply box focused; the aside's replies are
+// read into the cache on arrival too.
 
-/** Where a mention notification opens: the session, at the message that named the person. */
+/** Where a mention or aside reply notification opens: the session, at the message, with its aside open. */
 export interface MentionOpenTarget {
 	notificationId: string;
+	/** A mention, or a reply in an aside (whose body is the reply, not the message). */
+	kind: "mention" | "aside_reply";
 	orgId: string;
 	projectId?: string;
 	sessionId: string;
@@ -32,19 +39,25 @@ export interface MentionOpenTarget {
 	turnId?: string;
 	authorUserId?: string;
 	authorName?: string;
-	/** The notification's own text: the message's first line, with each mention as @Name. */
+	/** The notification's own text: the message's (or the reply's) first line, with each mention as @Name. */
 	body: string;
 	/** The team that named them, when only a team did: its chip is tinted. */
 	teamId?: string;
+	/** The aside to open beside the conversation; absent from a control plane without asides. */
+	asideId?: string;
 	createdAt: string;
 }
 
-/** A mention notification's open target, or undefined for any other row or one without a session. */
+/** A mention or aside reply notification's open target, or undefined for any other row or one without a session. */
 export function mentionOpenTarget(row: CloudCpNotification): MentionOpenTarget | undefined {
-	const metadata = mentionMetadata(row);
-	if (!metadata || !row.sessionId) return undefined;
+	if (!row.sessionId) return undefined;
+	const mention = mentionMetadata(row);
+	const reply = mention ? undefined : asideReplyMetadata(row);
+	const metadata = mention ?? reply;
+	if (!metadata) return undefined;
 	return {
 		notificationId: row.id,
+		kind: mention ? "mention" : "aside_reply",
 		orgId: row.orgId,
 		projectId: row.projectId,
 		sessionId: row.sessionId,
@@ -53,7 +66,8 @@ export function mentionOpenTarget(row: CloudCpNotification): MentionOpenTarget |
 		authorUserId: metadata.authorUserId,
 		authorName: metadata.authorName,
 		body: row.body,
-		teamId: metadata.teamId,
+		teamId: mention?.teamId,
+		...(metadata.asideId ? { asideId: metadata.asideId } : {}),
 		createdAt: row.updatedAt || row.createdAt,
 	};
 }
@@ -116,7 +130,8 @@ export function useMentionFocus(sessionId: string | undefined): MentionFocus | u
  * sequence, so it takes the row's place when the conversation loads.
  */
 export function mentionFallbackEvents(target: MentionOpenTarget | undefined): CloudCpClientEvent[] | undefined {
-	if (!target || target.sequence === undefined || target.body.trim() === "") return undefined;
+	// An aside reply's text is the reply, which belongs in the aside, not the conversation.
+	if (!target || target.kind !== "mention" || target.sequence === undefined || target.body.trim() === "") return undefined;
 	return [{
 		sessionId: target.sessionId,
 		sequence: target.sequence,
@@ -125,6 +140,7 @@ export function mentionFallbackEvents(target: MentionOpenTarget | undefined): Cl
 			text: target.body,
 			...(target.authorUserId ? { authorUserId: target.authorUserId } : {}),
 			...(target.authorName ? { authorName: target.authorName } : {}),
+			...(target.asideId ? { asideId: target.asideId } : {}),
 		},
 		createdAt: target.createdAt,
 	}];
@@ -151,11 +167,15 @@ export const cloudSessionQueryKey = (baseUrl: string, orgId: string, sessionId: 
  */
 export async function prefetchMentionedSession(
 	queryClient: QueryClient,
-	client: Pick<CloudCpClient, "getSession" | "listChatEvents">,
+	client: Pick<CloudCpClient, "getSession" | "listChatEvents"> & Partial<Pick<CloudCpClient, "getSessionAside">>,
 	baseUrl: string,
 	target: MentionOpenTarget,
 ): Promise<void> {
-	const { orgId, sessionId, sequence } = target;
+	const { orgId, sessionId, sequence, asideId } = target;
+	// The aside opens beside the conversation with its replies already here.
+	const aside = asideId && client.getSessionAside
+		? prefetchAside(queryClient, { getSessionAside: client.getSessionAside }, orgId, sessionId, asideId, CHAT_EVENTS_CACHE_MS)
+		: Promise.resolve();
 	const header = queryClient.prefetchQuery({
 		queryKey: cloudSessionQueryKey(baseUrl, orgId, sessionId),
 		queryFn: async (): Promise<CloudCpSession | undefined> => (await client.getSession(orgId, sessionId)).session,
@@ -174,5 +194,5 @@ export async function prefetchMentionedSession(
 			await loadOlderCloudChatEvents(queryClient, client, orgId, sessionId);
 		}
 	})();
-	await Promise.allSettled([header, conversation]);
+	await Promise.allSettled([header, conversation, aside]);
 }

@@ -40,6 +40,7 @@ describe("mentionOpenTarget", () => {
 	it("opens a mention at its message, with what the row knows", () => {
 		expect(mentionOpenTarget(row())).toEqual({
 			notificationId: "n-1",
+			kind: "mention",
 			orgId: "org-1",
 			projectId: "project-1",
 			sessionId: "session-1",

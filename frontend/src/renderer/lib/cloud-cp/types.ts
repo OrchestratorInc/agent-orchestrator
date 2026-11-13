@@ -203,6 +203,10 @@ export interface CloudCpMentionNotificationMetadata {
 	teamName?: string;
 	sessionTitle?: string;
 	projectName?: string;
+	/** The aside the mention is in: the one its message started, or the one whose reply named them. */
+	asideId?: string;
+	/** Set when a reply in the aside named them. */
+	replyId?: string;
 }
 
 /**
@@ -220,6 +224,25 @@ export interface CloudCpNotificationPreferences {
 	mentions: boolean;
 	/** Someone mentions a team I'm in. */
 	teamMentions: boolean;
+	/** New replies in asides I'm in. Absent from a control plane that predates asides. */
+	asideReplies?: boolean;
+}
+
+/**
+ * An `aside_reply` notification's metadata: the aside, its newest reply and
+ * who wrote it, the event of the message that started the aside, and what to
+ * show on the row's "session · project · time" line.
+ */
+export interface CloudCpAsideReplyNotificationMetadata {
+	asideId?: string;
+	replyId?: string;
+	authorUserId?: string;
+	authorName?: string;
+	/** The session event of the message that started the aside. */
+	sequence?: number;
+	turnId?: string;
+	sessionTitle?: string;
+	projectName?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -261,6 +284,69 @@ export interface CloudCpMentionCandidates {
 export interface CloudCpMentionCandidatesQuery {
 	q?: string;
 	limit?: number;
+}
+
+// ---------------------------------------------------------------------------
+// Asides: a message that mentions people starts a thread between them about
+// it, which the agent never reads.
+// ---------------------------------------------------------------------------
+
+/** GET /orgs/{orgId}/sessions/{sessionId}/asides: one aside as the caller sees it. */
+export interface CloudCpAside {
+	asideId: string;
+	/** The message that started it. */
+	anchor: { sequence: number; turnId?: string; clientMessageId?: string };
+	replyCount: number;
+	lastReplyAt?: string;
+	/** The caller is in it and something by someone else is newer than when they last read it. */
+	unread: boolean;
+	muted: boolean;
+}
+
+export interface CloudCpAsideListResponse {
+	items: CloudCpAside[];
+}
+
+/** The message that started an aside, as the transcript shows it. */
+export interface CloudCpAsideMessage {
+	sequence: number;
+	turnId?: string;
+	text: string;
+	mentions: CloudCpEventMention[];
+	authorUserId?: string;
+	authorName?: string;
+	createdAt: string;
+}
+
+export interface CloudCpAsideReply {
+	replyId: string;
+	asideId: string;
+	text: string;
+	mentions: CloudCpEventMention[];
+	authorUserId: string;
+	authorName: string;
+	createdAt: string;
+}
+
+/** GET /orgs/{orgId}/sessions/{sessionId}/asides/{asideId}: the message and a page of replies, oldest first. */
+export interface CloudCpAsideThread {
+	aside: CloudCpAside;
+	message: CloudCpAsideMessage;
+	replies: CloudCpAsideReply[];
+	hasMore: boolean;
+	nextCursor?: string;
+}
+
+export interface CloudCpAsideThreadQuery {
+	cursor?: string;
+	limit?: number;
+}
+
+/** POST /orgs/{orgId}/sessions/{sessionId}/asides/{asideId}/replies; idempotent on clientMessageId. */
+export interface CloudCpAsideReplyRequest {
+	text: string;
+	mentions?: CloudCpMentionToken[];
+	clientMessageId: string;
 }
 
 export interface CloudCpNotificationEvent {

@@ -250,6 +250,8 @@ export interface ConversationMessage {
 	authorName?: string;
 	/** The people and teams a human message in a shared Cloud session named, drawn as chips in its text. */
 	mentions?: TimelineMention[];
+	/** The aside a shared Cloud message that names people started: it draws as a dashed box with the aside icon. */
+	asideId?: string;
 	/** Set when origin is a worker or automation, for the attribution line. */
 	senderLabel?: string;
 	senderSessionId?: string;
@@ -581,6 +583,8 @@ export interface SystemEventDetail {
 	clientMessageId?: string;
 	/** steer: the people and teams it named in a shared Cloud session, drawn as chips. */
 	mentions?: TimelineMention[];
+	/** steer: the aside it started in a shared Cloud session, as on a message. */
+	asideId?: string;
 	/** steer: the queued turns whose messages this steer carried into the running turn. */
 	providerInputSourceTurnIds?: string[];
 	/** steer: complete provider-neutral content copied from a promoted queue item. */

@@ -69,6 +69,12 @@ import type {
 	CloudCpSteerTurnRequest,
 	CloudCpMentionCandidates,
 	CloudCpMentionCandidatesQuery,
+	CloudCpAside,
+	CloudCpAsideListResponse,
+	CloudCpAsideReply,
+	CloudCpAsideReplyRequest,
+	CloudCpAsideThread,
+	CloudCpAsideThreadQuery,
 	CloudCpMyNotificationStateChange,
 	CloudCpNotificationPreferences,
 	CloudCpSendMessageResponse,
@@ -593,6 +599,16 @@ export interface CloudCpClient {
 	setMyNotificationPreferences(change: Partial<CloudCpNotificationPreferences>, options?: CloudCpRequestOptions): Promise<CloudCpNotificationPreferences>;
 	/** The people and teams a session's @ menu offers; names only, and only people who can open the session. */
 	listMentionCandidates(orgId: string, sessionId: string, query?: CloudCpMentionCandidatesQuery, options?: CloudCpRequestOptions): Promise<CloudCpMentionCandidates>;
+	/** The session's asides as the caller sees them: each tagged message's reply count, unread dot and mute. */
+	listSessionAsides(orgId: string, sessionId: string, options?: CloudCpRequestOptions): Promise<CloudCpAsideListResponse>;
+	/** One aside: the message that started it and a page of its replies, oldest first. */
+	getSessionAside(orgId: string, sessionId: string, asideId: string, query?: CloudCpAsideThreadQuery, options?: CloudCpRequestOptions): Promise<CloudCpAsideThread>;
+	/** Replies in an aside; anyone who can open the session may, a viewer too. The agent never reads it. */
+	replyToSessionAside(orgId: string, sessionId: string, asideId: string, body: CloudCpAsideReplyRequest, options?: CloudCpRequestOptions): Promise<{ reply: CloudCpAsideReply }>;
+	/** Marks the aside read for the caller, with its reply notification. */
+	markSessionAsideRead(orgId: string, sessionId: string, asideId: string, options?: CloudCpRequestOptions): Promise<CloudCpAside>;
+	/** Mutes or unmutes the aside's replies for the caller. */
+	muteSessionAside(orgId: string, sessionId: string, asideId: string, muted: boolean, options?: CloudCpRequestOptions): Promise<CloudCpAside>;
 
 	createTerminalTicket(
 		orgId: string,
@@ -1305,6 +1321,16 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 		setMyNotificationPreferences: (change, o) => requestJson("PUT", "/me/notification-preferences", { body: change, signal: o?.signal }),
 		listMentionCandidates: (orgId, sessionId, query, o) =>
 			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/mention-candidates`, { query: { q: query?.q, limit: query?.limit }, signal: o?.signal }),
+		listSessionAsides: (orgId, sessionId, o) =>
+			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/asides`, { signal: o?.signal }),
+		getSessionAside: (orgId, sessionId, asideId, query, o) =>
+			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/asides/${seg(asideId)}`, { query: { cursor: query?.cursor, limit: query?.limit }, signal: o?.signal }),
+		replyToSessionAside: (orgId, sessionId, asideId, body, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/asides/${seg(asideId)}/replies`, { body, signal: o?.signal }),
+		markSessionAsideRead: (orgId, sessionId, asideId, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/asides/${seg(asideId)}/read`, { signal: o?.signal }),
+		muteSessionAside: (orgId, sessionId, asideId, muted, o) =>
+			requestJson("PUT", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/asides/${seg(asideId)}/mute`, { body: { muted }, signal: o?.signal }),
 
 		createTerminalTicket: (orgId, sessionId, body, o) =>
 			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/terminal-ticket`, {

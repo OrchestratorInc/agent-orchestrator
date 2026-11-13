@@ -85,7 +85,7 @@ describe("opening a chat at a mention", () => {
 	it("lands on the notification's own text when nothing else is loaded yet", () => {
 		const done = vi.fn();
 		const fallback = mentionFallbackEvents({
-			notificationId: "n-1", orgId: "org-1", sessionId: session.id, sequence: 4,
+			notificationId: "n-1", kind: "mention", orgId: "org-1", sessionId: session.id, sequence: 4,
 			authorUserId: "u-chen", authorName: "Chen Li", body: "Can you check the backoff? @Priya Shah", createdAt: at,
 		})!;
 		render(
