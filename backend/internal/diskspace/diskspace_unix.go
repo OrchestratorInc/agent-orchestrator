@@ -1,6 +1,5 @@
 //go:build !windows
 
-// Package diskspace reports free space on the volume holding a path.
 package diskspace
 
 import "golang.org/x/sys/unix"
