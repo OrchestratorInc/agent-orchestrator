@@ -506,7 +506,6 @@ export interface ChatWorkspaceProps {
 	composerLockedPlaceholder?: string;
 	/** The snapshot is a saved copy, so its controller state says nothing about the agent now. */
 	savedCopy?: boolean;
-	sendsWhileAway?: boolean;
 	importBlock?: AgentBlock;
 	/** Every edit of the chat box's draft text or move of its caret. */
 	onComposerInput?: (text: string, caret?: number) => void;
@@ -818,7 +817,6 @@ function ChatWorkspaceContent({
 	composerNotice,
 	composerLockedPlaceholder,
 	savedCopy = false,
-	sendsWhileAway = false,
 	importBlock,
 	settingsLocked = false,
 	onComposerInput,
@@ -2266,7 +2264,7 @@ function ChatWorkspaceContent({
 												: undefined
 										}
 										starting={orchestratorStarting || arrivingInChat || cloudStarting || composerStarting}
-										disabled={(orchestratorBlocksComposer || (openingStarting && !session) || loadingQuietly || (snapshot.controller.state === "stopped" && !suppressStopped && !accountMoveQueues && (!resumingAgent || session?.provisionState === "failed" || terminated)) || (controllerTransitioning && !accountMoveQueues) || (newWorkDisabled && !sendsWhileAway) || composerLockedPlaceholder !== undefined) && !queueEdit?.clientMessageId}
+										disabled={(orchestratorBlocksComposer || (openingStarting && !session) || loadingQuietly || (snapshot.controller.state === "stopped" && !suppressStopped && !accountMoveQueues && (!resumingAgent || session?.provisionState === "failed" || terminated)) || (controllerTransitioning && !accountMoveQueues) || newWorkDisabled || composerLockedPlaceholder !== undefined) && !queueEdit?.clientMessageId}
 										disabledPlaceholder={
 											composerLockedPlaceholder !== undefined
 												? composerLockedPlaceholder
@@ -2277,7 +2275,7 @@ function ChatWorkspaceContent({
 												? t("chat.startup.queuePlaceholder", { agent: agentLabel(snapshot.harness) })
 												: orchestratorBlocksComposer
 												? setupPlaceholder
-												: controllerTransitioning || (newWorkDisabled && !sendsWhileAway)
+												: controllerTransitioning || newWorkDisabled
 												? ""
 												: terminated && snapshot.controller.state === "stopped"
 												? t(resumingAgent ? "shell.restoringSession" : "chat.archived.placeholder")

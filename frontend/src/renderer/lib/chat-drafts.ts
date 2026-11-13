@@ -94,7 +94,6 @@ export interface ChatComposerDelivery {
 	state: ChatDraftDeliveryState;
 	/** Exact composer revision this delivery was created from. */
 	revision: number;
-	sentAt?: number;
 	/** Stable daemon idempotency key. Reused for every recovery attempt. */
 	clientMessageId: string;
 	/** Exact API text, including durable attachment path references. */
@@ -156,12 +155,12 @@ export interface ChatSessionDraft {
 		delivery?: ChatComposerDelivery;
 	};
 	/**
-	 * Sends whose outcome is unknown and that nothing is sending now (an app
-	 * restart or a lost answer), oldest first. They sit beside the composer, each
-	 * with its own `draft`, so the person can type while they are retried with the
-	 * same ids or discarded.
+	 * A send whose outcome is unknown and that nothing is sending now (an app
+	 * restart or a lost answer). It sits beside the composer, always with its own
+	 * `draft`, so the person can type while they retry it with the same id or
+	 * discard it.
 	 */
-	unsentQueue?: ChatComposerDelivery[];
+	unsent?: ChatComposerDelivery;
 	queuedEdit?: ChatDraftQueuedEdit;
 	inlineEdit?: ChatDraftInlineEdit;
 	/** Durable delivery journal for an inline branch edit. */
@@ -190,7 +189,6 @@ export interface PrepareChatComposerDeliveryInput {
 	fileReferences?: ChatFileReference[];
 	requestText: string;
 	clientMessageId: string;
-	queue?: boolean;
 }
 
 export interface PrepareChatInlineEditDeliveryInput extends ChatDraftInlineEditInput {
@@ -785,7 +783,6 @@ function isComposerDelivery(value: unknown): value is ChatComposerDelivery {
 		typeof delivery.revision === "number" &&
 		Number.isInteger(delivery.revision) &&
 		delivery.revision >= 0 &&
-		(delivery.sentAt === undefined || Number.isFinite(delivery.sentAt)) &&
 		typeof delivery.clientMessageId === "string" &&
 		delivery.clientMessageId.length > 0 &&
 		typeof delivery.requestText === "string" &&
@@ -852,8 +849,8 @@ function isChatSessionDraft(value: unknown, scope: ChatDraftScope): value is Cha
 			(Array.isArray(composer.excerpts) && composer.excerpts.every(isExcerptReference))) &&
 		(composer.fileReferences === undefined || (Array.isArray(composer.fileReferences) && composer.fileReferences.every(isFileReference))) &&
 		(composer.delivery === undefined || isComposerDelivery(composer.delivery)) &&
-		(draft.unsentQueue === undefined || (Array.isArray(draft.unsentQueue) && draft.unsentQueue.every((unsent) =>
-			isComposerDelivery(unsent) && unsent.kind === "send" && unsent.state === "dispatching" && unsent.draft !== undefined))) &&
+		(draft.unsent === undefined || (isComposerDelivery(draft.unsent) &&
+			draft.unsent.kind === "send" && draft.unsent.state === "dispatching" && draft.unsent.draft !== undefined)) &&
 		(draft.queuedEdit === undefined || (draft.queuedEdit !== null &&
 			typeof draft.queuedEdit.revision === "string" && draft.queuedEdit.revision.length > 0 &&
 			typeof draft.queuedEdit.turnId === "string" && draft.queuedEdit.turnId.length > 0 &&
@@ -915,10 +912,6 @@ export function loadChatSessionDraft(
 		(parsed as { incarnation?: unknown }).incarnation !== scope.incarnation
 	) return { ok: false, draft: empty };
  if (parsed && typeof parsed === "object" && "schemaVersion" in parsed && parsed.schemaVersion === 2) parsed = { ...parsed, schemaVersion: CHAT_DRAFT_SCHEMA_VERSION };
-	if (parsed && typeof parsed === "object" && "unsent" in parsed) {
-		const { unsent, ...rest } = parsed as { unsent?: unknown; unsentQueue?: unknown };
-		parsed = unsent === undefined ? rest : { ...rest, unsentQueue: [unsent, ...(Array.isArray(rest.unsentQueue) ? rest.unsentQueue : [])] };
-	}
  return {
   ok: true,
   draft: isChatSessionDraft(parsed, scope) ? parsed : empty,
@@ -939,7 +932,7 @@ function hasContent(draft: ChatSessionDraft): boolean {
 		(draft.composer.excerpts?.length ?? 0) > 0 ||
 		(draft.composer.fileReferences?.length ?? 0) > 0 ||
 		Boolean(draft.composer.delivery) ||
-		Boolean(draft.unsentQueue?.length) ||
+		Boolean(draft.unsent) ||
 		Boolean(draft.queuedEdit) ||
 		Boolean(draft.inlineEdit) ||
 		Boolean(draft.inlineEditDelivery)
@@ -1048,7 +1041,7 @@ export function prepareChatComposerDelivery(
 	const loaded = loadChatSessionDraft(scope, storage);
 	if (!loaded.ok) return { ok: false, recovered: false, draft: loaded.draft };
 	const existing = loaded.draft.composer.delivery;
-	if (existing && !input.queue) {
+	if (existing) {
 		const proof = persistDraftProven(loaded.draft, storage);
 		return proof.ok
 			? { ok: true, recovered: true, draft: proof.draft, mutation: existing }
@@ -1065,14 +1058,12 @@ export function prepareChatComposerDelivery(
 		: loaded.draft.composer.revision + 1;
 	// shortcut: excerpt sends stay locked, enable optimism when refused references can be edited separately.
 	const optimistic = input.optimistic && input.kind === "send" && excerpts.length === 0 && fileReferences.length === 0;
-	if (input.queue && (existing || !optimistic)) return { ok: false, recovered: false, draft: loaded.draft };
 	const mutation: ChatComposerDelivery = {
 		fileReferenceFormat: "quoted-v1",
 		...(input.nativeImages === undefined ? {} : { nativeImages: input.nativeImages }),
 		kind: input.kind,
 		state: "dispatching",
 		revision,
-		sentAt: Date.now(),
 		clientMessageId: input.clientMessageId,
 		requestText: input.requestText,
 		...(optimistic ? { draft: { text: input.composerText, attachments: input.attachments } } : {}),
@@ -1087,9 +1078,8 @@ export function prepareChatComposerDelivery(
 			attachments: optimistic ? [] : input.attachments,
 			excerpts,
 			fileReferences,
-			...(input.queue ? {} : { delivery: mutation }),
+			delivery: mutation,
 		},
-		...(input.queue ? { unsentQueue: withUnsent(loaded.draft.unsentQueue, mutation) } : {}),
 	};
 	const result = persistDraftProven(next, storage);
 	return result.ok
@@ -1205,7 +1195,12 @@ export function clearUncertainChatComposerDelivery(
 }
 
 /**
- * Whether an unanswered delivery can wait in the unsent queue.
+ * Move a send that nothing is sending (no live mutation) out of the composer into
+ * `unsent`, so the composer is free again. A send prepared without its own copy of
+ * the text takes the composer's text, attachments and references with it.
+ */
+/**
+ * Whether an unanswered delivery can wait in the unsent slot.
  * ponytail: excerpt and file-reference sends keep the locked retry, as they do for optimistic sends; park them once the strip can show those chips.
  */
 export function isParkableChatComposerDelivery(delivery: ChatComposerDelivery | undefined): delivery is ChatComposerDelivery {
@@ -1213,26 +1208,6 @@ export function isParkableChatComposerDelivery(delivery: ChatComposerDelivery | 
 		!delivery.excerpts?.length && !delivery.fileReferences?.length;
 }
 
-export function compareSendOrder(a: ChatComposerDelivery, b: ChatComposerDelivery): number {
-	return (a.sentAt ?? 0) - (b.sentAt ?? 0) || a.revision - b.revision;
-}
-
-function withUnsent(queue: ChatComposerDelivery[] | undefined, delivery: ChatComposerDelivery): ChatComposerDelivery[] {
-	return [...(queue ?? []).filter((unsent) => unsent.clientMessageId !== delivery.clientMessageId), delivery]
-		.sort(compareSendOrder);
-}
-
-function withoutUnsent(draft: ChatSessionDraft, clientMessageId: string): ChatSessionDraft {
-	const { unsentQueue, ...rest } = draft;
-	const left = (unsentQueue ?? []).filter((unsent) => unsent.clientMessageId !== clientMessageId);
-	return left.length ? { ...rest, unsentQueue: left } : rest;
-}
-
-/**
- * Move a send that nothing is sending (no live mutation) out of the composer into
- * `unsentQueue`, in send order, so the composer is free again. A send prepared without
- * its own copy of the text takes the composer's text, attachments and references with it.
- */
 export function parkChatComposerDelivery(
 	scope: ChatDraftScopeInput,
 	clientMessageId: string,
@@ -1244,14 +1219,16 @@ export function parkChatComposerDelivery(
 		!loaded.ok ||
 		getChatComposerMutation(scope).pending ||
 		!isParkableChatComposerDelivery(delivery) ||
-		delivery.clientMessageId !== clientMessageId
+		delivery.clientMessageId !== clientMessageId ||
+		// ponytail: one unsent slot; a second unanswered send stays in the composer until the first is resolved.
+		loaded.draft.unsent
 	) {
 		return { ok: false, draft: loaded.draft };
 	}
 	const composer = loaded.draft.composer;
 	const next: ChatSessionDraft = {
 		...loaded.draft,
-		unsentQueue: withUnsent(loaded.draft.unsentQueue, { ...delivery, draft: delivery.draft ?? { text: composer.text, attachments: composer.attachments } }),
+		unsent: { ...delivery, draft: delivery.draft ?? { text: composer.text, attachments: composer.attachments } },
 		composer: delivery.draft
 			? {
 				revision: composer.revision,
@@ -1266,42 +1243,46 @@ export function parkChatComposerDelivery(
 	return result.ok ? result : { ok: false, draft: loaded.draft };
 }
 
-/** Put an unsent message back in the composer's delivery slot for a retry with the same id. */
+/** Put the unsent message back in the composer's delivery slot for a retry with the same id. */
 export function reviveUnsentChatComposerDelivery(
 	scope: ChatDraftScopeInput,
 	clientMessageId: string,
 	storage: DraftStorage | undefined = rendererStorage(),
 ): DraftWriteResult {
 	const loaded = loadChatSessionDraft(scope, storage);
-	const unsent = loaded.draft.unsentQueue?.find((item) => item.clientMessageId === clientMessageId);
+	const unsent = loaded.draft.unsent;
 	if (
 		!loaded.ok ||
 		getChatComposerMutation(scope).pending ||
 		!unsent ||
+		unsent.clientMessageId !== clientMessageId ||
 		loaded.draft.composer.delivery
 	) {
 		return { ok: false, draft: loaded.draft };
 	}
-	const next = withoutUnsent(loaded.draft, clientMessageId);
-	const result = persistDraftProven({ ...next, composer: { ...next.composer, delivery: unsent } }, storage);
+	const next: ChatSessionDraft = { ...loaded.draft, composer: { ...loaded.draft.composer, delivery: unsent } };
+	delete next.unsent;
+	const result = persistDraftProven(next, storage);
 	return result.ok ? result : { ok: false, draft: loaded.draft };
 }
 
-/** Drop an unsent message. If it did arrive, the chat already shows it. */
+/** Drop the unsent message. If it did arrive, the chat already shows it. */
 export function discardUnsentChatComposerDelivery(
 	scope: ChatDraftScopeInput,
 	clientMessageId: string,
 	storage: DraftStorage | undefined = rendererStorage(),
 ): DraftWriteResult {
 	const loaded = loadChatSessionDraft(scope, storage);
-	if (!loaded.ok || !loaded.draft.unsentQueue?.some((unsent) => unsent.clientMessageId === clientMessageId)) {
+	if (!loaded.ok || loaded.draft.unsent?.clientMessageId !== clientMessageId) {
 		return { ok: false, draft: loaded.draft };
 	}
-	const result = persistDraftProven(withoutUnsent(loaded.draft, clientMessageId), storage);
+	const next: ChatSessionDraft = { ...loaded.draft };
+	delete next.unsent;
+	const result = persistDraftProven(next, storage);
 	return result.ok ? result : { ok: false, draft: loaded.draft };
 }
 
-/** Undo a discard: the message goes back to its place in send order. */
+/** Undo a discard, unless another unsent message has taken the slot since. */
 export function restoreUnsentChatComposerDelivery(
 	scope: ChatDraftScopeInput,
 	delivery: ChatComposerDelivery,
@@ -1310,14 +1291,14 @@ export function restoreUnsentChatComposerDelivery(
 	const loaded = loadChatSessionDraft(scope, storage);
 	if (
 		!loaded.ok ||
-		loaded.draft.unsentQueue?.some((unsent) => unsent.clientMessageId === delivery.clientMessageId) ||
+		loaded.draft.unsent ||
 		loaded.draft.composer.delivery?.clientMessageId === delivery.clientMessageId ||
 		delivery.kind !== "send" ||
 		!delivery.draft
 	) {
 		return { ok: false, draft: loaded.draft };
 	}
-	const result = persistDraftProven({ ...loaded.draft, unsentQueue: withUnsent(loaded.draft.unsentQueue, { ...delivery, state: "dispatching" }) }, storage);
+	const result = persistDraftProven({ ...loaded.draft, unsent: { ...delivery, state: "dispatching" } }, storage);
 	return result.ok ? result : { ok: false, draft: loaded.draft };
 }
 

@@ -1390,17 +1390,17 @@ describe("unsent composer sends", () => {
 		const draft = readChatSessionDraft("park", storage);
 		expect(draft.composer).toMatchObject({ text: "yo" });
 		expect(draft.composer.delivery).toBeUndefined();
-		expect(draft.unsentQueue).toMatchObject([{ clientMessageId: "unsent-1", requestText: input.requestText, draft: { text: "old long paste", attachments: [sent] } }]);
+		expect(draft.unsent).toMatchObject({ clientMessageId: "unsent-1", requestText: input.requestText, draft: { text: "old long paste", attachments: [sent] } });
 
 		// A new message can now be prepared while the old one waits.
 		const nextSend = prepareChatComposerDelivery("park", { ...input, composerText: "yo", attachments: [], requestText: "yo", clientMessageId: "next-1" }, storage);
 		expect(nextSend).toMatchObject({ ok: true, recovered: false, mutation: { clientMessageId: "next-1" } });
-		expect(readChatSessionDraft("park", storage).unsentQueue?.map((unsent) => unsent.clientMessageId)).toEqual(["unsent-1"]);
+		expect(readChatSessionDraft("park", storage).unsent?.clientMessageId).toBe("unsent-1");
 		expect(clearAcceptedChatComposer("park", nextSend.ok ? nextSend.mutation.revision : -1, storage).ok).toBe(true);
 
 		const revived = reviveUnsentChatComposerDelivery("park", "unsent-1", storage);
 		expect(revived.ok).toBe(true);
-		expect(revived.draft.unsentQueue).toBeUndefined();
+		expect(revived.draft.unsent).toBeUndefined();
 		const retry = prepareChatComposerDelivery("park", { ...input, clientMessageId: "ignored" }, storage);
 		expect(retry).toMatchObject({ ok: true, recovered: true, mutation: { clientMessageId: "unsent-1" } });
 	});
@@ -1414,10 +1414,10 @@ describe("unsent composer sends", () => {
 		expect(parkChatComposerDelivery("park-locked", input.clientMessageId, storage).ok).toBe(true);
 		const draft = readChatSessionDraft("park-locked", storage);
 		expect(draft.composer).toMatchObject({ text: "", attachments: [] });
-		expect(draft.unsentQueue?.[0]?.draft).toEqual({ text: "old long paste", attachments: [sent] });
+		expect(draft.unsent?.draft).toEqual({ text: "old long paste", attachments: [sent] });
 	});
 
-	it("never parks a send that is still being sent, a steer, or an excerpt send", () => {
+	it("never parks a send that is still being sent, a steer, an excerpt send, or into a taken slot", () => {
 		const storage = new MemoryStorage();
 		const token = beginChatComposerMutation("park-live")!;
 		const prepared = prepareChatComposerDelivery("park-live", input, storage);
@@ -1425,6 +1425,11 @@ describe("unsent composer sends", () => {
 		expect(parkChatComposerDelivery("park-live", input.clientMessageId, storage).ok).toBe(false);
 		cancelChatComposerMutation("park-live", token);
 		expect(parkChatComposerDelivery("park-live", input.clientMessageId, storage).ok).toBe(true);
+
+		const second = prepareChatComposerDelivery("park-live", { ...input, clientMessageId: "unsent-2" }, storage);
+		if (!second.ok) throw new Error("Failed to prepare second delivery");
+		expect(parkChatComposerDelivery("park-live", "unsent-2", storage).ok).toBe(false);
+		expect(readChatSessionDraft("park-live", storage).composer.delivery?.clientMessageId).toBe("unsent-2");
 
 		const steer = prepareChatComposerDelivery("park-steer", { ...input, kind: "steer" }, storage);
 		if (!steer.ok) throw new Error("Failed to prepare steer");
@@ -1436,49 +1441,19 @@ describe("unsent composer sends", () => {
 		expect(parkChatComposerDelivery("park-excerpt", input.clientMessageId, storage).ok).toBe(false);
 	});
 
-	it("keeps unsent sends in send order, whether parked, queued, retried or put back", () => {
-		const storage = new MemoryStorage();
-		const ids = () => readChatSessionDraft("order", storage).unsentQueue?.map((unsent) => unsent.clientMessageId);
-		const send = (text: string, clientMessageId: string, queue = false) =>
-			prepareChatComposerDelivery("order", { ...input, composerText: text, attachments: [], requestText: text, clientMessageId, queue }, storage);
-		expect(send("first", "a").ok).toBe(true);
-		expect(parkChatComposerDelivery("order", "a", storage).ok).toBe(true);
-		expect(send("second", "b").ok).toBe(true);
-		expect(parkChatComposerDelivery("order", "b", storage).ok).toBe(true);
-
-		const queued = send("third", "c", true);
-		expect(queued).toMatchObject({ ok: true, recovered: false, mutation: { clientMessageId: "c", draft: { text: "third" } } });
-		expect(queued.draft.composer).toMatchObject({ text: "", attachments: [] });
-		expect(queued.draft.composer.delivery).toBeUndefined();
-		expect(ids()).toEqual(["a", "b", "c"]);
-
-		expect(reviveUnsentChatComposerDelivery("order", "a", storage).ok).toBe(true);
-		expect(ids()).toEqual(["b", "c"]);
-		expect(send("typed while a retries", "d", true).ok).toBe(false);
-		expect(parkChatComposerDelivery("order", "a", storage).ok).toBe(true);
-		expect(ids()).toEqual(["a", "b", "c"]);
-
-		const b = readChatSessionDraft("order", storage).unsentQueue![1]!;
-		expect(discardUnsentChatComposerDelivery("order", "b", storage).ok).toBe(true);
-		expect(ids()).toEqual(["a", "c"]);
-		expect(restoreUnsentChatComposerDelivery("order", b, storage).ok).toBe(true);
-		expect(ids()).toEqual(["a", "b", "c"]);
-		expect(restoreUnsentChatComposerDelivery("order", b, storage).ok).toBe(false);
-	});
-
 	it("discards the unsent message and can put it back once", () => {
 		const storage = new MemoryStorage();
 		const prepared = prepareChatComposerDelivery("discard", input, storage);
 		if (!prepared.ok) throw new Error("Failed to prepare test delivery");
 		parkChatComposerDelivery("discard", input.clientMessageId, storage);
-		const unsent = readChatSessionDraft("discard", storage).unsentQueue![0]!;
+		const unsent = readChatSessionDraft("discard", storage).unsent!;
 
 		expect(discardUnsentChatComposerDelivery("discard", "unsent-1", storage).ok).toBe(true);
-		expect(readChatSessionDraft("discard", storage).unsentQueue).toBeUndefined();
+		expect(readChatSessionDraft("discard", storage).unsent).toBeUndefined();
 		expect(storage.values.size).toBe(1);
 
 		expect(restoreUnsentChatComposerDelivery("discard", unsent, storage).ok).toBe(true);
-		expect(readChatSessionDraft("discard", storage).unsentQueue).toEqual([unsent]);
+		expect(readChatSessionDraft("discard", storage).unsent).toEqual(unsent);
 		expect(restoreUnsentChatComposerDelivery("discard", unsent, storage).ok).toBe(false);
 	});
 
@@ -1489,26 +1464,11 @@ describe("unsent composer sends", () => {
 		parkChatComposerDelivery("keep", input.clientMessageId, storage);
 		writeChatComposerText("keep", "typing", storage);
 		writeChatAttachments("keep", [], storage);
-		expect(readChatSessionDraft("keep", storage).unsentQueue?.[0]?.clientMessageId).toBe("unsent-1");
+		expect(readChatSessionDraft("keep", storage).unsent?.clientMessageId).toBe("unsent-1");
 
 		const key = [...storage.values.keys()].find((name) => name.startsWith("ao.chat.draft:"))!;
 		const stored = JSON.parse(storage.values.get(key)!);
-		storage.values.set(key, JSON.stringify({ ...stored, unsentQueue: [{ ...stored.unsentQueue[0], draft: undefined }] }));
-		expect(readChatSessionDraft("keep", storage).unsentQueue).toBeUndefined();
-	});
-
-	it("reads the single unsent message an earlier version saved", () => {
-		const storage = new MemoryStorage();
-		const prepared = prepareChatComposerDelivery("legacy", input, storage);
-		if (!prepared.ok) throw new Error("Failed to prepare test delivery");
-		parkChatComposerDelivery("legacy", input.clientMessageId, storage);
-		const key = [...storage.values.keys()].find((name) => name.startsWith("ao.chat.draft:"))!;
-		const { unsentQueue, ...stored } = JSON.parse(storage.values.get(key)!);
-		storage.values.set(key, JSON.stringify({ ...stored, unsent: unsentQueue[0] }));
-
-		expect(readChatSessionDraft("legacy", storage).unsentQueue).toEqual(unsentQueue);
-		expect(writeChatComposerText("legacy", "typing", storage).ok).toBe(true);
-		expect(JSON.parse(storage.values.get(key)!)).not.toHaveProperty("unsent");
+		storage.values.set(key, JSON.stringify({ ...stored, unsent: { ...stored.unsent, draft: undefined } }));
+		expect(readChatSessionDraft("keep", storage).unsent).toBeUndefined();
 	});
 });
-

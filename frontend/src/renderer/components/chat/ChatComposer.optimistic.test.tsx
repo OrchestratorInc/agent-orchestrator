@@ -18,7 +18,7 @@ function pendingSend() {
 	return { onSend, resolve, reject };
 }
 
-function renderComposer(sessionId: string, onSend: Parameters<typeof ChatComposer>[0]["onSend"], attachments = false, commandError?: string) {
+function renderComposer(sessionId: string, onSend: Parameters<typeof ChatComposer>[0]["onSend"], attachments = false) {
 	return render(
 		<TooltipProvider>
 			<ChatComposer
@@ -26,7 +26,6 @@ function renderComposer(sessionId: string, onSend: Parameters<typeof ChatCompose
 				onSend={onSend}
 				nativeImages={attachments}
 				onStageAttachments={attachments ? vi.fn().mockResolvedValue([".ao/attachments/original.png"]) : undefined}
-				commandError={commandError}
 			/>
 		</TooltipProvider>,
 	);
@@ -238,110 +237,6 @@ describe("optimistic message delivery", () => {
 		expect(replacement).toHaveTextContent("message to restore");
 		expect(replacement).toHaveAttribute("contenteditable", "true");
 	});
-
-	it("keeps retrying a send nobody answered from the strip, with the box free, and stops at a coded refusal", async () => {
-		const sessionId = "optimistic-transport-retry";
-		let refuse: (reason: unknown) => void = () => {};
-		const onSend = vi.fn()
-			.mockRejectedValueOnce(new TypeError("Failed to fetch"))
-			.mockRejectedValueOnce({ code: "UPSTREAM_UNAVAILABLE", message: "remote daemon unreachable" })
-			.mockImplementationOnce(() => new Promise((_resolve, reject) => { refuse = reject; }))
-			.mockResolvedValue(undefined);
-		renderComposer(sessionId, onSend);
-		await startSend(onSend, "status here");
-		const field = screen.getByLabelText("Message the agent");
-		const strip = await screen.findByTestId("unsent-message-strip");
-		expect(strip).toHaveTextContent("Waiting for connection…");
-		expect(screen.getByText("Waiting for connection…")).toHaveClass("text-muted-foreground");
-		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-		expect(strip).toHaveTextContent("status here");
-		await typeInLexicalEditor(field, "typed during the outage");
-
-		const flickers: string[] = [];
-		const observer = new MutationObserver(() => {
-			if (field.getAttribute("contenteditable") !== "true") flickers.push("box locked");
-			if (!screen.queryByTestId("unsent-message-strip")) flickers.push("strip gone");
-		});
-		observer.observe(document.body, { attributes: true, childList: true, subtree: true });
-		await waitFor(() => expect(onSend).toHaveBeenCalledTimes(3), { timeout: 6_000 });
-		expect(onSend.mock.calls[1]).toEqual(onSend.mock.calls[0]);
-		expect(onSend.mock.calls[2]).toEqual(onSend.mock.calls[0]);
-		observer.disconnect();
-		expect(flickers).toEqual([]);
-
-		await act(async () => refuse({ code: "CHAT_RESUME_FAILED", message: "Could not resume" }));
-		await waitFor(() => expect(screen.getByTestId("unsent-message-strip")).toHaveTextContent("Not sent"));
-		expect(field).toHaveTextContent("typed during the outage");
-		await new Promise((resolve) => setTimeout(resolve, 2_500));
-		expect(onSend).toHaveBeenCalledTimes(3);
-		expect(readChatSessionDraft(sessionId).unsentQueue?.[0]?.state).toBe("dispatching");
-	});
-
-	it("delivers the sends of an outage in the order they were sent", async () => {
-		const sessionId = "optimistic-two-unanswered";
-		let online = false;
-		const delivered: string[] = [];
-		const onSend = vi.fn(async (text: string) => {
-			if (!online) throw new TypeError("Failed to fetch");
-			delivered.push(text);
-		});
-		renderComposer(sessionId, onSend);
-		const field = await startSend(onSend, "first");
-		await screen.findByTestId("unsent-message-strip");
-		await typeInLexicalEditor(field, "second");
-		fireEvent.keyDown(field, { key: "Enter" });
-		await waitFor(() => expect(readChatSessionDraft(sessionId).unsentQueue?.map((unsent) => unsent.requestText)).toEqual(["first", "second"]));
-		await waitFor(() => expect(field).toHaveAttribute("contenteditable", "true"));
-		expect(field.textContent).toBe("");
-		expect(screen.getAllByText("Waiting for connection…")).toHaveLength(2);
-		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-
-		online = true;
-		await waitFor(() => expect(screen.queryByTestId("unsent-message-strip")).not.toBeInTheDocument(), { timeout: 12_000 });
-		expect(delivered).toEqual(["first", "second"]);
-		expect(onSend.mock.calls.filter(([text]) => text === "second")).toHaveLength(1);
-		await waitFor(() => expect(readChatSessionDraft(sessionId).composer.delivery).toBeUndefined());
-		expect(readChatSessionDraft(sessionId).unsentQueue).toBeUndefined();
-	}, 20_000);
-
-	it("holds the messages after a refused one and the ones sent after it, and Retry sends them all in order", async () => {
-		const sessionId = "optimistic-refused-line";
-		let mode: "offline" | "refuse" | "online" = "offline";
-		const delivered: string[] = [];
-		const onSend = vi.fn(async (text: string) => {
-			if (mode === "offline") throw new TypeError("Failed to fetch");
-			if (mode === "refuse") {
-				mode = "online";
-				throw { code: "CHAT_RESUME_FAILED", message: "Could not resume" };
-			}
-			delivered.push(text);
-		});
-		renderComposer(sessionId, onSend);
-		const field = await startSend(onSend, "first");
-		await screen.findByTestId("unsent-message-strip");
-		await typeInLexicalEditor(field, "second");
-		fireEvent.keyDown(field, { key: "Enter" });
-		await waitFor(() => expect(screen.getAllByText("Waiting for connection…")).toHaveLength(2));
-
-		mode = "refuse";
-		await waitFor(() => expect(screen.getAllByText("Not sent")).toHaveLength(2), { timeout: 6_000 });
-		const attempts = onSend.mock.calls.length;
-		await new Promise((resolve) => setTimeout(resolve, 2_500));
-		expect(onSend).toHaveBeenCalledTimes(attempts);
-		expect(delivered).toEqual([]);
-
-		await waitFor(() => expect(field).toHaveAttribute("contenteditable", "true"));
-		await typeInLexicalEditor(field, "third");
-		fireEvent.keyDown(field, { key: "Enter" });
-		await waitFor(() => expect(screen.getAllByText("Not sent")).toHaveLength(3));
-		await new Promise((resolve) => setTimeout(resolve, 1_000));
-		expect(onSend).toHaveBeenCalledTimes(attempts);
-		expect(delivered).toEqual([]);
-
-		await userEvent.click(screen.getByRole("button", { name: "Retry" }));
-		await waitFor(() => expect(screen.queryByTestId("unsent-message-strip")).not.toBeInTheDocument(), { timeout: 8_000 });
-		expect(delivered).toEqual(["first", "second", "third"]);
-	}, 20_000);
 
 	it.each([
 		["response lost", new Error("response lost")],

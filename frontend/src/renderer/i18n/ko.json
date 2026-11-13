@@ -3303,7 +3303,6 @@
 	"chat.draft.sendUncertain": "메시지 전송이 확인되지 않았습니다. 동일한 전송 ID로 재시도하세요. 확인될 때까지 초안은 잠긴 상태로 유지됩니다.",
 	"chat.unsent.label": "보내지 않음",
 	"chat.unsent.sending": "보내는 중…",
-	"chat.unsent.retrying": "연결을 기다리는 중…",
 	"chat.unsent.expand": "전체 메시지 보기",
 	"chat.unsent.collapse": "전체 메시지 숨기기",
 	"chat.unsent.retry": "다시 시도",

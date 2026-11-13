@@ -3303,7 +3303,6 @@
 	"chat.draft.sendUncertain": "メッセージの配信が確認されていません。同じ配信 ID で再試行してください。確認されるまで下書きはロックされます。",
 	"chat.unsent.label": "未送信",
 	"chat.unsent.sending": "送信中…",
-	"chat.unsent.retrying": "接続を待っています…",
 	"chat.unsent.expand": "メッセージ全体を表示",
 	"chat.unsent.collapse": "メッセージ全体を隠す",
 	"chat.unsent.retry": "再試行",

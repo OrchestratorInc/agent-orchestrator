@@ -3303,7 +3303,6 @@
 	"chat.draft.sendUncertain": "Die Nachrichtenzustellung wurde nicht bestätigt. Versuchen Sie es mit derselben Zustellungs-ID erneut; der Entwurf bleibt bis zur Klärung gesperrt.",
 	"chat.unsent.label": "Nicht gesendet",
 	"chat.unsent.sending": "Wird gesendet…",
-	"chat.unsent.retrying": "Warte auf Verbindung…",
 	"chat.unsent.expand": "Ganze Nachricht anzeigen",
 	"chat.unsent.collapse": "Ganze Nachricht ausblenden",
 	"chat.unsent.retry": "Erneut senden",

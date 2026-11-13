@@ -3362,7 +3362,6 @@
 	"chat.draft.sendUncertain": "A entrega da mensagem não foi confirmada. Tente novamente com o mesmo ID de entrega; o rascunho ficará bloqueado até a confirmação.",
 	"chat.unsent.label": "Não enviada",
 	"chat.unsent.sending": "Enviando…",
-	"chat.unsent.retrying": "Aguardando conexão…",
 	"chat.unsent.expand": "Mostrar a mensagem inteira",
 	"chat.unsent.collapse": "Ocultar a mensagem inteira",
 	"chat.unsent.retry": "Tentar de novo",

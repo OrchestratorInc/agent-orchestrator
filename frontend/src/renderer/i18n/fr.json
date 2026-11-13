@@ -3362,7 +3362,6 @@
 	"chat.draft.sendUncertain": "La livraison du message n’a pas été confirmée. Réessayez avec le même identifiant de livraison ; le brouillon reste verrouillé jusqu’à confirmation.",
 	"chat.unsent.label": "Non envoyé",
 	"chat.unsent.sending": "Envoi…",
-	"chat.unsent.retrying": "En attente de connexion…",
 	"chat.unsent.expand": "Afficher le message complet",
 	"chat.unsent.collapse": "Masquer le message complet",
 	"chat.unsent.retry": "Réessayer",
