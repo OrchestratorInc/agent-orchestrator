@@ -431,7 +431,7 @@ export function buildCommands(ctx: CommandPaletteContext, t: TFunction = appI18n
 				items.push({
 					id: "current-open-archive",
 					group: "current",
-					title: t("command.openArchive"),
+					title: t("command.archivedSessions"),
 					emphasis: currentProject.name,
 					subtitle: t("command.archivedCount", { count: archivedCount }),
 					keywords: ["archive", "archived", "ended", "terminated", "restore", "history", currentProject.name],

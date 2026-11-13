@@ -771,9 +771,8 @@ describe("ChatWorkspace timeline", () => {
 		const dock = screen.getByTestId("queued-message-dock");
 		expect(within(dock).getByText("Do this next")).toBeInTheDocument();
 		expect(within(screen.getByRole("log")).queryByText("Do this next")).not.toBeInTheDocument();
-		// Nothing to steer, edit or cancel until the daemon has given it a turn.
-		expect(within(dock).queryByLabelText("Delete queued message")).not.toBeInTheDocument();
-		expect(within(dock).queryByLabelText("Edit queued message")).not.toBeInTheDocument();
+		// The same actions as a confirmed row, held until the daemon has given it a turn.
+		expect(within(dock).getByLabelText("Delete queued message")).toBeDisabled();
 
 		const durable = structuredClone(snapshot);
 		durable.turns.push({ id: "turn-queued", state: "queued", requestedAt: "2026-09-09T00:00:05Z" });
@@ -794,7 +793,7 @@ describe("ChatWorkspace timeline", () => {
 
 		// The daemon's row replaces the pending one: still one row, now with its actions.
 		expect(screen.getAllByText("Do this next")).toHaveLength(1);
-		expect(within(screen.getByTestId("queued-message-dock")).getByLabelText("Delete queued message")).toBeInTheDocument();
+		expect(within(screen.getByTestId("queued-message-dock")).getByLabelText("Delete queued message")).toBeEnabled();
 	});
 
 	it("keeps a hibernated send looking normal while its queued turn wakes", () => {

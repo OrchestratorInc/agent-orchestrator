@@ -172,7 +172,7 @@ function renderBoardWithClient(queryClient: QueryClient, projectId?: string) {
 
 /** Opens the archive modal from the board's button; its cards mount the frame after it opens. */
 async function expandArchive() {
-	await userEvent.click(screen.getByRole("button", { name: /^Archive, \d+ sessions?$/ }));
+	await userEvent.click(screen.getByRole("button", { name: /^Archived sessions, \d+$/ }));
 	const dialog = await screen.findByRole("dialog", { name: "Archived sessions" });
 	await within(dialog).findAllByTestId("session-archive-card");
 	return dialog;
@@ -381,7 +381,7 @@ describe("SessionsBoard", () => {
 			isSuccess: true, isError: false,
 		});
 		renderBoard("p1");
-		expect(screen.queryByRole("button", { name: /^Archive, \d+ sessions?$/ })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: /^Archived sessions, \d+$/ })).not.toBeInTheDocument();
 		const indicator = screen.getByTestId("app-memory-indicator");
 		// In the board's action row, ahead of the Task button.
 		expect(indicator.closest(".workspace-topbar-actions")).not.toBeNull();
@@ -810,7 +810,7 @@ describe("SessionsBoard", () => {
 		});
 		view.rerender(<QueryClientProvider client={queryClient}><TooltipProvider><SessionsBoard projectId="p1" /></TooltipProvider></QueryClientProvider>);
 		expect(within(card()).queryByRole("status")).not.toBeInTheDocument();
-		expect(within(card()).getByText("ao/composer-review/root")).toBeInTheDocument();
+		expect(within(card()).getByText("composer-review")).toBeInTheDocument();
 	});
 
 	it("shows start failure instead of Idle on a failed card", () => {
@@ -1072,7 +1072,7 @@ describe("SessionsBoard", () => {
 		renderBoard("p1");
 
 		// The board keeps only a quiet entry point; no cards render until it opens.
-		const archiveButton = screen.getByRole("button", { name: "Archive, 2 sessions" });
+		const archiveButton = screen.getByRole("button", { name: "Archived sessions, 2" });
 		expect(archiveButton).toHaveAttribute("aria-haspopup", "dialog");
 		expect(within(archiveButton).getByText("2")).toBeInTheDocument();
 		expect(screen.queryByText("dead worker")).not.toBeInTheDocument();
@@ -1672,7 +1672,7 @@ describe("SessionsBoard", () => {
 		const readyLane = screen.getByRole("region", { name: "Ready sessions" });
 		expect(within(readyLane).getByText("Ready")).toHaveClass("text-status-ready");
 		expect(within(readyLane).getByText("merged worker")).toBeInTheDocument();
-		expect(screen.queryByRole("button", { name: /^Archive, \d+ sessions?$/ })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: /^Archived sessions, \d+$/ })).not.toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Restore merged worker" })).not.toBeInTheDocument();
 
 		await userEvent.click(screen.getByText("merged worker"));

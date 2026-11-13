@@ -80,6 +80,7 @@ function sortableRowStyle({
 function QueuedMessageRowContent({
 	message,
 	showPersistentSteer,
+	enterSteers = false,
 	showHoverSteer = false,
 	canSteer,
 	suppressHoverSteer,
@@ -90,13 +91,17 @@ function QueuedMessageRowContent({
 	canCancelMessage,
 	turnId,
 	busy,
+	steady = false,
 	onRunAction,
+	showGrip,
 	reorderEnabled,
 	dragHandleRef,
 	dragHandleProps,
 }: {
 	message: ConversationMessage;
 	showPersistentSteer?: boolean;
+	/** Cmd/Ctrl+Enter in the empty composer steers this row; the button shows the key. */
+	enterSteers?: boolean;
 	showHoverSteer?: boolean;
 	canSteer?: boolean;
 	suppressHoverSteer?: boolean;
@@ -107,7 +112,11 @@ function QueuedMessageRowContent({
 	canCancelMessage?: (message: ConversationMessage) => boolean;
 	turnId: string;
 	busy?: boolean;
+	/** Busy only while the composer sends: the actions wait without dimming. */
+	steady?: boolean;
 	onRunAction: (turnId: string, action: () => Promise<unknown>) => void;
+	/** The grip stays put whenever the dock can reorder; only dragging is gated. */
+	showGrip?: boolean;
 	reorderEnabled?: boolean;
 	dragHandleRef?: (element: HTMLButtonElement | null) => void;
 	dragHandleProps?: Record<string, unknown>;
@@ -131,6 +140,10 @@ function QueuedMessageRowContent({
 	const showHoverSteerButton =
 		showHoverSteer ||
 		Boolean(onPromoteQueuedTurn && canSteer && !showPersistentSteer && !suppressHoverSteer);
+	// Each send briefly disables every row. Dimming them on every Enter made the
+	// dock flicker and showed the hidden hover Steer on every row.
+	// Row actions change state instantly: no fades on hover, disable or key hint.
+	const steadyClass = cn("transition-none", steady && "disabled:opacity-100");
 
 	return (
 		<div className="queue-dock-row-content flex h-10 w-full min-w-0 items-center gap-2.5 overflow-hidden px-3">
@@ -157,10 +170,12 @@ function QueuedMessageRowContent({
 							void onRunAction(turnId, () => onPromoteQueuedTurn!(turnId));
 						}}
 						className={cn(
-							"focus-visible:pointer-events-auto focus-visible:opacity-100",
+							"transition-none focus-visible:pointer-events-auto focus-visible:opacity-100",
 							showHoverSteer
 								? "pointer-events-none opacity-100"
-								: "pointer-events-none opacity-0 group-hover/queued-row:pointer-events-auto group-hover/queued-row:opacity-100",
+								: busy
+									? "pointer-events-none opacity-0 disabled:opacity-0"
+									: "pointer-events-none opacity-0 group-hover/queued-row:pointer-events-auto group-hover/queued-row:opacity-100",
 						)}
 						aria-label="Steer this queued message into the running turn"
 						title="Steer into running turn"
@@ -174,13 +189,21 @@ function QueuedMessageRowContent({
 						variant="quiet"
 						size="sm"
 						disabled={busy}
+						className={steadyClass}
 						onClick={() => {
 							void onRunAction(turnId, () => onPromoteQueuedTurn(turnId));
 						}}
 						aria-label="Steer this queued message into the running turn"
 						title="Steer into running turn"
 					>
-						<span className="inline-flex shrink-0 items-center gap-1 text-muted-foreground">
+						{/* The key hint hides in place on other rows, so every Steer button is the same width. */}
+						<span
+							className={cn(
+								"inline-flex shrink-0 items-center gap-1 text-muted-foreground",
+								!enterSteers && "opacity-0",
+							)}
+							data-enter-steers={enterSteers ? "true" : undefined}
+						>
 							<CornerDownLeft aria-hidden="true" className="size-3.5 shrink-0" />
 						</span>
 						Steer
@@ -192,6 +215,7 @@ function QueuedMessageRowContent({
 						variant="quiet"
 						size="icon-sm"
 						disabled={busy}
+						className={steadyClass}
 						onClick={() => onBeginQueuedEdit(turnId, message.text)}
 						aria-label="Edit queued message"
 						title="Edit"
@@ -205,6 +229,7 @@ function QueuedMessageRowContent({
 						variant="destructive-ghost"
 						size="icon-sm"
 						disabled={busy}
+						className={steadyClass}
 						onClick={() => {
 							void onRunAction(turnId, () => onCancelQueuedTurn(turnId));
 						}}
@@ -214,12 +239,12 @@ function QueuedMessageRowContent({
 						<Trash2 aria-hidden="true" className="size-3.5 shrink-0" />
 					</Button>
 				) : null}
-				{reorderEnabled ? (
+				{showGrip ? (
 					<Pressable
 						ref={dragHandleRef}
 						{...dragHandleProps}
-						disabled={busy}
-						className="flex size-7 cursor-grab items-center justify-center rounded-md text-muted-foreground touch-none active:cursor-grabbing disabled:pointer-events-none disabled:opacity-50"
+						disabled={busy || !reorderEnabled}
+						className="flex size-7 cursor-grab items-center justify-center rounded-md text-muted-foreground touch-none transition-none active:cursor-grabbing disabled:pointer-events-none"
 						aria-label="Drag to reorder queued message"
 						title="Drag to reorder"
 					>
@@ -236,6 +261,7 @@ function SortableQueuedMessageRow({
 	message,
 	hiddenFromView,
 	showPersistentSteer,
+	enterSteers,
 	canSteer,
 	suppressHoverSteer,
 	onPromoteQueuedTurn,
@@ -244,8 +270,10 @@ function SortableQueuedMessageRow({
 	onCancelQueuedTurn,
 	canCancelMessage,
 	busy,
+	steady,
 	error,
 	onRunAction,
+	showGrip,
 	reorderEnabled,
 	isReordering,
 	dragSnapshot,
@@ -255,6 +283,7 @@ function SortableQueuedMessageRow({
 	message: ConversationMessage;
 	hiddenFromView?: boolean;
 	showPersistentSteer?: boolean;
+	enterSteers?: boolean;
 	canSteer?: boolean;
 	suppressHoverSteer?: boolean;
 	onPromoteQueuedTurn?: (turnId: string) => Promise<unknown>;
@@ -263,8 +292,10 @@ function SortableQueuedMessageRow({
 	onCancelQueuedTurn?: (turnId: string) => Promise<unknown>;
 	canCancelMessage?: (message: ConversationMessage) => boolean;
 	busy?: boolean;
+	steady?: boolean;
 	error?: string;
 	onRunAction: (turnId: string, action: () => Promise<unknown>) => void;
+	showGrip?: boolean;
 	reorderEnabled?: boolean;
 	isReordering?: boolean;
 	dragSnapshot?: DragRowSnapshot | null;
@@ -304,9 +335,11 @@ function SortableQueuedMessageRow({
 		>
 			<QueuedMessageRowContent
 				busy={busy}
+				steady={steady}
 				canSteer={canSteer}
 				dragHandleProps={{ ...attributes, ...listeners }}
 				dragHandleRef={setActivatorNodeRef}
+				enterSteers={enterSteers}
 				message={message}
 				onBeginQueuedEdit={onBeginQueuedEdit}
 				canEditMessage={canEditMessage}
@@ -314,6 +347,7 @@ function SortableQueuedMessageRow({
 				canCancelMessage={canCancelMessage}
 				onPromoteQueuedTurn={onPromoteQueuedTurn}
 				onRunAction={onRunAction}
+				showGrip={showGrip}
 				reorderEnabled={reorderEnabled}
 				showHoverSteer={frozenActions?.showHoverSteer}
 				showPersistentSteer={frozenActions?.showPersistentSteer ?? showPersistentSteer}
@@ -332,6 +366,7 @@ function SortableQueuedMessageRow({
 export const QueuedMessageDock = memo(function QueuedMessageDock({
 	messages,
 	disabled,
+	sending,
 	editingTurnId,
 	canSteer,
 	canSteerNext,
@@ -348,6 +383,8 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 }: {
 	messages: QueuedMessage[];
 	disabled?: boolean;
+	/** The composer is sending: row actions wait for it, without dimming. */
+	sending?: boolean;
 	editingTurnId?: string;
 	canSteer?: boolean;
 	canSteerNext?: boolean;
@@ -416,27 +453,30 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 		() => messages.filter((entry) => !entry.pending).map(({ turnId }) => turnId),
 		[messages],
 	);
-	const defaultDisplayTurnIds = useMemo(() => [...fifoTurnIds].reverse(), [fifoTurnIds]);
+	// Rows read in send order, like the transcript: the next message on top, the
+	// newest at the bottom, and a send not yet confirmed after everything queued.
 	const displayTurnIds = useMemo(() => {
-		if (!displayOrder) return defaultDisplayTurnIds;
+		if (!displayOrder) return fifoTurnIds;
 		const known = new Set(fifoTurnIds);
 		const ordered = displayOrder.filter((turnId) => known.has(turnId));
 		const missing = fifoTurnIds.filter((turnId) => !ordered.includes(turnId));
 		return [...ordered, ...missing];
-	}, [defaultDisplayTurnIds, displayOrder, fifoTurnIds]);
+	}, [displayOrder, fifoTurnIds]);
 	const displayMessages = useMemo(
 		() => [
-			// Newest first, like the rest of the dock: a pending send is the newest of all.
-			...[...pendingMessages].reverse(),
 			...displayTurnIds.flatMap((turnId) => {
 				const message = messagesByTurnId.get(turnId);
 				return message ? [message] : [];
 			}),
+			...pendingMessages,
 		],
 		[displayTurnIds, messagesByTurnId, pendingMessages],
 	);
 	const reorderEnabled =
 		Boolean(onReorderQueuedTurns) && fifoTurnIds.length > 1 && isOpen;
+	// Grips appear with the second row, a send still in flight included, and
+	// then stay put while sends come and go; only dragging waits.
+	const showGrip = Boolean(onReorderQueuedTurns) && displayMessages.length > 1 && isOpen;
 	const nextQueuedTurnId = fifoTurnIds[0];
 
 	const suppressHoverSteer = useCallback(() => {
@@ -470,10 +510,9 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 
 	useEffect(() => {
 		if (!displayOrder) return;
-		const expectedFifo = [...displayOrder].reverse();
 		if (
-			expectedFifo.length === fifoTurnIds.length &&
-			expectedFifo.every((turnId, index) => turnId === fifoTurnIds[index])
+			displayOrder.length === fifoTurnIds.length &&
+			displayOrder.every((turnId, index) => turnId === fifoTurnIds[index])
 		) {
 			setDisplayOrder(null);
 		}
@@ -523,9 +562,7 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 	const onDragStart = useCallback(
 		({ active }: DragStartEvent) => {
 			const turnId = String(active.id);
-			const showPersistentSteer = Boolean(
-				canSteer && canSteerNext && turnId === nextQueuedTurnId,
-			);
+			const showPersistentSteer = Boolean(canSteer);
 			setIsReordering(true);
 			setDragSnapshot({
 				showPersistentSteer,
@@ -535,7 +572,7 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 			});
 			suppressHoverSteer();
 		},
-		[canSteer, canSteerNext, hoveredTurnId, nextQueuedTurnId, suppressHoverSteer],
+		[canSteer, hoveredTurnId, suppressHoverSteer],
 	);
 
 	const onDragEnd = useCallback(
@@ -547,10 +584,9 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 			if (!over || !onReorderQueuedTurns) return;
 			const nextDisplay = reorderById(displayTurnIds, String(active.id), String(over.id));
 			if (!nextDisplay) return;
-			const fifoOrder = [...nextDisplay].reverse();
 			setReorderError(undefined);
 			flushSync(() => setDisplayOrder(nextDisplay));
-			void onReorderQueuedTurns(fifoOrder).catch((error) => {
+			void onReorderQueuedTurns(nextDisplay).catch((error) => {
 				setDisplayOrder(null);
 				setReorderError(
 					error instanceof Error ? error.message : "Could not reorder queued messages.",
@@ -584,7 +620,7 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 				onClick={() => hasMore && setExpanded((open) => !open)}
 				disabled={!hasMore}
 				className={cn(
-					"queue-dock-toggle relative z-[1] flex w-full items-center gap-2 bg-surface px-3 py-2 text-left motion-reduce:transition-none",
+					"queue-dock-toggle relative z-[1] flex w-full items-center gap-2 bg-surface px-3 py-2 text-left transition-none",
 					hasMore && "cursor-pointer",
 					!hasMore && "cursor-default",
 				)}
@@ -594,18 +630,18 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 				<span
 					aria-hidden="true"
 					className={cn(
-						"grid h-3.5 shrink-0 overflow-hidden transition-[width] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] motion-reduce:transition-none",
+						"grid h-3.5 shrink-0 overflow-hidden",
 						hasMore ? "w-3.5" : "w-0",
 					)}
 				>
 					<ChevronDown
 						className={cn(
-							"size-3.5 shrink-0 text-muted-foreground transition-transform duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] motion-reduce:transition-none",
+							"size-3.5 shrink-0 text-muted-foreground",
 							expanded ? "rotate-0" : "-rotate-90",
 						)}
 					/>
 				</span>
-				<span className="queue-dock-label text-xs font-medium text-muted-foreground transition-colors duration-150">
+				<span className="queue-dock-label text-xs font-medium text-muted-foreground">
 					<span
 						className="inline-block w-fit"
 					>
@@ -643,8 +679,9 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 								)}
 							>
 								{displayMessages.map(({ turnId, message, pending }, index) => {
-									const busy =
+									const rowBusy =
 										disabled || promotePendingTurnId === turnId || cancelPendingTurnId === turnId;
+									const busy = rowBusy || Boolean(sending);
 									const isNextQueuedTurn = turnId === nextQueuedTurnId;
 									return (
 										<SortableQueuedMessageRow
@@ -653,23 +690,24 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 											key={message.clientMessageId ?? turnId}
 											turnId={turnId}
 											message={message}
-											hiddenFromView={!isOpen && index !== displayMessages.length - 1}
-											showPersistentSteer={Boolean(canSteer && canSteerNext && isNextQueuedTurn)}
+											// Folded, the dock keeps the next message to send in view.
+											hiddenFromView={!isOpen && index !== 0}
+											// Every row's Steer, and the next row's key hint, stay put while a
+											// turn can be steered: typing or sending never makes them blink.
+											showPersistentSteer={Boolean(canSteer)}
+											enterSteers={Boolean(canSteer && isNextQueuedTurn)}
 											busy={busy}
+											steady={busy && !rowBusy}
 											dragSnapshot={dragSnapshot}
 											error={errors[turnId] ?? steerErrors?.[turnId]}
 											isReordering={isReordering}
 											onRowHoverChange={setHoveredTurnId}
+											showGrip={showGrip}
 											reorderEnabled={reorderEnabled && !busy && !pending}
 											{...rowProps}
-											{...(pending
-												? {
-														canSteer: false,
-														onPromoteQueuedTurn: undefined,
-														onBeginQueuedEdit: undefined,
-														onCancelQueuedTurn: undefined,
-													}
-												: null)}
+											// A send the daemon has not confirmed yet shows the same actions,
+											// held until it has a turn, so confirming it shifts nothing.
+											{...(pending ? { busy: true, steady: true } : null)}
 										/>
 									);
 								})}
