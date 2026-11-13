@@ -72,3 +72,26 @@ func TestAdapterLogNeverFailsTheProvider(t *testing.T) {
 		t.Fatalf("Close on a disabled log = %v; want nil", err)
 	}
 }
+
+func TestAdapterLogTrimsWritesLargerThanTheLimit(t *testing.T) {
+	dir := t.TempDir()
+	log := openAdapterLog(dir, 10)
+	t.Cleanup(func() { _ = log.Close() })
+
+	big := strings.Repeat("x", 15) + "0123456789"
+	for range 2 {
+		if n, err := log.Write([]byte(big)); err != nil || n != len(big) {
+			t.Fatalf("Write = %d, %v; want %d, nil", n, err, len(big))
+		}
+	}
+
+	for _, name := range []string{adapterLogName, adapterLogName + ".1"} {
+		got, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != "0123456789" {
+			t.Fatalf("%s = %q; want only the newest 10 bytes of an oversized write", name, got)
+		}
+	}
+}

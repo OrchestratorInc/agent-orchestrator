@@ -61,13 +61,19 @@ func (l *adapterLog) Write(p []byte) (int, error) {
 	if l.file == nil {
 		return len(p), nil
 	}
-	if l.size+int64(len(p)) > l.maxBytes && l.size > 0 {
+	// One write larger than a whole file keeps only its newest bytes, so a file
+	// never exceeds the limit. The caller still sees the full length written.
+	chunk := p
+	if int64(len(chunk)) > l.maxBytes {
+		chunk = chunk[int64(len(chunk))-l.maxBytes:]
+	}
+	if l.size+int64(len(chunk)) > l.maxBytes && l.size > 0 {
 		l.rotate()
 		if l.file == nil {
 			return len(p), nil
 		}
 	}
-	n, err := l.file.Write(p)
+	n, err := l.file.Write(chunk)
 	l.size += int64(n)
 	if err != nil {
 		_ = l.file.Close()
