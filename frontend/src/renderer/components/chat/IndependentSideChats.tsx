@@ -1,10 +1,10 @@
 import { excerptSizeError, fitExcerptContext, LOCAL_CHAT_MESSAGE_BYTES } from "../../../shared/chat-excerpt";
 import { upgradeExcerpt } from "../../lib/chat-excerpt-snapshot";
 import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
-import { apiErrorException } from "../../lib/api-error-exception";
 import { useTranslation } from "react-i18next";
 import { flushSync } from "react-dom";
-import type { PendingSideClose, SideCloseOutcome, SideCloseState } from "../../../shared/side-close";
+import { SIDE_CLOSE_OPERATION_TIMEOUT_MS, SIDE_CLOSE_QUERY_TIMEOUT_MS, type SideCloseState } from "../../../shared/side-close";
+import { applyCloseSummary, beginClose, canMutateSide, closeStatus, emptyCloseProjection, selectedSideAfterUpdate, uncertainClose, unavailableCloseProjection, withWatchdog, type SideCloseProjection } from "./sideCloseProjection";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { ArrowUp, Loader2, MessageSquare, Pencil, Plus, Square, X } from "@/components/app-icons";
 import type { components } from "../../../api/schema";
@@ -132,7 +132,9 @@ export function SideComposer({
 		if (trigger) editor.current?.insertToken(trigger, value);
 	};
 	useEffect(() => {
-		if (editor.current?.getSnapshot().text !== draft.text) editor.current?.setText(draft.text);
+		if (editor.current?.getSnapshot().text === draft.text) return;
+		// Loading a draft must not move keyboard focus out of the tab strip.
+		editor.current?.setText(draft.text, undefined, { preserveFocus: true });
 	}, [draft.text]);
 	useEffect(() => {
 		if (focusKey && ready) editor.current?.focus();
@@ -380,16 +382,22 @@ export function useIndependentSideChats(
 	const [sides, setSidesState] = useState<Side[]>([]);
 	const sidesRef = useRef(sides);
 	const setSides = useCallback((update: Side[] | ((current: Side[]) => Side[])) => {
-		const next = typeof update === "function" ? update(sidesRef.current) : update;
+		const previous = sidesRef.current;
+		const next = typeof update === "function" ? update(previous) : update;
 		sidesRef.current = next;
 		setSidesState(next);
+		setActiveId(selected => selectedSideAfterUpdate(selected, previous, next));
 	}, []);
 	const [activeId, setActiveId] = useState<string>();
 	const [visible, setVisible] = useState(false);
 	const [liveSnapshot, setSnapshot] = useState<Snapshot>();
+	const liveSnapshotRef = useRef(liveSnapshot);
+	liveSnapshotRef.current = liveSnapshot;
 	const retainedSnapshots = useRef(new Map<string, { snapshot: Snapshot; olderPages: Snapshot[] }>());
 	const [snapshotRefreshKey, setSnapshotRefreshKey] = useState(0);
 	const [olderPages, setOlderPages] = useState<Snapshot[]>([]);
+	const olderPagesRef = useRef(olderPages);
+	olderPagesRef.current = olderPages;
 	const [drafts, setDrafts] = useState<Record<string, SideChatDraft>>({});
 	const draftsRef = useRef(drafts);
 	draftsRef.current = drafts;
@@ -397,28 +405,18 @@ export function useIndependentSideChats(
 	const [focusKey, setFocusKey] = useState(0);
 	const [renameText, setRenameText] = useState<string>();
 	const [renameId, setRenameId] = useState<string>();
+	const renameIdRef = useRef(renameId);
+	renameIdRef.current = renameId;
 	const renameCancelled = useRef(false);
-	const [confirmClose, setConfirmClose] = useState<string>();
-	const tabRowRef = useRef<HTMLElement>(null);
-	const hadCloseDialog = useRef(false);
-	useEffect(() => {
-		const wasOpen = hadCloseDialog.current;
-		hadCloseDialog.current = Boolean(confirmClose);
-		if (!wasOpen || confirmClose) return;
-		const timer = window.setTimeout(() => {
-			if (document.activeElement === document.body) {
-				tabRowRef.current?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"], .browser-panel__tab-new')?.focus();
-			}
-		}, 0);
-		return () => window.clearTimeout(timer);
-	}, [confirmClose]);
-	const [closeWarnings, setCloseWarningsState] = useState<Record<string, "open" | "cleanup_pending" | "unconfirmed">>({});
-	const closeWarningsRef = useRef(closeWarnings);
-	const setCloseWarnings = useCallback((update: typeof closeWarnings | ((current: typeof closeWarnings) => typeof closeWarnings)) => {
-		const next = typeof update === "function" ? update(closeWarningsRef.current) : update;
-		closeWarningsRef.current = next;
-		setCloseWarningsState(next);
+	type CloseDialog = { id: string; sideId: string; requestId: string; scope: { active: boolean } };
+	const [confirmClose, setConfirmCloseState] = useState<CloseDialog>();
+	const confirmCloseRef = useRef(confirmClose);
+	const setConfirmClose = useCallback((update: CloseDialog | undefined | ((current: CloseDialog | undefined) => CloseDialog | undefined)) => {
+		const next = typeof update === "function" ? update(confirmCloseRef.current) : update;
+		confirmCloseRef.current = next;
+		setConfirmCloseState(next);
 	}, []);
+	const tabRowRef = useRef<HTMLElement>(null);
 	// The side transcript renders through the main chat's Timeline, which owns
 	// selection, source navigation, and scroll follow. Same-side annotations from
 	// the composer navigate through it.
@@ -426,33 +424,84 @@ export function useIndependentSideChats(
 	const [loadingOlder, setLoadingOlder] = useState(false);
 	const [error, setError] = useState<string>();
 	const [listError, setListError] = useState<string>();
-	const [sideError, setSideError] = useState<{ id: string; message: string }>();
+	const [sideErrors, setSideErrors] = useState<Record<string, Record<string, string>>>({});
+	const setSideError = useCallback((error?: { id: string; message: string; kind?: string }) => setSideErrors(current => {
+		if (!error) return {};
+		const kind = error.kind ?? "mutation";
+		const owned = { ...current[error.id] };
+		delete owned[kind];
+		return { ...current, [error.id]: { ...owned, [kind]: error.message } };
+	}), []);
+	const clearSideError = useCallback((id: string, kind?: string) => setSideErrors(current => {
+		const next = { ...current };
+		if (!kind) delete next[id];
+		else { next[id] = { ...next[id] }; delete next[id][kind]; }
+		return next;
+	}), []);
 	const [pending, setPending] = useState(false);
 	const [sendingRevision, setSendingRevision] = useState(0);
-	const sendingRef = useRef(new Set<string>());
+	const sendingRef = useRef(new Map<string, symbol>());
 	const sending = Boolean(activeId && sendingRef.current.has(activeId));
-	const [editingTurnId, setEditingTurnId] = useState<string>();
-	const [editingText, setEditingText] = useState("");
-	const [inputAnswers, setInputAnswers] = useState<Record<string, Record<string, string>>>({});
+	const [queuedEditors, setQueuedEditors] = useState<Record<string, { turnId: string; text: string }>>({});
+	const editingTurnId = activeId ? queuedEditors[activeId]?.turnId : undefined;
+	const editingText = activeId ? queuedEditors[activeId]?.text ?? "" : "";
+	const [inputAnswers, setInputAnswers] = useState<Record<string, Record<string, Record<string, string>>>>({});
 	const activeIdRef = useRef(activeId);
 	activeIdRef.current = activeId;
 	const activationRevision = useRef({ id: activeId, revision: 0 });
 	if (activationRevision.current.id !== activeId) {
 		activationRevision.current = { id: activeId, revision: activationRevision.current.revision + 1 };
 	}
-	const closedSidesRef = useRef(new Set<string>());
-	const [pendingCloses, setPendingCloses] = useState<PendingSideClose[]>([]);
-	const closingSidesRef = useRef(new Set<string>());
-	const snapshot = liveSnapshot?.side.id === activeId ? liveSnapshot : activeId && closingSidesRef.current.has(activeId) ? retainedSnapshots.current.get(activeId)?.snapshot : undefined;
-	const closeRequests = useRef(new Set<string>());
-	const closing = Boolean(confirmClose && closeRequests.current.has(confirmClose));
 	const [closeRevision, setCloseRevision] = useState(0);
+	const closeProjection = useRef(emptyCloseProjection(sessionId));
+	const closeInvocations = useRef(new Map<string, string>());
+	const sideRevisions = useRef(new Map<string, number>());
+	const projectClose = useCallback((next: SideCloseProjection) => {
+		const previous = closeProjection.current;
+		if (next === previous) return;
+		const ids = new Set([...sidesRef.current.map(side => side.id), ...Object.keys(previous.entries), ...Object.keys(next.entries), ...Object.keys(previous.attempts), ...Object.keys(next.attempts)]);
+		for (const id of ids) {
+			if (canMutateSide(previous, id) !== canMutateSide(next, id) || closeStatus(previous, id) !== closeStatus(next, id) || previous.entries[id]?.version !== next.entries[id]?.version || previous.epoch !== next.epoch) {
+				sideRevisions.current.set(id, (sideRevisions.current.get(id) ?? 0) + 1);
+				if (activeIdRef.current === id && !canMutateSide(next, id)) {
+					const loaded = liveSnapshotRef.current;
+					if (loaded?.side.id === id) retainedSnapshots.current.set(id, { snapshot: loaded, olderPages: olderPagesRef.current });
+					olderGeneration.current++;
+					loadingOlderRef.current = false;
+					setLoadingOlder(false);
+				}
+				if (!canMutateSide(next, id)) {
+					sendingRef.current.delete(id);
+					if (renameIdRef.current === id) {
+						renameCancelled.current = true;
+						renameIdRef.current = undefined;
+						setRenameId(undefined);
+						setRenameText(undefined);
+					}
+				}
+			}
+		}
+		closeProjection.current = next;
+		setCloseRevision(value => value + 1);
+	}, []);
+	// These are derived permission views, not independent lifecycle state.
+	const closedSidesRef = { current: { has: (id: string) => closeStatus(closeProjection.current, id) === "closed" } };
+	const closingSidesRef = { current: { has: (id: string) => !canMutateSide(closeProjection.current, id) } };
+	const isClosing = (id: string) => closeInvocations.current.has(id) || closeStatus(closeProjection.current, id) === "closing";
+	const closing = Boolean(confirmClose && (closeInvocations.current.get(confirmClose.sideId) === confirmClose.requestId || (closeProjection.current.attempts[confirmClose.sideId]?.requestId === confirmClose.requestId && closeProjection.current.attempts[confirmClose.sideId]?.busy)));
+	const snapshot = liveSnapshot?.side.id === activeId ? liveSnapshot : activeId && closingSidesRef.current.has(activeId) ? retainedSnapshots.current.get(activeId)?.snapshot : undefined;
 	const lifecycleRevision = useRef(0);
 	const listRequests = useRef(0);
 	const appliedCloseStateRequest = useRef(0);
+	const closeStateRequests = useRef(0);
 	const appliedListRequest = useRef(0);
 	const localCreates = useRef(new Map<string, Side>());
-	const sideRevisions = useRef(new Map<string, number>());
+	// Rows recovered only from close state may learn their title after startup.
+	// Once HTTP/create supplies a row, its label wins over the recovery copy.
+	const closePlaceholders = useRef(new Set<string>());
+	const queuedCloseSummary = useRef(new Map<string, SideCloseState>());
+	const inventoryKnown = useRef(false);
+	const closeWaiters = useRef(new Map<string, { sideId: string; expectedVersion: number; current: () => boolean; resolve: (state: SideCloseState) => void }>());
 	const loadingOlderRef = useRef(false);
 	const olderGeneration = useRef(0);
 	const olderScope = useRef("");
@@ -480,7 +529,10 @@ export function useIndependentSideChats(
 	}, [sessionId]);
 	useEffect(() => {
 		creationScope.active = true;
+		closeInvocations.current.clear();
 		setPending(false);
+		sendingRef.current.clear();
+		setSendingRevision(value => value + 1);
 		olderGeneration.current++;
 		loadingOlderRef.current = false;
 		setLoadingOlder(false);
@@ -498,12 +550,8 @@ export function useIndependentSideChats(
 			const next = JSON.stringify([status.state, status.pid, status.port]);
 			if (identity !== next) {
 				creationScopeRef.current.active = false;
-				setCloseWarnings(warnings => {
-					const next = { ...warnings };
-					for (const id of closeRequests.current) next[id] = "unconfirmed";
-					return next;
-				});
-				closeRequests.current.clear();
+				projectClose(unavailableCloseProjection(closeProjection.current, true));
+				queuedCloseSummary.current.clear();
 				setConfirmClose(undefined);
 				setAttachmentRevision(value => value + 1);
 			}
@@ -516,15 +564,15 @@ export function useIndependentSideChats(
 		return () => { sessionRef.current = ""; };
 	}, [sessionId, enabled]);
 	useEffect(() => {
-		closedSidesRef.current.clear();
-		closingSidesRef.current.clear();
-		closeRequests.current.clear();
+		projectClose(emptyCloseProjection(sessionId));
+		queuedCloseSummary.current.clear();
+		inventoryKnown.current = false;
 		retainedSnapshots.current.clear();
 		localCreates.current.clear();
+		closePlaceholders.current.clear();
 		sideRevisions.current.clear();
 		setSideError(undefined);
 		lifecycleRevision.current++;
-		setPendingCloses([]);
 		setSides([]);
 		setActiveId(undefined);
 		setVisible(false);
@@ -535,7 +583,8 @@ export function useIndependentSideChats(
 		setRenameId(undefined);
 		setRenameText(undefined);
 		setConfirmClose(undefined);
-		setCloseWarnings({});
+		setQueuedEditors({});
+		setInputAnswers({});
 		setError(undefined);
 		setListError(undefined);
 		setPending(false);
@@ -543,98 +592,116 @@ export function useIndependentSideChats(
 
 	const removeSide = useCallback((sideId: string) => {
 		lifecycleRevision.current++;
-		closedSidesRef.current.add(sideId);
-		closingSidesRef.current.delete(sideId);
 		localCreates.current.delete(sideId);
+		closePlaceholders.current.delete(sideId);
 		retainedSnapshots.current.delete(sideId);
-		setSideError(current => current?.id === sideId ? undefined : current);
+		clearSideError(sideId);
+		setQueuedEditors(current => { const next = { ...current }; delete next[sideId]; return next; });
+		setInputAnswers(current => {
+			const next = { ...current };
+			delete next[sideId];
+			return next;
+		});
 		const current = sidesRef.current;
-		const index = current.findIndex(side => side.id === sideId);
+		const targetFocused = document.activeElement?.closest("[data-side-id]")?.getAttribute("data-side-id") === sideId;
+		const scope = creationScopeRef.current;
 		const remaining = current.filter(side => side.id !== sideId);
 		setSides(remaining);
-		setActiveId(selected => selected === sideId ? remaining[Math.min(Math.max(index, 0), remaining.length - 1)]?.id : selected);
 		setSnapshot(current => current?.side.id === sideId ? undefined : current);
 		setDrafts(current => { const next = { ...current }; delete next[sideId]; return next; });
 		setAttachments(current => { const next = { ...current }; delete next[sideId]; return next; });
-		setCloseWarnings(current => { const next = { ...current }; delete next[sideId]; return next; });
-		setPendingCloses(current => current.filter(side => side.id !== sideId));
-		setConfirmClose(current => current === sideId ? undefined : current);
-	}, [setSides]);
+		setConfirmClose(current => current?.sideId === sideId ? undefined : current);
+		if (targetFocused) window.setTimeout(() => {
+			if (!scope.active || creationScopeRef.current !== scope || confirmCloseRef.current || document.activeElement !== document.body) return;
+			const header = tabRowRef.current;
+			(header?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"], .browser-panel__tab-new:not(:disabled)') ?? header)?.focus();
+		}, 0);
+	}, [setSides, clearSideError, setConfirmClose]);
+
+	const reconcileCloseSummary = useCallback((summary: SideCloseState, adoptEpoch = false) => {
+		const previous = closeProjection.current;
+		const next = applyCloseSummary(previous, summary, adoptEpoch);
+		if (next === previous) return;
+		projectClose(next);
+		for (const waiter of closeWaiters.current.values()) {
+			const entry = next.entries[waiter.sideId];
+			if (waiter.current() && ((entry && entry.status !== "closing" && entry.version > waiter.expectedVersion) || next.recovery === "unavailable")) waiter.resolve(summary);
+		}
+		for (const entry of Object.values(next.entries)) {
+			if (entry.status === "closed") { if (sidesRef.current.some(side => side.id === entry.id)) removeSide(entry.id); continue; }
+			if (entry.status !== "rejected_open" && !sidesRef.current.some(side => side.id === entry.id)) {
+				closePlaceholders.current.add(entry.id);
+				setSides(current => [...current, { id: entry.id, sessionId: entry.sessionId, label: entry.label, state: "closing", mainConversationId: "", contextMode: "", hasWork: false, createdAt: "", updatedAt: "" }]);
+			} else if (closePlaceholders.current.has(entry.id) && entry.label && sidesRef.current.some(side => side.id === entry.id && side.label !== entry.label)) {
+				setSides(current => current.map(side => side.id === entry.id ? { ...side, label: entry.label } : side));
+			}
+			if (entry.status !== "closing") setConfirmClose(dialog => dialog?.sideId === entry.id && previous.attempts[entry.id]?.requestId === dialog.requestId && !next.attempts[entry.id] ? undefined : dialog);
+		}
+	}, [projectClose, removeSide, setSides, setConfirmClose]);
 
 	const refreshList = useCallback(async (reportErrors = true) => {
 		if (!enabled) return;
 		const scope = creationScopeRef.current;
-		let revision = lifecycleRevision.current;
+		const revision = lifecycleRevision.current;
 		const request = ++listRequests.current;
-		const scopeCurrent = () => scope.active && creationScopeRef.current === scope && sessionRef.current === sessionId && revision === lifecycleRevision.current;
-		// Shutdown proof must not depend on a successful (or completed) HTTP list.
-		let closeState: SideCloseState | undefined;
-		try { closeState = await aoBridge.sideChats.getCloseState(sessionId); } catch { /* retain existing close locks */ }
-		if (!scopeCurrent() || request <= appliedCloseStateRequest.current) return;
-		if (closeState) {
-			appliedCloseStateRequest.current = request;
-			for (const id of closeState.closedIds) if (!closedSidesRef.current.has(id)) removeSide(id);
-			const closes = closeState.pending.filter(side => !closedSidesRef.current.has(side.id));
-			setPendingCloses(closes);
-			setCloseWarnings(warnings => {
-				const next = { ...warnings };
-				for (const side of closes) if (!closeRequests.current.has(side.id)) next[side.id] = side.phase;
-				return next;
-			});
-			closingSidesRef.current = new Set([...closes.map(side => side.id), ...closeRequests.current, ...Object.keys(closeWarningsRef.current).filter(id => closeWarningsRef.current[id] !== "open" && !closedSidesRef.current.has(id))]);
-			setSides(current => {
-				const next = [...current];
-				for (const side of closes) if (!next.some(current => current.id === side.id)) next.push({ ...side, state: "closing", mainConversationId: "", contextMode: "", hasWork: false, createdAt: "", updatedAt: "" });
-				return next;
-			});
-			// Our own confirmed removals advance the lifecycle revision.
-			revision = lifecycleRevision.current;
-		}
-		const current = () => scopeCurrent() && request > appliedListRequest.current;
+		const current = () => scope.active && creationScopeRef.current === scope && sessionRef.current === sessionId && revision === lifecycleRevision.current && request > appliedListRequest.current;
 		try {
-			const { data, error: requestError } = await apiClient.GET("/api/v1/sessions/{sessionId}/conversation/side-chats", {
-				params: { path: { sessionId } },
-			});
+			const { data, error: requestError } = await apiClient.GET("/api/v1/sessions/{sessionId}/conversation/side-chats", { params: { path: { sessionId } } });
 			if (!current()) return;
-			if (requestError) {
-				appliedListRequest.current = request;
-				if (reportErrors) setListError(apiErrorMessage(requestError));
-				return;
-			}
 			appliedListRequest.current = request;
+			if (requestError) { if (reportErrors) setListError(apiErrorMessage(requestError)); return; }
+			if (!Array.isArray(data?.sides)) { if (reportErrors) setListError("Could not load side chats."); return; }
+			inventoryKnown.current = true;
 			setListError(undefined);
-			const nextSides = Array.isArray(data?.sides) ? data.sides.filter((side) => !closedSidesRef.current.has(side.id)) : [];
+			const nextSides = data.sides.filter(side => !closedSidesRef.current.has(side.id));
+			for (const side of nextSides) closePlaceholders.current.delete(side.id);
 			for (const [id, side] of localCreates.current) {
 				if (nextSides.some(current => current.id === id)) localCreates.current.delete(id);
 				else if (!closedSidesRef.current.has(id)) nextSides.push(side);
 			}
-			for (const id of closingSidesRef.current) {
-				const retained = sidesRef.current.find(side => side.id === id);
-				if (retained && !closedSidesRef.current.has(id) && !nextSides.some(side => side.id === id)) nextSides.push(retained);
+			for (const side of sidesRef.current) {
+				if (closingSidesRef.current.has(side.id) && !closedSidesRef.current.has(side.id) && !nextSides.some(current => current.id === side.id)) nextSides.push(side);
 			}
 			setSides(nextSides);
-			setActiveId((current) =>
-				current && nextSides.some((side) => side.id === current) ? current : nextSides.at(-1)?.id,
-			);
 		} catch (cause) {
-			if (current()) {
-				appliedListRequest.current = request;
-				if (reportErrors) setListError(apiErrorMessage(cause));
-			}
+			if (current()) { appliedListRequest.current = request; if (reportErrors) setListError(apiErrorMessage(cause)); }
 		}
-	}, [sessionId, enabled, removeSide, setSides, creationScope]);
-	useEffect(() => {
+	}, [sessionId, enabled, setSides, creationScope]);
+
+	const refreshCloseState = useCallback(async () => {
 		if (!enabled) return;
-		return aoBridge.sideChats.onPendingClosesChanged(() => { void refreshList().catch((cause) => setError(String(cause))); });
-	}, [enabled, refreshList]);
+		const scope = creationScopeRef.current;
+		const request = ++closeStateRequests.current;
+		const current = () => scope.active && creationScopeRef.current === scope && sessionRef.current === sessionId && request > appliedCloseStateRequest.current;
+		try {
+			const summary = await withWatchdog(aoBridge.sideChats.getCloseState(sessionId), SIDE_CLOSE_QUERY_TIMEOUT_MS);
+			if (!current()) return;
+			appliedCloseStateRequest.current = request;
+			const queued = queuedCloseSummary.current.get(summary.epoch);
+			reconcileCloseSummary(queued && queued.epoch === summary.epoch && queued.revision > summary.revision ? queued : summary, true);
+			for (const side of sidesRef.current) {
+				if (canMutateSide(closeProjection.current, side.id)) clearSideError(side.id, "close-preflight");
+			}
+		} catch {
+			if (current()) projectClose(unavailableCloseProjection(closeProjection.current));
+		}
+	}, [enabled, sessionId, creationScope, reconcileCloseSummary, projectClose, clearSideError]);
 
 	useEffect(() => {
 		if (!enabled) return;
-		const refresh = () => void refreshList().catch((error) => setError(String(error)));
-		refresh();
-		const timer = window.setInterval(refresh, 2000);
-		return () => window.clearInterval(timer);
-	}, [refreshList, enabled]);
+		const scope = creationScopeRef.current;
+		const unsubscribe = aoBridge.sideChats.onCloseStateChanged(summary => {
+			if (!scope.active || creationScopeRef.current !== scope || (summary.sessionId !== null && summary.sessionId !== sessionId)) return;
+			const previous = queuedCloseSummary.current.get(summary.epoch);
+			if (!previous || summary.revision > previous.revision) queuedCloseSummary.current.set(summary.epoch, summary);
+			if (closeProjection.current.epoch) reconcileCloseSummary(summary);
+			void refreshList();
+		});
+		void refreshCloseState();
+		void refreshList();
+		const timer = window.setInterval(() => { void refreshCloseState(); void refreshList(); }, 2000);
+		return () => { unsubscribe(); window.clearInterval(timer); };
+	}, [enabled, sessionId, creationScope, refreshCloseState, refreshList, reconcileCloseSummary]);
 
 	useEffect(() => {
 		if (liveSnapshot && liveSnapshot.side.id === activeId && !closingSidesRef.current.has(activeId!)) {
@@ -653,6 +720,7 @@ export function useIndependentSideChats(
 		let lastApplied = 0;
 		let issued = 0;
 		const refresh = async () => {
+			if (!alive || !available()) return;
 			const requestNumber = ++issued;
 			const { data, error: requestError } = await apiClient.GET(
 				"/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}",
@@ -663,7 +731,7 @@ export function useIndependentSideChats(
 			if (!alive || !available() || requestNumber < lastApplied) return;
 			lastApplied = requestNumber;
 			if (requestError) {
-				setSideError({ id: activeId, message: apiErrorMessage(requestError) });
+				setSideError({ id: activeId, message: apiErrorMessage(requestError), kind: "read" });
 				return;
 			}
 			if (data?.snapshot) {
@@ -690,12 +758,12 @@ export function useIndependentSideChats(
 						],
 					};
 				});
-				setSideError(current => current?.id === activeId ? undefined : current);
+				clearSideError(activeId, "read");
 			}
 		};
 		const refreshSafely = () =>
 			void refresh().catch((error) => {
-				if (alive && available()) setSideError({ id: activeId, message: String(error) });
+				if (alive && available()) setSideError({ id: activeId, message: String(error), kind: "read" });
 			});
 		refreshSafely();
 		let stream: EventSource | undefined;
@@ -741,7 +809,7 @@ export function useIndependentSideChats(
 			}
 			if (data?.snapshot && current()) setOlderPages((pages) => [...pages, data.snapshot]);
 		} catch (cause) {
-			if (current()) setSideError({ id: activeId, message: apiErrorMessage(cause) });
+			if (current()) setSideError({ id: activeId, message: apiErrorMessage(cause), kind: "draft" });
 		} finally {
 			if (current()) {
 				loadingOlderRef.current = false;
@@ -806,12 +874,13 @@ export function useIndependentSideChats(
 					},
 				);
 				if (requestError) throw requestError;
-				const available = () => current() && !closedSidesRef.current.has(data.side.id) && !closingSidesRef.current.has(data.side.id);
+				const available = () => current() && !["closing", "unconfirmed", "cleanup_pending", "closed"].includes(closeStatus(closeProjection.current, data.side.id) ?? "");
 				if (!available())
 					throw new Error("Side chat is no longer active.");
 				await aoBridge.sideChats.capture().catch(() => undefined);
 				if (!available()) throw new Error("Side chat is no longer active.");
 				if (excerpt) {
+					if (!canMutateSide(closeProjection.current, data.side.id)) throw new Error("Side chat status is unavailable.");
 					// An unconfirmed create can recover an existing, inactive side. Load
 					// its draft before appending, and save without focusing any composer.
 					let draft = draftsRef.current[data.side.id];
@@ -842,6 +911,7 @@ export function useIndependentSideChats(
 				}
 				lifecycleRevision.current++;
 				localCreates.current.set(data.side.id, data.side);
+				closePlaceholders.current.delete(data.side.id);
 				setSides((current) =>
 					current.some((side) => side.id === data.side.id)
 						? current.map((side) => (side.id === data.side.id ? data.side : side))
@@ -875,6 +945,7 @@ export function useIndependentSideChats(
 		async (sideId: string, draft: SideChatDraft) => {
 			if (closingSidesRef.current.has(sideId) || closedSidesRef.current.has(sideId)) throw new Error("Side chat is closing.");
 			const available = operationCurrent(sideId);
+			if (!available()) return;
 			const next = {
 				...draft,
 				pendingDelivery: draftsRef.current[sideId]?.pendingDelivery,
@@ -886,25 +957,31 @@ export function useIndependentSideChats(
 			setDrafts((current) => ({ ...current, [sideId]: next }));
 			setAttachments((current) => ({ ...current, [sideId]: [] }));
 			setFocusKey((key) => key + 1);
-			const { error: requestError } = await saveSideChatDraft(sessionId, sideId, JSON.stringify(next), available);
-			if (requestError) throw requestError;
-			if (available()) await aoBridge.sideChats.capture();
+			try {
+				const { error: requestError } = await saveSideChatDraft(sessionId, sideId, JSON.stringify(next), available);
+				if (!available()) return;
+				if (requestError) throw requestError;
+				await aoBridge.sideChats.capture();
+			} catch (cause) { if (available()) throw cause; }
 		},
-		[sessionId],
+		[sessionId, operationCurrent],
 	);
 
 	const addReference = useCallback(async (sideId: string, excerpt: ChatDraftExcerptReference) => {
 		if (closingSidesRef.current.has(sideId) || closedSidesRef.current.has(sideId)) throw new Error("Side chat is closing.");
 		const available = operationCurrent(sideId);
+		if (!available()) return;
 		const draft = draftsRef.current[sideId] ?? emptySideChatDraft();
 		const result = appendReference(draft, excerpt);
 		if (result.error) throw new Error(result.error);
 		draftsRef.current = { ...draftsRef.current, [sideId]: result.draft };
 		setDrafts(current => ({ ...current, [sideId]: result.draft }));
-		const { error: requestError } = await saveSideChatDraft(sessionId, sideId, JSON.stringify(result.draft), available);
-		if (!available()) return;
-		if (requestError) throw requestError;
-		setFocusKey(key => key + 1);
+		try {
+			const { error: requestError } = await saveSideChatDraft(sessionId, sideId, JSON.stringify(result.draft), available);
+			if (!available()) return;
+			if (requestError) throw requestError;
+			setFocusKey(key => key + 1);
+		} catch (cause) { if (available()) throw cause; }
 	}, [sessionId, operationCurrent]);
 
 	const attachFiles = useCallback(
@@ -913,6 +990,7 @@ export function useIndependentSideChats(
 			const available = operationCurrent(sideId);
 			try {
 				const payloads = await Promise.all(files.map(sideFilePayload));
+				if (!available()) return;
 				const paths = await stageAttachments(payloads);
 				if (!available()) return;
 				if (paths.length !== files.length) throw new Error("Could not stage every attached file.");
@@ -977,7 +1055,8 @@ export function useIndependentSideChats(
 	const cancelHandoff = useCallback(async (sideId: string) => {
 		const pending = draftsRef.current[sideId]?.pendingCommand;
 		if (!pending || sendingRef.current.has(sideId) || closedSidesRef.current.has(sideId) || closingSidesRef.current.has(sideId)) return;
-		sendingRef.current.add(sideId);
+		const token = Symbol();
+			sendingRef.current.set(sideId, token);
 		setSendingRevision(version => version + 1);
 		const command = { ...pending, cancelRequested: true };
 		const available = operationCurrent(sideId);
@@ -1000,14 +1079,14 @@ export function useIndependentSideChats(
 			// A remount/crash after this capture can only finish cancellation, never send.
 			await persist(apply(false));
 			await persist(apply(true));
-			if (available()) setError(undefined);
+			if (available()) clearSideError(sideId, "delivery");
 		} catch (cause) {
 			if (available()) {
 				if (!draftsRef.current[sideId]?.pendingCommand || draftsRef.current[sideId].pendingCommand?.creationKey === command.creationKey) apply(false); // Preserve newer edits and cancellation intent.
-				setError(apiErrorMessage(cause));
+				setSideError({ id: sideId, message: apiErrorMessage(cause), kind: "delivery" });
 			}
 		} finally {
-			sendingRef.current.delete(sideId);
+			if (sendingRef.current.get(sideId) === token) sendingRef.current.delete(sideId);
 			setSendingRevision(version => version + 1);
 		}
 	}, [sessionId]);
@@ -1031,7 +1110,8 @@ export function useIndependentSideChats(
 			const btw = preparedReceipt ? null : /^\/btw(?:\s+|$)/i.exec(text);
 			if (!preparedReceipt && (btw || (!text && draftsRef.current[sideId]?.pendingCommand))) {
 				if (sendingRef.current.has(sideId)) return;
-				sendingRef.current.add(sideId);
+				const token = Symbol();
+			sendingRef.current.set(sideId, token);
 				setSendingRevision((version) => version + 1);
 				let command = draftsRef.current[sideId]?.pendingCommand;
 				const available = operationCurrent(sideId);
@@ -1054,7 +1134,7 @@ export function useIndependentSideChats(
 					}
 					const draft = draftsRef.current[sideId] ?? emptySideChatDraft();
 					if (command?.cancelRequested) {
-						sendingRef.current.delete(sideId);
+						if (sendingRef.current.get(sideId) === token) sendingRef.current.delete(sideId);
 						await cancelHandoff(sideId);
 						return;
 					}
@@ -1066,6 +1146,7 @@ export function useIndependentSideChats(
 						if (submitted.references.some((ref) => ref.conversationId !== parentId))
 							throw new Error("References from another side cannot be transferred. Remove them before creating a new side.");
 						const images = [...extraAttachments, ...(await Promise.all((attachments[sideId] ?? []).filter(({ file }) => /^image\/(png|jpeg|gif|webp)$/i.test(file.type)).map(({ file }) => sideFilePayload(file))))];
+						if (!available()) return;
 						const staged = extraAttachments.length ? await stageAttachments(extraAttachments) : [];
 						if (staged.length !== extraAttachments.length) throw new Error("Could not stage every attached file.");
 						const clientMessageId = crypto.randomUUID();
@@ -1121,17 +1202,17 @@ export function useIndependentSideChats(
 					}));
 					await aoBridge.sideChats.capture().catch(() => undefined);
 				} catch (cause) {
-					if (available()) setError(apiErrorMessage(cause));
+					if (available()) setSideError({ id: sideId, message: apiErrorMessage(cause), kind: "delivery" });
 					if (propagateError) throw cause;
 				} finally {
-					sendingRef.current.delete(sideId);
+					if (sendingRef.current.get(sideId) === token) sendingRef.current.delete(sideId);
 					setSendingRevision((version) => version + 1);
 				}
 				return;
 			}
 			if (draftsRef.current[sideId]?.pendingCommand) {
 				const cause = new Error("Retry the original handoff before sending another question.");
-				setError(cause.message);
+				setSideError({ id: sideId, message: cause.message, kind: "delivery" });
 				if (propagateError) throw cause;
 				return;
 			}
@@ -1141,16 +1222,22 @@ export function useIndependentSideChats(
 				return;
 			}
 			const available = operationCurrent(sideId);
-			if (!available()) return;
-			sendingRef.current.add(sideId);
+			const dispatchAvailable = () => {
+				if (available()) return true;
+				if (propagateError) throw new Error("Side chat is no longer active.");
+				return false;
+			};
+			if (!dispatchAvailable()) return;
+			const token = Symbol();
+			sendingRef.current.set(sideId, token);
 			setSendingRevision((version) => version + 1);
-			setError(undefined);
+			clearSideError(sideId, "delivery");
 			let receipt = draftsRef.current[sideId]?.pendingDelivery ?? preparedReceipt;
 			try {
 				if (!Object.hasOwn(draftsRef.current, sideId)) {
 					const { data, error } = await readSideChatDraft(sessionId, sideId);
 					if (error) throw error;
-					if (!available()) return;
+					if (!dispatchAvailable()) return;
 					const loaded = parseSideChatDraft(data?.contentJson ?? "");
 					const current = draftsRef.current[sideId] ?? loaded;
 					draftsRef.current = { ...draftsRef.current, [sideId]: current };
@@ -1172,6 +1259,7 @@ export function useIndependentSideChats(
 								.map(({ file }) => sideFilePayload(file)),
 						)),
 					];
+					if (!dispatchAvailable()) return;
 					const paths = extraAttachments.length ? await stageAttachments(extraAttachments) : [];
 					const allPaths = [...draft.attachments.map((file) => file.path), ...paths];
 
@@ -1200,7 +1288,7 @@ export function useIndependentSideChats(
 						},
 					};
 				}
-				if (!available()) return;
+				if (!dispatchAvailable()) return;
 				const frozen = receipt;
 				const pending = {
 					...(draftsRef.current[sideId] ?? draft),
@@ -1226,7 +1314,10 @@ export function useIndependentSideChats(
 						body: frozen.request,
 					},
 				);
-				if (!available()) return;
+				if (!available()) {
+					if (propagateError && requestError) throw requestError;
+					return;
+				}
 				if (requestError) {
 					// Server errors can occur after acceptance; keep their receipt too.
 					if (response && response.status < 500)
@@ -1263,215 +1354,117 @@ export function useIndependentSideChats(
 				// failure must not turn an accepted delivery into a failed send.
 				void refreshList(false).catch(() => undefined);
 			} catch (cause) {
-				if (available()) setError(apiErrorMessage(cause));
+				if (available()) setSideError({ id: sideId, message: apiErrorMessage(cause), kind: "delivery" });
 				if (propagateError) throw cause;
 			} finally {
-				sendingRef.current.delete(sideId);
+				if (sendingRef.current.get(sideId) === token) sendingRef.current.delete(sideId);
 				setSendingRevision((version) => version + 1);
 			}
 		},
 		[sessionId, attachments, stageAttachments, nativeImages, create, sides, cancelHandoff, refreshList],
 	);
 
-	const close = useCallback(
-		async (sideId: string) => {
-			if (closeRequests.current.has(sideId) || closedSidesRef.current.has(sideId)) return;
-			const scope = creationScopeRef.current;
-			const current = () => scope.active && creationScopeRef.current === scope && sessionRef.current === sessionId;
-			closeRequests.current.add(sideId);
-			closingSidesRef.current.add(sideId);
-			if (activeIdRef.current === sideId) {
-				olderGeneration.current++;
-				loadingOlderRef.current = false;
-				setLoadingOlder(false);
-			}
-			sideRevisions.current.set(sideId, (sideRevisions.current.get(sideId) ?? 0) + 1);
+	const close = useCallback(async (sideId: string, requestId: string = crypto.randomUUID()) => {
+		const scope = creationScopeRef.current;
+		const current = () => scope.active && creationScopeRef.current === scope && sessionRef.current === sessionId;
+		if (!current() || closedSidesRef.current.has(sideId) || closeInvocations.current.has(sideId) || closeProjection.current.attempts[sideId]?.busy) return;
+		closeInvocations.current.set(sideId, requestId);
+		setCloseRevision(value => value + 1);
+		clearSideError(sideId, "close-preflight");
+		let closeStarted = false;
+		try {
+			if (!closeProjection.current.hydrated) await refreshCloseState();
+			if (!current() || closedSidesRef.current.has(sideId)) return;
+			const state = closeProjection.current;
+			if (!state.hydrated || state.recovery === "unavailable" || !state.epoch) throw new Error("Side chat status is unavailable.");
+			const expectedVersion = state.entries[sideId]?.version ?? 0;
+			projectClose(beginClose(state, sideId, requestId));
+			closeStarted = true;
 			lifecycleRevision.current++;
-			setError(undefined);
-			setSideError(error => error?.id === sideId ? undefined : error);
-			setCloseWarnings(warnings => { const next = { ...warnings }; delete next[sideId]; return next; });
-			setCloseRevision(value => value + 1);
-			let outcome: SideCloseOutcome = "unconfirmed";
-			let failure: unknown;
-			let rejected = false;
-			try {
-				try {
-					await aoBridge.sideChats.capture(sideId);
-					if (!current()) return;
-					const { error: requestError, response } = await apiClient.DELETE(
-						"/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}",
-						{ params: { path: { sessionId, sideId } } },
-					);
-					if (!current()) return;
-					if (!requestError) {
-						// Failed bookkeeping cannot undo HTTP shutdown proof, but an explicit
-						// attachment mismatch needs reconciliation with the replacement daemon.
-						outcome = "closed";
-						const confirmed = await aoBridge.sideChats.confirmClose(sideId).catch(() => undefined);
-						if (confirmed === "unconfirmed") outcome = "unconfirmed";
-					} else if (response.status === 404) {
-						outcome = await aoBridge.sideChats.confirmClose(sideId, true);
-					} else {
-						if ([400, 401, 403, 405, 409, 422].includes(response.status)) {
-							rejected = true;
-							await aoBridge.sideChats.capture(sideId, true);
-						} else await aoBridge.sideChats.capture().catch(() => undefined);
-						throw apiErrorException(requestError);
-					}
-				} catch (cause) {
-					failure = cause;
-				}
-				if (!current()) return;
-				if (closedSidesRef.current.has(sideId)) { outcome = "closed"; return; }
-				if (outcome === "closed") { removeSide(sideId); return; }
-				// Keep the request marker through reconciliation: a concurrent list
-				// refresh must not unlock a side whose capture failed before pinning.
-				let state: SideCloseState | undefined;
-				try { state = await aoBridge.sideChats.getCloseState(sessionId); } catch { /* keep the local close intent */ }
-				if (!current()) return;
-				if (state?.closedIds.includes(sideId)) { outcome = "closed"; removeSide(sideId); return; }
-				const closes = state?.pending;
-				const pending = closes?.find(side => side.id === sideId);
-				if (closes) setPendingCloses(closes);
-				if (pending?.phase === "cleanup_pending") outcome = "cleanup_pending";
-				const stillOpen = rejected && closes !== undefined && !pending;
-				if (stillOpen) closingSidesRef.current.delete(sideId);
-				setCloseWarnings(warnings => ({ ...warnings, [sideId]: stillOpen ? "open" : outcome === "cleanup_pending" ? "cleanup_pending" : "unconfirmed" }));
-				throw failure ?? new Error("Side chat shutdown is not confirmed.");
-			} finally {
-				if (current()) {
-					closeRequests.current.delete(sideId);
-					lifecycleRevision.current++;
-					setCloseRevision(value => value + 1);
-					if (outcome !== "closed") void refreshList().catch(() => undefined);
-				}
+			clearSideError(sideId);
+			let resolveTerminal!: (state: SideCloseState) => void;
+			const terminal = new Promise<SideCloseState>(resolve => { resolveTerminal = resolve; });
+			closeWaiters.current.set(requestId, { sideId, expectedVersion, resolve: resolveTerminal, current });
+			// The main process owns dispatch, classification and cleanup even if this
+			// view disappears or its IPC reply is lost.
+			const response = aoBridge.sideChats.requestClose({ sessionId, sideId, requestId, epoch: state.epoch, expectedVersion });
+			const settled = response.then(summary => {
+				if (current()) reconcileCloseSummary(summary);
+				const entry = summary.sides.find(entry => entry.id === sideId && entry.sessionId === sessionId);
+				return entry?.status === "closing" ? terminal : summary;
+			});
+			const summary = await withWatchdog(Promise.race([settled, terminal]), SIDE_CLOSE_OPERATION_TIMEOUT_MS + 5000);
+			if (!current()) return;
+			reconcileCloseSummary(summary);
+			if (closeStatus(closeProjection.current, sideId) !== "closed") throw new Error("Side chat shutdown is not confirmed.");
+		} catch (cause) {
+			if (current() && !closeStarted && !closedSidesRef.current.has(sideId)) {
+				setSideError({ id: sideId, kind: "close-preflight", message: t("sideChat.sideChatIsUnavailable") });
 			}
-		},
-		[sessionId, refreshList, removeSide],
-	);
+			throw cause;
+		} finally {
+			closeWaiters.current.delete(requestId);
+			if (closeInvocations.current.get(sideId) === requestId) closeInvocations.current.delete(sideId);
+			if (current()) {
+				setCloseRevision(value => value + 1);
+				projectClose(uncertainClose(closeProjection.current, sideId, requestId));
+				void refreshCloseState();
+			}
+		}
+	}, [sessionId, refreshCloseState, projectClose, clearSideError, reconcileCloseSummary, setSideError, t]);
 
-	const interrupt = useCallback(
-		async (sideId: string) => {
-			const available = operationCurrent(sideId);
-			if (!available()) return;
-			const { error: requestError } = await apiClient.POST(
-				"/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/interrupt",
-				{
-					params: { path: { sessionId, sideId } },
-				},
-			);
-			if (!available()) return;
-			if (requestError) setSideError({ id: sideId, message: apiErrorMessage(requestError) });
-		},
-		[sessionId],
-	);
-	const compact = useCallback(
-		async (sideId: string) => {
-			const available = operationCurrent(sideId);
-			if (!available()) return;
-			setError(undefined);
-			const { error: requestError } = await apiClient.POST(
-				"/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/compact",
-				{
-					params: { path: { sessionId, sideId } },
-				},
-			);
-			if (!available()) return;
-			if (requestError) {
-				setSideError({ id: sideId, message: apiErrorMessage(requestError) });
-				return;
-			}
-			updateDraft(sideId, "");
-		},
-		[sessionId, updateDraft],
-	);
-	const resolveApproval = useCallback(
-		async (sideId: string, requestId: string, decisionId: string) => {
-			const available = operationCurrent(sideId);
-			if (!available()) return;
-			const { error: requestError } = await apiClient.POST(
-				"/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/approvals/{requestId}/resolve",
-				{
-					params: { path: { sessionId, sideId, requestId } },
-					body: { decisionId },
-				},
-			);
-			if (!available()) return;
-			if (requestError) setSideError({ id: sideId, message: apiErrorMessage(requestError) });
-		},
-		[sessionId],
-	);
-	const resolveInput = useCallback(
-		async (sideId: string, requestId: string, action: "accept" | "decline" | "cancel") => {
-			const available = operationCurrent(sideId);
-			if (!available()) return;
-			const { error: requestError } = await apiClient.POST(
-				"/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/inputs/{requestId}/resolve",
-				{
-					params: { path: { sessionId, sideId, requestId } },
-					body: {
-						action,
-						content: action === "accept" ? (inputAnswers[requestId] ?? {}) : {},
-					},
-				},
-			);
-			if (!available()) return;
-			if (requestError) setSideError({ id: sideId, message: apiErrorMessage(requestError) });
-		},
-		[sessionId, inputAnswers],
-	);
-	const updateSettings = useCallback(
-		async (sideId: string, model: string, effort: string) => {
-			const available = operationCurrent(sideId);
-			if (!available()) return;
-			const { error: requestError } = await apiClient.PATCH(
-				"/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/settings",
-				{
-					params: { path: { sessionId, sideId } },
-					body: { model, effort },
-				},
-			);
-			if (!available()) return;
-			if (requestError) setSideError({ id: sideId, message: apiErrorMessage(requestError) });
-		},
-		[sessionId],
-	);
-	const retry = useCallback(
-		async (sideId: string, turnId: string) => {
-			const available = operationCurrent(sideId);
-			if (!available()) return;
-			const { error: requestError } = await apiClient.POST(
-				"/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/turns/{turnId}/retry",
-				{
-					params: { path: { sessionId, sideId, turnId } },
-				},
-			);
-			if (!available()) return;
-			if (requestError) setSideError({ id: sideId, message: apiErrorMessage(requestError) });
-		},
-		[sessionId],
-	);
-	const saveQueuedEdit = useCallback(
-		async (sideId: string) => {
-			const available = operationCurrent(sideId);
-			if (!available()) return;
-			if (!editingTurnId || !editingText.trim()) return;
-			const { error: requestError } = await apiClient.PATCH(
-				"/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/turns/{turnId}",
-				{
-					params: { path: { sessionId, sideId, turnId: editingTurnId } },
-					body: { text: editingText, clientMessageId: "" },
-				},
-			);
-			if (!available()) return;
-			if (requestError) {
-				setSideError({ id: sideId, message: apiErrorMessage(requestError) });
-				return;
-			}
-			setEditingTurnId(undefined);
-		},
-		[sessionId, editingTurnId, editingText],
-	);
+	const mutationTokens = useRef(new Map<string, symbol>());
+	const runSideMutation = useCallback(async (sideId: string, kind: string, action: () => Promise<{ error?: unknown }>, success?: () => void) => {
+		const available = operationCurrent(sideId);
+		if (!available()) return;
+		const key = JSON.stringify([sessionId, sideId, kind]);
+		const token = Symbol();
+		mutationTokens.current.set(key, token);
+		const current = () => available() && mutationTokens.current.get(key) === token;
+		clearSideError(sideId, kind);
+		try {
+			const response = await action();
+			if (!current()) return;
+			if (response.error) { setSideError({ id: sideId, message: apiErrorMessage(response.error), kind }); return; }
+			success?.();
+		} catch (cause) {
+			if (current()) setSideError({ id: sideId, message: apiErrorMessage(cause), kind });
+		} finally {
+			if (mutationTokens.current.get(key) === token) mutationTokens.current.delete(key);
+		}
+	}, [sessionId, operationCurrent, clearSideError, setSideError]);
+	const interrupt = useCallback((sideId: string) => runSideMutation(sideId, "interrupt", () => apiClient.POST(
+		"/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/interrupt", { params: { path: { sessionId, sideId } } },
+	)), [sessionId, runSideMutation]);
+	const compact = useCallback((sideId: string) => runSideMutation(sideId, "compact", () => apiClient.POST(
+		"/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/compact", { params: { path: { sessionId, sideId } } },
+	), () => updateDraft(sideId, "")), [sessionId, runSideMutation, updateDraft]);
+	const resolveApproval = useCallback((sideId: string, requestId: string, decisionId: string) => runSideMutation(sideId, "approval:" + requestId, () => apiClient.POST(
+		"/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/approvals/{requestId}/resolve", { params: { path: { sessionId, sideId, requestId } }, body: { decisionId } },
+	)), [sessionId, runSideMutation]);
+	const resolveInput = useCallback((sideId: string, requestId: string, action: "accept" | "decline" | "cancel") => runSideMutation(sideId, "input:" + requestId, () => apiClient.POST(
+		"/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/inputs/{requestId}/resolve", { params: { path: { sessionId, sideId, requestId } }, body: { action, content: action === "accept" ? inputAnswers[sideId]?.[requestId] ?? {} : {} } },
+	)), [sessionId, inputAnswers, runSideMutation]);
+	const updateSettings = useCallback((sideId: string, model: string, effort: string) => runSideMutation(sideId, "settings", () => apiClient.PATCH(
+		"/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/settings", { params: { path: { sessionId, sideId } }, body: { model, effort } },
+	)), [sessionId, runSideMutation]);
+	const retry = useCallback((sideId: string, turnId: string) => runSideMutation(sideId, "retry:" + turnId, () => apiClient.POST(
+		"/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/turns/{turnId}/retry", { params: { path: { sessionId, sideId, turnId } } },
+	)), [sessionId, runSideMutation]);
+	const recover = useCallback((sideId: string) => runSideMutation(sideId, "recover", () => apiClient.POST(
+		"/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/recover", { params: { path: { sessionId, sideId } } },
+	)), [sessionId, runSideMutation]);
+	const cancelQueuedTurn = useCallback((sideId: string, turnId: string) => runSideMutation(sideId, "cancel:" + turnId, () => apiClient.POST(
+		"/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/turns/{turnId}/cancel", { params: { path: { sessionId, sideId, turnId } } },
+	)), [sessionId, runSideMutation]);
+	const saveQueuedEdit = useCallback(async (sideId: string) => {
+		const editor = queuedEditors[sideId];
+		if (!editor?.text.trim()) return;
+		await runSideMutation(sideId, "edit:" + editor.turnId, () => apiClient.PATCH(
+			"/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/turns/{turnId}", { params: { path: { sessionId, sideId, turnId: editor.turnId } }, body: { text: editor.text, clientMessageId: "" } },
+		), () => setQueuedEditors(current => { if (current[sideId] !== editor) return current; const next = { ...current }; delete next[sideId]; return next; }));
+	}, [sessionId, queuedEditors, runSideMutation]);
+
 	const currentActiveId = sides.some((side) => side.id === activeId && side.sessionId === sessionId)
 		? activeId
 		: undefined;
@@ -1483,8 +1476,9 @@ export function useIndependentSideChats(
 		[activeId],
 	);
 	const readOnly = Boolean(activeId && closingSidesRef.current.has(activeId));
-	const warning = activeId ? closeWarnings[activeId] : undefined;
-	const activeError = error || listError || (sideError && sideError.id === activeId ? sideError.message : undefined);
+	const status = activeId ? closeStatus(closeProjection.current, activeId) : undefined;
+	const warning = activeId && status && !canMutateSide(closeProjection.current, activeId) && status !== "closing" ? (status === "cleanup_pending" ? "cleanup_pending" : "unconfirmed") : status === "rejected_open" ? "open" : undefined;
+	const activeError = error || listError || (activeId ? Object.values(sideErrors[activeId] ?? {}).at(-1) : undefined);
 	const conversation = useMemo(
 		() => (snapshot && snapshot.side.id === activeId ? sideConversationSnapshot(snapshot, readOnly ? retainedSnapshots.current.get(snapshot.side.id)?.olderPages ?? [] : olderPages) : undefined),
 		[snapshot, olderPages, activeId, readOnly],
@@ -1515,33 +1509,30 @@ export function useIndependentSideChats(
 		else if (rect.right > bounds.right) strip.scrollLeft += rect.right - bounds.right;
 	}, [currentActiveId, sides.length]);
 	const beginRename = (side: Side) => {
+		if (!operationCurrent(side.id)()) return;
 		renameCancelled.current = false;
+		renameIdRef.current = side.id;
 		setRenameId(side.id);
 		setRenameText(side.label);
 	};
 	const saveRename = async () => {
-		if (renameCancelled.current || !renameId) return;
+		if (renameCancelled.current || !renameId || renameIdRef.current !== renameId) return;
 		const id = renameId,
 			label = renameText?.trim();
 		setRenameId(undefined);
+		renameIdRef.current = undefined;
 		setRenameText(undefined);
 		if (!label || label === sides.find((side) => side.id === id)?.label) return;
 		const available = operationCurrent(id);
 		if (!available()) return;
-		const { error: requestError } = await apiClient.PATCH(
+		await runSideMutation(id, "rename", () => apiClient.PATCH(
 			"/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/label",
 			{ params: { path: { sessionId, sideId: id } }, body: { label } },
-		);
-		if (!available()) return;
-		if (requestError) {
-			setSideError({ id, message: apiErrorMessage(requestError) });
-			return;
-		}
-		await refreshList();
+		), () => { void refreshList(); });
 	};
 
 	const tabBar = enabled ? (
-		<header ref={tabRowRef} className="browser-panel__tab-row side-chat__tab-row">
+		<header ref={tabRowRef} tabIndex={-1} className="browser-panel__tab-row side-chat__tab-row">
 			<div className="browser-panel__tab-region">
 				<div
 					ref={tabStripRef}
@@ -1554,6 +1545,7 @@ export function useIndependentSideChats(
 						const tab = (
 							<div
 								key={side.id}
+								data-side-id={side.id}
 								className={cn("browser-panel__tab", side.id === currentActiveId && "browser-panel__tab--active")}
 							>
 								{renameId === side.id ? (
@@ -1583,9 +1575,10 @@ export function useIndependentSideChats(
 									<Pressable
 										role="tab"
 										aria-selected={side.id === currentActiveId}
-										aria-busy={closeRequests.current.has(side.id) || undefined}
+										aria-busy={isClosing(side.id) || undefined}
 										tabIndex={side.id === currentActiveId ? 0 : -1}
 										className="browser-panel__tab-select"
+										onFocus={() => setFocusKey(0)}
 										onClick={(event) => {
 											if (event.detail > 1) return;
 											setActiveId(side.id);
@@ -1604,29 +1597,29 @@ export function useIndependentSideChats(
 										}}
 										title={side.label}
 									>
-										{closeRequests.current.has(side.id) ? <Loader2 className="browser-panel__tab-icon animate-spin" aria-hidden="true" /> : <MessageSquare className="browser-panel__tab-icon" aria-hidden="true" />}
+										{isClosing(side.id) ? <Loader2 className="browser-panel__tab-icon animate-spin" aria-hidden="true" /> : <MessageSquare className="browser-panel__tab-icon" aria-hidden="true" />}
 										<span className="browser-panel__tab-title">{side.label?.trim() || t("sideChat.defaultLabel")}</span>
-										{closeRequests.current.has(side.id) ? <span role="status" className="sr-only">{t("sideChat.deleting")}</span> : null}
+										{isClosing(side.id) ? <span role="status" className="sr-only">{t("sideChat.deleting")}</span> : null}
 									</Pressable>
 								)}
 								<Pressable
-									hidden={renameId === side.id || closeRequests.current.has(side.id) || pendingCloses.some(pending => pending.id === side.id && pending.phase === "cleanup_pending")}
+									hidden={renameId === side.id || isClosing(side.id) || closeStatus(closeProjection.current, side.id) === "cleanup_pending"}
 									className="browser-panel__tab-close"
 									aria-label={t("sideChat.closeNamed", { name: side.label })}
 									onClick={() => {
-										setConfirmClose(side.id);
+										setConfirmClose({ id: crypto.randomUUID(), sideId: side.id, requestId: crypto.randomUUID(), scope: creationScopeRef.current });
 									}}
 								>
 									<X className="size-3.5" aria-hidden="true" />
 								</Pressable>
 							</div>
 						);
-						if (renameId === side.id || pendingCloses.some((pending) => pending.id === side.id)) return tab;
+						if (renameId === side.id) return tab;
 						return (
 							<ContextMenu key={side.id}>
-								<ContextMenuTrigger asChild>{tab}</ContextMenuTrigger>
+								<ContextMenuTrigger asChild disabled={closingSidesRef.current.has(side.id)}>{tab}</ContextMenuTrigger>
 								<ContextMenuContent className="min-w-44">
-									<ContextMenuItem onSelect={() => beginRename(side)}>
+									<ContextMenuItem disabled={closingSidesRef.current.has(side.id)} onSelect={() => beginRename(side)}>
 										<Pencil aria-hidden="true" />
 										{t("sideChat.rename")}
 									</ContextMenuItem>
@@ -1649,24 +1642,37 @@ export function useIndependentSideChats(
 	) : null;
 	const closeDialog = (
 		<ConfirmDialog
+			key={confirmClose?.id ?? "closed"}
 			open={Boolean(confirmClose)}
 			title={t("sideChat.deleteConfirm")}
 			description={t("sideChat.deleteExplanation")}
 			confirmLabel={t("sideChat.delete")}
 			cancelLabel={t("confirm.cancel")}
 			busy={closing}
+			busyLabel={t("sideChat.deleting")}
+			onCloseAutoFocus={(event) => {
+				event.preventDefault();
+				const dialog = confirmClose;
+				window.setTimeout(() => {
+					if (!dialog || !dialog.scope.active || creationScopeRef.current !== dialog.scope || (confirmCloseRef.current && confirmCloseRef.current.id !== dialog.id)) return;
+					if (document.activeElement !== document.body && document.activeElement?.isConnected) return;
+					const header = tabRowRef.current;
+					(header?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"], .browser-panel__tab-new:not(:disabled)') ?? header)?.focus();
+				}, 0);
+			}}
 			onOpenChange={(open) => {
-				if (!open && !closing) setConfirmClose(undefined);
+				if (!open && !closing) setConfirmClose(current => current?.id === confirmClose?.id ? undefined : current);
 			}}
 			onConfirm={() => {
-				if (!confirmClose || closeRequests.current.has(confirmClose)) return;
+				if (!confirmClose || closing) return;
+				const dialog = confirmClose;
 				const scope = creationScopeRef.current;
 				const current = () => scope.active && creationScopeRef.current === scope;
-				void close(confirmClose)
+				void close(dialog.sideId, dialog.requestId)
 					.catch(() => undefined)
 					.finally(() => {
 						if (!current()) return;
-						setConfirmClose(selected => selected === confirmClose ? undefined : selected);
+						setConfirmClose(selected => selected?.id === dialog.id ? undefined : selected);
 					});
 			}}
 		/>
@@ -1704,13 +1710,15 @@ export function useIndependentSideChats(
 						{key}
 						<input
 							className="ml-2 rounded border border-border bg-background p-1"
-							value={inputAnswers[requestId]?.[key] ?? ""}
-							onChange={(event) =>
+							value={inputAnswers[activeId]?.[requestId]?.[key] ?? ""}
+							onChange={(event) => {
+								if (!operationCurrent(activeId)()) return;
+								const value = event.target.value;
 								setInputAnswers((current) => ({
 									...current,
-									[requestId]: { ...current[requestId], [key]: event.target.value },
-								}))
-							}
+									[activeId]: { ...current[activeId], [requestId]: { ...current[activeId]?.[requestId], [key]: value } },
+								}));
+							}}
 						/>
 					</label>
 				))}
@@ -1728,6 +1736,7 @@ export function useIndependentSideChats(
 	const panel =
 		enabled && currentActiveId && visible ? (
 			<aside
+				data-side-id={activeId}
 				data-chat-find-scope=""
 				aria-label={t("sideChat.sideChats")}
 				className="cursor-chat-surface relative flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden bg-background [font-size:14px]"
@@ -1794,15 +1803,7 @@ export function useIndependentSideChats(
 								type="button"
 								variant="secondary"
 								size="sm"
-								onClick={() =>
-									void apiClient
-										.POST("/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/recover", {
-											params: { path: { sessionId, sideId: activeId } },
-										})
-										.then(({ error: recoveryError }) => {
-											if (recoveryError) setError(apiErrorMessage(recoveryError));
-										})
-								}
+								onClick={() => void recover(activeId)}
 							>
 								{t("sideChat.retryConnection")}
 							</Button>
@@ -1834,6 +1835,7 @@ export function useIndependentSideChats(
 							onInterrupt={() => void interrupt(activeId)}
 							onAttach={(files) => void attachFiles(activeId, files)}
 							onRemoveFile={(index) => {
+								if (!operationCurrent(activeId)()) return;
 								const stagedCount = (drafts[activeId]?.attachments ?? []).length;
 								if (index < stagedCount) {
 									const path = drafts[activeId]?.attachments[index]?.path;
@@ -1857,7 +1859,7 @@ export function useIndependentSideChats(
 							focusKey={focusKey}
 							onFocusSide={canCreate ? () => void create(undefined, true).catch(() => undefined) : undefined}
 							onRemoveReference={(id) =>
-								setDrafts((current) => ({
+								operationCurrent(activeId)() && setDrafts((current) => ({
 									...current,
 									[activeId]: {
 										...(current[activeId] ?? emptySideChatDraft()),
@@ -1866,7 +1868,7 @@ export function useIndependentSideChats(
 								}))
 							}
 							onRemoveAllReferences={() =>
-								setDrafts((current) => ({
+								operationCurrent(activeId)() && setDrafts((current) => ({
 									...current,
 									[activeId]: {
 										...(current[activeId] ?? emptySideChatDraft()),
@@ -1900,20 +1902,10 @@ export function useIndependentSideChats(
 														createdAt: turn.createdAt,
 													},
 												}))}
-											onCancelQueuedTurn={(turnId) =>
-												apiClient
-													.POST("/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/turns/{turnId}/cancel", {
-														params: {
-															path: { sessionId, sideId: activeId, turnId },
-														},
-													})
-													.then(({ error }) => {
-														if (error) setError(apiErrorMessage(error));
-													})
-											}
+											onCancelQueuedTurn={(turnId) => cancelQueuedTurn(activeId, turnId)}
 											onBeginQueuedEdit={(turnId, text) => {
-												setEditingTurnId(turnId);
-												setEditingText(text);
+												if (!operationCurrent(activeId)()) return;
+												setQueuedEditors(current => ({ ...current, [activeId]: { turnId, text } }));
 											}}
 										/>
 										{editingTurnId ? (
@@ -1923,13 +1915,13 @@ export function useIndependentSideChats(
 													aria-label={t("sideChat.editQueuedSideQuestion")}
 													className="w-full rounded border border-border bg-background p-2"
 													value={editingText}
-													onChange={(event) => setEditingText(event.target.value)}
+													onChange={(event) => { const text = event.target.value; if (operationCurrent(activeId)()) setQueuedEditors(current => ({ ...current, [activeId]: { turnId: editingTurnId!, text } })); }}
 												/>
 												<div className="flex gap-2">
 													<Button type="button" size="sm" onClick={() => void saveQueuedEdit(activeId)}>
 														{t("sideChat.save")}
 													</Button>
-													<Button type="button" size="sm" variant="ghost" onClick={() => setEditingTurnId(undefined)}>
+													<Button type="button" size="sm" variant="ghost" onClick={() => setQueuedEditors(current => { const next = { ...current }; if (activeId) delete next[activeId]; return next; })}>
 														{t("sideChat.cancel")}
 													</Button>
 												</div>
@@ -1940,7 +1932,7 @@ export function useIndependentSideChats(
 							}
 						/> : null}
 					</>
-				) : readOnly ? <div className="min-h-0 flex-1" /> : (
+				) : readOnly && status ? <div className="min-h-0 flex-1" /> : (
 					<div
 						className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 text-center"
 						role="status"
@@ -1966,8 +1958,7 @@ export function useIndependentSideChats(
 								variant="secondary"
 								size="sm"
 								onClick={() => {
-									setError(undefined);
-									setSideError(undefined);
+									if (activeId) clearSideError(activeId, "read");
 									setSnapshotRefreshKey((key) => key + 1);
 								}}
 							>
@@ -1988,7 +1979,7 @@ export function useIndependentSideChats(
 				{closeDialog}
 				<div className="flex flex-1 flex-col items-center justify-center gap-3 p-4 text-center text-xs text-muted-foreground">
 					<p>
-						{enabled ? t("sideChat.noneOpen") : t("sideChat.sideChatsAreAvailableOnlyForLocalDesktopChatSessions")}
+						{!enabled ? t("sideChat.sideChatsAreAvailableOnlyForLocalDesktopChatSessions") : inventoryKnown.current && closeProjection.current.hydrated && closeProjection.current.recovery === "ready" ? t("sideChat.noneOpen") : t("sideChat.sideChatIsUnavailable")}
 					</p>
 					{activeError ? <p role="alert">{translateDraft(activeError)}</p> : null}
 				</div>

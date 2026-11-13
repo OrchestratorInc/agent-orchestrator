@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { TooltipProvider } from "../ui/tooltip";
 import { emptySideChatDraft } from "./sideChatDraft";
 import type { ChatDraftExcerptReference } from "../../lib/chat-drafts";
+import type { SideCloseRequest } from "../../../shared/side-close";
 
 const { get, post, put, capture } = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), put: vi.fn(), capture: vi.fn() }));
 vi.mock("../../lib/api-client", () => ({
@@ -12,7 +13,15 @@ vi.mock("../../lib/api-client", () => ({
 	apiErrorMessage: (e: unknown) => e instanceof Error ? e.message : "Request failed",
 	getApiBaseUrl: () => "", subscribeApiBaseUrl: () => () => {},
 }));
-vi.mock("../../lib/bridge", () => ({ aoBridge: { daemon: { getStatus: async () => ({ state: "ready", pid: 1, port: 3002 }), onStatus: () => () => {} }, sideChats: { capture, confirmClose: async () => "closed", getCloseState: async () => ({ pending: [], closedIds: [] }), onPendingClosesChanged: () => () => {} } } }));
+vi.mock("../../lib/bridge", () => ({ aoBridge: { daemon: { getStatus: async () => ({ state: "ready", pid: 1, port: 3002 }), onStatus: () => () => {} }, sideChats: {
+	protocolVersion: 1, mode: "desktop", capture,
+	requestClose: async (request: SideCloseRequest) => ({
+		protocolVersion: 1, epoch: "test-daemon", revision: 1, recovery: "ready", sessionId: request.sessionId,
+		sides: [{ id: request.sideId, sessionId: request.sessionId, label: request.sideId, operationId: request.requestId, version: request.expectedVersion + 2, status: "closed" }],
+	}),
+	getCloseState: async (sessionId: string) => ({ protocolVersion: 1, epoch: "test-daemon", revision: 0, recovery: "ready", sessionId, sides: [] }),
+	onCloseStateChanged: () => () => {},
+} } }));
 
 const drafts = new Map<string, string>();
 const creations = new Map<string, string>();
@@ -256,7 +265,10 @@ it.each(["intent save","intent capture","clear save","clear capture"])("retains 
   if(stage.startsWith("clear"))capture.mockResolvedValueOnce(undefined);
   capture.mockRejectedValueOnce(new Error("capture failed"));
  }
+ const selectedDestination=hook.result.current.activeId;
  await act(async()=>{await hook.result.current.cancelHandoff("source")});
+ expect(hook.result.current.activeId).toBe(selectedDestination);
+ await act(async()=>{hook.result.current.show("source")});
  expect(hook.result.current.error).toContain("failed");
  // Flush the failed-operation state through the same ordered writer before remount.
  await act(async()=>{await hook.result.current.replaceDraft("source",{...emptySideChatDraft(),text:"newer draft"})});

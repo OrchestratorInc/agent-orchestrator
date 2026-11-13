@@ -117,6 +117,25 @@ it("retries a claim timeout at five seconds without overlapping attempts", async
 	expect(fetcher).toHaveBeenCalledTimes(2);
 });
 
+it("releases serialized snapshot batches when transport ignores abort and ignores its late result", async () => {
+	const { recovery, fetcher, onSnapshot } = setup();
+	recovery.setAttachment(attachment); await recovery.ensureReady();
+	let finish!: (response: Response) => void;
+	fetcher.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+	const first = recovery.captureForClose().catch(error => error);
+	await vi.advanceTimersByTimeAsync(0);
+	const next = recovery.captureForClose();
+	await vi.advanceTimersByTimeAsync(5_000);
+	expect((await first).message).toContain("timed out");
+	await next;
+	expect(onSnapshot).toHaveBeenCalledOnce();
+	const cancel = vi.fn().mockResolvedValue(undefined);
+	finish({ ...ok({ appRunId: "run", sides: [{ stale: true }] }), body: { cancel } } as unknown as Response);
+	await vi.advanceTimersByTimeAsync(0);
+	expect(onSnapshot).toHaveBeenCalledOnce();
+	expect(cancel).toHaveBeenCalledOnce();
+});
+
 it("retries the exact frozen restore after sixty seconds and releases the payload on success", async () => {
 	const snapshot = { appRunId: "run", sides: [{ id: "original" }], numbers: { session: 4 } };
 	const { recovery, fetcher, snapshot: getSnapshot, onRestore } = setup(snapshot);
@@ -258,4 +277,64 @@ it("retains accepted close ownership when the background snapshot fails", async 
 	expect(ledger.state?.sides).toMatchObject([{ cleanupOnly: true, providerForkId: "fork" }]);
 	await recovery.capture(); // A later capture still works without another claim.
 	expect(fetcher.mock.calls.filter(([url]) => String(url).endsWith("/claim"))).toHaveLength(1);
+});
+
+it("permits claimed close capture after an unrelated permanent restore rejection", async () => {
+	const { recovery, fetcher } = setup({ appRunId: "run", sides: [{ side: { id: "bad", sessionId: "terminated" } }] });
+	fetcher.mockResolvedValueOnce(ok()).mockResolvedValueOnce(status(409)).mockResolvedValueOnce(ok({ appRunId: "run", sides: [] }));
+	recovery.setAttachment(attachment);
+	await recovery.ensureClaimed();
+	await expect(recovery.ensureReady()).rejects.toThrow("409");
+	expect((await recovery.captureForClose()).coverage).toEqual({ ids: [], ready: false });
+	expect(fetcher).toHaveBeenCalledTimes(3);
+});
+
+it("captures a verified open side mutation after restore rejection without losing another private original", async () => {
+	const blocked = { side: { id: "blocked", sessionId: "terminated" }, providerHostId: "private-host", providerForkId: "private-fork", draft: { text: "original" } };
+	const open = { side: { id: "open", sessionId: "usable" }, providerHostId: "open-host", draft: { text: "before" } };
+	const ledger = new SideCloseRecovery(); ledger.remember({ appRunId: "run", sides: [blocked, open] });
+	const { recovery, fetcher, snapshot: getSnapshot, onSnapshot } = setup(ledger.state);
+	getSnapshot.mockImplementation(() => ledger.state);
+	onSnapshot.mockImplementation((state, coverage) => ledger.remember(state, coverage));
+	fetcher.mockResolvedValueOnce(ok()).mockResolvedValueOnce(status(409));
+	recovery.setAttachment(attachment);
+	await expect(recovery.ensureReady()).rejects.toThrow("409");
+	const updated = { ...open, draft: { text: "latest draft and delivery receipt", pendingDelivery: { id: "receipt" } } };
+	fetcher.mockResolvedValueOnce(ok({ appRunId: "run", sides: [updated] }));
+	const capture = await recovery.captureForClose();
+	expect(capture.coverage).toEqual({ ids: [], ready: false });
+	expect(ledger.state?.sides).toEqual([updated, blocked]);
+	// A second crash still offers both the latest mutation and the private
+	// original which the first replacement daemon could not restore.
+	recovery.setAttachment({ ...attachment, generation: 2, pid: 22 });
+	await recovery.ensureReady();
+	const offered = JSON.parse(String(fetcher.mock.calls.findLast(([url, init]) => String(url).endsWith("/state") && init?.method === "POST")?.[1]?.body));
+	expect(offered.sides).toEqual([updated, blocked]);
+});
+
+it("keeps a pre-ack close capture partial and requires a fresh post-ack read", async () => {
+	const record = { side: { id: "side", sessionId: "session", mainConversationId: "main" }, providerHostId: "host", providerForkId: "fork" };
+	const ledger = new SideCloseRecovery(); ledger.remember({ appRunId: "run", sides: [record] }); ledger.begin("side");
+	const offered = ledger.state!;
+	const { recovery, fetcher, onSnapshot } = setup(offered);
+	onSnapshot.mockImplementation((state, coverage) => ledger.remember(state, coverage));
+	let acknowledge!: (value: Response) => void, finishRead!: (value: Response) => void;
+	fetcher.mockResolvedValueOnce(ok()).mockReturnValueOnce(new Promise(yes => { acknowledge = yes; }));
+	recovery.setAttachment(attachment); await recovery.ensureClaimed();
+	fetcher.mockReturnValueOnce(new Promise(yes => { finishRead = yes; }));
+	const early = recovery.captureForClose(); await vi.advanceTimersByTimeAsync(0);
+	acknowledge(ok()); await recovery.ensureReady(); ledger.markRestoreAccepted(offered);
+	finishRead(ok());
+	expect((await early).coverage).toEqual({ ids: [], ready: false });
+	expect(ledger.pending()[0].phase).toBe("cleanup_pending");
+	const later = await recovery.captureForClose();
+	expect(later.coverage).toEqual({ ids: ["side"], ready: true });
+	expect(ledger.pending()).toEqual([]);
+});
+
+it("does not grant cleanup absence proof for an acknowledged OPEN payload", async () => {
+	const record = { side: { id: "side", sessionId: "session", mainConversationId: "main" }, providerHostId: "host", providerForkId: "fork" };
+	const { recovery } = setup({ appRunId: "run", sides: [record] });
+	recovery.setAttachment(attachment); await recovery.ensureReady();
+	expect((await recovery.captureForClose()).coverage).toEqual({ ids: [], ready: true });
 });

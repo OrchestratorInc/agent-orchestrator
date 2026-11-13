@@ -5,6 +5,26 @@ const record = { side: { id: "side", sessionId: "session", label: "Question", ma
 const snapshot = (sides: unknown[]) => ({ appRunId: "run", sides });
 
 describe("side close recovery ownership", () => {
+	it("preserves unreconciled originals and numbering through partial recovery reads", () => {
+		const recovery = new SideCloseRecovery();
+		recovery.remember({ ...snapshot([record]), numbers: { session: 4 } });
+		recovery.remember({ ...snapshot([]), numbers: { session: 1 } }, { ids: [] });
+		expect(recovery.state?.sides).toEqual([record]);
+		expect(recovery.state?.numbers).toEqual({ session: 4 });
+	});
+	it("an offered OPEN record does not make a newly pinned close non-cancelable", () => {
+		const recovery = new SideCloseRecovery(); const offered = snapshot([record]);
+		recovery.remember(offered); recovery.begin("side"); recovery.markRestoreAttempt(offered);
+		expect(recovery.cancel("side", record)).toBe(true);
+	});
+	it("partial absence cannot retire accepted cleanup before the post-ack barrier", () => {
+		const recovery = new SideCloseRecovery();
+		recovery.remember(snapshot([record])); recovery.begin("side"); recovery.markRestoreAccepted(recovery.state!);
+		recovery.remember(snapshot([]), { ids: [] });
+		expect(recovery.pending()[0].phase).toBe("cleanup_pending");
+		recovery.remember(snapshot([]), { ids: ["side"] });
+		expect(recovery.summary("session").closedIds).toEqual(["side"]);
+	});
 	it("pins minimal cleanup before DELETE and survives stale snapshots and daemon replacement", () => {
 		const recovery = new SideCloseRecovery();
 		recovery.remember(snapshot([record]));

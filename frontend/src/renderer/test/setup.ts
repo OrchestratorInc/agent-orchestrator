@@ -250,7 +250,12 @@ if (typeof window !== "undefined") {
 			onStatus: () => () => undefined,
 		},
 		agentLogin: { request: async () => null },
-		sideChats: { capture: async () => undefined, confirmClose: async () => "closed", getCloseState: async () => ({ pending: [], closedIds: [] }), onPendingClosesChanged: () => () => {} },
+		sideChats: {
+			protocolVersion: 1, mode: "desktop", capture: async () => undefined,
+			requestClose: async () => { throw new Error("Install a close fixture before requesting deletion"); },
+			getCloseState: async (sessionId: string) => ({ protocolVersion: 1, epoch: "test-daemon", revision: 0, recovery: "ready", sessionId, sides: [] }),
+			onCloseStateChanged: () => () => {},
+		},
 	editorHandoff: {
 			pathAction: async () => undefined,
 			getState: async () => ({
