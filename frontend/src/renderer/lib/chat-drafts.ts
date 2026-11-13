@@ -189,6 +189,12 @@ export interface PrepareChatComposerDeliveryInput {
 	fileReferences?: ChatFileReference[];
 	requestText: string;
 	clientMessageId: string;
+	/**
+	 * The message left the composer when it was entered (one held behind a send
+	 * still in flight), so it is not the composer's current draft: the delivery
+	 * carries its own copy and the composer is left exactly as it is.
+	 */
+	detached?: boolean;
 }
 
 export interface PrepareChatInlineEditDeliveryInput extends ChatDraftInlineEditInput {
@@ -1058,6 +1064,8 @@ export function prepareChatComposerDelivery(
 		: loaded.draft.composer.revision + 1;
 	// shortcut: excerpt sends stay locked, enable optimism when refused references can be edited separately.
 	const optimistic = input.optimistic && input.kind === "send" && excerpts.length === 0 && fileReferences.length === 0;
+	// Only an optimistic send carries its own copy of the draft, which a detached one needs.
+	if (input.detached && !optimistic) return { ok: false, recovered: false, draft: loaded.draft };
 	const mutation: ChatComposerDelivery = {
 		fileReferenceFormat: "quoted-v1",
 		...(input.nativeImages === undefined ? {} : { nativeImages: input.nativeImages }),
@@ -1072,14 +1080,16 @@ export function prepareChatComposerDelivery(
 	};
 	const next: ChatSessionDraft = {
 		...loaded.draft,
-		composer: {
-			revision: optimistic ? revision + 1 : revision,
-			text: optimistic ? "" : input.composerText,
-			attachments: optimistic ? [] : input.attachments,
-			excerpts,
-			fileReferences,
-			delivery: mutation,
-		},
+		composer: input.detached
+			? { ...loaded.draft.composer, delivery: mutation }
+			: {
+				revision: optimistic ? revision + 1 : revision,
+				text: optimistic ? "" : input.composerText,
+				attachments: optimistic ? [] : input.attachments,
+				excerpts,
+				fileReferences,
+				delivery: mutation,
+			},
 	};
 	const result = persistDraftProven(next, storage);
 	return result.ok

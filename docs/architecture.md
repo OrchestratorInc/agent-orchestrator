@@ -640,12 +640,14 @@ their existing delivery path.
 The desktop composer sends one message per session at a time, so the daemon
 receives them in the order they were entered. A send clears the box before the
 daemon answers. If the user enters the next message while the previous send is
-still in flight, the composer holds it and sends it as soon as that send is
-accepted. Each held message then gets its own queued row and keeps its place.
-A held message is sent only if the box still holds exactly the text that was
-entered; an edit made since waits for its own Enter. If the previous send is
-refused or gets no answer, the held message stays in the box instead of
-overtaking it.
+still in flight, its Enter takes it out of the box too and the composer holds
+it, in order, sending it with its own client id as soon as the send before it
+is accepted. Each Enter is one message: what is typed next is the next draft
+and never joins a held one. Held messages show in the queue dock as pending
+rows until the daemon has them. If the send before them is refused or gets no
+answer, they are not sent; they come back to the box, in order. A draft with
+files or annotations, or a steer, cannot be held this way and stays in the box
+with a notice to try again.
 
 The queue dock lists waiting messages in send order: the next one on top, the
 newest at the bottom, and a send the daemon has not confirmed yet after them.
