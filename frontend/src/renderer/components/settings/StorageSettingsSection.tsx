@@ -72,12 +72,13 @@ type PendingClean = { kinds: StorageCleanKind[]; preview: StorageCleanResult };
 export function StorageSettingsSection({ titleHidden }: { titleHidden?: boolean }) {
 	const { t, i18n } = useTranslation();
 	const { report, isLoading, error } = useStorageReport();
-	const { scan } = useStorageScan();
+	const { scan, error: scanRequestError } = useStorageScan();
 	const cleaner = useStorageClean();
 	const [pending, setPending] = useState<PendingClean | null>(null);
 	const [notice, setNotice] = useState<string | null>(null);
 	const [browserCache, setBrowserCache] = useState<number | null>(null);
 	const [clearingCache, setClearingCache] = useState(false);
+	const [cacheError, setCacheError] = useState<string | null>(null);
 	const size = (bytes: number) => formatStorageBytes(bytes, i18n.language);
 
 	useEffect(() => {
@@ -120,13 +121,17 @@ export function StorageSettingsSection({ titleHidden }: { titleHidden?: boolean 
 
 	const clearBrowserCache = async () => {
 		setClearingCache(true);
+		setCacheError(null);
 		try {
 			await aoBridge.storage.clearBrowserCache();
 			setBrowserCache(await aoBridge.storage.browserCacheSize());
+		} catch (failure) {
+			setCacheError(failure instanceof Error ? failure.message : String(failure));
 		} finally {
 			setClearingCache(false);
 		}
 	};
+	const scanFailure = scanRequestError ?? report?.scanError;
 
 	const offloaded = (report?.worktrees ?? []).filter((wt) => wt.offloaded);
 	const restoreFailure = (report?.worktrees ?? []).find((wt) => wt.restoreError);
@@ -168,6 +173,12 @@ export function StorageSettingsSection({ titleHidden }: { titleHidden?: boolean 
 				{error ? (
 					<SettingsRow label={t("settings.storage")} description={<span role="alert" className="text-error">{error}</span>} />
 				) : null}
+				{scanFailure ? (
+					<SettingsRow
+						label={t("settings.storage.measure")}
+						description={<span role="alert" className="text-error">{t("settings.storage.scanFailed", { error: scanFailure })}</span>}
+					/>
+				) : null}
 				{status && !report?.scannedAt ? <SettingsRow label={status} /> : null}
 				{(report?.categories ?? [])
 					.filter((category) => category.bytes > 0)
@@ -175,11 +186,14 @@ export function StorageSettingsSection({ titleHidden }: { titleHidden?: boolean 
 						const kinds = CATEGORY_CLEAN_KINDS[category.category];
 						const canClean = Boolean(kinds) && category.reclaimableBytes > 0;
 						const cache = category.category === "browser_data" && browserCache ? browserCache : 0;
-						const description = canClean
-							? t("settings.storage.canFree", { size: size(category.reclaimableBytes) })
-							: cache > 0
-								? t("settings.storage.browserCache", { size: size(cache) })
-								: undefined;
+						const description =
+							category.category === "browser_data" && cacheError ? (
+								<span role="alert" className="text-error">{t("settings.storage.clearCacheFailed", { error: cacheError })}</span>
+							) : canClean ? (
+								t("settings.storage.canFree", { size: size(category.reclaimableBytes) })
+							) : cache > 0 ? (
+								t("settings.storage.browserCache", { size: size(cache) })
+							) : undefined;
 						return (
 							<SettingsRow key={category.category} label={t(CATEGORY_LABEL_KEYS[category.category])} description={description}>
 								<div className="flex items-center gap-3">

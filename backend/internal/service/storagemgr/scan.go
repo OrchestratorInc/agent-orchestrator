@@ -202,9 +202,11 @@ func (s *Service) scan(ctx context.Context) (*scanSnapshot, error) {
 		snap.Categories[domain.StorageDBBackups] += b.Bytes
 	}
 
-	if snap.Logs, err = s.scanLogs(ctx); err != nil {
+	var activeLogBytes int64
+	if snap.Logs, activeLogBytes, err = s.scanLogs(ctx); err != nil {
 		return nil, err
 	}
+	snap.Categories[domain.StorageLogs] = activeLogBytes
 	for _, l := range snap.Logs {
 		snap.Categories[domain.StorageLogs] += l.Bytes
 	}
@@ -360,19 +362,20 @@ func (s *Service) scanDatabase(ctx context.Context) DatabaseUsage {
 	return usage
 }
 
-func (s *Service) scanLogs(ctx context.Context) ([]fileEntry, error) {
-	logs, err := listEntries(ctx, s.layout.Logs(), func(_ string, isDir bool) bool { return !isDir })
+// scanLogs lists the log directory's files, which the policy may age out,
+// and sizes the daemon's and hooks' own log files, which it never removes:
+// they are live sinks that can stay unwritten for weeks on a healthy install.
+func (s *Service) scanLogs(ctx context.Context) (logs []fileEntry, activeBytes int64, err error) {
+	logs, err = listEntries(ctx, s.layout.Logs(), func(_ string, isDir bool) bool { return !isDir })
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	for _, loose := range s.layout.LooseLogFiles() {
-		info, statErr := os.Stat(loose)
-		if statErr != nil || !info.Mode().IsRegular() {
-			continue
+		if info, statErr := os.Stat(loose); statErr == nil && info.Mode().IsRegular() {
+			activeBytes += info.Size()
 		}
-		logs = append(logs, fileEntry{Path: loose, Bytes: info.Size(), ModTime: info.ModTime()})
 	}
-	return logs, nil
+	return logs, activeBytes, nil
 }
 
 func (s *Service) scanDevProfiles(ctx context.Context) ([]devProfile, error) {
@@ -386,16 +389,23 @@ func (s *Service) scanDevProfiles(ctx context.Context) ([]devProfile, error) {
 	out := make([]devProfile, 0, len(entries))
 	for _, entry := range entries {
 		profile := devProfile{fileEntry: entry, Running: s.devProfileRunning(entry.Path)}
-		// A dev profile is "used" whenever anything inside changes; the top
-		// folder's mtime alone misses writes deep in its database.
-		for _, marker := range []string{"running.json", filepath.Join("data", "ao.db"), filepath.Join("data", "ao.db-wal")} {
-			if info, statErr := os.Stat(filepath.Join(entry.Path, marker)); statErr == nil && info.ModTime().After(profile.ModTime) {
-				profile.ModTime = info.ModTime()
-			}
-		}
+		profile.ModTime = devProfileLastUsed(entry.Path, entry.ModTime)
 		out = append(out, profile)
 	}
 	return out, nil
+}
+
+// devProfileLastUsed is when a dev profile last changed: the newest of its
+// folder and the files a running dev build writes. The top folder's mtime
+// alone misses writes deep in its database.
+func devProfileLastUsed(dir string, folderMod time.Time) time.Time {
+	last := folderMod
+	for _, marker := range []string{"running.json", filepath.Join("data", "ao.db"), filepath.Join("data", "ao.db-wal")} {
+		if info, err := os.Stat(filepath.Join(dir, marker)); err == nil && info.ModTime().After(last) {
+			last = info.ModTime()
+		}
+	}
+	return last
 }
 
 func (s *Service) scanTemplates(ctx context.Context) ([]templateEntry, error) {
@@ -430,7 +440,12 @@ func (s *Service) scanOther(ctx context.Context) (int64, error) {
 		claimed[normalizePath(p)] = true
 	}
 	var total int64
-	for _, dir := range []string{s.layout.DataDir, s.layout.StateDir} {
+	roots := []string{s.layout.DataDir}
+	// Under an AO_DATA_DIR override the state and data dirs are one folder.
+	if normalizePath(s.layout.StateDir) != normalizePath(s.layout.DataDir) {
+		roots = append(roots, s.layout.StateDir)
+	}
+	for _, dir := range roots {
 		entries, err := os.ReadDir(dir)
 		if err != nil {
 			continue

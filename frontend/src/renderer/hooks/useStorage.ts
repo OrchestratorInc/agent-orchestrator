@@ -53,7 +53,11 @@ export function useStorageScan() {
 		},
 		onSuccess: (data) => queryClient.setQueryData(storageQueryKey, data),
 	});
-	return { scan: () => mutation.mutate(), scanning: mutation.isPending };
+	return {
+		scan: () => mutation.mutate(),
+		scanning: mutation.isPending,
+		error: mutation.error ? apiErrorMessage(mutation.error) : undefined,
+	};
 }
 
 /** Previews (dryRun) or starts a cleanup; a started one is followed through the report. */

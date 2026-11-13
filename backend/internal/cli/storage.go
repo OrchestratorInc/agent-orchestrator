@@ -328,7 +328,9 @@ func (c *commandContext) cleanStorage(ctx context.Context, cmd *cobra.Command, o
 	for _, raw := range opts.only {
 		kind := strings.TrimSpace(raw)
 		if kind == "" {
-			continue
+			// Dropping it would turn a narrowed cleanup into a cleanup of
+			// every kind.
+			return usageError{errors.New("--only needs a cleanup kind; an empty value is not allowed")}
 		}
 		if _, ok := domain.ParseStorageCleanKind(kind); !ok {
 			return usageError{fmt.Errorf("unknown cleanup kind %q (want one of %s)", kind, strings.Join(storageCleanKindNames(), ", "))}
@@ -391,9 +393,29 @@ func (c *commandContext) cleanStorage(ctx context.Context, cmd *cobra.Command, o
 		return err
 	}
 	if opts.json {
-		return writeJSON(out, report.LastClean)
+		if err := writeJSON(out, report.LastClean); err != nil {
+			return err
+		}
+	} else if err := writeStorageResult(out, *report.LastClean); err != nil {
+		return err
 	}
-	return writeStorageResult(out, *report.LastClean)
+	return storageCleanFailure(*report.LastClean)
+}
+
+// storageCleanFailure turns failed cleanup actions into a non-zero exit, so a
+// script never reads a failed cleanup as a success. Skipped actions (a dirty
+// worktree, a running agent) are expected and do not fail the command.
+func storageCleanFailure(result storageCleanResponseTO) error {
+	failed := 0
+	for _, action := range result.Actions {
+		if action.Result == "failed" {
+			failed++
+		}
+	}
+	if failed == 0 {
+		return nil
+	}
+	return fmt.Errorf("%d cleanup action%s failed; see `ao storage log`", failed, pluralS(failed))
 }
 
 // storageClean posts a cleanup request, waiting for the first measurement

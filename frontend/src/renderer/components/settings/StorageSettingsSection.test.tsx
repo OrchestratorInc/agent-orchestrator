@@ -139,6 +139,23 @@ describe("StorageSettingsSection", () => {
 		await waitFor(() => expect(apiMocks.patch).toHaveBeenCalledWith("/api/v1/storage/settings", { body: { offloadEnabled: false } }));
 	});
 
+	it("shows a failed cache clear and a failed measurement", async () => {
+		const user = userEvent.setup();
+		bridgeMocks.browserCacheSize.mockResolvedValue(512 * 1024 * 1024);
+		bridgeMocks.clearBrowserCache.mockRejectedValue(new Error("cache is locked"));
+		apiMocks.get.mockResolvedValue({
+			data: report({
+				scanError: "permission denied",
+				categories: [{ category: "browser_data", bytes: GiB, reclaimableBytes: 0 }],
+			}),
+			error: undefined,
+		});
+		renderSection();
+		expect(await screen.findByText("Measuring failed: permission denied")).toBeInTheDocument();
+		await user.click(await screen.findByRole("button", { name: "Clear cache" }));
+		expect(await screen.findByText("Could not clear the cache: cache is locked")).toBeInTheDocument();
+	});
+
 	it("explains a kill switch instead of offering automatic cleanup", async () => {
 		apiMocks.get.mockResolvedValue({ data: report({ autoCleanAllowed: false }), error: undefined });
 		renderSection();

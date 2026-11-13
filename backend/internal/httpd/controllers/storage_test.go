@@ -56,11 +56,9 @@ func (f *fakeStorageService) Actions(_ context.Context, limit int) ([]domain.Sto
 	return []domain.StorageAction{{ID: 1, At: time.Now(), Kind: domain.StorageCleanLogs, Target: "/l", Result: domain.StorageActionDone}}, nil
 }
 
-func (f *fakeStorageService) Settings(context.Context) (domain.StorageSettings, error) {
-	return f.settings, nil
-}
-
-func (f *fakeStorageService) UpdateSettings(_ context.Context, s domain.StorageSettings) (domain.StorageSettings, error) {
+func (f *fakeStorageService) UpdateSettings(_ context.Context, change func(*domain.StorageSettings)) (domain.StorageSettings, error) {
+	s := f.settings
+	change(&s)
 	f.saved = &s
 	return s, nil
 }

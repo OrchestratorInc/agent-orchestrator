@@ -19,8 +19,7 @@ type StorageService interface {
 	StartScan()
 	Clean(ctx context.Context, req storagemgr.CleanRequest) (storagemgr.CleanResult, error)
 	Actions(ctx context.Context, limit int) ([]domain.StorageAction, error)
-	Settings(ctx context.Context) (domain.StorageSettings, error)
-	UpdateSettings(ctx context.Context, settings domain.StorageSettings) (domain.StorageSettings, error)
+	UpdateSettings(ctx context.Context, change func(*domain.StorageSettings)) (domain.StorageSettings, error)
 }
 
 // StorageController owns the /storage routes: the disk-usage report, scans,
@@ -128,13 +127,11 @@ func (c *StorageController) updateSettings(w http.ResponseWriter, r *http.Reques
 	if !decodeConversationBody(w, r, &req) {
 		return
 	}
-	current, err := c.Svc.Settings(r.Context())
-	if err != nil {
-		envelope.WriteError(w, r, err)
-		return
-	}
-	applyStorageSettingsPatch(&current, req)
-	updated, err := c.Svc.UpdateSettings(r.Context(), current)
+	// The service reads, patches and saves under one lock, so a concurrent
+	// change to another setting is never overwritten by a stale read.
+	updated, err := c.Svc.UpdateSettings(r.Context(), func(settings *domain.StorageSettings) {
+		applyStorageSettingsPatch(settings, req)
+	})
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return

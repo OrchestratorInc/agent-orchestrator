@@ -64,6 +64,11 @@ func startStorage(ctx context.Context, cfg config.Config, store *sqlite.Store, s
 	if guard, ok := mgr.(storagemgr.QuietGuard); ok {
 		quiet = guard
 	}
+	// Without the session manager's gate, orphan worktrees are left alone.
+	var workspaces storagemgr.WorkspaceGuard
+	if guard, ok := mgr.(storagemgr.WorkspaceGuard); ok {
+		workspaces = guard
+	}
 	svc := storagemgr.New(storagemgr.Options{
 		Layout:           storagemgr.Layout{StateDir: cfg.StateDir, DataDir: cfg.DataDir},
 		Store:            store,
@@ -72,6 +77,7 @@ func startStorage(ctx context.Context, cfg config.Config, store *sqlite.Store, s
 		Projects:         store,
 		Logger:           log.With("component", "storage"),
 		AutoCleanAllowed: storageAutoCleanAllowed(os.Getenv("AO_STORAGE_AUTOCLEAN")),
+		Workspaces:       workspaces,
 	})
 	if hooked, ok := mgr.(interface {
 		SetStorageHooks(hooks sessionmanager.StorageHooks)

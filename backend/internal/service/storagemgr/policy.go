@@ -13,6 +13,7 @@ type PlannedAction struct {
 	Kind      domain.StorageCleanKind
 	Target    string
 	SessionID domain.SessionID
+	ProjectID domain.ProjectID
 	Reason    string
 	Bytes     int64
 	Automatic bool
@@ -80,7 +81,7 @@ func plan(in policyInput) []PlannedAction {
 			// AO cannot tell whose work an unowned folder holds.
 			if wt.GitWorktree && wt.Clean {
 				out = append(out, PlannedAction{
-					Kind: domain.StorageCleanOrphanWorktrees, Target: wt.Path, Bytes: wt.Bytes,
+					Kind: domain.StorageCleanOrphanWorktrees, Target: wt.Path, ProjectID: wt.ProjectID, Bytes: wt.Bytes,
 					Reason: "no session owns this worktree and it has no changes",
 				})
 			}

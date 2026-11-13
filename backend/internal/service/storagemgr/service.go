@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -49,6 +50,12 @@ type QuietGuard interface {
 	WithQuietSession(ctx context.Context, id domain.SessionID, fn func(domain.SessionRecord) error) error
 }
 
+// WorkspaceGuard runs work while no session can claim a worktree path
+// (sessionmanager.Manager.WithUnownedWorkspace).
+type WorkspaceGuard interface {
+	WithUnownedWorkspace(ctx context.Context, projectID domain.ProjectID, path string, fn func() error) error
+}
+
 // Projects resolves project records.
 type Projects interface {
 	GetProject(ctx context.Context, id string) (domain.ProjectRecord, bool, error)
@@ -66,6 +73,8 @@ type Options struct {
 	// AutoCleanAllowed is the deployment kill switch (AO_STORAGE_AUTOCLEAN=off
 	// clears it): off, scheduled passes only log what they would do.
 	AutoCleanAllowed bool
+	// Workspaces gates removing a worktree no session owns; nil skips orphans.
+	Workspaces WorkspaceGuard
 }
 
 // Errors the HTTP layer maps to responses.
@@ -91,6 +100,11 @@ type Service struct {
 	now         func() time.Time
 	autoAllowed bool
 	pressure    *pressureTracker
+	workspaces  WorkspaceGuard
+
+	// settingsMu makes a settings change one read-modify-write: the daemon
+	// is the only writer, so two requests can never interleave.
+	settingsMu sync.Mutex
 
 	mu       sync.Mutex
 	bg       context.Context
@@ -132,6 +146,7 @@ func New(opts Options) *Service {
 		now:         now,
 		autoAllowed: opts.AutoCleanAllowed,
 		pressure:    newPressureTracker(),
+		workspaces:  opts.Workspaces,
 		bg:          context.Background(),
 		wake:        make(chan struct{}, 1),
 	}
@@ -289,10 +304,20 @@ func (s *Service) runScan(ctx context.Context) {
 	s.logger.Debug("storage: scan finished", "duration", snap.Duration)
 }
 
-// scanNow runs a scan in the caller's goroutine, sharing a running one.
+// scanNow runs a scan and waits for it, sharing a running one. A failed scan
+// keeps the previous snapshot, so it is reported as an error: nothing may act
+// on a plan the failed scan was meant to refresh.
 func (s *Service) scanNow(ctx context.Context) error {
 	s.StartScan()
-	return s.WaitScan(ctx)
+	if err := s.WaitScan(ctx); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.scanErr != "" {
+		return errors.New(s.scanErr)
+	}
+	return nil
 }
 
 // CheckPressure reads free space on the data volume now.
@@ -314,8 +339,17 @@ func (s *Service) Settings(ctx context.Context) (domain.StorageSettings, error) 
 	return s.store.GetStorageSettings(ctx)
 }
 
-// UpdateSettings validates and saves the storage preferences.
-func (s *Service) UpdateSettings(ctx context.Context, settings domain.StorageSettings) (domain.StorageSettings, error) {
+// UpdateSettings applies change to the current preferences, validates and
+// saves them as one step, so two concurrent changes to different settings
+// never overwrite each other.
+func (s *Service) UpdateSettings(ctx context.Context, change func(*domain.StorageSettings)) (domain.StorageSettings, error) {
+	s.settingsMu.Lock()
+	defer s.settingsMu.Unlock()
+	settings, err := s.store.GetStorageSettings(ctx)
+	if err != nil {
+		return domain.StorageSettings{}, err
+	}
+	change(&settings)
 	if err := settings.Validate(); err != nil {
 		return domain.StorageSettings{}, apierr.Invalid("INVALID_STORAGE_SETTINGS", err.Error(), nil)
 	}
@@ -438,19 +472,22 @@ func (s *Service) Clean(ctx context.Context, req CleanRequest) (CleanResult, err
 		}
 		return result, nil
 	}
-	job, err := s.beginJob()
-	if err != nil {
-		return CleanResult{}, err
-	}
-	go func() {
-		defer sentryobs.RecoverBackground()
-		s.execute(s.bg, job, selected)
-	}()
+	// The response is built before the executor starts, which reorders its
+	// own copy of the actions.
 	planned := CleanResult{StartedAt: now, Running: true, Actions: make([]domain.StorageAction, 0, len(selected))}
 	for _, action := range selected {
 		planned.Actions = append(planned.Actions, plannedRecord(action, now, false))
 		planned.FreedBytes += action.Bytes
 	}
+	job, err := s.beginJob()
+	if err != nil {
+		return CleanResult{}, err
+	}
+	actions := append([]PlannedAction(nil), selected...)
+	go func() {
+		defer sentryobs.RecoverBackground()
+		s.execute(s.bg, job, actions)
+	}()
 	return planned, nil
 }
 
@@ -563,6 +600,11 @@ func (s *Service) runAction(ctx context.Context, action PlannedAction) domain.St
 		if s.devProfileRunning(action.Target) {
 			return s.record(action, domain.StorageActionSkipped, errors.New("this dev build is running"))
 		}
+		if action.Automatic && !s.devProfileStillExpired(ctx, action.Target) {
+			// The plan came from an earlier scan; a profile used since then is
+			// no longer due.
+			return s.record(action, domain.StorageActionSkipped, errors.New("used again since it was measured"))
+		}
 		return s.runRemoval(action, s.layout.DevProfiles())
 	case domain.StorageCleanTemplates:
 		return s.runRemoval(action, s.layout.Templates())
@@ -582,7 +624,7 @@ func (s *Service) runAction(ctx context.Context, action PlannedAction) domain.St
 }
 
 func (s *Service) runOffload(ctx context.Context, action PlannedAction) domain.StorageAction {
-	var facts domain.SessionStorageFacts
+	var result offloadResult
 	err := s.quiet.WithQuietSession(ctx, action.SessionID, func(rec domain.SessionRecord) error {
 		if normalizePath(rec.Metadata.WorkspacePath) != normalizePath(action.Target) {
 			return errors.New("the session's worktree moved since it was measured")
@@ -597,25 +639,26 @@ func (s *Service) runOffload(ctx context.Context, action PlannedAction) domain.S
 		if project.Config.StorageOffloadDisabled {
 			return errors.New("offload is turned off for this project")
 		}
-		offloaded, offloadErr := s.offloadWorktree(ctx, project, rec.Metadata.WorkspacePath)
-		facts = offloaded
-		if len(facts.OffloadedPaths) > 0 {
-			facts.SessionID, facts.OffloadedAt = rec.ID, s.now()
-			if err := s.store.RecordSessionOffload(ctx, facts); err != nil {
-				return errors.Join(offloadErr, err)
-			}
+		offloadedAt := s.now()
+		record := func(facts domain.SessionStorageFacts) error {
+			facts.SessionID, facts.OffloadedAt = rec.ID, offloadedAt
+			return s.store.RecordSessionOffload(ctx, facts)
 		}
+		offloaded, offloadErr := s.offloadWorktree(ctx, project, rec.Metadata.WorkspacePath, record)
+		result = offloaded
 		return offloadErr
 	})
 	switch {
 	case errors.Is(err, sessionmanager.ErrSessionNotQuiet), errors.Is(err, sessionmanager.ErrOperationInProgress),
 		errors.Is(err, sessionmanager.ErrTerminated), errors.Is(err, sessionmanager.ErrNotFound):
 		return s.record(action, domain.StorageActionSkipped, err)
-	case err != nil && facts.OffloadedBytes == 0:
+	case err != nil && len(result.facts.OffloadedPaths) == 0:
 		return s.record(action, domain.StorageActionFailed, err)
 	}
 	out := s.record(action, domain.StorageActionDone, err)
-	out.Bytes = facts.OffloadedBytes
+	// Only trashed trees went back to the disk; one adopted as a dependency
+	// template is still on it.
+	out.Bytes = result.freed
 	return out
 }
 
@@ -649,19 +692,32 @@ func (s *Service) runOrphanRemoval(ctx context.Context, action PlannedAction) do
 	if !Within(s.layout.Worktrees(), action.Target) {
 		return s.record(action, domain.StorageActionSkipped, errors.New("outside AO's managed worktrees"))
 	}
-	status, err := gitCommand(ctx, action.Target, "status", "--porcelain=v1", "--untracked-files=normal")
-	if err != nil {
-		return s.record(action, domain.StorageActionFailed, err)
+	if s.workspaces == nil {
+		return s.record(action, domain.StorageActionSkipped, errors.New("worktree ownership cannot be checked"))
 	}
-	if len(status) > 0 {
-		return s.record(action, domain.StorageActionSkipped, errors.New("it has uncommitted changes"))
-	}
-	common, err := gitCommand(ctx, action.Target, "rev-parse", "--path-format=absolute", "--git-common-dir")
-	if err != nil {
-		return s.record(action, domain.StorageActionFailed, err)
-	}
-	// Plain `worktree remove` (no --force) refuses a dirty or locked worktree.
-	if _, err := gitCommand(ctx, strings.TrimSpace(string(common)), "worktree", "remove", action.Target); err != nil {
+	errDirty := errors.New("it has uncommitted changes")
+	// Ownership is checked again, and the worktree removed, under the project's
+	// workspace gate: no spawn, restore or import can claim it in between.
+	err := s.workspaces.WithUnownedWorkspace(ctx, action.ProjectID, action.Target, func() error {
+		status, err := gitCommand(ctx, action.Target, "status", "--porcelain=v1", "--untracked-files=normal")
+		if err != nil {
+			return err
+		}
+		if len(status) > 0 {
+			return errDirty
+		}
+		common, err := gitCommand(ctx, action.Target, "rev-parse", "--path-format=absolute", "--git-common-dir")
+		if err != nil {
+			return err
+		}
+		// Plain `worktree remove` (no --force) refuses a dirty or locked worktree.
+		_, err = gitCommand(ctx, strings.TrimSpace(string(common)), "worktree", "remove", action.Target)
+		return err
+	})
+	switch {
+	case errors.Is(err, errDirty), errors.Is(err, sessionmanager.ErrWorkspaceOwned):
+		return s.record(action, domain.StorageActionSkipped, err)
+	case err != nil:
 		return s.record(action, domain.StorageActionFailed, err)
 	}
 	return s.record(action, domain.StorageActionDone, nil)
@@ -677,10 +733,15 @@ func (s *Service) runRemoval(action PlannedAction, root string) domain.StorageAc
 		return s.record(action, domain.StorageActionSkipped, errors.New("already gone"))
 	}
 	if moved, err := moveToTrash(s.layout.Trash(), action.Target); err == nil {
+		out := s.record(action, domain.StorageActionDone, nil)
 		if err := removeTree(moved); err != nil {
+			// Still on the disk until a later pass empties the trash, which
+			// then counts it.
 			s.logger.Debug("storage: trash delete deferred", "path", moved, "error", err)
+			out.Bytes = 0
+			out.Reason += "; the delete finishes on a later pass"
 		}
-		return s.record(action, domain.StorageActionDone, nil)
+		return out
 	}
 	if err := removeTree(action.Target); err != nil {
 		return s.record(action, domain.StorageActionFailed, err)
@@ -704,10 +765,29 @@ func (s *Service) runVacuum(ctx context.Context, action PlannedAction) domain.St
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	_, _, after, _ := s.store.DatabasePageStats(ctx)
 	out := s.record(action, domain.StorageActionDone, nil)
+	_, _, after, err := s.store.DatabasePageStats(ctx)
+	if err != nil {
+		out.Bytes = 0
+		out.Error = "could not measure what was freed: " + err.Error()
+		return out
+	}
 	out.Bytes = max(before-after, 0) * pageSize
 	return out
+}
+
+// devProfileStillExpired re-reads a dev profile's last use against the
+// current setting, so a scheduled removal never acts on an outdated scan.
+func (s *Service) devProfileStillExpired(ctx context.Context, dir string) bool {
+	settings, err := s.store.GetStorageSettings(ctx)
+	if err != nil {
+		return false
+	}
+	info, err := os.Stat(dir)
+	if err != nil {
+		return false
+	}
+	return s.now().Sub(devProfileLastUsed(dir, info.ModTime())) >= time.Duration(settings.DevProfileDays)*day
 }
 
 func (s *Service) emptyTrash(ctx context.Context) {
