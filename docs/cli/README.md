@@ -78,6 +78,10 @@ without a terminal runs it in the background and reads its output; see
 | `ao project rm <id>`                | `DELETE /api/v1/projects/{id}`                 |
 | `ao agent ls`                       | `POST /api/v1/agents/readiness/ensure` (`display`) |
 | `ao agent ls --refresh`             | `POST /api/v1/agents/refresh` (forced checks) |
+| `ao account ls`                     | `GET /api/v1/agents/accounts`                  |
+| `ao account default <account-id>`   | `POST /api/v1/agents/accounts/{id}/default`    |
+| `ao account show [<session-id>]`    | `GET /api/v1/agents/accounts/sessions/{id}`    |
+| `ao account switch <session-id> <account-id>` | `PUT /api/v1/agents/accounts/sessions/{id}`; `--wait` polls `GET /api/v1/sessions/{id}/interface-transition` |
 | `ao automation create/list/get/update/delete/runs` | `POST/GET/PATCH/DELETE /api/v1/automations` |
 | `ao cue create/list`                | `POST/GET /api/v1/projects/{id}/cues`         |
 | `ao spawn`                          | Targeted launch ensure, then `POST /api/v1/sessions` |

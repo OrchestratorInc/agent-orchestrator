@@ -33,6 +33,7 @@ type spawnOptions struct {
 	model           string
 	output          string
 	effort          string
+	account         string
 	claimPR         string
 	noTakeover      bool
 	skipAgentCheck  bool
@@ -53,6 +54,7 @@ type spawnRequest struct {
 	Prompt              string `json:"prompt,omitempty"`
 	Model               string `json:"model,omitempty"`
 	Effort              string `json:"effort,omitempty"`
+	AccountID           string `json:"accountId,omitempty"`
 	RequestedOutput     string `json:"requestedOutput,omitempty"`
 	DisplayName         string `json:"displayName"`
 	DisplayNameExplicit bool   `json:"displayNameExplicit,omitempty"`
@@ -186,6 +188,7 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 				Prompt:              opts.prompt,
 				Model:               strings.TrimSpace(opts.model),
 				Effort:              strings.TrimSpace(opts.effort),
+				AccountID:           strings.TrimSpace(opts.account),
 				RequestedOutput:     opts.output,
 				DisplayName:         name,
 				DisplayNameExplicit: true,
@@ -256,6 +259,7 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 	f.StringVar(&opts.prompt, "prompt", "", "Initial prompt for the agent")
 	f.StringVar(&opts.model, "model", "", "Agent model override for this session only (e.g. sonnet, gpt-5.6-sol); overrides project/role config without changing it")
 	f.StringVar(&opts.output, "output", "", "Deliverable for the session: artifact asks the agent to write a file in its artifact directory instead of opening a PR (default: ordinary task)")
+	f.StringVar(&opts.account, "account", "", "Claude Code or Codex account id to start on, from ao account ls; empty uses the agent's default account")
 	f.StringVar(&opts.effort, "effort", "", "Reasoning effort override for this session only (e.g. low, medium, high); empty defers to the agent/model default")
 	f.StringVar(&opts.issue, "issue", "", "Issue id to associate with the session")
 	f.StringVar(&opts.trackerProvider, "tracker-provider", "github", "Issue tracker provider: github or gitlab (default: github)")
