@@ -30,10 +30,17 @@ describe("QuotaBar", () => {
 		expect(screen.getByText("94%").className).toContain("text-status-exited");
 	});
 
-	it("says when it resets once full", () => {
+	it("swaps the bar for a clock and the reset time once full", () => {
 		render(<QuotaBar quota={{ percent: 100, kind: "session", resetsIn: 8_100 }} />);
-		expect(screen.getByText("Resets in 2h 15m")).toBeInTheDocument();
+		expect(screen.getByRole("status")).toHaveTextContent("Resets in 2h 15m");
+		expect(screen.queryByRole("meter")).not.toBeInTheDocument();
 		expect(screen.queryByText("100%")).not.toBeInTheDocument();
+	});
+
+	it("names the limit when a full window has no reported reset", () => {
+		render(<QuotaBar quota={{ percent: 100, kind: "weekly" }} />);
+		expect(screen.getByRole("status")).toHaveTextContent("Usage limit reached");
+		expect(screen.queryByRole("meter")).not.toBeInTheDocument();
 	});
 
 	it("formats resets to the useful unit", () => {

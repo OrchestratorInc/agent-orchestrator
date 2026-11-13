@@ -109,7 +109,7 @@ export interface AgentSwitchProps {
 	harnessView?: "local" | "cloud";
 }
 
-/** Something to show in the picker's place for now, such as the usage limit near its end. */
+/** Something to show beside the agent's logo for now, such as the usage limit near its end. */
 export interface PickerOverride {
 	label: ReactNode;
 	/** Leads the hover title, ahead of the model the picker still opens to. */
@@ -213,7 +213,7 @@ export function AgentModelPicker({
 	override,
 	onCloseAutoFocus,
 }: {
-	/** Shown in place of the agent, model and effort; the menu is unchanged. */
+	/** Shown after the agent's logo in place of the model and effort; the menu is unchanged. */
 	override?: PickerOverride;
 	/** Shown under the settings of the agent picked to switch to, such as its Switch and Cancel buttons. */
 	pendingFooter?: ReactNode;
@@ -421,8 +421,8 @@ export function AgentModelPicker({
 				showCaret={false}
 				data-shortcut-target={terminal ? undefined : "model-picker"}
 			>
-				{override && !terminal ? override.label : <>
 				<ProviderMark provider={terminal ? currentHarness : shownHarness} className="size-3.5" />
+				{override && !terminal ? override.label : <>
 				{loadingModels && !savedLabel && !pending && !terminal ? (
 					<span className="flex items-center gap-1.5 text-muted-foreground">
 						<Loader2 aria-hidden="true" className="size-3 animate-spin" />

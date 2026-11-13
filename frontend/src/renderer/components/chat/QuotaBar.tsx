@@ -7,11 +7,13 @@
  * picker still opens on click and names the model in its hover title.
  *
  * The fill is the real reported percentage. It grows in once when the bar first
- * appears and eases to each new reading; nothing loops.
+ * appears and eases to each new reading; nothing loops. Once the window is full
+ * the bar gives way to a clock and the time it resets.
  */
 
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
+import { Clock } from "@/components/app-icons";
 import { cn } from "../../lib/utils";
 import type { ConversationRateLimits } from "../../types/conversation";
 
@@ -58,6 +60,23 @@ export function QuotaBar({ quota }: { quota: QuotaWindow }) {
 	const resets = quota.resetsIn && quota.resetsIn > 0 ? formatQuotaReset(quota.resetsIn) : undefined;
 	const label = t(quota.kind === "session" ? "chat.quota.session" : "chat.quota.weekly");
 
+	// Full: there is nothing left to fill, so only when it comes back matters.
+	if (full) {
+		return (
+			<span
+				data-quota-bar=""
+				data-severity="full"
+				role="status"
+				className="flex min-w-0 items-center gap-1.5 text-status-exited animate-[quota-in_150ms_var(--ease-out)] motion-reduce:animate-none"
+			>
+				<Clock aria-hidden="true" className="size-3.5 shrink-0" />
+				<span className="truncate tabular-nums">
+					{resets ? t("chat.quota.resetsIn", { time: resets }) : t("chat.usageLimit.title")}
+				</span>
+			</span>
+		);
+	}
+
 	return (
 		<span
 			data-quota-bar=""
@@ -85,7 +104,7 @@ export function QuotaBar({ quota }: { quota: QuotaWindow }) {
 				/>
 			</span>
 			<span className={cn("shrink-0 tabular-nums", critical ? "text-status-exited" : "text-status-in-review")}>
-				{full && resets ? t("chat.quota.resetsIn", { time: resets }) : `${percent}%`}
+				{percent}%
 			</span>
 		</span>
 	);

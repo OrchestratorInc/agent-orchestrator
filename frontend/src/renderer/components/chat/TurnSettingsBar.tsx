@@ -188,7 +188,7 @@ export function TurnSettingsBar({
 	agentSwitch?: AgentSwitchProps;
 	/** Drawn just before that picker, such as the context meter. */
 	beforePicker?: ReactNode;
-	/** Shown in the picker in place of the agent, model and effort, such as the usage limit near its end. */
+	/** Shown in the picker after the agent's logo, in place of the model and effort, such as the usage limit near its end. */
 	pickerOverride?: PickerOverride;
 	/** The agent is starting again; the picker names no model until it reports its own. */
 	modelsLoading?: boolean;
