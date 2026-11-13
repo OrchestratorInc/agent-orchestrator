@@ -564,6 +564,7 @@ export function toCloudWorkspaceSession(
 			updatedAt: file.updatedAt,
 			registered: file.registered,
 			...(file.previousPaths?.length ? { previousPaths: file.previousPaths } : {}),
+			...(file.sha256 ? { sha256: file.sha256 } : {}),
 		})),
 		...((session.artifactCount ?? 0) > 0 && !session.artifactFiles && !session.isTerminated ? { artifactFilesPending: true } : {}),
 	};

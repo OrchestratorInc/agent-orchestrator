@@ -16,6 +16,7 @@ import {
 	type CloudShareFile,
 	type CloudShareGrant,
 	type CloudShareInspection,
+	type CloudShareStatus,
 	type CloudShareLinks,
 	type CloudSharePublishResult,
 	type CloudSessionShareFile,
@@ -233,6 +234,30 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 			...(publishedFingerprint ? { publishedFingerprint } : {}),
 			...(publishedSecretFindings?.length ? { publishedSecretFindings } : {}),
 		};
+	});
+
+	// What the Publish button shows: the file's link and whether the file
+	// changed since, from the record and the file's size and modification time
+	// (a cloud file's SHA-256, passed as fingerprint). It never reads the file:
+	// the full inspection runs when the person publishes.
+	deps.ipcMain.handle("cloudShare:status", async (event, value: unknown): Promise<CloudShareStatus> => {
+		requireMainFrame(event);
+		const file = shareFileArgument(value);
+		if (isCloudFile(file)) {
+			const key = await cloudRecordKey(deps.records, file.baseUrl, file);
+			const shareId = await deps.records.get(key);
+			const published = shareId ? await deps.records.publishedFingerprint(key) : undefined;
+			const name = file.path.split("/").pop() || file.path;
+			return { name, ...(shareId ? { shareId } : {}), changed: Boolean(published && file.fingerprint && published !== file.fingerprint) };
+		}
+		const resolved = await resolveShareFile(deps.daemonDataDir(), file.sessionId, file.path);
+		const key = await recordKey(deps.records, file.baseUrl, file.sessionId, resolved.relativePath, file.artifactId);
+		const shareId = await deps.records.get(key);
+		if (!shareId) return { name: resolved.name, changed: false };
+		const published = await deps.records.publishedFingerprint(key);
+		const stat = await fs.stat(resolved.realPath);
+		// The fingerprint ends in the size and modification time it was taken at.
+		return { name: resolved.name, shareId, changed: Boolean(published && !published.endsWith(`:${stat.size}:${Math.trunc(stat.mtimeMs)}`)) };
 	});
 
 	deps.ipcMain.handle("cloudShare:available", async (_event, value: unknown): Promise<boolean | null> =>

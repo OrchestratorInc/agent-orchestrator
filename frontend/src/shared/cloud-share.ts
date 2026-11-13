@@ -147,6 +147,25 @@ export interface CloudShareInspection {
 	publishedSecretFindings?: string[];
 }
 
+/**
+ * Whether a file is published from this computer, and whether it changed
+ * since, read without opening it: no hashing, no credential scan, no
+ * download. The Publish button shows this; the full inspection runs only
+ * when the person publishes.
+ */
+export interface CloudShareStatus {
+	/** The file's name, which the link's name is compared with. */
+	name: string;
+	/** The link this file was last published to from this computer, if any. */
+	shareId?: string;
+	/**
+	 * The file changed since it was published to shareId: a local file's size
+	 * or modification time, or a cloud file's SHA-256 (when the caller knows
+	 * it), differs from when it was published.
+	 */
+	changed: boolean;
+}
+
 export type CloudSharePublishResult =
 	| { status: "published"; share: CloudShareLink; replaced: boolean }
 	/** The person cancelled before the upload finished; nothing was published. */

@@ -114,6 +114,35 @@ describe("cloudShare IPC", () => {
 		expect(requests).toEqual([]);
 	});
 
+	it("tells the Publish button a file's link and whether it changed, without reading the file or the network", async () => {
+		const { invoke, publish, file, requests } = setup();
+		const read = vi.spyOn(fs, "open");
+		await expect(invoke("cloudShare:status", file)).resolves.toEqual({ name: "report.html", changed: false });
+		await publish();
+		requests.length = 0;
+		read.mockClear();
+		await expect(invoke("cloudShare:status", file)).resolves.toEqual({ name: "report.html", shareId: SHARE_ID, changed: false });
+		// Rewritten since: its size and modification time differ from the published fingerprint's.
+		const later = new Date(Date.now() + 60_000);
+		await fs.writeFile(path.join(dataDir, "artifacts", "sess-1", "docs", "report.html"), "new content");
+		await fs.utimes(path.join(dataDir, "artifacts", "sess-1", "docs", "report.html"), later, later);
+		await expect(invoke("cloudShare:status", file)).resolves.toEqual({ name: "report.html", shareId: SHARE_ID, changed: true });
+		expect(read).not.toHaveBeenCalled();
+		expect(requests).toEqual([]);
+		read.mockRestore();
+	});
+
+	it("compares a cloud file's listed SHA-256 with the published one, with no request", async () => {
+		const { invoke, publish, cloudFile, requests } = setup();
+		await publish(cloudFile);
+		requests.length = 0;
+		await expect(invoke("cloudShare:status", { ...cloudFile, fingerprint: "0".repeat(64) })).resolves.toEqual({ name: "q3 plan.md", shareId: SHARE_ID, changed: false });
+		await expect(invoke("cloudShare:status", { ...cloudFile, fingerprint: "1".repeat(64) })).resolves.toEqual({ name: "q3 plan.md", shareId: SHARE_ID, changed: true });
+		// Without the listed SHA-256 it cannot tell, and says unchanged; publishing inspects it.
+		await expect(invoke("cloudShare:status", cloudFile)).resolves.toMatchObject({ shareId: SHARE_ID, changed: false });
+		expect(requests).toEqual([]);
+	});
+
 	it("publishes when the window asks, with no second confirmation", async () => {
 		const { publish, requests, sent } = setup();
 		const result = await publish();

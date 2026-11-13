@@ -41,10 +41,19 @@ const maya: CloudShareGrant = { id: "6f1c3a1e-2b4d-4c5e-8f7a-9b0c1d2e3f40", emai
 
 function stub(inspect: CloudShareInspection, list: CloudShareLinks, publish?: CloudSharePublishResult) {
 	const inspectSpy = vi.spyOn(aoBridge.cloudShare, "inspect").mockResolvedValue(inspect);
+	// The status follows whatever the inspection would say, without counting as one: it never reads the file.
+	const statusSpy = vi.spyOn(aoBridge.cloudShare, "status").mockImplementation(async (file) => {
+		const found = await inspectSpy.getMockImplementation()!(file);
+		return {
+			name: found.name,
+			...(found.shareId ? { shareId: found.shareId } : {}),
+			changed: Boolean(found.publishedFingerprint && found.publishedFingerprint !== found.fingerprint),
+		};
+	});
 	const listSpy = vi.spyOn(aoBridge.cloudShare, "list").mockResolvedValue(list);
 	const publishSpy = vi.spyOn(aoBridge.cloudShare, "publish").mockResolvedValue(publish ?? { status: "cancelled" });
 	const grantsSpy = vi.spyOn(aoBridge.cloudShare, "grants").mockResolvedValue([]);
-	return { inspectSpy, listSpy, publishSpy, grantsSpy };
+	return { inspectSpy, statusSpy, listSpy, publishSpy, grantsSpy };
 }
 
 function renderButton(file: Omit<CloudShareFile, "baseUrl" | "shareId">, name = "report.html") {
@@ -615,9 +624,9 @@ describe("ShareArtifactButton once the file changed", () => {
 	});
 
 	it("says Publish, never Republish, for a link that was unpublished", async () => {
-		const { inspectSpy } = stub({ ...inspection, shareId: SHARE_ID, publishedFingerprint: "fp-0" }, { ...links, shares: [{ ...share, revokedAt: "2026-11-01T00:00:00Z" }] });
+		const { statusSpy } = stub({ ...inspection, shareId: SHARE_ID, publishedFingerprint: "fp-0" }, { ...links, shares: [{ ...share, revokedAt: "2026-11-01T00:00:00Z" }] });
 		renderButton(cloudFile);
-		await waitFor(() => expect(inspectSpy).toHaveBeenCalled());
+		await waitFor(() => expect(statusSpy).toHaveBeenCalled());
 		expect(await screen.findByRole("button", { name: "Publish: report.html" })).toBeTruthy();
 		expect(screen.queryByRole("button", { name: "Republish: report.html" })).toBeNull();
 	});
@@ -720,17 +729,42 @@ describe("ShareArtifactButton states", () => {
 		expect(publishSpy).not.toHaveBeenCalled();
 	});
 
-	it("starts inspecting the file as the person points at Publish", async () => {
-		const { inspectSpy } = stub(inspection, links);
+	it("never reads the file to draw the button: it is inspected once, when the person goes to publish", async () => {
+		const { inspectSpy, statusSpy } = stub(inspection, links);
 		renderButton(localFile);
 		const button = await screen.findByRole("button", { name: "Publish: report.html" });
-		await waitFor(() => expect(inspectSpy).toHaveBeenCalledTimes(1));
+		await waitFor(() => expect(statusSpy).toHaveBeenCalled());
+		expect(inspectSpy).not.toHaveBeenCalled();
 		await userEvent.hover(button);
-		expect(inspectSpy).toHaveBeenCalledTimes(2);
+		expect(inspectSpy).toHaveBeenCalledTimes(1);
 		await userEvent.click(button);
-		// The click opens on the inspection pointing started, not a third.
+		// The click opens on the inspection pointing started, not a second.
 		expect(await screen.findByRole("button", { name: "Publish" })).toBeTruthy();
-		expect(inspectSpy).toHaveBeenCalledTimes(2);
+		expect(inspectSpy).toHaveBeenCalledTimes(1);
+	});
+
+	it("shows Republish from the status alone, for a cloud file whose listed SHA-256 changed", async () => {
+		const { inspectSpy, statusSpy } = stub(inspection, { ...links, shares: [share] });
+		statusSpy.mockResolvedValue({ name: "report.html", shareId: SHARE_ID, changed: true });
+		render(<QueryClientProvider client={new QueryClient()}><TooltipProvider><ShareArtifactButton file={cloudFile} fingerprint="sha-2" name="report.html" /></TooltipProvider></QueryClientProvider>);
+		expect(await screen.findByRole("button", { name: "Republish: report.html" })).toBeTruthy();
+		expect(statusSpy).toHaveBeenCalledWith(expect.objectContaining({ fingerprint: "sha-2" }));
+		expect(inspectSpy).not.toHaveBeenCalled();
+	});
+
+	it("opens a published file's panel on its link before the file is read, then adds what reading it found", async () => {
+		const { inspectSpy, statusSpy } = stub({ ...inspection, shareId: SHARE_ID }, { ...links, shares: [share] });
+		statusSpy.mockResolvedValue({ name: "report.html", shareId: SHARE_ID, changed: false });
+		renderButton(localFile);
+		const button = await screen.findByRole("button", { name: "Published: report.html" });
+		let read: (value: CloudShareInspection) => void = () => undefined;
+		inspectSpy.mockReturnValue(new Promise((resolve) => { read = resolve; }));
+		await userEvent.click(button);
+		expect(await screen.findByRole("button", { name: "Copy link" })).toBeTruthy();
+		expect(screen.queryByRole("alert")).toBeNull();
+		await act(async () => read({ ...inspection, shareId: SHARE_ID, secretFindings: ["AWS access key"] }));
+		expect((await screen.findByRole("alert")).textContent).toContain("AWS access key");
+		expect(screen.getByRole("button", { name: "Copy link" })).toBeTruthy();
 	});
 
 	it.each(["restricted", "anyone"] as const)("keeps the Publish icon on a %s link's Published button", async (access) => {

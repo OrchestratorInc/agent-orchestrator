@@ -880,6 +880,7 @@ export function SessionArtifactsView({
 								name={selected.name}
 								published={Boolean(selected.shareUrl)}
 								revision={listed?.updatedAt}
+								fingerprint={selected.sha256}
 							/>
 						)) : !hostId ? (
 							<ShareArtifactButton

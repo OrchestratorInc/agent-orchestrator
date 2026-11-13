@@ -439,10 +439,13 @@ interface PublishedShare {
 }
 
 /**
- * The file's active link as the toolbar shows it: Published with its access,
- * and whether the file changed since (its newer content or its new name),
- * which Republish would put on the link. Checked again whenever `revision`
- * changes.
+ * The file's active link as the toolbar shows it: Published, and whether the
+ * file changed since (its newer content or its new name), which Republish
+ * would put on the link. Read from this computer's publish record, the file's
+ * size and modification time (a cloud file's SHA-256) and the link list,
+ * cached when it was read moments ago: the file itself is never opened. It is
+ * inspected only when the person publishes. Checked again whenever
+ * `revision` changes.
  */
 function usePublishedShare(file: CloudShareFile | null, revision: string): PublishedShare {
 	// Kept with the file it is for: a button reused for another file shows
@@ -453,13 +456,12 @@ function usePublishedShare(file: CloudShareFile | null, revision: string): Publi
 		if (!file) return setState({ outdated: false, fileKey });
 		let cancelled = false;
 		void (async (): Promise<PublishedShare> => {
-			const inspection = await aoBridge.cloudShare.inspect(file);
-			if (!inspection.shareId) return { outdated: false };
-			const links = await readShareLinks(file.baseUrl);
-			const share = links.shares.find((candidate) => candidate.id === inspection.shareId && !candidate.revokedAt);
+			const status = await aoBridge.cloudShare.status(file);
+			if (!status.shareId) return { outdated: false };
+			const links = freshShareLinks(file.baseUrl) ?? await readShareLinks(file.baseUrl);
+			const share = links.shares.find((candidate) => candidate.id === status.shareId && !candidate.revokedAt);
 			if (!share) return { outdated: false };
-			const changed = Boolean(inspection.publishedFingerprint && inspection.publishedFingerprint !== inspection.fingerprint);
-			return { share, outdated: changed || share.name !== inspection.name };
+			return { share, outdated: status.changed || share.name !== status.name };
 		})()
 			.catch((): PublishedShare => ({ outdated: false }))
 			.then((result) => {
@@ -484,7 +486,7 @@ function usePublishedShare(file: CloudShareFile | null, revision: string): Publi
  * the same link, and the chevron opens the popover without republishing. For
  * a video the button is disabled and says why.
  */
-export function ShareArtifactButton({ file, name, className, iconOnly = false, revision = "", published = false }: {
+export function ShareArtifactButton({ file, name, className, iconOnly = false, revision = "", published = false, fingerprint }: {
 	file: Omit<CloudShareFile, "baseUrl" | "shareId">;
 	name: string;
 	className?: string;
@@ -493,6 +495,8 @@ export function ShareArtifactButton({ file, name, className, iconOnly = false, r
 	revision?: string;
 	/** Whether the artifact list has the file published: the label until the button's own check answers. */
 	published?: boolean;
+	/** A cloud file's SHA-256 from its listing, so the button knows it changed since publishing without reading it. */
+	fingerprint?: string;
 }) {
 	const { t } = useTranslation();
 	const [open, setOpen] = useState(false);
@@ -506,7 +510,7 @@ export function ShareArtifactButton({ file, name, className, iconOnly = false, r
 	// Pointing at the button starts what its panel opens on.
 	const prefetch = usePrefetchShare(file);
 	const prefetchProps = { onFocus: prefetch, onPointerEnter: prefetch };
-	const { share, outdated, checked } = usePublishedShare(available && signedIn && !video ? { ...file, baseUrl } : null, `${revision}:${checks}:${publishing}`);
+	const { share, outdated, checked } = usePublishedShare(available && signedIn && !video ? { ...file, baseUrl, ...(fingerprint ? { fingerprint } : {}) } : null, `${revision}:${checks}:${publishing}`);
 	// What the panel does on opening is fixed when it opens, so a check that
 	// lands while it is open never starts a second publish.
 	const [republishOnOpen, setRepublishOnOpen] = useState(false);
@@ -779,14 +783,44 @@ function SharePanel({
 			setStagedAccess(links.privateLinks ? "restricted" : "anyone");
 			setPhase({ kind: "setup", inspection, links, unpublished });
 		};
-		// The list read moments ago (by the toolbar button, an artifacts list or
+		// The list read moments ago (by an artifacts list, the open artifact or
 		// pointing at Publish) opens the panel at once; it is read again behind it.
 		const cached = freshShareLinks(baseUrl);
 		const openedRevision = shareLinksRevision;
-		Promise.all([takeInspection({ ...file, baseUrl }), cached ?? readShareLinks(baseUrl)])
+		const linksRead = cached ? Promise.resolve(cached) : readShareLinks(baseUrl);
+		const inspecting = takeInspection({ ...file, baseUrl });
+		// A file published from here opens on its link as soon as the record and
+		// the list say so, without waiting for the file to be read; its
+		// inspection then adds what the file holds and whether to Republish.
+		// Only a first publish, and Republish, wait for the inspection.
+		let decided = false;
+		let shownEarly: string | undefined;
+		void Promise.all([aoBridge.cloudShare.status({ ...file, baseUrl }), linksRead])
+			.then(([status, links]) => {
+				if (cancelled || decided || !status.shareId) return;
+				const current = links.shares.find((share) => share.id === status.shareId && !share.revokedAt);
+				if (!current) return;
+				if (republishOnOpen && publishNow && (status.changed || current.name !== status.name)) return;
+				shownEarly = current.id;
+				setPrivateLinks(links.privateLinks);
+				showPublished(current, unpublishOnOpen ? { unpublishing: "confirm" } : {});
+			})
+			.catch(() => undefined);
+		Promise.all([inspecting, linksRead])
 			.then(([inspection, links]) => {
 				if (cancelled) return;
-				decide(inspection, links, publishNow);
+				decided = true;
+				const current = inspection.shareId ? links.shares.find((share) => share.id === inspection.shareId && !share.revokedAt) : undefined;
+				if (shownEarly && current?.id === shownEarly) {
+					// Already open on this link: fill in the file's findings and Republish, keeping what the person is doing.
+					const outdated = current.name !== inspection.name ||
+						Boolean(inspection.publishedFingerprint && inspection.publishedFingerprint !== inspection.fingerprint);
+					setPhase((shown) => shown.kind === "published" && shown.share.id === current.id
+						? { ...shown, inspection, ...(outdated && !shown.republish ? { republish: { inspection, links } } : {}) }
+						: shown);
+				} else {
+					decide(inspection, links, publishNow);
+				}
 				if (!cached) return;
 				void readShareLinks(baseUrl)
 					.then((fresh) => {
@@ -798,7 +832,10 @@ function SharePanel({
 					.catch(() => undefined);
 			})
 			.catch((error: unknown) => {
-				if (!cancelled) setPhase({ kind: "error", message: errorMessage(error) });
+				if (cancelled) return;
+				// Open on the link already: the inspection only adds to it, so its failure leaves it as it is.
+				if (shownEarly) return;
+				setPhase({ kind: "error", message: errorMessage(error) });
 			});
 		return () => {
 			cancelled = true;
