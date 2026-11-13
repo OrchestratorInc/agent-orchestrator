@@ -844,6 +844,39 @@ it("retries reviewer Chat on Box B with the same delivery ID", async () => {
 	expect(localPost).not.toHaveBeenCalled();
 });
 
+it("does not read reviewer models while the host is away", async () => {
+	HTMLElement.prototype.scrollTo = vi.fn();
+	localGet.mockReset();
+	localPost.mockReset();
+	remoteConnect.mockResolvedValue({ hostId: "box-a", label: "Box A", url: "http://box-a:3001", base: "http://127.0.0.1:4000" });
+	vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+		const request = input instanceof Request ? input : new Request(input);
+		const path = new URL(request.url).pathname;
+		if (path.endsWith("/projects")) return Response.json({ projects: [{ id: "project-1", name: "Todo", path: "/remote" }] });
+		if (path.endsWith("/sessions")) return Response.json({ sessions: [{ id: "session-1", projectId: "project-1", harness: "codex", status: "working", mode: "chat", prs: [{ url: "https://github.com/acme/todo/pull/7", number: 7, state: "open", ci: "passing", review: "none", mergeability: "mergeable", reviewComments: false, updatedAt: "2026-09-28T00:00:00Z" }] }] });
+		if (path.endsWith("/sessions/session-1/reviews")) return Response.json({ reviewerHandleId: "", reviewerSurface: { mode: "chat", reviewId: "review-1", harness: "codex" }, reviews: [], runs: [] });
+		if (path.endsWith("/reviews/review-1/conversation")) return Response.json(conversationBody({ sessionId: "review-1", messages: [{ id: "msg-review", role: "assistant", text: "Review ready", sequence: 1 }] }));
+		if (path.endsWith("/reviews/review-1/conversation/models")) return Response.json({ models: [{ id: "gpt-5", displayName: "GPT-5", efforts: ["high"] }] });
+		if (path.endsWith("/sessions/session-1/conversation")) return Response.json(conversationBody());
+		return Response.json({});
+	}));
+	await connectHost("http://box-a:3001");
+	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	renderRemoteSession(queryClient);
+	await userEvent.click(await screen.findByRole("tab", { name: "Reviewer" }));
+	expect(await screen.findByText("Review ready")).toBeInTheDocument();
+	const modelsKey = [...reviewerConversationQueryKey("review-1", "box-a"), "models"];
+	await waitFor(() => expect(queryClient.getQueryData(modelsKey)).toBeDefined());
+	await act(async () => { await disconnectHost("box-a"); });
+	expect(await screen.findByText(LAST_SAVED_COPY)).toBeInTheDocument();
+	// The cached catalog going stale (or the tab opening again) reads it once more.
+	await act(async () => {
+		await queryClient.refetchQueries({ queryKey: modelsKey });
+		await new Promise((resolve) => setTimeout(resolve, 20));
+	});
+	expect(screen.queryByText(/is not connected/)).not.toBeInTheDocument();
+});
+
 it("opens the returned reviewer Chat when a remote review is triggered", async () => {
 	HTMLElement.prototype.scrollTo = vi.fn();
 	remoteConnect.mockResolvedValue({ hostId: "box-b", label: "Box B", url: "http://box-b:3001", base: "http://127.0.0.1:4001" });

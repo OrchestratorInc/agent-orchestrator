@@ -30,7 +30,7 @@ export function ReviewerChatSurface({
 }) {
 	const { t } = useTranslation();
 	const { snapshot, isLoading, error, hasOlder, isLoadingOlder, loadOlder } = useReviewerConversation(reviewId, hostId);
-	const catalog = useReviewerConversationModels(reviewId, Boolean(snapshot && snapshot.controller.state !== "stopped"), hostId);
+	const catalog = useReviewerConversationModels(reviewId, Boolean(snapshot && snapshot.controller.state !== "stopped") && !hostUnreachable, hostId);
 	const commands = useReviewerConversationCommands(reviewId, hostId);
 	const openSessionLink = useSessionLinkNavigation(hostId);
 	const { baseUrl: remoteBase } = useHostConnection(hostId);
