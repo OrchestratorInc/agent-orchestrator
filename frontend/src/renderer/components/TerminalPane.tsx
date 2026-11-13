@@ -38,7 +38,7 @@ import {
 import { cn } from "../lib/utils";
 import { useWorkspaceQuery, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { useRestoreSession } from "../hooks/useRestoreSession";
-import { useSessionMovedTo } from "../hooks/useSessionMovedTo";
+import { usePendingMove, useSessionMovedTo } from "../hooks/useSessionMovedTo";
 import { moveKey, useMoveStore } from "../lib/move-runner";
 import { useShellTerminals } from "../hooks/useShellTerminals";
 import { placeCloudAttachment, uploadCloudAttachment } from "../lib/cloud-attachments";
@@ -1590,9 +1590,13 @@ function TerminalEndedStrip({ canRestore: restorable, error, isRestoring, onRest
 	const moving = move?.phase === "moving" || move?.phase === "done" ? move.targetLabel : undefined;
 	const canRestore = restorable && !movedTo && !moving;
 	const agentExited = variant === "session" && sessionAgentExited(session);
+	// A move that did not finish keeps the agent from resuming; offer the two ways out instead.
+	const pendingMove = usePendingMove(agentExited && !moving ? session : undefined);
 	const startupFailed = variant === "session" && session?.provisionState === "failed";
 	const heading = moving
 		? t("moveSession.moving", { host: moving })
+		: pendingMove
+		? t("moveSession.pendingHeading", { host: pendingMove.label })
 		: movedTo
 		? t("moveSession.movedHeading", { host: movedTo.label })
 		: reviewDelivered
@@ -1632,11 +1636,21 @@ function TerminalEndedStrip({ canRestore: restorable, error, isRestoring, onRest
 						{heading}
 					</div>
 					<div className="mt-0.5 text-xs text-muted-foreground">
-						{moving ? null : startupFailed && session?.provisionError ? session.provisionError : agentExited ? t("terminal.agentExitedHelp") : message}
+						{moving ? null : pendingMove ? t("moveSession.pendingBody") : startupFailed && session?.provisionError ? session.provisionError : agentExited ? t("terminal.agentExitedHelp") : message}
 					</div>
 				</div>
 				{error && <div className="max-w-content-max truncate text-xs text-destructive">{error}</div>}
-				{variant === "session" && session && !movedTo && !moving ? <ResumeAgentControl session={session} /> : null}
+				{variant === "session" && session && !movedTo && !moving && !pendingMove ? <ResumeAgentControl session={session} /> : null}
+				{pendingMove ? (
+					<>
+						<Button type="button" variant="secondary" onClick={pendingMove.finish}>
+							{t("moveSession.finish")}
+						</Button>
+						<Button type="button" variant="ghost" disabled={pendingMove.keeping} onClick={() => void pendingMove.keepHere()}>
+							{t("moveSession.keepHere")}
+						</Button>
+					</>
+				) : null}
 				{movedTo?.open ? (
 					<Button type="button" variant="secondary" onClick={movedTo.open}>
 						{t("moveSession.open")}

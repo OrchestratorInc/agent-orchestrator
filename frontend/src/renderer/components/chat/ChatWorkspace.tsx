@@ -49,14 +49,14 @@ import {
 	type ReactNode,
 	type WheelEvent as ReactWheelEvent,
 } from "react";
-import { Archive, ArrowDown, Columns2, FlaskConical, ListTodo, Loader2, NotebookPen, Presentation, Route, ScanSearch, TriangleAlert, Undo2, WandSparkles } from "@/components/app-icons";
+import { Archive, ArrowDown, ArrowRightLeft, Columns2, FlaskConical, ListTodo, Loader2, NotebookPen, Presentation, Route, ScanSearch, TriangleAlert, Undo2, WandSparkles } from "@/components/app-icons";
 import { AnimatePresence, motion, Reorder, useReducedMotion } from "motion/react";
 import { useTranslation } from "react-i18next";
 import { ChatSelectionActions } from "./ChatSelectionActions";
 import { ChatAnnotationMarkers, DraftAnnotationMarkers, numberedReferences } from "./ChatAnnotationMarkers";
 import { selectionRangesEqual } from "../../lib/selection-toolbar";
 import { useScrollFollow } from "../../hooks/useScrollFollow";
-import { useSessionMovedTo } from "../../hooks/useSessionMovedTo";
+import { usePendingMove, useSessionMovedTo } from "../../hooks/useSessionMovedTo";
 import { moveKey, useMoveStore } from "../../lib/move-runner";
 import {
 	defaultRangeExtractor,
@@ -120,6 +120,7 @@ import { inspectorIsOpen, sidebarOccupiesLayout, useUiStore } from "../../stores
 import type { TerminalTarget } from "../../types/terminal";
 import {
 	isOrchestratorSession,
+	sessionAgentExited,
 	sessionIsActive,
 	type SessionKind,
 	type WorkspaceSession,
@@ -2154,7 +2155,7 @@ function ChatWorkspaceContent({
 					) : null}
 					{savedCopy || importBlock ? null : (
 						<ControllerBannerForSession
-							session={terminated ? session : undefined}
+							session={terminated || sessionAgentExited(session) ? session : undefined}
 							onMovedTo={setMovedToLabel}
 							moving={moving?.phase === "moving" || moving?.phase === "done" ? moving.targetLabel : undefined}
 							controller={snapshot.controller}
@@ -2920,11 +2921,12 @@ function ControllerBannerForSession({ session, onMovedTo, ...props }: MovedAware
 
 function MovedAwareControllerBanner({ session, onMovedTo, ...props }: MovedAwareProps & { session: WorkspaceSession }) {
 	const movedTo = useSessionMovedTo(session);
+	const pendingMove = usePendingMove(session);
 	useEffect(() => {
 		onMovedTo?.(movedTo?.label);
 		return () => onMovedTo?.(undefined);
 	}, [movedTo?.label, onMovedTo]);
-	return <ControllerBanner {...props} movedTo={movedTo} />;
+	return <ControllerBanner {...props} movedTo={movedTo} pendingMove={pendingMove} />;
 }
 
 function ControllerBanner({
@@ -2937,6 +2939,7 @@ function ControllerBanner({
 	terminated = false,
 	movedTo,
 	moving,
+	pendingMove,
 	onResume,
 	resuming,
 	resumeError,
@@ -2963,6 +2966,8 @@ function ControllerBanner({
 	movedTo?: { label: string; sessionId: string; open?: () => void };
 	/** The computer this session is moving to, while the move runs. */
 	moving?: string;
+	/** A move that did not finish, which keeps the agent from resuming. */
+	pendingMove?: ReturnType<typeof usePendingMove>;
 	onResume?: () => void | Promise<unknown>;
 	resuming?: boolean;
 	resumeError?: string;
@@ -2996,6 +3001,23 @@ function ControllerBanner({
 			<div role="status" aria-atomic="true" className="flex shrink-0 items-center gap-2.5 border-b border-border bg-surface px-4 py-2.5">
 				<Loader2 aria-hidden="true" className="size-3.5 shrink-0 animate-spin text-[var(--color-status-working)]" />
 				<strong className="text-xs font-medium text-muted-foreground">{t("moveSession.moving", { host: moving })}</strong>
+			</div>
+		);
+	}
+	if (pendingMove && controller.state === "stopped" && !terminated) {
+		return (
+			<div role="status" aria-atomic="true" className="flex shrink-0 items-start gap-2.5 border-b border-border bg-surface px-4 py-2.5">
+				<ArrowRightLeft aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
+				<div className="flex min-w-0 flex-1 flex-col gap-0.5">
+					<strong className="text-xs font-medium text-muted-foreground">{t("moveSession.pendingHeading", { host: pendingMove.label })}</strong>
+					<span className="text-xs leading-snug text-muted-foreground">{t("moveSession.pendingBody")}</span>
+					<div className="mt-1.5 flex flex-wrap gap-2">
+						<Button type="button" size="sm" variant="secondary" onClick={pendingMove.finish}>{t("moveSession.finish")}</Button>
+						<Button type="button" size="sm" variant="ghost" disabled={pendingMove.keeping} onClick={() => void pendingMove.keepHere()}>
+							{t("moveSession.keepHere")}
+						</Button>
+					</div>
+				</div>
 			</div>
 		);
 	}

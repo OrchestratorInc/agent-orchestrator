@@ -38,7 +38,7 @@ export type MoveResult = {
 
 /** A move that failed before the destination took the session. */
 export class MoveError extends Error {
-	constructor(message: string, readonly step: MoveStep, readonly resumedSource: boolean, readonly code?: string) {
+	constructor(message: string, readonly step: MoveStep, readonly resumedSource: boolean, readonly code?: string, readonly transferId?: string) {
 		super(message);
 		this.name = "MoveError";
 	}
@@ -93,7 +93,10 @@ export async function moveSession(input: MoveInput): Promise<MoveResult> {
 		({ sessionId, warnings, hostLabel, resumed } = await receive(target.client, target.projectId, transfer).catch(unreachable(target.label)));
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
-		throw new MoveError(message, step, await cancelMove(source, transferId), code);
+		// The destination may have started the session before it stopped answering.
+		// Leave the move pending so Retry finishes it instead of running it twice.
+		if (step === "receive" && error instanceof Unreachable) throw new MoveError(message, step, false, "RECEIVE_UNCONFIRMED", transferId);
+		throw new MoveError(message, step, await cancelMove(source, transferId), code, transferId);
 	}
 	input.onStep?.("commit");
 	const destinationLabel = target.hostId === LOCAL_HOST && hostLabel ? hostLabel : target.label;
@@ -110,7 +113,7 @@ async function checkDestination(target: MoveInput["target"]): Promise<void> {
 }
 
 /** Forgets the move on the source and resumes its agent. True when the agent runs there again. */
-async function cancelMove(source: MoveInput["source"], transferId: string): Promise<boolean> {
+export async function cancelMove(source: MoveInput["source"], transferId: string): Promise<boolean> {
 	const path = { params: { path: { sessionId: source.sessionId } } };
 	await source.client.POST("/api/v1/sessions/{sessionId}/transfer/cancel", { ...path, body: { transferId } }).catch(() => undefined);
 	return source.client.POST("/api/v1/sessions/{sessionId}/resume-agent", path).then(
@@ -120,10 +123,12 @@ async function cancelMove(source: MoveInput["source"], transferId: string): Prom
 	);
 }
 
+class Unreachable extends Error {}
+
 /** fetch rejects with a TypeError when the other computer cannot be reached. */
 function unreachable(label: string) {
 	return (error: unknown): never => {
-		throw error instanceof TypeError ? new Error(`${label} is not reachable`) : error;
+		throw error instanceof TypeError ? new Unreachable(`${label} is not reachable`) : error;
 	};
 }
 

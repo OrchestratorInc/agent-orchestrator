@@ -7,7 +7,7 @@ import { useRemoteWorkspaces, useWorkspaceQuery, workspaceQueryKeyForHost } from
 import { clientForSessionHost, labelForHost } from "../lib/host-clients";
 import { LOCAL_HOST, type HostId } from "../lib/hosts";
 import { cancelWaitingMove, clearMove, moveKey, runMove, useMoveStore } from "../lib/move-runner";
-import { commitMove, MOVE_PART_BYTES, type MoveResult, type MoveStep } from "../lib/move-session";
+import { cancelMove, commitMove, MOVE_PART_BYTES, type MoveResult, type MoveStep } from "../lib/move-session";
 import { sessionNavigateTarget } from "../lib/navigate-to-session";
 import { hostsWithRepo } from "../lib/repo-hosts";
 import { sessionBranchPresentation } from "../lib/session-branch";
@@ -79,6 +79,7 @@ function MoveSessionDialogContent({ request, onClose }: { request: MoveSessionRe
 	const refresh = (hostId: HostId) => {
 		void queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(request.hostId) });
 		void queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(hostId === LOCAL_HOST ? undefined : hostId) });
+		void queryClient.invalidateQueries({ queryKey: ["session-moved-to"] });
 	};
 	const dialogOpen = () => useUiStore.getState().moveSessionRequest?.sessionId === request.sessionId;
 
@@ -127,6 +128,16 @@ function MoveSessionDialogContent({ request, onClose }: { request: MoveSessionRe
 		refresh(destination.hostId);
 		onClose();
 		void navigate(sessionNavigateTarget(destination.projectId, result.sessionId, destination.hostId));
+	};
+
+	// The destination may have the session; dropping the move here runs it on this side again.
+	const unconfirmed = view === "failed" && move?.error?.code === "RECEIVE_UNCONFIRMED";
+	const keepHere = async () => {
+		const transferId = move?.error?.transferId;
+		if (transferId) await cancelMove(source, transferId);
+		clearMove(key);
+		refresh(target?.hostId ?? LOCAL_HOST);
+		onClose();
 	};
 
 	const close = () => {
@@ -209,10 +220,16 @@ function MoveSessionDialogContent({ request, onClose }: { request: MoveSessionRe
 
 					{view === "failed" && move?.error ? (
 						<p role="alert" className="text-xs leading-5 text-destructive">
-							{t("moveSession.failed", { message: move.error.message })}{" "}
-							<span className="text-muted-foreground">
-								{move.error.resumedSource ? t("moveSession.resumed") : t("moveSession.notResumed")}
-							</span>
+							{unconfirmed ? (
+								t("moveSession.unconfirmed", { host: destination?.label ?? "" })
+							) : (
+								<>
+									{t("moveSession.failed", { message: move.error.message })}{" "}
+									<span className="text-muted-foreground">
+										{move.error.resumedSource ? t("moveSession.resumed") : t("moveSession.notResumed")}
+									</span>
+								</>
+							)}
 						</p>
 					) : null}
 
@@ -239,6 +256,11 @@ function MoveSessionDialogContent({ request, onClose }: { request: MoveSessionRe
 							</>
 						) : view === "waiting" ? (
 							<Button variant="secondary" onClick={() => cancelWaitingMove(key)}>{t("moveSession.cancelMove")}</Button>
+						) : unconfirmed ? (
+							<>
+								<Button variant="secondary" onClick={() => void keepHere()}>{t("moveSession.keepHere")}</Button>
+								<Button variant="primary" disabled={!destination} onClick={() => start()}>{t("moveSession.retry")}</Button>
+							</>
 						) : view === "failed" && move?.error?.code && FINAL_REFUSALS.has(move.error.code) ? (
 							<Button variant="secondary" onClick={close}>{t("common.close")}</Button>
 						) : view === "failed" ? (
