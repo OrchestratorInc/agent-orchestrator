@@ -151,7 +151,7 @@ describe("ChatComposer steering", () => {
 		expect(onPromoteQueuedTurn).not.toHaveBeenCalled();
 	});
 
-	it("keeps the next row's Steer button while typing and only hides its Enter hint", async () => {
+	it("keeps the next row's Steer button and its key hint while typing", async () => {
 		render(
 			<ChatComposer
 				onSend={vi.fn()}
@@ -178,7 +178,7 @@ describe("ChatComposer steering", () => {
 		expect(steerButtons()).toHaveLength(1);
 		// Still the visible button, not the hover-only one that is transparent at rest.
 		expect(steerButtons()[0]).not.toHaveClass("opacity-0");
-		expect(nextRow.querySelector("[data-enter-steers]")).toBeNull();
+		expect(nextRow.querySelector("[data-enter-steers]")).not.toBeNull();
 	});
 
 	it("drains every queued steer request that arrives while a promotion is pending", async () => {

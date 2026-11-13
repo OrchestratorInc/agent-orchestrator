@@ -192,7 +192,7 @@ function QueuedMessageRowContent({
 						aria-label="Steer this queued message into the running turn"
 						title="Steer into running turn"
 					>
-						{/* The key hint fades in place, so typing never resizes the row's actions. */}
+						{/* The key hint hides in place on other rows, so every Steer button is the same width. */}
 						<span
 							className={cn(
 								"inline-flex shrink-0 items-center gap-1 text-muted-foreground",
@@ -674,11 +674,10 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 											message={message}
 											// Folded, the dock keeps the next message to send in view.
 											hiddenFromView={!isOpen && index !== 0}
-											// Every row's Steer stays put while a turn can be steered, so the
-											// buttons never come and go; typing or sending only toggles the next
-											// row's key hint.
+											// Every row's Steer, and the next row's key hint, stay put while a
+											// turn can be steered: typing or sending never makes them blink.
 											showPersistentSteer={Boolean(canSteer)}
-											enterSteers={Boolean(canSteer && canSteerNext && isNextQueuedTurn)}
+											enterSteers={Boolean(canSteer && isNextQueuedTurn)}
 											busy={busy}
 											steady={busy && !rowBusy}
 											dragSnapshot={dragSnapshot}
