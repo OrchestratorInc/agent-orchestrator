@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
 	buildCommands,
 	buildFileSessionCommands,
+	buildProjectActions,
 	buildSessionActions,
+	findSubmenuEntries,
+	menuEntryCommands,
 	buildWorkspaceFileCommands,
 	filterCommands,
 	matchScore,
@@ -965,5 +968,55 @@ describe("the blank palette", () => {
 		const items = byId(buildCommands({ workspaces: [cloud] }));
 		expect(items.get("project:cloud-1")?.subtitle).toBe("Cloud");
 		expect(items.get("session:c1")?.subtitle).toBe("web · Cloud");
+	});
+});
+
+describe("project actions", () => {
+	const ctx = { isPinned: false, canPin: true, restarting: false, hasOrchestrator: true, setPinned: () => {}, copyPath: () => {}, remove: () => {} };
+
+	it("offers what the sidebar's project menu offers", () => {
+		const project = { ...workspaces()[0]!, sessions: [...workspaces()[0]!.sessions, session({ id: "old", isTerminated: true })] };
+		const items = buildProjectActions(project, ctx);
+		expect(items.map((item) => item.id)).toEqual([
+			"project-action:new-task",
+			"project-action:orchestrator",
+			"project-action:board",
+			"project-action:archive",
+			"project-action:copy-path",
+			"project-action:pin",
+			"project-action:settings",
+			"project-action:remove",
+		]);
+		expect(byId(items).get("project-action:archive")?.state).toBe("1");
+	});
+
+	it("leaves out board, settings and remove for Scratchpad, and pin when it can't pin", () => {
+		const scratch: WorkspaceSummary = { id: STANDALONE_WORKSPACE_ID, name: "Scratchpad", path: "", type: "main", sessions: [] };
+		const ids = buildProjectActions(scratch, { ...ctx, canPin: false }).map((item) => item.id);
+		expect(ids).toEqual(["project-action:new-task"]);
+	});
+
+	it("opens a project's actions from its row", () => {
+		const project = byId(buildCommands({ workspaces: workspaces() })).get("project:proj-1");
+		expect(project?.secondaryAction).toEqual({ kind: "open-view", view: { mode: "project-actions", projectId: "proj-1" } });
+	});
+});
+
+describe("context menu rows", () => {
+	const run = () => {};
+	const entries = [
+		{ kind: "item" as const, id: "session-pin", label: "Pin", onSelect: run },
+		{ kind: "item" as const, id: "session-off", label: "Off", disabled: true },
+		{ kind: "separator" as const, id: "sep" },
+		{ kind: "submenu" as const, id: "session-open-in", label: "Open in", items: [{ kind: "item" as const, id: "open-finder", label: "Finder", onSelect: run }] },
+	];
+
+	it("turns items and submenus into rows and skips separators", () => {
+		const items = menuEntryCommands(entries, "s1");
+		expect(items.map((item) => item.id)).toEqual(["menu:session-pin", "menu:session-off", "menu:session-open-in"]);
+		expect(items[0]?.action).toEqual({ kind: "run", run });
+		expect(items[1]?.disabled).toBe(true);
+		expect(items[2]?.action).toEqual({ kind: "open-view", view: { mode: "menu-submenu", sessionId: "s1", entryId: "session-open-in", title: "Open in" } });
+		expect(findSubmenuEntries(entries, "session-open-in")?.map((entry) => entry.id)).toEqual(["open-finder"]);
 	});
 });

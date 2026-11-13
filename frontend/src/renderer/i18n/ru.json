@@ -557,6 +557,8 @@
 	"command.newTask": "Новая задача",
 	"command.noResults": "Ничего не найдено.",
 	"command.noResultsHint": "Попробуйте название сессии, проекта, настройки или команды.",
+	"command.on": "Вкл.",
+	"command.off": "Выкл.",
 	"command.noCurrentProject": "Нет текущего проекта",
 	"command.notEligibleForReview": "Недоступно для ревью",
 	"command.openOrchestrator": "Открыть оркестратор",

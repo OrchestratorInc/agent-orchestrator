@@ -1,7 +1,7 @@
 import { apiErrorException } from "../lib/api-error-exception";
 import { keepPreviousData, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "@tanstack/react-router";
-import { ArrowLeft, ChevronRight, CircleAlert, Folder, Loader2 } from "@/components/app-icons";
+import { ArrowLeft, Bell, Check, ChevronRight, CircleAlert, Folder, Loader2, Smartphone } from "@/components/app-icons";
 import { effectiveShortcutBindings, shortcutBindingKeys, type AppShortcutId } from "../../shared/shortcuts";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type AnimationEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
@@ -17,8 +17,12 @@ import {
 	buildCommands,
 	buildContentSearchCommands,
 	buildFileSessionCommands,
+	buildProjectActions,
 	buildSessionActions,
 	buildWorkspaceFileCommands,
+	findSubmenuEntries,
+	menuEntryCommands,
+	type PaletteMenuView,
 	displayGroups,
 	filterCommands,
 	isSearchGroup,
@@ -40,7 +44,18 @@ import {
 } from "../lib/command-palette-file-search";
 import { iconForCommand } from "../lib/command-palette-icons";
 import { startProblemReport } from "../lib/report-problem";
-import { buildSettingsCommands, buildShortcutCommands } from "../lib/palette-registry";
+import { buildChoiceCommands, buildChoiceSearchCommands, buildSettingsCommands, buildShortcutCommands, choiceValue, type PalettePreferences } from "../lib/palette-registry";
+import { previewDocumentThemeStyle } from "../lib/theme";
+import { renameCloudSession, renameSession } from "../lib/rename-session";
+import { runAppMenuAction } from "../hooks/useAppMenuCommand";
+import { useTerminateSession } from "../hooks/useTerminateSession";
+import { useLocaleStore } from "../stores/locale-store";
+import { useSidebarOrderStore } from "../stores/sidebar-order-store";
+import { useSoundNotificationsStore } from "../stores/sound-notifications-store";
+import { ConfirmDialog } from "./ConfirmDialog";
+import { SessionArchiveDialog } from "./SessionArchiveDialog";
+import { useCopyToClipboard, useSessionMenuEntries } from "./SessionContextMenuItems";
+import type { MenuEntry } from "./menu-model";
 import { useSplitPanesEnabled } from "../lib/split-panes";
 import { isDialogOrMenuOpen } from "../lib/dom-selectors";
 import { sessionReviewsQueryOptions, type PRReviewState } from "../lib/session-reviews";
@@ -55,9 +70,12 @@ import {
 	CLOUD_PROJECT_KIND,
 	findProjectOrchestrator,
 	hasConfiguredOrchestratorAgent,
+	isOrchestratorSession,
 	openPRs,
 	STANDALONE_WORKSPACE_ID,
 	workerSessions,
+	type WorkspaceSession,
+	type WorkspaceSummary,
 } from "../types/workspace";
 import { useUiStore } from "../stores/ui-store";
 import { useSessionImportStore } from "../stores/session-import-store";
@@ -79,7 +97,20 @@ type PaletteView =
 	| { mode: "root" }
 	| { mode: "session-actions"; sessionId: string }
 	| { mode: "file-session-picker"; projectId: string }
-	| { mode: "file-search"; target: WorkspaceFileSearchTarget; parent: "root" | "picker" };
+	| { mode: "file-search"; target: WorkspaceFileSearchTarget; parent: "root" | "picker" }
+	// Nested lists go back to the view they were opened from.
+	| (PaletteMenuView & { parent: PaletteView });
+
+/** The submenu entry with this id, searched through nested submenus. */
+function findSubmenuOwner(entries: readonly MenuEntry[], entryId: string): Extract<MenuEntry, { kind: "submenu" }> | undefined {
+	for (const entry of entries) {
+		if (entry.kind !== "submenu") continue;
+		if (entry.id === entryId) return entry;
+		const nested = findSubmenuOwner(entry.items, entryId);
+		if (nested) return nested;
+	}
+	return undefined;
+}
 
 /**
  * Whether two search keys differ only in their query text, so an answer for
@@ -108,7 +139,7 @@ export const CommandPalette = memo(function CommandPalette() {
 	const cloudReady = cloud.ready;
 	const restoreSessionById = useRestoreSession();
 	const params = useParams({ strict: false }) as { hostId?: string; projectId?: string; sessionId?: string };
-	const { cloneProject, createProject, daemonStatus, initializeProjectRepository } = useShell();
+	const { cloneProject, createProject, daemonStatus, initializeProjectRepository, removeProject } = useShell();
 	const resolvedTheme = useUiStore((s) => s.resolvedTheme);
 	const setThemePreference = useUiStore((s) => s.setThemePreference);
 	const isOpen = useUiStore((s) => s.isCommandPaletteOpen);
@@ -304,6 +335,37 @@ export const CommandPalette = memo(function CommandPalette() {
 	}, [isOpen, reviewActionsReady, reviewQuerySummary.reviewStatesBySessionId]);
 	const reviewStatesForCommands = isOpen && reviewActionsReady ? reviewStatesSnapshot : EMPTY_REVIEW_STATES;
 
+	const themePreference = useUiStore((s) => s.themePreference);
+	const themeStyle = useUiStore((s) => s.themeStyle);
+	const locale = useLocaleStore((s) => s.locale);
+	const terminalClickMode = useUiStore((s) => s.terminalClickMode);
+	const chatSendKeyMode = useUiStore((s) => s.chatSendKeyMode);
+	const windowTranslucency = useUiStore((s) => s.windowTranslucency);
+	const projectAvatars = useUiStore((s) => s.projectAvatars);
+	const renderMath = useUiStore((s) => s.renderMath);
+	const navigationGestures = useUiStore((s) => s.navigationGestures);
+	const terminalCopyOnSelect = useUiStore((s) => s.terminalCopyOnSelect);
+	const sideChats = useUiStore((s) => s.sideChats);
+	const soundNotifications = useSoundNotificationsStore((s) => s.enabled);
+	const prefs = useMemo((): PalettePreferences => ({
+		themePreference,
+		themeStyle,
+		locale,
+		terminalClickMode,
+		chatSendKeyMode,
+		toggles: {
+			transparency: windowTranslucency,
+			"project-avatars": projectAvatars,
+			"render-math": renderMath,
+			"navigation-gestures": navigationGestures,
+			"copy-on-select": terminalCopyOnSelect,
+			sound: soundNotifications,
+			"developer-mode": developerMode,
+			"side-chats": sideChats,
+			"split-panes": splitPanes,
+		},
+	}), [themePreference, themeStyle, locale, terminalClickMode, chatSendKeyMode, windowTranslucency, projectAvatars, renderMath, navigationGestures, terminalCopyOnSelect, soundNotifications, developerMode, sideChats, splitPanes]);
+
 	const rootItems = useMemo(
 		() => [
 			...buildCommands({
@@ -324,18 +386,90 @@ export const CommandPalette = memo(function CommandPalette() {
 					? { session: currentSession && !currentSession.cloud && !currentSession.hostId && !params.hostId ? "local" as const : "elsewhere" as const }
 					: {}),
 			}),
-			...buildSettingsCommands(t, { developerMode, diagnostics, mac: isMac }),
+			...buildSettingsCommands(t, { developerMode, diagnostics, mac: isMac, prefs }),
+			...buildChoiceSearchCommands(t, prefs),
+			// The bell's panel and the footer's Connect mobile, which have no route.
+			{ id: "global-notifications", group: "global" as const, title: t("notify.title"), icon: <Bell aria-hidden="true" />, keywords: ["alerts", "inbox", "bell"], action: { kind: "run" as const, run: () => runAppMenuAction("toggle-notifications") } },
+			{ id: "global-connect-mobile", group: "global" as const, title: t("settings.connectMobile"), icon: <Smartphone aria-hidden="true" />, keywords: ["phone", "pair", "ios", "android", "qr code"], searchOnly: true, action: { kind: "run" as const, run: () => useUiStore.getState().openGlobalSettings("mobile", { startPairing: true }) } },
 		],
-		[workspaces, currentProjectId, currentSession, params.hostId, params.sessionId, restartingProjectIds, reviewStatesForCommands, cloudReady, developerMode, diagnostics, splitPanes, t, i18n.resolvedLanguage],
+		[workspaces, currentProjectId, currentSession, params.hostId, params.sessionId, restartingProjectIds, reviewStatesForCommands, cloudReady, developerMode, diagnostics, splitPanes, prefs, t, i18n.resolvedLanguage],
 	);
 	const scoped = useMemo(
 		() => (view.mode === "session-actions" ? findSession(workspaces, view.sessionId) : undefined),
 		[view, workspaces],
 	);
-	const sessionActionItems = useMemo(
-		() => (scoped ? buildSessionActions(scoped.workspace, scoped.session, t) : []),
-		[scoped, t],
-	);
+	// The session whose right-click menu the palette is showing: in its actions,
+	// one of that menu's submenus, or renaming it.
+	const menuSession = view.mode === "session-actions"
+		? scoped?.session
+		: view.mode === "menu-submenu" || view.mode === "rename-session"
+			? findSession(workspaces, view.sessionId)?.session
+			: undefined;
+	const [archiveTarget, setArchiveTarget] = useState<WorkspaceSession | null>(null);
+	const [removeTarget, setRemoveTarget] = useState<WorkspaceSummary | null>(null);
+	const { mutate: terminateSession } = useTerminateSession();
+	const copyToClipboard = useCopyToClipboard();
+	const pinnedProjectIds = useSidebarOrderStore((state) => state.pinnedProjectIds);
+	const sessionMenuEntries = useSessionMenuEntries(menuSession, {
+		// Archive asks first, as from the sidebar; the confirm outlives the palette.
+		onArchive: menuSession && !menuSession.cloud?.shared ? () => {
+			setArchiveTarget(menuSession);
+			closePalette();
+		} : undefined,
+		onRename: menuSession && !isOrchestratorSession(menuSession) ? () => {
+			pushView({ mode: "rename-session", sessionId: menuSession.id, parent: viewRef.current });
+			setQuery(menuSession.title);
+		} : undefined,
+	});
+	const sessionActionItems = useMemo(() => {
+		if (!scoped) return [];
+		const own = buildSessionActions(scoped.workspace, scoped.session, t);
+		// The palette's own rows already cover these.
+		const skip = new Set(["menu:session-copy-branch", ...(own.some((item) => item.action?.kind === "resume-session") ? ["menu:session-resume"] : [])]);
+		return [...own, ...menuEntryCommands(sessionMenuEntries, scoped.session.id).filter((item) => !skip.has(item.id))];
+	}, [scoped, sessionMenuEntries, t]);
+	const menuViewItems = useMemo((): CommandItemModel[] => {
+		switch (view.mode) {
+			case "menu-submenu":
+				return menuSession ? menuEntryCommands(findSubmenuEntries(sessionMenuEntries, view.entryId) ?? [], menuSession.id) : [];
+			case "choices":
+				return buildChoiceCommands(view.menu, t, prefs);
+			case "rename-session": {
+				const name = query.trim();
+				return [{
+					id: "rename:commit",
+					group: "current",
+					title: name || (menuSession?.title ?? ""),
+					subtitle: t("shell.rename"),
+					disabled: !menuSession || !name || name === menuSession.title,
+					action: { kind: "run", run: () => {
+						if (!menuSession) return;
+						const done = menuSession.cloud
+							? renameCloudSession(queryClient, { id: menuSession.id, cloud: menuSession.cloud }, name)
+							: renameSession(menuSession.id, name, menuSession.hostId).then(() => queryClient.invalidateQueries({ queryKey: workspaceQueryKey }));
+						done.catch((error: unknown) => useUiStore.getState().showGlobalToast(t("shell.rename"), error instanceof Error ? error.message : undefined, "error"));
+					} },
+				}];
+			}
+			case "project-actions": {
+				const workspace = workspaces.find((candidate) => candidate.id === view.projectId);
+				if (!workspace) return [];
+				const canPin = workspace.id !== STANDALONE_WORKSPACE_ID && !workspace.hostId;
+				return buildProjectActions(workspace, {
+					canPin,
+					isPinned: canPin && pinnedProjectIds.includes(workspace.id),
+					restarting: restartingProjectIds.has(workspace.id),
+					hasOrchestrator: Boolean(findProjectOrchestrator(workspaces, workspace.id)),
+					setPinned: (pinned) => useSidebarOrderStore.getState().setProjectPinned(workspace.id, pinned),
+					copyPath: () => copyToClipboard(workspace.path),
+					// Remote projects remove through their host, which the sidebar handles.
+					...(removeProject && !workspace.hostId ? { remove: () => setRemoveTarget(workspace) } : {}),
+				}, t);
+			}
+			default:
+				return [];
+		}
+	}, [view, menuSession, sessionMenuEntries, prefs, query, workspaces, pinnedProjectIds, restartingProjectIds, copyToClipboard, removeProject, queryClient, t]);
 	const filePickerWorkspace = view.mode === "file-session-picker"
 		? workspaces.find((workspace) => workspace.id === view.projectId && (workspace.hostId ?? "") === (params.hostId ?? ""))
 		: undefined;
@@ -399,8 +533,12 @@ export const CommandPalette = memo(function CommandPalette() {
 		if (view.mode === "file-search") {
 			return displayGroups([...fileItems, ...contentItems], query, t, PALETTE_FILE_VIEW_ROWS);
 		}
+		if (view.mode !== "root") {
+			// Renaming shows its one row whatever is typed; other lists filter.
+			return [{ id: "menu", label: "", items: view.mode === "rename-session" ? menuViewItems : filterCommands(menuViewItems, query) }];
+		}
 		return displayGroups([...rootItems, ...fileItems, ...contentItems, ...chatItems], query, t);
-	}, [view.mode, rootItems, sessionActionItems, fileSessionItems, fileItems, contentItems, chatItems, query, normalizedFileQuery, t, i18n.resolvedLanguage]);
+	}, [view.mode, rootItems, sessionActionItems, fileSessionItems, menuViewItems, fileItems, contentItems, chatItems, query, normalizedFileQuery, t, i18n.resolvedLanguage]);
 
 	const visibleItems = useMemo(() => groups.flatMap((group) => group.items), [groups]);
 	// Rows a search found for an earlier query stay visible while the next one
@@ -415,6 +553,15 @@ export const CommandPalette = memo(function CommandPalette() {
 		(visibleItems.some((item) => item.id === selectedValue && !item.disabled)
 			? selectedValue
 			: (visibleItems.find(autoSelectable) ?? (searchStale ? undefined : visibleItems[0]))?.id) ?? "";
+
+	// Arrowing through Color theme previews each theme; leaving the list without
+	// picking one puts the saved theme back.
+	const previewTheme = view.mode === "choices" && view.menu === "color-theme" ? choiceValue(value) : undefined;
+	useEffect(() => {
+		if (!previewTheme) return;
+		previewDocumentThemeStyle(previewTheme as Parameters<typeof previewDocumentThemeStyle>[0], useUiStore.getState().themeStyle);
+		return () => previewDocumentThemeStyle(null, useUiStore.getState().themeStyle);
+	}, [previewTheme]);
 
 	const resetTransient = useCallback(() => {
 		runGenerationRef.current += 1;
@@ -502,6 +649,8 @@ export const CommandPalette = memo(function CommandPalette() {
 		const current = viewRef.current;
 		if (current.mode === "file-search" && current.parent === "picker") {
 			setView({ mode: "file-session-picker", projectId: current.target.projectId });
+		} else if ("parent" in current && typeof current.parent === "object") {
+			setView(current.parent);
 		} else {
 			setView({ mode: "root" });
 		}
@@ -715,6 +864,15 @@ export const CommandPalette = memo(function CommandPalette() {
 				case "open-session-actions":
 					pushView({ mode: "session-actions", sessionId: action.sessionId });
 					break;
+				case "open-view":
+					pushView({ ...action.view, parent: viewRef.current });
+					// Like opening the submenu in the context menu (Open in looks for new terminals).
+					if (action.view.mode === "menu-submenu") findSubmenuOwner(sessionMenuEntries, action.view.entryId)?.onOpenChange?.(true);
+					break;
+				case "run":
+					action.run();
+					if (!item.keepOpen) closePalette();
+					break;
 				case "open-file-search":
 					if (action.target) {
 						pushView({
@@ -815,7 +973,7 @@ export const CommandPalette = memo(function CommandPalette() {
 				}
 			}
 		},
-		[daemonStatus.state, findChatWorkspace, navigate, navigateToTarget, closePalette, toggleTheme, openOrchestrator, resumeSession, pushView, blockedByRestart, openNewProject, queryClient, t, params.hostId, params.sessionId, fileSessionRoute, sessionRoute, workspaces],
+		[daemonStatus.state, findChatWorkspace, sessionMenuEntries, navigate, navigateToTarget, closePalette, toggleTheme, openOrchestrator, resumeSession, pushView, blockedByRestart, openNewProject, queryClient, t, params.hostId, params.sessionId, fileSessionRoute, sessionRoute, workspaces],
 	);
 
 	const onSelectItem = useCallback(
@@ -889,8 +1047,12 @@ export const CommandPalette = memo(function CommandPalette() {
 			?.sessions.find((session) => session.id === view.target.sessionId)
 		: undefined;
 	const contextLabel =
-		view.mode === "session-actions"
-			? (scoped?.session.title ?? t("command.sessionFallback"))
+		view.mode === "session-actions" || view.mode === "rename-session"
+			? (scoped?.session.title ?? menuSession?.title ?? t("command.sessionFallback"))
+			: view.mode === "menu-submenu" || view.mode === "choices"
+				? view.title
+				: view.mode === "project-actions"
+					? (workspaces.find((workspace) => workspace.id === view.projectId)?.name ?? "")
 			: view.mode === "file-session-picker"
 					? t("command.chooseFileSession")
 					: view.mode === "file-search"
@@ -993,8 +1155,8 @@ export const CommandPalette = memo(function CommandPalette() {
 								? <Loader2 className="size-icon-md shrink-0 animate-spin text-muted-foreground" role="status" aria-label={t("command.searching")} />
 								: null}
 							placeholder={
-								view.mode === "session-actions"
-									? t("command.searchActionsPlaceholder")
+								view.mode === "session-actions" || view.mode === "project-actions" || view.mode === "menu-submenu" || view.mode === "choices"
+									? `${contextLabel} · ${t("command.searchActionsPlaceholder")}`
 									: view.mode === "file-session-picker"
 										? t("command.chooseFileSession")
 										: view.mode === "file-search"
@@ -1086,6 +1248,28 @@ export const CommandPalette = memo(function CommandPalette() {
 					</>
 			</CommandDialog>
 
+			<SessionArchiveDialog
+				open={archiveTarget !== null}
+				session={archiveTarget ?? undefined}
+				onOpenChange={(open) => { if (!open) setArchiveTarget(null); }}
+				onConfirm={({ deleteArtifacts }) => {
+					if (archiveTarget) terminateSession({ ...archiveTarget, deleteArtifacts });
+					setArchiveTarget(null);
+				}}
+			/>
+			<ConfirmDialog
+				open={removeTarget !== null}
+				title={t("shell.removeProjectTitle")}
+				description={removeTarget?.kind === CLOUD_PROJECT_KIND ? t("shell.removeCloudProjectBody") : t("shell.removeProjectBody")}
+				confirmLabel={t("shell.remove")}
+				destructive
+				onOpenChange={(open) => { if (!open) setRemoveTarget(null); }}
+				onConfirm={() => {
+					if (removeTarget) removeProject?.(removeTarget.id, removeTarget.kind === CLOUD_PROJECT_KIND);
+					setRemoveTarget(null);
+					closePalette();
+				}}
+			/>
 			{createProjectFlowMounted ? (
 				<CreateProjectFlow
 					mode="choose"
@@ -1155,10 +1339,11 @@ function PaletteRow({
 	blocked: boolean;
 	onSelect: () => void;
 }) {
+	const { t } = useTranslation();
 	const Icon = iconForCommand(item);
 	const pathSubtitle = PATH_SUBTITLE_GROUPS.has(item.group);
 	// A row that leads to a list of choices rather than doing something.
-	const opensPicker = item.action?.kind === "open-file-search" && !item.action.target;
+	const opensPicker = (item.action?.kind === "open-file-search" && !item.action.target) || item.action?.kind === "open-view";
 	return (
 		<CommandItem
 			value={item.id}
@@ -1169,6 +1354,8 @@ function PaletteRow({
 			<span className={cn("flex size-icon-base shrink-0 items-center justify-center", item.snippet && "mt-0.75")} aria-hidden="true">
 				{item.status ? (
 					<span className={cn("size-2 rounded-full", item.status.className, item.status.breathe && "animate-status-pulse")} />
+				) : item.icon ? (
+					item.icon
 				) : Icon ? (
 					<Icon />
 				) : null}
@@ -1205,10 +1392,17 @@ function PaletteRow({
 				<Loader2 className="size-icon-md animate-spin" aria-hidden="true" />
 			) : item.disabled && item.disabledReason ? (
 				<span className="max-w-[45%] shrink-0 truncate text-caption text-muted-foreground group-data-[selected=true]/command-item:text-foreground/75">{item.disabledReason}</span>
+			) : item.checked ? (
+				<Check className="size-icon-md" aria-label={t("command.on")} />
 			) : keys ? (
 				<CommandShortcut keys={keys} />
+			) : item.state && !opensPicker ? (
+				<span className="shrink-0 text-caption text-muted-foreground group-data-[selected=true]/command-item:text-foreground/75">{item.state}</span>
 			) : opensPicker ? (
-				<ChevronRight className="size-icon-md" aria-hidden="true" />
+				<span className="flex shrink-0 items-center gap-1 text-caption text-muted-foreground group-data-[selected=true]/command-item:text-foreground/75">
+					{item.state}
+					<ChevronRight className="size-icon-md" aria-hidden="true" />
+				</span>
 			) : null}
 		</CommandItem>
 	);

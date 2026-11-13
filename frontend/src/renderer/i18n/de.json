@@ -562,6 +562,8 @@
 	"command.newTask": "Neue Aufgabe",
 	"command.noResults": "Keine Ergebnisse.",
 	"command.noResultsHint": "Versuche den Namen einer Sitzung, eines Projekts, einer Einstellung oder eines Befehls.",
+	"command.on": "An",
+	"command.off": "Aus",
 	"command.noCurrentProject": "Kein aktuelles Projekt",
 	"command.notEligibleForReview": "Nicht für ein Review geeignet",
 	"command.openOrchestrator": "Orchestrator-Agenten öffnen",

@@ -30,6 +30,8 @@ import type { GlobalSettingsSection } from "../stores/ui-store";
 import { renderedSnippetText } from "./chat-annotation-navigation";
 import { getSessionStatusDotView } from "./session-presentation";
 import { importableProject } from "./session-import";
+import type { ReactNode } from "react";
+import type { MenuEntry } from "../components/menu-model";
 
 export type CommandGroupId = "current" | "attention" | "files" | "content" | "messages" | "projects" | "sessions" | "prs" | "settings" | "global";
 
@@ -79,7 +81,22 @@ export type CommandAction =
 	| { kind: "trigger-review"; sessionId: string }
 	| { kind: "toggle-theme" }
 	| { kind: "open-shared-link" }
-	| { kind: "report-problem" };
+	| { kind: "report-problem" }
+	/** Runs a menu's own handler, as its context menu would. */
+	| { kind: "run"; run: () => void }
+	/** Opens one of the palette's nested lists. */
+	| { kind: "open-view"; view: PaletteMenuView };
+
+/**
+ * The palette's nested lists beyond a session's actions and file search: a
+ * project's actions, a session menu's submenu ("Open in"), a choice list
+ * (Theme, Color theme, Language, ...) and renaming a session in the field.
+ */
+export type PaletteMenuView =
+	| { mode: "project-actions"; projectId: string }
+	| { mode: "menu-submenu"; sessionId: string; entryId: string; title: string }
+	| { mode: "choices"; menu: string; title: string }
+	| { mode: "rename-session"; sessionId: string };
 
 export type CommandItem = {
 	id: string;
@@ -106,6 +123,13 @@ export type CommandItem = {
 	shortcut?: AppShortcutId;
 	/** What the command acts on, drawn bold after the title: "New task in **app**". */
 	emphasis?: string;
+	/** A menu entry's own icon, drawn in place of the group's. */
+	icon?: ReactNode;
+	/** A choice's or toggle's current state: a check, or On/Off at the end of the row. */
+	checked?: boolean;
+	state?: string;
+	/** The palette stays open after it runs, to show the new state (choices, toggles). */
+	keepOpen?: boolean;
 };
 
 export type CommandPaletteContext = {
@@ -378,6 +402,89 @@ export function buildSessionActions(
 	return items;
 }
 
+/**
+ * A context menu's entries as palette rows, so a session's actions here are
+ * the ones its right-click menu offers. A submenu (Open in) becomes a row that
+ * opens it as a nested list; separators and custom rows have no row.
+ */
+export function menuEntryCommands(entries: readonly MenuEntry[], sessionId: string): CommandItem[] {
+	return entries.flatMap((entry): CommandItem[] => {
+		if (entry.kind === "item") {
+			return [{
+				id: `menu:${entry.id}`,
+				group: "current",
+				title: entry.label,
+				icon: entry.icon,
+				shortcut: entry.shortcutId,
+				disabled: entry.disabled || !entry.onSelect,
+				...(entry.onSelect ? { action: { kind: "run" as const, run: entry.onSelect } } : {}),
+			}];
+		}
+		if (entry.kind === "submenu") {
+			return [{
+				id: `menu:${entry.id}`,
+				group: "current",
+				title: entry.label,
+				icon: entry.icon,
+				action: { kind: "open-view", view: { mode: "menu-submenu", sessionId, entryId: entry.id, title: entry.label } },
+			}];
+		}
+		return [];
+	});
+}
+
+/** A submenu's entries by id, searched through nested submenus. */
+export function findSubmenuEntries(entries: readonly MenuEntry[], entryId: string): MenuEntry[] | undefined {
+	for (const entry of entries) {
+		if (entry.kind !== "submenu") continue;
+		if (entry.id === entryId) return entry.items;
+		const nested = findSubmenuEntries(entry.items, entryId);
+		if (nested) return nested;
+	}
+	return undefined;
+}
+
+export type ProjectActionContext = {
+	isPinned: boolean;
+	canPin: boolean;
+	restarting: boolean;
+	hasOrchestrator: boolean;
+	setPinned: (pinned: boolean) => void;
+	copyPath: () => void;
+	remove?: () => void;
+};
+
+/** A project's actions, as its sidebar ⋮ and right-click menu offer them. */
+export function buildProjectActions(workspace: WorkspaceSummary, ctx: ProjectActionContext, t: TFunction = appI18n.t): CommandItem[] {
+	const isStandalone = workspace.id === STANDALONE_WORKSPACE_ID;
+	const isAgent = Boolean(workspace.standaloneAgent);
+	const archivedCount = isStandalone ? 0 : workerSessions(workspace.sessions).filter(isArchivedSession).length;
+	const items: CommandItem[] = [];
+	const row = (id: string, title: string, action: CommandAction, extra: Partial<CommandItem> = {}) =>
+		items.push({ id: `project-action:${id}`, group: "current", title, action, ...extra });
+	if (!isAgent) {
+		row("new-task", t("shell.newTask"), { kind: "open-new-task", projectId: workspace.id }, { disabled: ctx.restarting, shortcut: "new-session" });
+	}
+	if (!isStandalone && !isAgent && (!workspace.shared || ctx.hasOrchestrator)) {
+		row("orchestrator", ctx.hasOrchestrator ? t("shell.openOrchestrator") : t("shell.spawnOrchestratorLower"), { kind: "open-orchestrator", projectId: workspace.id }, { disabled: ctx.restarting });
+	}
+	if (!isStandalone && !isAgent) {
+		row("board", t("shell.openDashboard"), { kind: "navigate", target: { to: "/projects/$projectId", params: { projectId: workspace.id } } });
+	}
+	if (archivedCount > 0) {
+		row("archive", t("shell.archivedSessions"), { kind: "open-archive", projectId: workspace.id }, { state: String(archivedCount) });
+	}
+	if (workspace.path && !workspace.hostId) row("copy-path", t("editor.copyPath"), { kind: "run", run: ctx.copyPath });
+	if (ctx.canPin) {
+		row("pin", ctx.isPinned ? t("shell.unpinProject") : t("shell.pinProject"), { kind: "run", run: () => ctx.setPinned(!ctx.isPinned) });
+	}
+	if (!isStandalone && !isAgent) {
+		row("settings", t("shell.projectSettings"), { kind: "navigate", target: { to: "/projects/$projectId/settings", params: { projectId: workspace.id } } });
+		if (ctx.remove) row("remove", t("shell.removeProjectTitle"), { kind: "run", run: ctx.remove });
+	}
+	return items;
+}
+
 export function findSession(workspaces: WorkspaceSummary[], sessionId: string): WorkspaceSessionContext | undefined {
 	for (const workspace of workspaces) {
 		const match = workspace.sessions.find((session) => session.id === sessionId);
@@ -529,6 +636,7 @@ export function buildCommands(ctx: CommandPaletteContext, t: TFunction = appI18n
 			...(workspace.kind === CLOUD_PROJECT_KIND ? { subtitle: t("shell.cloudProjectBadge") } : {}),
 			keywords: [workspace.path],
 			action: { kind: "navigate", target: { to: "/projects/$projectId", params: { projectId: workspace.id } } },
+			secondaryAction: { kind: "open-view", view: { mode: "project-actions", projectId: workspace.id } },
 		});
 	}
 

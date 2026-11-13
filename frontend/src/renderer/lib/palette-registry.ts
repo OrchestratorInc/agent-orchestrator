@@ -4,6 +4,13 @@ import { shortcutLabelKeys } from "../i18n/key-maps";
 import type { MessageKey } from "../i18n";
 import type { GlobalSettingsSection } from "../stores/ui-store";
 import type { CommandItem } from "./command-palette";
+import { APP_LOCALES, type AppLocale } from "../i18n/locales";
+import { useLocaleStore } from "../stores/locale-store";
+import { useSoundNotificationsStore } from "../stores/sound-notifications-store";
+import { useUiStore, type ChatSendKeyMode } from "../stores/ui-store";
+import type { ThemePreference, ThemeStyle } from "./theme";
+import { THEMES } from "./theme-palettes";
+import type { TerminalClickMode } from "./terminal-mouse";
 
 // What the palette can find by name beyond projects, sessions and PRs:
 // keyboard-shortcut actions and individual settings. Labels are the app's own
@@ -95,7 +102,8 @@ const SECTION_KEYWORDS: Partial<Record<GlobalSettingsSection, string[]>> = {
 const SETTINGS_ENTRIES: SettingsEntry[] = [
 	{ id: "general", section: "general", label: "settings.general", keywords: ["preferences"] },
 	{ id: "appearance", section: "general", label: "settings.appearance", keywords: ["look", "visual"] },
-	{ id: "theme", section: "general", label: "settings.theme", keywords: ["dark mode", "light mode", "color theme", "colors", "accent"] },
+	{ id: "theme", section: "general", label: "settings.theme", keywords: ["dark mode", "light mode", "system"] },
+	{ id: "color-theme", section: "general", label: "settings.colorTheme", keywords: ["colors", "accent", "palette", "scheme"] },
 	{ id: "transparency", section: "general", label: "settings.windowTranslucency", keywords: ["translucency", "vibrancy", "blur"], when: "mac" },
 	{ id: "project-avatars", section: "general", label: "settings.projectAvatars", keywords: ["repo icons", "project icons", "github avatars"] },
 	{ id: "language", section: "general", label: "settings.language", keywords: ["locale", "translation", "chinese", "japanese", "spanish"] },
@@ -144,7 +152,100 @@ const SETTINGS_ENTRIES: SettingsEntry[] = [
 	{ id: "diagnostics", section: "diagnostics", label: "settings.diagnostics", keywords: ["performance", "cpu", "memory", "monitor"] },
 ];
 
-type SettingsVisibility = { developerMode: boolean; diagnostics: boolean; mac?: boolean };
+/** Settings whose values the palette shows and changes in place. */
+export type PalettePreferences = {
+	themePreference: ThemePreference;
+	themeStyle: ThemeStyle;
+	locale: AppLocale;
+	terminalClickMode: TerminalClickMode;
+	chatSendKeyMode: ChatSendKeyMode;
+	toggles: Partial<Record<ToggleId, boolean>>;
+};
+
+/** Switch rows: Enter flips them and the palette stays open to show the new state. */
+const TOGGLES = {
+	transparency: (on: boolean) => useUiStore.getState().setWindowTranslucency(on),
+	"project-avatars": (on: boolean) => useUiStore.getState().setProjectAvatars(on),
+	"render-math": (on: boolean) => useUiStore.getState().setRenderMath(on),
+	"navigation-gestures": (on: boolean) => useUiStore.getState().setNavigationGestures(on),
+	"copy-on-select": (on: boolean) => useUiStore.getState().setTerminalCopyOnSelect(on),
+	sound: (on: boolean) => void useSoundNotificationsStore.getState().setEnabled(on),
+	"developer-mode": (on: boolean) => useUiStore.getState().setDeveloperMode(on),
+	"side-chats": (on: boolean) => useUiStore.getState().setSideChats(on),
+	"split-panes": (on: boolean) => useUiStore.getState().setSplitPanes(on),
+} satisfies Record<string, (on: boolean) => void>;
+export type ToggleId = keyof typeof TOGGLES;
+
+type Choice = { value: string; label: string };
+
+/** Lists the palette opens as a nested view, keyed by the settings entry that opens them. */
+const CHOICES: Record<string, { options: (t: TFunction) => Choice[]; current: (prefs: PalettePreferences) => string; apply: (value: string) => void }> = {
+	theme: {
+		options: (t) => (["light", "dark", "system"] as const).map((value) => ({ value, label: t(`settings.theme.${value}`) })),
+		current: (prefs) => prefs.themePreference,
+		apply: (value) => useUiStore.getState().setThemePreference(value as ThemePreference),
+	},
+	"color-theme": {
+		options: () => THEMES.map(({ id, label }) => ({ value: id, label })),
+		current: (prefs) => prefs.themeStyle,
+		apply: (value) => useUiStore.getState().setThemeStyle(value as ThemeStyle),
+	},
+	language: {
+		options: (t) => APP_LOCALES.map((value) => ({ value, label: t(`settings.language.${value.replace("-", "")}` as MessageKey) })),
+		current: (prefs) => prefs.locale,
+		apply: (value) => void useLocaleStore.getState().setLocale(value as AppLocale),
+	},
+	"terminal-clicks": {
+		options: (t) => [{ value: "app", label: t("settings.terminalClicks.app") }, { value: "select", label: t("settings.terminalClicks.select") }],
+		current: (prefs) => prefs.terminalClickMode,
+		apply: (value) => useUiStore.getState().setTerminalClickMode(value as TerminalClickMode),
+	},
+	"chat-send-key": {
+		options: (t) => [{ value: "enter", label: t("settings.chatSendKey.enter") }, { value: "mod-enter", label: t("settings.chatSendKey.modEnter") }],
+		current: (prefs) => prefs.chatSendKeyMode,
+		apply: (value) => useUiStore.getState().setChatSendKeyMode(value as ChatSendKeyMode),
+	},
+};
+
+/** A choice list's rows, the current one checked. Picking one applies it and keeps the list open. */
+export function buildChoiceCommands(menu: string, t: TFunction, prefs: PalettePreferences): CommandItem[] {
+	const choices = CHOICES[menu];
+	if (!choices) return [];
+	const current = choices.current(prefs);
+	return choices.options(t).map(({ value, label }) => ({
+		id: `choice:${menu}:${value}`,
+		group: "current",
+		title: label,
+		checked: value === current,
+		keepOpen: true,
+		action: { kind: "run", run: () => choices.apply(value) },
+	}));
+}
+
+/** Labels of the lists whose options a search can pick directly. */
+const SEARCHABLE_CHOICES: Partial<Record<string, MessageKey>> = { theme: "settings.theme", "color-theme": "settings.colorTheme", language: "settings.language" };
+
+/**
+ * Every option of Theme, Color theme and Language as its own search-only row
+ * ("Color theme: Nord"), so typing a theme's name picks it without opening the list.
+ */
+export function buildChoiceSearchCommands(t: TFunction, prefs: PalettePreferences): CommandItem[] {
+	return Object.entries(SEARCHABLE_CHOICES).flatMap(([menu, label]) =>
+		buildChoiceCommands(menu, t, prefs).map((item) => ({
+			...item,
+			group: "settings" as const,
+			title: `${t(label!)}: ${item.title}`,
+			searchOnly: true,
+			keepOpen: false,
+		})));
+}
+
+/** The value a choice row stands for, for previewing a color theme while it is selected. */
+export function choiceValue(itemId: string): string | undefined {
+	return itemId.startsWith("choice:") ? itemId.split(":").slice(2).join(":") : undefined;
+}
+
+type SettingsVisibility = { developerMode: boolean; diagnostics: boolean; mac?: boolean; prefs?: PalettePreferences };
 
 /** Mirrors the settings catalog's and General page's visibility rules for the entries here. */
 function entryVisible(entry: SettingsEntry, { developerMode, diagnostics, mac = false }: SettingsVisibility): boolean {
@@ -161,15 +262,27 @@ export function buildSettingsCommands(t: TFunction, visibility: SettingsVisibili
 	};
 	return SETTINGS_ENTRIES.filter((entry) => entryVisible(entry, visibility)).map((entry) => {
 		const isPage = entry.id === sectionLeadId(entry.section);
+		const title = t(entry.label);
+		const prefs = visibility.prefs;
+		const toggle = prefs && entry.id in TOGGLES ? TOGGLES[entry.id as ToggleId] : undefined;
+		const on = Boolean(prefs?.toggles[entry.id as ToggleId]);
+		const choice = prefs && CHOICES[entry.id];
 		return {
 			id: `setting:${entry.id}`,
 			group: "settings",
-			title: t(entry.label),
+			title,
 			subtitle: isPage ? undefined : pageLabel(entry.section),
 			keywords: isPage ? [...entry.keywords, ...(SECTION_KEYWORDS[entry.section] ?? [])] : entry.keywords,
 			searchOnly: true,
-			// A page entry opens the page; any other lands on its own row.
-			action: { kind: "open-settings-section", section: entry.section, ...(isPage ? {} : { focus: t(entry.label) }) },
+			...(toggle ? { state: on ? t("command.on") : t("command.off"), keepOpen: true } : {}),
+			...(choice && prefs ? { state: choice.options(t).find((option) => option.value === choice.current(prefs))?.label } : {}),
+			// A switch flips; a choice opens its list; a page entry opens the page;
+			// any other lands on its own row.
+			action: toggle
+				? { kind: "run", run: () => toggle(!on) }
+				: choice
+					? { kind: "open-view", view: { mode: "choices", menu: entry.id, title } }
+					: { kind: "open-settings-section", section: entry.section, ...(isPage ? {} : { focus: title }) },
 		};
 	});
 }

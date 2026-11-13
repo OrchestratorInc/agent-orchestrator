@@ -559,6 +559,8 @@
 	"command.newTask": "New task",
 	"command.noResults": "No results.",
 	"command.noResultsHint": "Try the name of a session, project, setting or command.",
+	"command.on": "On",
+	"command.off": "Off",
 	"command.noCurrentProject": "No current project",
 	"command.notEligibleForReview": "Not eligible for review",
 	"command.openOrchestrator": "Open orchestrator",

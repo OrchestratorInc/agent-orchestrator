@@ -565,6 +565,8 @@
 	"command.newTask": "Nouvelle tâche",
 	"command.noResults": "Aucun résultat.",
 	"command.noResultsHint": "Essayez le nom d’une session, d’un projet, d’un réglage ou d’une commande.",
+	"command.on": "Activé",
+	"command.off": "Désactivé",
 	"command.noCurrentProject": "Aucun projet actuel",
 	"command.notEligibleForReview": "Non éligible à une revue",
 	"command.openOrchestrator": "Ouvrir l'orchestrateur",

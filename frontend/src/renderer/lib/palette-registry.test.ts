@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { appI18n } from "../i18n";
-import { buildSettingsCommands, buildShortcutCommands } from "./palette-registry";
+import { buildChoiceCommands, buildChoiceSearchCommands, buildSettingsCommands, buildShortcutCommands, choiceValue, type PalettePreferences } from "./palette-registry";
 import { filterCommands } from "./command-palette";
 
 const t = appI18n.t.bind(appI18n);
@@ -68,9 +68,9 @@ describe("palette registry", () => {
 
 	it("lists only rows the settings pages still show", () => {
 		const ids = buildSettingsCommands(t, { developerMode: true, diagnostics: true, mac: true }).map((item) => item.id);
-		// Closed-lid keep awake is part of Keep this Mac awake; Color theme sits inside the Theme row.
+		// Closed-lid keep awake is part of Keep this Mac awake.
 		expect(ids).not.toContain("setting:keep-awake-lid");
-		expect(ids).not.toContain("setting:color-theme");
+		expect(ids).toContain("setting:color-theme");
 		expect(ids).toContain("setting:computer-use");
 	});
 
@@ -84,7 +84,7 @@ describe("palette registry", () => {
 		// API keys are set from a harness's Account, so a key search lands there too.
 		expect(filterCommands(items, "api key")[0]?.action).toMatchObject({ kind: "open-settings-section", section: "harness" });
 		expect(filterCommands(items, "pair phone")[0]?.id).toBe("setting:mobile");
-		expect(filterCommands(items, "color theme")[0]?.id).toBe("setting:theme");
+		expect(filterCommands(items, "color theme")[0]?.id).toBe("setting:color-theme");
 		expect(filterCommands(items, "dark mode")[0]?.id).toBe("setting:theme");
 	});
 
@@ -92,5 +92,46 @@ describe("palette registry", () => {
 		const items = buildSettingsCommands(t, { developerMode: false, diagnostics: false });
 		expect(items.find((item) => item.id === "setting:theme")?.action).toEqual({ kind: "open-settings-section", section: "general", focus: t("settings.theme") });
 		expect(items.find((item) => item.id === "setting:updates")?.action).toEqual({ kind: "open-settings-section", section: "updates" });
+	});
+
+	const prefs: PalettePreferences = {
+		themePreference: "dark",
+		themeStyle: "nord",
+		locale: "en",
+		terminalClickMode: "app",
+		chatSendKeyMode: "enter",
+		toggles: { "render-math": true, sound: false },
+	};
+
+	it("flips a switch in place and shows its state", () => {
+		const items = buildSettingsCommands(t, { developerMode: false, diagnostics: false, prefs });
+		const math = items.find((item) => item.id === "setting:render-math");
+		const sound = items.find((item) => item.id === "setting:sound");
+		expect(math).toMatchObject({ state: t("command.on"), keepOpen: true, action: { kind: "run" } });
+		expect(sound).toMatchObject({ state: t("command.off"), keepOpen: true, action: { kind: "run" } });
+	});
+
+	it("opens a choice list from its setting, naming the current choice", () => {
+		const items = buildSettingsCommands(t, { developerMode: false, diagnostics: false, prefs });
+		expect(items.find((item) => item.id === "setting:theme")).toMatchObject({
+			state: t("settings.theme.dark"),
+			action: { kind: "open-view", view: { mode: "choices", menu: "theme" } },
+		});
+		expect(items.find((item) => item.id === "setting:color-theme")?.state).toBe("Nord");
+	});
+
+	it("checks the current choice and keeps the list open after a pick", () => {
+		const rows = buildChoiceCommands("theme", t, prefs);
+		expect(rows.map((row) => row.id)).toEqual(["choice:theme:light", "choice:theme:dark", "choice:theme:system"]);
+		expect(rows.filter((row) => row.checked).map((row) => row.id)).toEqual(["choice:theme:dark"]);
+		expect(rows.every((row) => row.keepOpen)).toBe(true);
+		expect(choiceValue("choice:color-theme:nord")).toBe("nord");
+		expect(choiceValue("setting:theme")).toBeUndefined();
+	});
+
+	it("finds a color theme by name without opening the list", () => {
+		const rows = buildChoiceSearchCommands(t, prefs);
+		expect(rows.every((row) => row.searchOnly && !row.keepOpen)).toBe(true);
+		expect(filterCommands(rows, "nord")[0]).toMatchObject({ id: "choice:color-theme:nord", title: `${t("settings.colorTheme")}: Nord` });
 	});
 });
