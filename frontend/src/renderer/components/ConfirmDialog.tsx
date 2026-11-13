@@ -29,6 +29,8 @@ type ConfirmDialogProps = {
 	destructive?: boolean;
 	/** Options shown between the description and the buttons. */
 	children?: React.ReactNode;
+	/** Starts here rather than on a button, for a dialog with a field to fill. */
+	initialFocusRef?: React.RefObject<HTMLElement | null>;
 	busy?: boolean;
 	confirmDisabled?: boolean;
 	error?: string | null;
@@ -45,6 +47,7 @@ export function ConfirmDialog({
 	cancelLabel,
 	destructive,
 	children,
+	initialFocusRef,
 	busy,
 	confirmDisabled,
 	error,
@@ -74,9 +77,9 @@ export function ConfirmDialog({
 					// disabled button can't take focus, which would leave it behind the
 					// dialog: then the other one, or Radix's own choice.
 					const preferred = destructive ? cancelRef.current : confirmRef.current;
-					const target = preferred && !preferred.disabled
+					const target = initialFocusRef?.current ?? (preferred && !preferred.disabled
 						? preferred
-						: [cancelRef.current, confirmRef.current].find((button) => button && !button.disabled);
+						: [cancelRef.current, confirmRef.current].find((button) => button && !button.disabled));
 					if (!target) return;
 					event.preventDefault();
 					target.focus();
