@@ -34,3 +34,16 @@ describe("large-title header", () => {
 		expect(largeTitleScreenOptions()).toEqual({});
 	});
 });
+
+describe("push transition", () => {
+	// Android's "default" was a short fade that read as the page appearing in
+	// place; it slides in as iOS's push does.
+	it("slides pages in from the right on Android", () => {
+		platform.OS = "android";
+		expect(stackScreenOptions(theme).animation).toBe("ios_from_right");
+	});
+
+	it("leaves iOS on UIKit's own push", () => {
+		expect(stackScreenOptions(theme)).not.toHaveProperty("animation");
+	});
+});
