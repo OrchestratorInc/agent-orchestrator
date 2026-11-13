@@ -4319,6 +4319,29 @@ describe("useTaskLaunch Cloud start on send", () => {
 		expect((outcome as { code?: string }).code).toBeUndefined();
 	});
 
+	// A control plane's refusal of the brief is final only once the session
+	// is gone: while the cleanup could not delete it, the page keeps the send
+	// and retries it with the same request id, which continues that session.
+	it("keeps a refused brief uncertain while its session may still exist", async () => {
+		const queryClient = freestyleFixture();
+		h.cloudMaxAttachmentBytes = 25 * 1024 * 1024;
+		h.cloudCreateSession.mockResolvedValue({ session: { id: "s-f7", harness: "codex", interfaceMode: "chat" } });
+		h.cloudUpload.mockResolvedValue({ id: "file-1" });
+		h.cloudSendSessionMessage.mockRejectedValue(new CloudCpError("This session's sandbox runs an older AO worker that cannot receive attached files.", { status: 409, code: "ATTACHMENTS_UNSUPPORTED" }));
+		h.cloudDeleteSession.mockRejectedValue(new TypeError("Failed to fetch"));
+		render(<Wrap queryClient={queryClient}><Launcher /></Wrap>);
+		await screen.findByText("ready");
+		let outcome: unknown;
+		await act(async () => {
+			outcome = await task.launch("Look at this", { clientRequestId: "req-f7", interfaceMode: "chat", attachments: [{ mimeType: "image/png", data: "aGk=", name: "shot.png" }] })
+				.catch((error: unknown) => error);
+		});
+		expect(outcome).toBeInstanceOf(Error);
+		expect(outcome).not.toMatchObject({ name: "TaskCreateError" });
+		expect((outcome as { code?: string }).code).toBeUndefined();
+		expect((outcome as { status?: number }).status).toBeUndefined();
+	});
+
 	// Its own project comes with its session, so a start the files did not
 	// reach would leave that project behind: it starts without them.
 	it("refuses files on a Cloud standalone agent as final, starting nothing", async () => {

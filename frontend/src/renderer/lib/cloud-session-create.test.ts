@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { CloudCpError } from "./cloud-cp";
 import type { CloudCpCreateSessionRequest } from "./cloud-cp";
-import { CloudTaskFilesNeedChatError, CloudTaskFilesUndeliveredError, cloudDefaultInterfaceMode, createCloudChatSessionWithFiles, createCloudSession } from "./cloud-session-create";
+import { CloudTaskFilesNeedChatError, CloudTaskFilesUncertainError, CloudTaskFilesUndeliveredError, cloudDefaultInterfaceMode, createCloudChatSessionWithFiles, createCloudSession } from "./cloud-session-create";
 
 const body: CloudCpCreateSessionRequest = {
 	projectId: "project-1",
@@ -125,7 +125,7 @@ describe("createCloudChatSessionWithFiles", () => {
 		client.sendSessionMessage.mockRejectedValueOnce(new TypeError("Failed to fetch"));
 		client.deleteSession.mockRejectedValueOnce(new TypeError("Failed to fetch"));
 		const upload = vi.fn(async (_sessionId: string, file: { name?: string }) => ({ id: `id-${file.name}` }));
-		await expect(createCloudChatSessionWithFiles(client, "org-1", chatBody, files, upload, { idempotencyKey: "req-left" })).rejects.toBeInstanceOf(TypeError);
+		await expect(createCloudChatSessionWithFiles(client, "org-1", chatBody, files, upload, { idempotencyKey: "req-left" })).rejects.toBeInstanceOf(CloudTaskFilesUncertainError);
 		await createCloudChatSessionWithFiles(client, "org-1", chatBody, files, upload, { idempotencyKey: "req-left" });
 		const [first, second] = client.createSession.mock.calls.map((call) => call[2].idempotencyKey);
 		expect(second).toBe(first);
@@ -186,7 +186,29 @@ describe("createCloudChatSessionWithFiles", () => {
 		expect(outcome).toMatchObject({ code: "CLOUD_TASK_FILES_UNDELIVERED", message: failure.message });
 		const kept = clientFor();
 		kept.deleteSession.mockRejectedValue(new TypeError("Failed to fetch"));
-		await expect(createCloudChatSessionWithFiles(kept, "org-1", chatBody, files, vi.fn().mockRejectedValue(failure))).rejects.toBe(failure);
+		const uncertain = await createCloudChatSessionWithFiles(kept, "org-1", chatBody, files, vi.fn().mockRejectedValue(failure)).catch((error: unknown) => error);
+		expect(uncertain).toBeInstanceOf(CloudTaskFilesUncertainError);
+		expect(uncertain).toMatchObject({ message: failure.message, cause: failure });
+	});
+
+	// A refusal of the brief or a session that did not start in Chat is final
+	// only once the cleanup deleted the session: one the delete did not reach
+	// is still there, so the start stays uncertain whatever the refusal said,
+	// and a retry with the same request id continues it.
+	it.each([
+		["a refused brief", "send"],
+		["a session that did not start in Chat", "terminal"],
+	])("keeps the start uncertain after %s when the cleanup could not delete the session", async (_name, failing) => {
+		const client = clientFor(failing === "terminal" ? "tui" : "chat");
+		const refusal = new CloudCpError("This session's sandbox runs an older AO worker that cannot receive attached files.", { status: 409, code: "ATTACHMENTS_UNSUPPORTED" });
+		if (failing === "send") client.sendSessionMessage.mockRejectedValue(refusal);
+		client.deleteSession.mockRejectedValue(new TypeError("Failed to fetch"));
+		const outcome = await createCloudChatSessionWithFiles(client, "org-1", chatBody, files, vi.fn().mockResolvedValue({ id: "f" }), { idempotencyKey: `req-${failing}` })
+			.catch((error: unknown) => error);
+		expect(outcome).toBeInstanceOf(CloudTaskFilesUncertainError);
+		expect(outcome).not.toBeInstanceOf(CloudCpError);
+		expect(outcome).not.toHaveProperty("code");
+		expect((outcome as Error).cause).toBeInstanceOf(failing === "send" ? CloudCpError : CloudTaskFilesNeedChatError);
 	});
 
 	// A control plane that predates interfaceMode starts the session in the

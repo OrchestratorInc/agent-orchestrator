@@ -91,6 +91,21 @@ export class CloudTaskFilesUndeliveredError extends Error {
 }
 
 /**
+ * The files or the brief did not reach a new Cloud task, and the cleanup could
+ * not delete its session: it is still there, and may hold the brief. Nothing
+ * about the start is final then, whatever the failure was (a control plane's
+ * refusal included), so it carries no code or status and the page keeps the
+ * send to retry with the same request id, which continues that session
+ * (unsettledFileStarts). cause is the failure the cleanup followed.
+ */
+export class CloudTaskFilesUncertainError extends Error {
+	constructor(cause: unknown) {
+		super(cause instanceof Error ? cause.message : String(cause), { cause });
+		this.name = "CloudTaskFilesUncertainError";
+	}
+}
+
+/**
  * A start with files whose outcome is not known yet, by its request id: a
  * create that went unanswered may have made the session, and a session the
  * cleanup could not delete is still there. A retry with the same request id
@@ -112,7 +127,8 @@ const unsettledFileStarts = new Map<string, { key: string; sessionId?: string; a
  * brief did not reach, is deleted and the error thrown, so the composer keeps
  * the task to send again. Once the delete went through the failure is final
  * (a control plane's refusal keeps its own status); while the session may
- * still be there the error stays as it was, so a retry can still reach it.
+ * still be there it is uncertain (CloudTaskFilesUncertainError), so a retry
+ * can still reach it.
  * Each attempt creates under its own key, since a replay of the same create
  * would answer with the deleted session; a retry of an attempt not settled
  * yet keeps it (unsettledFileStarts).
@@ -166,7 +182,7 @@ export async function createCloudChatSessionWithFiles(
 		}, { idempotencyKey: `${attempt.key}:brief` });
 	} catch (error) {
 		const deleted = await client.deleteSession(orgId, sessionId).then(() => true, () => false);
-		if (!deleted) throw error;
+		if (!deleted) throw new CloudTaskFilesUncertainError(error);
 		settle();
 		if (error instanceof CloudCpError || error instanceof CloudTaskFilesNeedChatError) throw error;
 		throw new CloudTaskFilesUndeliveredError(error instanceof Error ? error.message : String(error));
