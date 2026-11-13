@@ -55,6 +55,8 @@ import { Pressable } from "./ui/pressable";
 import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { TooltipProvider } from "./ui/tooltip";
 import { useCloudNotifications } from "../hooks/useCloudNotifications";
+import { useCloudCp } from "../hooks/useCloudCp";
+import { useCloudOrg } from "../hooks/useCloudOrg";
 import { clearRemoteNotification, clearRemoteNotifications, connectRemoteNotificationStreams, fetchRemoteNotificationsPage, markRemoteNotificationsRead, remoteNotificationsQueryKey, useRemoteNotificationHosts } from "../hooks/useRemoteNotifications";
 import type { CloudCpNotification } from "../lib/cloud-cp/types";
 
@@ -65,6 +67,8 @@ type NotificationCenterProps = {
 };
 
 const REMOTE_NOTIFICATION_PREFIX = "remote-notification:";
+const CLOUD_NOTIFICATION_PREFIX = "cloud-notification:";
+const EMPTY_CLOUD_NOTIFICATIONS: CloudCpNotification[] = [];
 const notificationKey = (hostId: HostId, id: string) => refKey({ host: hostId, id });
 
 function useNotificationTargetNavigation() {
@@ -186,14 +190,28 @@ function NotificationWorkspaceState({
 export function NotificationRuntime() {
 	const queryClient = useQueryClient();
 	const { openPrimary } = useNotificationTargetNavigation();
+	const navigateToSession = useNavigateToSession();
 	const unreadQuery = useNotificationsQuery("unread");
 	const remoteUnread = useRemoteNotificationHosts("unread");
-	const unreadCount = getCachedUnreadCount(unreadQuery.data) + remoteUnread.totalUnreadCount;
+	// CloudNotificationRuntime keeps the Cloud list live; this only reads it,
+	// so Cloud rows reach the badge and the OS as local ones do.
+	const cloudAll = useCloudNotifications("all", { live: false });
+	const cloudItems = cloudAll.items ?? EMPTY_CLOUD_NOTIFICATIONS;
+	const cloudItemsRef = useRef(cloudItems);
+	cloudItemsRef.current = cloudItems;
+	const { userId: cloudUserId } = useCloudCp();
+	const { org: cloudOrg } = useCloudOrg();
+	// Whose Cloud inbox is loaded; a new account or organization is a new inbox.
+	const cloudScope = cloudAll.data ? `${cloudUserId}:${cloudOrg?.id ?? ""}` : undefined;
+	// The same count as the bell's.
+	const unreadCount = getCachedUnreadCount(unreadQuery.data) + remoteUnread.totalUnreadCount + (cloudAll.data?.unreadCount ?? 0);
 	const params = useParams({ strict: false }) as { hostId?: string; sessionId?: string };
 	const routeRef = useRef(params);
 	routeRef.current = params;
 	const seenRemoteIds = useRef(new Map<HostId, Set<string>>());
 	const shownRemoteNotifications = useRef(new Map<string, NotificationDTO>());
+	const seenCloudIds = useRef<{ scope: string; ids: Set<string> } | undefined>(undefined);
+	const shownCloudNotifications = useRef(new Map<string, CloudCpNotification>());
 
 	// Being on the session route is not the same as watching the agent: its pane
 	// renders one terminal at a time, so a shell or reviewer tab hides the agent
@@ -254,8 +272,53 @@ export function NotificationRuntime() {
 		}
 	}, [remoteUnread.hosts]);
 
+	// A Cloud row that arrives while the list is loaded raises an OS
+	// notification, as a local one does; the list as first loaded (or after
+	// the account or organization changes it wholesale) is not replayed.
+	useEffect(() => {
+		if (cloudScope === undefined) return;
+		if (seenCloudIds.current?.scope !== cloudScope) {
+			seenCloudIds.current = { scope: cloudScope, ids: new Set(cloudItems.map((item) => item.id)) };
+			return;
+		}
+		const previous = seenCloudIds.current.ids;
+		for (const notification of cloudItems) {
+			if (previous.has(notification.id)) continue;
+			previous.add(notification.id);
+			if (previous.size > 512) previous.delete(previous.values().next().value!);
+			if (notification.status !== "unread" || notification.resolvedAt) continue;
+			const id = `${CLOUD_NOTIFICATION_PREFIX}${notification.id}`;
+			shownCloudNotifications.current.set(id, notification);
+			if (shownCloudNotifications.current.size > 256) {
+				shownCloudNotifications.current.delete(shownCloudNotifications.current.keys().next().value!);
+			}
+			const { hostId, sessionId } = routeRef.current;
+			const watched = notification.type === "needs_input" && !hostId && Boolean(sessionId) &&
+				sessionId === notification.sessionId && document.visibilityState === "visible" && document.hasFocus() &&
+				useUiStore.getState().visibleTerminalKindBySession[sessionUiKey(sessionId!)] === "worker";
+			void aoBridge.notifications.show({
+				id,
+				title: notification.title,
+				body: notification.body || undefined,
+				type: notification.type,
+				watched,
+			});
+		}
+	}, [cloudItems, cloudScope]);
+
 	useEffect(() => {
 		return aoBridge.notifications.onClick((id) => {
+			if (id.startsWith(CLOUD_NOTIFICATION_PREFIX)) {
+				const notificationId = id.slice(CLOUD_NOTIFICATION_PREFIX.length);
+				const notification = shownCloudNotifications.current.get(id) ??
+					cloudItemsRef.current.find((item) => item.id === notificationId);
+				if (notification?.sessionId && notification.projectId) {
+					recordManualWorkerOpen(notification.sessionId);
+					void captureRendererEvent("ao.notifications.opened", { target: "session" });
+					navigateToSession(notification.projectId, notification.sessionId);
+				}
+				return;
+			}
 			if (id.startsWith(REMOTE_NOTIFICATION_PREFIX)) {
 				try {
 					const { host, id: notificationId } = parseRefKey(id.slice(REMOTE_NOTIFICATION_PREFIX.length));
@@ -273,7 +336,7 @@ export function NotificationRuntime() {
 			);
 			if (notification) openPrimary(notification);
 		});
-	}, [openPrimary, queryClient]);
+	}, [navigateToSession, openPrimary, queryClient]);
 
 	return null;
 }
