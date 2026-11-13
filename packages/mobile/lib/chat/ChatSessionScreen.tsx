@@ -57,6 +57,7 @@ import { useSessionPreview } from "../session/useSessionPreview";
 import { toolbarIcon } from "../toolbarIcon";
 import { useChatViewLease } from "./useChatViewLease";
 import { useOpenPage } from "../pageNavigation";
+import { usePushSettled } from "../usePushSettled";
 import { usePRSummaries } from "../usePRSummaries";
 import { reviewRouteForPR, reviewRouteForSession, sessionPRReadyForReview } from "../reviewView";
 import { space } from "../tokens";
@@ -108,6 +109,10 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	// The board's row, with its provisioning facts re-read every second while it starts.
 	const session = useStartupSession(config, boardSession);
 	const conversation = useMobileConversation(config, machine, session.id);
+	// See `awaitingConversation`: only a conversation the page opened without is held.
+	const pushSettled = usePushSettled();
+	const [openedWithSnapshot] = useState(() => Boolean(conversation.snapshot));
+	const holdArrivingSnapshot = !pushSettled && !openedWithSnapshot && Boolean(conversation.snapshot);
 	// Opening a hibernated chat wakes it, and only the lease request says when.
 	// The catalog is asked for again too if it has none of its own yet: a page
 	// cached as ready loads it before the wake, and that load can fail unseen.
@@ -693,10 +698,15 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		return <Failure><EmptyState icon="warning" iconColor={t.red} title="Session failed to start" message={failedStart} action={<Button title="Retry" icon="refresh" loading={resuming} onPress={() => void resume()} />} /></Failure>;
 	}
 	// A session that is still starting shows its checklist straight away rather than a bare spinner.
-	if (conversation.loading && !conversation.snapshot && startupView && !startupView.failed) {
+	// A conversation that arrives while the page is still sliding in waits for
+	// the slide to finish: mounting the timeline mid-push stalled the UI thread
+	// for hundreds of milliseconds, so the slide froze and then jumped to its
+	// end. One already cached renders with the page, before the slide starts.
+	const awaitingConversation = (conversation.loading && !conversation.snapshot) || holdArrivingSnapshot;
+	if (awaitingConversation && startupView && !startupView.failed) {
 		return <View style={[styles.startupLoading, { paddingTop: space.md + headerOverlap }]}><SessionStartupStatus startup={startupView} /></View>;
 	}
-	if (conversation.loading && !conversation.snapshot) return <View style={[styles.center, { paddingTop: headerOverlap }]}><EmptyState busy title="Loading conversation…" /></View>;
+	if (awaitingConversation) return <View style={[styles.center, { paddingTop: headerOverlap }]}><EmptyState busy title="Loading conversation…" /></View>;
 	if (conversation.unavailable) {
 		return <Failure>
 			<EmptyState
