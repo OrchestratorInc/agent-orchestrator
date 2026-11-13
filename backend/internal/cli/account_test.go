@@ -41,6 +41,11 @@ func newAccountServer(t *testing.T, final string) (*httptest.Server, *accountSer
 			_, _ = io.WriteString(w, accounts)
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/agents/accounts/work/default":
 			_, _ = io.WriteString(w, accounts)
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/sessions/demo-1":
+			_, _ = io.WriteString(w, `{"session":`+sessionJSON("demo-1", "demo", "worker", "idle", false)+`}`)
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/sessions/ghost":
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = io.WriteString(w, `{"error":"not_found","code":"SESSION_NOT_FOUND","message":"Unknown session"}`)
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/agents/accounts/sessions/demo-1":
 			_, _ = io.WriteString(w, `{"claude":"work","codex":"device-codex"}`)
 		case r.Method == http.MethodPut && r.URL.Path == "/api/v1/agents/accounts/sessions/demo-1":
@@ -125,6 +130,19 @@ func TestAccountShowDefaultsToThisSession(t *testing.T) {
 	}
 	if out != "claude-code: work\ncodex: device-codex\n" {
 		t.Fatalf("unexpected output:\n%q", out)
+	}
+}
+
+func TestAccountShowRefusesUnknownSession(t *testing.T) {
+	out, state, err := runAccountCLI(t, "completed", "account", "show", "ghost", "--json")
+	if err == nil || !strings.Contains(err.Error(), "Unknown session") {
+		t.Fatalf("account show ghost: err = %v, out = %q", err, out)
+	}
+	if out != "" {
+		t.Fatalf("printed accounts for an unknown session: %q", out)
+	}
+	if want := []string{"GET /api/v1/sessions/ghost"}; !reflect.DeepEqual(state.requests, want) {
+		t.Fatalf("requests = %#v, want %#v", state.requests, want)
 	}
 }
 

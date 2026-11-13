@@ -200,6 +200,9 @@ func newAccountShowCommand(ctx *commandContext) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if _, err := ctx.fetchScopedSession(cmd.Context(), sessionID, ""); err != nil {
+				return err
+			}
 			var res sessionAgentAccounts
 			if err := ctx.getJSON(cmd.Context(), "agents/accounts/sessions/"+url.PathEscape(sessionID), &res); err != nil {
 				return err
