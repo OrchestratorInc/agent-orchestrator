@@ -162,6 +162,24 @@ describe("TurnChangedFiles", () => {
 		expect(onOpenFile).toHaveBeenCalledWith("src/a.ts");
 	});
 
+	it("lets a keyboard user reach an outside file's path", async () => {
+		const memory = "/Users/me/.claude/projects/demo/memory/rate-limiting-deferred.md";
+		render(
+			<TurnChangedFiles
+				diff={diff({ files: [{ path: memory, additions: 11, deletions: 0, status: "added", outsideWorkspace: true }] })}
+				onOpenFile={vi.fn()}
+			/>,
+		);
+		await userEvent.tab();
+		expect(screen.getByText("rate-limiting-deferred.md")).toHaveFocus();
+		expect(await screen.findByRole("tooltip")).toHaveTextContent("~/.claude/projects/demo/memory/rate-limiting-deferred.md");
+	});
+
+	it("adds no tab stop to a file label that is not outside the workspace", () => {
+		render(<TurnChangedFiles diff={diff()} />);
+		expect(screen.getByText("a.ts")).not.toHaveAttribute("tabindex");
+	});
+
 	it("shows the full path on basename hover", async () => {
 		const user = userEvent.setup();
 		render(<TurnChangedFiles diff={diff()} />);

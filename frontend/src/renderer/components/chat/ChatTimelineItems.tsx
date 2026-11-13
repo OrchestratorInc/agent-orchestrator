@@ -4081,6 +4081,7 @@ export function TurnChangedFiles({
 										locationPath={tooltipPath}
 										locationOldPath={tooltipOldPath}
 										className="min-w-0 flex-1 truncate text-xs text-foreground/80"
+										focusable={file.outsideWorkspace}
 									/>
 									{file.outsideWorkspace ? (
 										<span className="shrink-0 text-caption text-passive">Outside workspace</span>
@@ -4137,6 +4138,7 @@ function FileLocationLabel({
 	locationPath,
 	locationOldPath,
 	className,
+	focusable = false,
 }: {
 	path: string;
 	oldPath?: string;
@@ -4144,6 +4146,11 @@ function FileLocationLabel({
 	locationPath?: string;
 	locationOldPath?: string;
 	className?: string;
+	/**
+	 * Gives the label its own tab stop, for a row with no button of its own,
+	 * so a keyboard user can still reach the path in its tooltip.
+	 */
+	focusable?: boolean;
 }) {
 	const location = fileLocationLabel(locationPath ?? path, locationOldPath ?? oldPath);
 
@@ -4155,8 +4162,10 @@ function FileLocationLabel({
 				<span
 					className={cn(
 						"min-w-0 truncate text-xs text-foreground/65 outline-none",
+						focusable && "rounded-sm focus-visible:ring-1 focus-visible:ring-ring",
 						className,
 					)}
+					tabIndex={focusable ? 0 : undefined}
 					title=""
 				>
 					{fileBasename(path)}
