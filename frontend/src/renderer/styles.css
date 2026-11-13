@@ -2154,6 +2154,28 @@ textarea,
 	to { background-position: 110% center, 0 0; }
 }
 
+/* A link's globe while its site icon loads: a brighter band sweeps across the
+   dimmed glyph, as the working shimmer does across text. Masked, since a
+   stroked SVG has no text to clip a gradient to. */
+.link-favicon-shimmer {
+	mask-image: linear-gradient(100deg, rgb(0 0 0 / 0.5) 35%, #000 50%, rgb(0 0 0 / 0.5) 65%);
+	mask-size: 250% 100%;
+	mask-repeat: no-repeat;
+	animation: link-favicon-shimmer 1.6s ease-in-out infinite;
+}
+
+@keyframes link-favicon-shimmer {
+	from { mask-position: 100% 0; }
+	to { mask-position: 0% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.link-favicon-shimmer {
+		animation: none;
+		mask-image: none;
+	}
+}
+
 @media (prefers-reduced-motion: reduce) {
 	.chat-working-shimmer {
 		animation: none;

@@ -105,6 +105,11 @@ type Service struct {
 	autoResumeInFlight    map[string]bool
 	autoResumeScanning    bool
 	usageLimitAccounts    usageLimitAccountReader
+	handoffMu             sync.Mutex
+	handoff               accountHandoffDeps
+	handoffSince          time.Time
+	handoffScanning       bool
+	handoffs              map[string]*accountHandoff
 	// updateStops are sessions stopped so an update could replace their
 	// executable; the update starts them again, so their queue is kept.
 	updateStops map[domain.SessionID]bool

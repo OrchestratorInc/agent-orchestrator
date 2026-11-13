@@ -182,6 +182,40 @@ export async function sendConversationMessage(
 	return (await res.json()) as SendMessageResult;
 }
 
+/** Which agent the next message switches to, and on which model. */
+export type ProviderSwitchInput = { targetHarness: string; model?: string };
+
+/**
+ * Switch the chat's agent and send the message to the new one, in one request
+ * (desktop's send with a pending switch). The send's own id is the switch's
+ * idempotency key, so a retried send cannot switch twice.
+ */
+export async function switchProviderAndSend(
+	cfg: ServerConfig,
+	sessionId: string,
+	providerSwitch: ProviderSwitchInput,
+	message: SendMessageInput,
+): Promise<SendMessageResult> {
+	if (message.excerpts?.length) await requireConversationExcerptSupport(cfg, sessionId);
+	const res = await apiRequest(cfg, `${API}/sessions/${encodeURIComponent(sessionId)}/provider-switch`, {
+		method: "POST",
+		headers: message.attachments?.length ? { "X-AO-Attachment-Upload": "1" } : undefined,
+		body: JSON.stringify({
+			targetHarness: providerSwitch.targetHarness,
+			...(providerSwitch.model ? { model: providerSwitch.model } : {}),
+			idempotencyKey: message.clientMessageId,
+			message,
+		}),
+	}, message.attachments?.length ? ATTACHMENT_REQUEST_TIMEOUT_MS : undefined);
+	const data = (await res.json()) as { message?: SendMessageResult };
+	return data.message ?? { duplicate: true };
+}
+
+/** Starts the agent's first-run chat check early, so a switch's send does not wait on it. */
+export async function prewarmChatAgent(cfg: ServerConfig, agent: string): Promise<void> {
+	await apiRequest(cfg, `${API}/agents/${encodeURIComponent(agent)}/chat/prewarm`, { method: "POST" });
+}
+
 export async function sendReviewerConversationMessage(
 	cfg: ServerConfig,
 	reviewId: string,

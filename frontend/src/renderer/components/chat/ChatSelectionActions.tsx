@@ -1,4 +1,6 @@
 import { isMacPlatform } from "../../lib/platform";
+import { effectiveShortcutBindings, matchesAppShortcut, shortcutBindingLabel } from "../../../shared/shortcuts";
+import { useKeybindingsStore } from "../../stores/keybindings-store";
 import { isDialogOrMenuOpen } from "../../lib/dom-selectors";
 import { useLatestCallback } from "../../hooks/useStable";
 import { useEffect, useLayoutEffect, useRef, useState, type MutableRefObject, type RefObject } from "react";
@@ -43,6 +45,9 @@ export function ChatSelectionActions({
 	commentRef?: MutableRefObject<string>;
 }) {
 	const { t } = useTranslation();
+	const overrides = useKeybindingsStore((state) => state.overrides);
+	const shortcutHint = effectiveShortcutBindings("add-selection-to-chat", isMacPlatform(), overrides)
+		.map((binding) => shortcutBindingLabel(binding, isMacPlatform())).join(" / ");
 	const translateDraft = useChatDraftTranslation();
 	const editing = Boolean(onRemove);
 	const buttonRef = useRef<HTMLDivElement>(null);
@@ -117,10 +122,12 @@ export function ChatSelectionActions({
 	useEffect(() => {
 		if (!position?.visible) return;
 		const onKeyDown = (event: KeyboardEvent) => {
-			if (event.defaultPrevented || event.altKey || isDialogOrMenuOpen()) return;
-			const shortcut = event.key.toLowerCase() === "l" && !event.shiftKey &&
-				(isMacPlatform() ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey);
-			const typing = event.key.length === 1 && event.key !== " " && !event.metaKey && !event.ctrlKey && !event.isComposing;
+			if (event.defaultPrevented || event.isComposing || isDialogOrMenuOpen()) return;
+			const shortcut = matchesAppShortcut("add-selection-to-chat", {
+				key: event.key, code: event.code, ctrl: event.ctrlKey,
+				meta: event.metaKey, shift: event.shiftKey, alt: event.altKey,
+			}, isMacPlatform(), useKeybindingsStore.getState().overrides);
+			const typing = event.key.length === 1 && event.key !== " " && !event.metaKey && !event.ctrlKey && !event.altKey;
 			if (!shortcut && !typing) return;
 			const toolbar = buttonRef.current;
 			const origin = event.composedPath()[0];
@@ -146,7 +153,7 @@ export function ChatSelectionActions({
 				!selectionRangesEqual(native.getRangeAt(0), saved)
 			)
 				return;
-			if (typing) {
+			if (typing && !shortcut) {
 				textareaRef.current?.focus({ preventScroll: true });
 				return;
 			}
@@ -240,7 +247,7 @@ export function ChatSelectionActions({
 							<Check aria-hidden="true" className="size-3.5" />
 						</Button>
 					</TooltipTrigger>
-					<TooltipContent side="top">{editing ? addLabel : `${addLabel} (${isMacPlatform() ? "⌘L" : "Ctrl+L"})`}</TooltipContent>
+					<TooltipContent side="top">{editing ? addLabel : `${addLabel}${shortcutHint ? ` (${shortcutHint})` : ""}`}</TooltipContent>
 				</Tooltip>
 				{error ? (
 					<span

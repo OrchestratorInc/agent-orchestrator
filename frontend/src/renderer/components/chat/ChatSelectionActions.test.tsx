@@ -1,10 +1,22 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
 import { ChatSelectionActions } from "./ChatSelectionActions";
 import { appI18n } from "../../i18n/instance";
+import { useKeybindingsStore } from "../../stores/keybindings-store";
+import { isMacPlatform } from "../../lib/platform";
 
 vi.mock("../../hooks/useChatSelectionPosition", () => ({ useChatSelectionPosition: () => ({ left: 8, top: 8, visible: true }) }));
+vi.mock("../../lib/platform", () => ({ isMacPlatform: vi.fn(() => false) }));
+
+beforeEach(() => {
+	useKeybindingsStore.setState({ overrides: {} });
+	vi.mocked(isMacPlatform).mockReturnValue(false);
+});
+afterEach(() => {
+	window.getSelection()?.removeAllRanges();
+	document.querySelectorAll("[data-test-chat-selection]").forEach(element => element.remove());
+});
 
 function setup() {
 	const range = document.createRange();
@@ -13,6 +25,37 @@ function setup() {
 }
 
 describe("chat selection actions", () => {
+	it.each([false, true])("uses live bindings and hints, including unassign and reset (Mac: %s)", async (isMac) => {
+		vi.mocked(isMacPlatform).mockReturnValue(isMac);
+		const props = setup();
+		const viewport = document.createElement("div");
+		viewport.dataset.testChatSelection = ""; viewport.textContent = "selected chat text";
+		document.body.append(viewport);
+		props.selection.range.selectNodeContents(viewport);
+		window.getSelection()!.addRange(props.selection.range);
+		render(<ChatSelectionActions {...props} viewportRef={{ current: viewport }} />);
+		const button = screen.getByRole("button", { name: "Add to chat" });
+		act(() => button.focus());
+		window.getSelection()!.removeAllRanges(); window.getSelection()!.addRange(props.selection.range);
+		const hint = () => screen.getByRole("tooltip").textContent;
+		expect(hint()).toBe(isMac ? "Add to chat (⌘L)" : "Add to chat (Ctrl+L)");
+		const primary = { ctrlKey: !isMac, metaKey: isMac };
+		await act(async () => { expect(fireEvent.keyDown(viewport, { key: "l", ...primary })).toBe(false); });
+		expect(props.onAdd).toHaveBeenCalledTimes(1);
+		act(() => useKeybindingsStore.setState({ overrides: { "add-selection-to-chat": [{ key: "j", ctrl: !isMac, meta: isMac, shift: true, alt: true }] } }));
+		expect(hint()).toBe(isMac ? "Add to chat (⌥⇧⌘J)" : "Add to chat (Ctrl+Alt+Shift+J)");
+		expect(fireEvent.keyDown(viewport, { key: "l", ...primary })).toBe(true);
+		expect(fireEvent.keyDown(viewport, { key: "j", ...primary, shiftKey: true, altKey: true, isComposing: true })).toBe(true);
+		await act(async () => { expect(fireEvent.keyDown(viewport, { key: "j", ...primary, shiftKey: true, altKey: true })).toBe(false); });
+		expect(props.onAdd).toHaveBeenCalledTimes(2);
+		act(() => useKeybindingsStore.setState({ overrides: { "add-selection-to-chat": [] } }));
+		expect(hint()).toBe("Add to chat");
+		expect(fireEvent.keyDown(viewport, { key: "l", ...primary })).toBe(true);
+		expect(fireEvent.keyDown(viewport, { key: "j", ...primary, shiftKey: true, altKey: true })).toBe(true);
+		act(() => useKeybindingsStore.setState({ overrides: {} }));
+		await act(async () => { expect(fireEvent.keyDown(viewport, { key: "l", ...primary })).toBe(false); });
+		expect(props.onAdd).toHaveBeenCalledTimes(3);
+	});
 	it("translates excerpt errors without dismissing the selected text", async () => {
 		const props = setup();
 		props.onAdd.mockRejectedValue(new Error("chat.draft.excerptTextLimit"));

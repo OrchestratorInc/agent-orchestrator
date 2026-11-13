@@ -55,6 +55,7 @@ import {
 import { Box, Image as ImageIcon } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
+import { createDraftFaviconWarmer } from "../../lib/link-preload";
 import { composerFileIcon } from "./composerFileIcon";
 import { findActiveTrigger, type TriggerKind } from "./composerSuggest";
 import { listBackspace, listEnter, listIndent, type LinePrefixEdit } from "./composerLists";
@@ -628,6 +629,17 @@ const EditorBridge = forwardRef<
 	const dictation = useRef<{ anchor: NodeKey; keys: NodeKey[]; prefix: string; settled: number } | null>(null);
 
 	useEffect(() => editor.setEditable(!disabled), [disabled, editor]);
+
+	// Links typed or pasted here load their site icons before they are sent.
+	useEffect(() => {
+		const warmer = createDraftFaviconWarmer();
+		warmer.update(editor.getEditorState().read(() => $getRoot().getTextContent()));
+		const unregister = editor.registerTextContentListener((text) => warmer.update(text));
+		return () => {
+			unregister();
+			warmer.dispose();
+		};
+	}, [editor]);
 
 	useImperativeHandle(
 		ref,

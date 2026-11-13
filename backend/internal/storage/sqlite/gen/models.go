@@ -186,6 +186,7 @@ type AppSetting struct {
 	VersionRefresh       bool
 	ComputerUse          bool
 	SessionRetentionDays int64
+	AccountHandoff       bool
 	LimitHistory         bool
 }
 
@@ -797,6 +798,10 @@ type Session struct {
 	TerminatedAt                     sql.NullTime
 	ImportSource                     string
 	DisplayNameExplicit              bool
+}
+
+type SessionAccountPin struct {
+	SessionID string
 }
 
 type SessionAgentAccount struct {

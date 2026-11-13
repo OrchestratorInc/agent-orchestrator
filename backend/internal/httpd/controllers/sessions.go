@@ -3040,6 +3040,7 @@ func sessionArtifactFiles(r *http.Request, s domain.Session) []SessionArtifactVi
 			Size:          artifact.Size,
 			UpdatedAt:     artifact.UpdatedAt,
 			ShareURL:      artifact.ShareURL,
+			ShareAccess:   artifact.ShareAccess,
 			Registered:    artifact.Registered,
 			PreviousPaths: artifact.PreviousPaths,
 		}
