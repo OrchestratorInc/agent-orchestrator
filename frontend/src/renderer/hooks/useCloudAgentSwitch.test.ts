@@ -8,6 +8,11 @@ const mocks = vi.hoisted(() => ({
 	start: vi.fn(),
 	transition: undefined as unknown,
 	starting: false,
+	latest: { activityState: "idle", status: "idle" } as { activityState: string; status: string },
+}));
+
+vi.mock("./useCloudCp", () => ({
+	useCloudCp: () => ({ client: { getSession: vi.fn(async () => ({ session: mocks.latest })) } }),
 }));
 
 vi.mock("./useCloudOffering", () => ({
@@ -36,6 +41,7 @@ describe("useCloudAgentSwitch", () => {
 		mocks.start.mockReset().mockResolvedValue({});
 		mocks.transition = undefined;
 		mocks.starting = false;
+		mocks.latest = { activityState: "idle", status: "idle" };
 	});
 
 	it("offers agents the control plane can switch to and the person is signed in to, with a Chat in Chat", () => {
@@ -54,10 +60,20 @@ describe("useCloudAgentSwitch", () => {
 		expect(renderHook(() => useCloudAgentSwitch(undefined)).result.current.available).toBe(false);
 	});
 
-	it("starts the switch in the session's interface with the picked model and effort", async () => {
-		const { result } = renderHook(() => useCloudAgentSwitch({ ...session, mode: "tui" }));
+	it("starts the switch in the session's interface with the picked model and effort, draining Chat", async () => {
+		const { result } = renderHook(() => useCloudAgentSwitch(session));
 		await result.current.start({ harness: "claude-code", model: "claude-opus-4-5", shownEffort: "high" });
-		expect(mocks.start).toHaveBeenCalledWith({ targetMode: "tui", policy: "drain", targetHarness: "claude-code", model: "claude-opus-4-5", reasoningEffort: "high" });
+		expect(mocks.start).toHaveBeenCalledWith({ targetMode: "chat", policy: "drain", targetHarness: "claude-code", model: "claude-opus-4-5", reasoningEffort: "high" });
+	});
+
+	it("stops an idle terminal directly, which cannot prove it is idle, and refuses while its agent works", async () => {
+		const { result } = renderHook(() => useCloudAgentSwitch({ ...session, mode: "tui" }));
+		await result.current.start({ harness: "claude-code" });
+		expect(mocks.start).toHaveBeenCalledWith({ targetMode: "tui", policy: "interrupt", targetHarness: "claude-code" });
+		mocks.start.mockClear();
+		mocks.latest = { activityState: "active", status: "working" };
+		await expect(result.current.start({ harness: "claude-code" })).rejects.toThrow("The agent is working");
+		expect(mocks.start).not.toHaveBeenCalled();
 	});
 
 	it("reports a running agent switch, not an interface switch", () => {

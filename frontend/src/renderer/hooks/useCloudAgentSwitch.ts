@@ -1,8 +1,10 @@
 import { useMemo } from "react";
 import { switchEffort, type PendingAgentSwitch } from "../components/chat/AgentSwitchPicker";
+import { appI18n } from "../i18n";
 import { agentLabel } from "../lib/agent-options";
 import { isCloudHarnessConnected } from "../lib/cloud-agents";
 import type { WorkspaceSession } from "../types/workspace";
+import { useCloudCp } from "./useCloudCp";
 import { useCloudOffering } from "./useCloudOffering";
 import { useProviderConnections } from "./useProviderConnections";
 import { interfaceTransitionIsActive, useSessionInterfaceTransition } from "./useSessionInterfaceTransition";
@@ -23,14 +25,18 @@ export function agentSwitchTarget(transition: unknown): string | undefined {
  * Chat offers only those with a Chat, and only agents the person is signed in
  * to, as the new task composer does. The switch keeps the session's interface,
  * and its progress, held messages and failure notice are the interface
- * transition's.
+ * transition's. Chat drains its agent first. A terminal cannot prove it is
+ * idle, so a drain would wait out its window and fail: as a switch from a
+ * Cloud terminal to Chat does, the switch reads the agent's latest activity
+ * and stops an idle terminal directly, and refuses while the agent works.
  */
 export function useCloudAgentSwitch(session: WorkspaceSession | undefined) {
 	const orgId = session?.cloud?.orgId;
+	const { client } = useCloudCp(Boolean(orgId));
 	const offering = useCloudOffering(Boolean(orgId), orgId);
 	const connections = useProviderConnections(Boolean(orgId)).data;
 	const transitions = useSessionInterfaceTransition(orgId ? session?.id : undefined, orgId ? { orgId } : undefined);
-	const mode = session?.mode === "chat" ? "chat" : "tui";
+	const mode: "chat" | "tui" = session?.mode === "chat" ? "chat" : "tui";
 	const provider = session?.provider;
 	// A test's offering (or a partial one) may leave the lists out: none can switch.
 	const agentSwitchHarnesses = offering.agentSwitchHarnesses ?? [];
@@ -54,12 +60,20 @@ export function useCloudAgentSwitch(session: WorkspaceSession | undefined) {
 		switching,
 		/** The agent switch running now, for the transcript's "Switching" line. */
 		running,
-		start: (pick: PendingAgentSwitch) => transitions.start({
-			targetMode: mode,
-			policy: "drain",
-			targetHarness: pick.harness,
-			...(pick.model ? { model: pick.model } : {}),
-			...(switchEffort(pick) ? { reasoningEffort: switchEffort(pick) } : {}),
-		}),
+		start: async (pick: PendingAgentSwitch) => {
+			const target = {
+				targetMode: mode,
+				targetHarness: pick.harness,
+				...(pick.model ? { model: pick.model } : {}),
+				...(switchEffort(pick) ? { reasoningEffort: switchEffort(pick) } : {}),
+			};
+			if (mode === "chat" || !orgId || !session) return transitions.start({ ...target, policy: "drain" });
+			const { session: latest } = await client.getSession(orgId, session.id);
+			if (["active", "waiting_input", "blocked"].includes(latest.activityState) ||
+				latest.status === "working" || latest.status === "needs_input") {
+				throw new Error(appI18n.t("agentSwitch.busy"));
+			}
+			return transitions.start({ ...target, policy: "interrupt" });
+		},
 	};
 }
