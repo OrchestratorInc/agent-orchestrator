@@ -415,8 +415,9 @@ func TestACPRelayStallWatchdogEndsTheTurnOnItsOwnPrompt(t *testing.T) {
 }
 
 // When the turn's own prompt has answered and only a running command is left,
-// a watchdog whose cancel is ignored fails the command and then settles the
-// turn with the answer it held.
+// a watchdog whose cancel is ignored fails the command and then the turn. The
+// held success would release the queue into a wedged adapter, so it becomes a
+// failure, without the stall marker.
 func TestACPRelayStallWatchdogSettlesAHeldResultWhenTheCancelIsIgnored(t *testing.T) {
 	relay, root := startStallTestPrompt(t)
 	relayClientFrame(t, relay, []byte(stalledSteerCommand), 1)
@@ -429,8 +430,9 @@ func TestACPRelayStallWatchdogSettlesAHeldResultWhenTheCancelIsIgnored(t *testin
 	frames := failStalled(t, relay, 1, stalledAt.Add(promptStallCancelGrace))
 	answers := bytes.SplitAfter(frames.client, []byte{'\n'})
 	if len(answers) != 3 || frameID(t, answers[0]) != "4" || frameID(t, answers[1]) != "3" ||
-		!strings.Contains(string(answers[1]), `"end_turn"`) || strings.Contains(string(frames.client), ACPPromptStalledDataKey) {
-		t.Fatalf("watchdog client frames = %q, want the command's failure, then the held answer without the marker", frames.client)
+		strings.Contains(string(answers[1]), `"end_turn"`) || !strings.Contains(string(answers[1]), "stopped responding") ||
+		!strings.Contains(string(answers[1]), ACPEventIDMetaKey) || strings.Contains(string(frames.client), ACPPromptStalledDataKey) {
+		t.Fatalf("watchdog client frames = %q, want the command's failure, then the turn failed without the marker", frames.client)
 	}
 	if state := relay.snapshot(); state.ActivePrompt || state.PendingResultEventID == "" {
 		t.Fatalf("state after the watchdog = %+v, want the turn settled", state)

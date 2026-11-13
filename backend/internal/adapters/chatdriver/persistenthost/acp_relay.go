@@ -614,6 +614,16 @@ func (r *acpRelay) failStalledPrompt(
 	// first, so the newest failure is the turn's result and no prompt the
 	// controller is waiting on is left unanswered.
 	r.stallCancelledAt = time.Time{}
+	if held := r.heldResult; held != nil {
+		// The turn's own prompt answered, but a steer command ignored the
+		// cancel. A held success would release the queue into a wedged adapter,
+		// so the turn fails like the prompts that are still waiting.
+		failure := map[string]json.RawMessage{}
+		_ = json.Unmarshal(rpcErrorFrame(held.id, -32603, fmt.Sprintf(
+			"provider stopped responding: no ACP output for %s and no answer to the cancel; failing the stalled prompt",
+			promptStallTimeout), nil), &failure)
+		held.envelope = failure
+	}
 	var client []byte
 	for _, providerID := range stalled {
 		failure := rpcErrorFrame(json.RawMessage(providerID), -32603, fmt.Sprintf(
