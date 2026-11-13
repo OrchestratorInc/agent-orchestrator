@@ -118,6 +118,28 @@ func TestACPRelayReclaimsPromptAcrossAttachment(t *testing.T) {
 	}
 }
 
+func TestACPRelayKeepsPromptFramesWhenTheJournalCannotBeWritten(t *testing.T) {
+	relay, _ := startStallTestPrompt(t)
+	if err := relay.promptJournal.file.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	update := []byte(`{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"session-live","update":{"agent_message_chunk":{"content":{"type":"text","text":"attached"}}}}}` + "\n")
+	delivered, retained := relayProviderFrame(t, relay, update, 1, true)
+	if !retained || !strings.Contains(string(delivered), "attached") {
+		t.Fatalf("attached update = retained:%v frame:%s", retained, delivered)
+	}
+	detached := []byte(`{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"session-live","update":{"agent_message_chunk":{"content":{"type":"text","text":"detached"}}}}}` + "\n")
+	if delivered, retained := relayProviderFrame(t, relay, detached, 1, false); !retained || len(delivered) != 0 {
+		t.Fatalf("detached update = retained:%v frame:%s", retained, delivered)
+	}
+
+	replay := relayReplayFrames(t, relay)
+	if len(replay) != 2 || !strings.Contains(string(replay[0]), "attached") || !strings.Contains(string(replay[1]), "detached") {
+		t.Fatalf("replay frames = %q", replay)
+	}
+}
+
 func TestACPRelayTracksActiveCompactionPrompt(t *testing.T) {
 	relay := newTestACPRelay(t)
 
@@ -348,11 +370,7 @@ func relayProviderFrame(
 	attached bool,
 ) ([]byte, bool) {
 	t.Helper()
-	rewritten, retainedByACP, err := relay.providerFrame(context.Background(), frame, generation, attached)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return rewritten, retainedByACP
+	return relay.providerFrame(context.Background(), frame, generation, attached)
 }
 
 func frameID(t *testing.T, frame []byte) string {
@@ -552,9 +570,5 @@ func startStallTestPrompt(t *testing.T) (*acpRelay, string) {
 
 func failStalled(t *testing.T, relay *acpRelay, generation uint64, now time.Time) acpClientFrames {
 	t.Helper()
-	frames, err := relay.failStalledPrompt(context.Background(), generation, true, now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return frames
+	return relay.failStalledPrompt(context.Background(), generation, true, now)
 }

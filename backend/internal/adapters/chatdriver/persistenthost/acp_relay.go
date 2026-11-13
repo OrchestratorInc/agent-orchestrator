@@ -70,9 +70,10 @@ const (
 )
 
 type acpReplayEntry struct {
-	kind acpReplayKind
-	key  string
-	span acpJournalSpan
+	kind  acpReplayKind
+	key   string
+	span  acpJournalSpan
+	frame []byte
 }
 
 type acpClientFrames struct {
@@ -94,6 +95,7 @@ type acpRelay struct {
 	commands          map[string]acpInteractionCommand
 	commandOrder      []string
 	promptReplay      []acpReplayEntry
+	inlineReplayBytes int
 	state             ACPState
 	promptJournal     *acpPromptJournal
 	promptResult      []byte
@@ -181,7 +183,13 @@ func (r *acpRelay) replayTo(ctx context.Context, dst io.Writer) error {
 	for _, entry := range r.promptReplay {
 		switch entry.kind {
 		case acpReplayFrame:
-			if err := r.promptJournal.replayTo(ctx, dst, entry.span); err != nil {
+			var err error
+			if entry.frame != nil {
+				_, err = dst.Write(entry.frame)
+			} else {
+				err = r.promptJournal.replayTo(ctx, dst, entry.span)
+			}
+			if err != nil {
 				return err
 			}
 		case acpReplayRequest:
@@ -271,6 +279,7 @@ func (r *acpRelay) clientFrame(ctx context.Context, frame []byte, generation uin
 			r.commands = make(map[string]acpInteractionCommand)
 			r.commandOrder = nil
 			r.promptReplay = nil
+			r.inlineReplayBytes = 0
 		}
 		return acpClientFrames{}, nil
 	}
@@ -336,6 +345,7 @@ func (r *acpRelay) clientFrame(ctx context.Context, frame []byte, generation uin
 		r.commands = make(map[string]acpInteractionCommand)
 		r.commandOrder = nil
 		r.promptReplay = nil
+		r.inlineReplayBytes = 0
 	}
 	return acpClientFrames{provider: marshalFrame(envelope, frame)}, nil
 }
@@ -412,11 +422,11 @@ func (r *acpRelay) providerFrame(
 	frame []byte,
 	generation uint64,
 	attached bool,
-) ([]byte, bool, error) {
+) ([]byte, bool) {
 	r.lastActivityAt = time.Now()
 	var envelope map[string]json.RawMessage
 	if json.Unmarshal(frame, &envelope) != nil {
-		return frame, false, nil //nolint:nilerr // preserve malformed output for the SDK's protocol error
+		return frame, false
 	}
 	var method string
 	_ = json.Unmarshal(envelope["method"], &method)
@@ -428,36 +438,32 @@ func (r *acpRelay) providerFrame(
 			if created && r.state.ActivePrompt {
 				r.promptReplay = append(r.promptReplay, acpReplayEntry{kind: acpReplayRequest, key: key})
 			}
-			return rewritten, true, nil
+			return rewritten, true
 		}
 		r.captureAvailableCommands(method, envelope["params"])
 		if r.state.ActivePrompt {
 			eventID := r.newEventID()
 			injectMeta(envelope, ACPEventIDMetaKey, eventID)
 			rewritten := marshalFrame(envelope, frame)
-			span, err := r.promptJournal.append(ctx, rewritten)
-			if err != nil {
-				return nil, false, err
-			}
-			r.promptReplay = append(r.promptReplay, acpReplayEntry{kind: acpReplayFrame, span: span})
+			r.retainPromptFrame(ctx, rewritten)
 			if !attached {
-				return nil, true, nil
+				return nil, true
 			}
-			return rewritten, true, nil
+			return rewritten, true
 		}
-		return frame, false, nil
+		return frame, false
 	}
 	if len(id) == 0 {
-		return frame, false, nil
+		return frame, false
 	}
 	if _, ok := r.abandonedPrompts[string(id)]; ok {
 		delete(r.abandonedPrompts, string(id))
-		return nil, false, nil
+		return nil, false
 	}
 
 	request, ok := r.pending[string(id)]
 	if !ok {
-		return frame, false, nil
+		return frame, false
 	}
 	delete(r.pending, string(id))
 	r.captureResponse(request, envelope)
@@ -471,27 +477,27 @@ func (r *acpRelay) providerFrame(
 		}
 		held := r.heldResult
 		if held == nil || r.pendingSteerCommand() {
-			return answer, false, nil
+			return answer, false
 		}
 		// The turn's own prompt answered while this command still ran, so its
 		// answer waited for this one and settles the turn now.
 		r.heldResult = nil
-		result, retained, err := r.settleTurn(held.id, held.request, held.envelope, held.frame, generation, attached)
-		return append(answer, result...), retained, err
+		result, retained := r.settleTurn(held.id, held.request, held.envelope, held.frame, generation, attached)
+		return append(answer, result...), retained
 	}
 	if request.method == "session/prompt" && r.newestPendingPrompt() != "" {
 		// Another prompt of the turn still runs, so this answer is a handoff or a
 		// refused steer prompt: the turn goes on, and its result is the answer of
 		// the last prompt to return.
 		if !attached {
-			return nil, false, nil
+			return nil, false
 		}
 		if request.generation != generation {
 			// A prompt the previous attachment sent. The reattached controller
 			// adopted its turn and learns of the handoff this way.
-			return promptAnswerNotification(ACPPromptHandoffMethod, envelope, ""), false, nil
+			return promptAnswerNotification(ACPPromptHandoffMethod, envelope, ""), false
 		}
-		return rewriteResponseID(envelope, request.clientID, frame), false, nil
+		return rewriteResponseID(envelope, request.clientID, frame), false
 	}
 	if request.method == "session/prompt" && r.pendingSteerCommand() {
 		// A steer command is still running. Hermes runs the guidance inside its
@@ -499,15 +505,28 @@ func (r *acpRelay) providerFrame(
 		// ("No active turn"), so the turn stays open until the command answers:
 		// its output belongs to this turn, and the agent is not idle yet.
 		r.heldResult = &acpHeldResult{id: id, request: request, envelope: envelope, frame: frame}
-		return nil, false, nil
+		return nil, false
 	}
 	if request.method == "session/prompt" {
 		return r.settleTurn(id, request, envelope, frame, generation, attached)
 	}
 	if request.generation != generation || !attached {
-		return nil, false, nil
+		return nil, false
 	}
-	return rewriteResponseID(envelope, request.clientID, frame), false, nil
+	return rewriteResponseID(envelope, request.clientID, frame), false
+}
+
+func (r *acpRelay) retainPromptFrame(ctx context.Context, frame []byte) {
+	span, err := r.promptJournal.append(ctx, frame)
+	if err == nil {
+		r.promptReplay = append(r.promptReplay, acpReplayEntry{kind: acpReplayFrame, span: span})
+		return
+	}
+	if r.inlineReplayBytes+len(frame) > maxDetachedBytes {
+		return
+	}
+	r.inlineReplayBytes += len(frame)
+	r.promptReplay = append(r.promptReplay, acpReplayEntry{kind: acpReplayFrame, frame: frame})
 }
 
 // settleTurn ends the running turn with the answer to one of its own prompts:
@@ -520,7 +539,7 @@ func (r *acpRelay) settleTurn(
 	frame []byte,
 	generation uint64,
 	attached bool,
-) ([]byte, bool, error) {
+) ([]byte, bool) {
 	if !r.stallCancelledAt.IsZero() {
 		// The adapter has answered the last prompt of the turn the watchdog
 		// cancelled. Whatever it says, the turn ended because the adapter went
@@ -540,12 +559,12 @@ func (r *acpRelay) settleTurn(
 	r.promptResult = promptResultNotification(envelope, eventID)
 	r.state.PendingResultEventID = eventID
 	if !attached {
-		return nil, true, nil
+		return nil, true
 	}
 	if request.generation != generation {
-		return append([]byte(nil), r.promptResult...), true, nil
+		return append([]byte(nil), r.promptResult...), true
 	}
-	return rewritten, true, nil
+	return rewritten, true
 }
 
 // pendingSteerCommand reports whether a steer command (keepsTurn) is still
@@ -585,27 +604,27 @@ func (r *acpRelay) failStalledPrompt(
 	generation uint64,
 	attached bool,
 	now time.Time,
-) (acpClientFrames, error) {
+) acpClientFrames {
 	if !r.state.ActivePrompt {
-		return acpClientFrames{}, nil
+		return acpClientFrames{}
 	}
 	cancelling := !r.stallCancelledAt.IsZero()
 	if !cancelling && (len(r.serverRequests) > 0 || now.Sub(r.lastActivityAt) < promptStallTimeout) {
-		return acpClientFrames{}, nil
+		return acpClientFrames{}
 	}
 	if cancelling && now.Sub(r.stallCancelledAt) < promptStallCancelGrace {
-		return acpClientFrames{}, nil
+		return acpClientFrames{}
 	}
 	stalled, sessionParams := r.pendingPrompts()
 	if len(stalled) == 0 {
-		return acpClientFrames{}, nil
+		return acpClientFrames{}
 	}
 	if !cancelling {
 		r.stallCancelledAt = now
 		cancel := marshalFrame(map[string]json.RawMessage{
 			"jsonrpc": json.RawMessage(`"2.0"`), "method": json.RawMessage(`"session/cancel"`), "params": sessionParams,
 		}, nil)
-		return acpClientFrames{provider: cancel}, nil
+		return acpClientFrames{provider: cancel}
 	}
 	// The adapter ignored the cancel. Settle without the stall marker: the
 	// adapter may still emit from the old turn, so the controller must hold its
@@ -629,14 +648,11 @@ func (r *acpRelay) failStalledPrompt(
 		failure := rpcErrorFrame(json.RawMessage(providerID), -32603, fmt.Sprintf(
 			"provider stopped responding: no ACP output for %s and no answer to the cancel; failing the stalled prompt",
 			promptStallTimeout), nil)
-		completion, _, err := r.providerFrame(ctx, failure, generation, attached)
-		if err != nil {
-			return acpClientFrames{}, err
-		}
+		completion, _ := r.providerFrame(ctx, failure, generation, attached)
 		r.abandonedPrompts[providerID] = struct{}{}
 		client = append(client, completion...)
 	}
-	return acpClientFrames{client: client}, nil
+	return acpClientFrames{client: client}
 }
 
 // pendingPrompts returns the provider ids of the session/prompt requests still

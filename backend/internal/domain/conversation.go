@@ -636,6 +636,9 @@ const (
 	ConversationFailureAuthRequired ConversationFailureCode = "auth_required"
 )
 
+// ConversationFailureDiskFull means the agent's process stopped while the disk was nearly full.
+const ConversationFailureDiskFull ConversationFailureCode = "disk_full"
+
 // ConversationTurnDiff is the turn's changed-file summary.
 //
 // Per-turn state rather than a timeline entry: the provider re-sends the whole
