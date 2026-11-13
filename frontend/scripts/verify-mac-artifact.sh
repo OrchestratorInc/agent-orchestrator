@@ -50,6 +50,12 @@
 #      releases is the release conductor's own verifier
 #      (frontend/docs/desktop-release.md).
 #
+#   6. keychain-access-groups (Touch ID passkeys, #6782) is a restricted
+#      entitlement. An app that carries it without an embedded provisioning
+#      profile from the same team is killed before main, yet passes codesign,
+#      spctl and stapler. So the entitlement requires
+#      Contents/embedded.provisionprofile.
+#
 # Exit codes: 0 all checks passed, 1 a check failed, 2 usage error.
 
 set -euo pipefail
@@ -66,6 +72,7 @@ Verifies a macOS release artifact is signed, notarized and stapled:
   spctl -a -vv -t install                               (.pkg)
   xcrun stapler validate
   bundled ACP Node entitlements + JavaScript execution       (.zip / .app)
+  provisioning profile when keychain-access-groups is signed (.zip / .app)
 
 A .zip is extracted with `ditto -x -k` first (never `unzip`), and the single
 .app bundle inside it is checked. A .dmg is checked as the container it is,
@@ -211,6 +218,12 @@ has_acp_node_entitlement() {
 		| grep -Fq "\"$entitlement\" => true"
 }
 
+app_has_keychain_access_groups() {
+	codesign -d --entitlements :- "$APP" 2>/dev/null \
+		| plutil -p - \
+		| grep -Fq '"keychain-access-groups" =>'
+}
+
 # Seal intact. --deep walks nested code (helpers, frameworks, the bundled
 # daemon); --strict rejects the loosened defaults. A .dmg has no nested code for
 # --deep to walk, so the same invocation is correct for both.
@@ -220,6 +233,11 @@ run_check "codesign" codesign --verify --deep --strict --verbose=2 "$APP"
 # valid. A dmg is intentionally not mounted by this verifier (rule 4), so the
 # matching zip/app verification is the place where nested code is checked.
 if [[ "$ARTIFACT" != *.dmg ]]; then
+	# Rule 6: an unprovisioned keychain-access-groups app never launches.
+	if app_has_keychain_access_groups; then
+		run_check "provisioning profile for keychain-access-groups" \
+			test -f "$APP/Contents/embedded.provisionprofile"
+	fi
 	ACP_NODE="$APP/Contents/Resources/acp-runtime/node/bin/node"
 	run_check "ACP Node is bundled" test -x "$ACP_NODE"
 	if [[ -x "$ACP_NODE" ]]; then
