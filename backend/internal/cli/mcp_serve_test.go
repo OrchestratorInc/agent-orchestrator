@@ -39,6 +39,18 @@ func newMCPServeHarness(t *testing.T, email string) *mcpServeHarness {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/projects":
 			_, _ = io.WriteString(w, `{"projects":[{"id":"demo","name":"Demo","kind":"git","path":"/secret/path"}]}`)
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/sessions/demo-1":
+			_, _ = io.WriteString(w, `{"session":{"id":"demo-1","projectId":"demo","kind":"worker","mode":"chat"}}`)
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/sessions/demo-1/conversation":
+			// Two pages: the newest holds a steer, stored as a system activity.
+			if r.URL.Query().Get("beforeSequence") == "20" {
+				_, _ = io.WriteString(w, `{"messages":[{"sequence":10,"role":"user","text":"task"},{"sequence":12,"role":"assistant","text":"on it"}],"hasMoreBefore":false,"oldestSequence":10}`)
+				return
+			}
+			_, _ = io.WriteString(w, `{"messages":[{"sequence":20,"role":"assistant","text":"working"},{"sequence":22,"role":"assistant","text":"STEERED: done"}],`+
+				`"activities":[{"sequence":21,"activityKind":"system","detail":{"event":"steer","text":"change of plan"}},{"sequence":23,"activityKind":"command","detail":{}}],"hasMoreBefore":true,"oldestSequence":20}`)
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/reports":
+			_, _ = io.WriteString(w, `{"reports":[]}`)
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/sessions":
 			body, _ := io.ReadAll(r.Body)
 			hs.mu.Lock()
@@ -253,6 +265,61 @@ func TestMCPServeToolsDeclareEveryAnnotation(t *testing.T) {
 			if _, ok := ann[key]; !ok {
 				t.Errorf("%s lacks %s", tool["name"], key)
 			}
+		}
+	}
+}
+
+func TestMCPServeTranscriptFillsThePageAndShowsSteers(t *testing.T) {
+	hs := newMCPServeHarness(t, "harshit@example.com")
+	res := hs.srv.callTool(t.Context(), "get_transcript", json.RawMessage(`{"agent_id":"demo-1","limit":4}`))
+	raw, _ := json.Marshal(res["structuredContent"])
+	var out struct {
+		Messages []mcpTranscriptItem `json:"messages"`
+		More     bool                `json:"has_more_before"`
+		Oldest   int64               `json:"oldest_sequence"`
+	}
+	_ = json.Unmarshal(raw, &out)
+	var got []string
+	for _, m := range out.Messages {
+		got = append(got, m.Role+":"+m.UntrustedText)
+	}
+	want := "assistant:on it|assistant:working|user:change of plan|assistant:STEERED: done"
+	if strings.Join(got, "|") != want || !out.Messages[2].Steer || !out.More || out.Oldest != 12 {
+		t.Fatalf("transcript = %s", raw)
+	}
+	agent := hs.srv.callTool(t.Context(), "get_agent", json.RawMessage(`{"agent_id":"demo-1"}`))
+	if raw, _ := json.Marshal(agent["structuredContent"]); !strings.Contains(string(raw), `"last_agent_message":{"sequence":22`) {
+		t.Fatalf("get_agent = %s", raw)
+	}
+}
+
+func TestMCPServeRejectsAnUnknownProject(t *testing.T) {
+	hs := newMCPServeHarness(t, "harshit@example.com")
+	for _, call := range []struct{ name, args string }{
+		{"list_agents", `{"project":"demoo"}`},
+		{"create_agent", `{"request_id":"r","project":"demoo","prompt":"x"}`},
+	} {
+		res := hs.srv.callTool(t.Context(), call.name, json.RawMessage(call.args))
+		if raw, _ := json.Marshal(res); res["isError"] != true || !strings.Contains(string(raw), "call list_projects") {
+			t.Fatalf("%s = %s", call.name, raw)
+		}
+	}
+	if len(hs.spawns) != 0 {
+		t.Fatalf("spawned for an unknown project: %v", hs.spawns)
+	}
+}
+
+func TestMCPCleanErrorDropsRequestIDsAndCLIHints(t *testing.T) {
+	for _, tc := range []struct {
+		body apiError
+		want string
+	}{
+		{apiError{Message: "Project x is not registered. Register it with `ao project add`.", Code: "PROJECT_NOT_FOUND", RequestID: "macos-2134.local/abc"}, "Project x is not registered."},
+		{apiError{Message: "bad cursor", Code: "INVALID_SESSION_CURSOR", RequestID: "macos-2134.local/abc"}, "cursor is invalid or expired; call list_agents again without a cursor"},
+		{apiError{RequestID: "macos-2134.local/abc"}, "AO could not complete the request (HTTP 400)"},
+	} {
+		if got := mcpCleanError(apiResponseError{StatusCode: http.StatusBadRequest, ErrorBody: tc.body}).Error(); got != tc.want {
+			t.Errorf("clean(%+v) = %q, want %q", tc.body, got, tc.want)
 		}
 	}
 }

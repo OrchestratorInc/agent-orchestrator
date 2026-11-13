@@ -142,7 +142,7 @@ func (s *mcpServeServer) callTool(ctx context.Context, name string, raw json.Raw
 		return s.callWriteTool(ctx, name, raw)
 	}
 	if err != nil {
-		return mcpToolError(err)
+		return mcpToolError(mcpCleanError(err))
 	}
 	return mcpStructured(result)
 }
@@ -188,7 +188,7 @@ func (s *mcpServeServer) callWriteTool(ctx context.Context, name string, raw jso
 		result, err = s.archiveAgent(ctx, raw)
 	}
 	if err != nil {
-		return mcpToolError(err)
+		return mcpToolError(mcpCleanError(err))
 	}
 	out := mcpStructured(result)
 	if requestID != "" {
@@ -197,6 +197,50 @@ func (s *mcpServeServer) callWriteTool(ctx context.Context, name string, raw jso
 		s.mu.Unlock()
 	}
 	return out
+}
+
+// mcpCleanError turns a daemon error into a sentence for the model: no request
+// id or hostname, and no hints that only make sense in a terminal.
+func mcpCleanError(err error) error {
+	if errors.Is(err, errDaemonUnavailable) {
+		return errors.New("the AO app on this machine is not running or not reachable; open Orchestrator and try again")
+	}
+	var apiErr apiResponseError
+	if !errors.As(err, &apiErr) {
+		return err
+	}
+	if apiErr.ErrorBody.Code == "INVALID_SESSION_CURSOR" {
+		return errors.New("cursor is invalid or expired; call list_agents again without a cursor")
+	}
+	var kept []string
+	for _, sentence := range strings.SplitAfter(apiErr.ErrorBody.Message, ". ") {
+		if !strings.Contains(sentence, "`ao ") && !strings.Contains(sentence, "ao project") {
+			kept = append(kept, sentence)
+		}
+	}
+	if msg := strings.TrimSpace(strings.Join(kept, "")); msg != "" {
+		return errors.New(msg)
+	}
+	return fmt.Errorf("AO could not complete the request (HTTP %d)", apiErr.StatusCode)
+}
+
+// requireProject fails with a pointer to list_projects for an unknown id, so a
+// typo never reads as "no agents".
+func (s *mcpServeServer) requireProject(ctx context.Context, project string) error {
+	var res struct {
+		Projects []struct {
+			ID string `json:"id"`
+		} `json:"projects"`
+	}
+	if err := s.c.getJSON(ctx, "projects", &res); err != nil {
+		return err
+	}
+	for _, p := range res.Projects {
+		if p.ID == project {
+			return nil
+		}
+	}
+	return fmt.Errorf("unknown project %q; call list_projects for valid project ids", project)
 }
 
 // mcpServeReplayKey namespaces a client's request_id for the daemon's durable
@@ -236,7 +280,10 @@ type mcpSessionWire struct {
 	IsTerminated   bool      `json:"isTerminated"`
 	ProvisionState string    `json:"provisionState"`
 	LastEventAt    time.Time `json:"lastEventAt"`
-	PRs            []struct {
+	Activity       struct {
+		LastActivityAt time.Time `json:"lastActivityAt"`
+	} `json:"activity"`
+	PRs []struct {
 		URL    string `json:"url"`
 		Number int    `json:"number"`
 		State  string `json:"state"`
@@ -273,7 +320,10 @@ type mcpAgent struct {
 	Branch      string    `json:"branch,omitempty"`
 	Harness     string    `json:"harness,omitempty"`
 	LastEventAt time.Time `json:"last_event_at"`
-	PRs         []mcpPR   `json:"prs,omitempty"`
+	// LastActivityAt moves with every agent message and tool call; LastEventAt
+	// only with status, PR, CI and review changes.
+	LastActivityAt *time.Time `json:"last_activity_at,omitempty"`
+	PRs            []mcpPR    `json:"prs,omitempty"`
 }
 
 type mcpReport struct {
@@ -299,6 +349,9 @@ func (w mcpSessionWire) agent() mcpAgent {
 	a := mcpAgent{
 		AgentID: w.ID, Project: w.ProjectID, Name: name, Kind: w.Kind, Mode: w.Mode, Status: status,
 		Archived: w.IsTerminated, Branch: w.Branch, Harness: w.Harness, LastEventAt: w.LastEventAt,
+	}
+	if t := w.Activity.LastActivityAt; !t.IsZero() {
+		a.LastActivityAt = &t
 	}
 	for _, pr := range w.PRs {
 		a.PRs = append(a.PRs, mcpPR{URL: pr.URL, Number: pr.Number, State: pr.State, CI: pr.CI, Review: pr.Review})
@@ -344,6 +397,9 @@ func (s *mcpServeServer) listAgents(ctx context.Context, raw json.RawMessage) (a
 	}
 	q := url.Values{"limit": {strconv.Itoa(a.Limit)}}
 	if a.Project != "" {
+		if err := s.requireProject(ctx, a.Project); err != nil {
+			return nil, err
+		}
 		q.Set("project", a.Project)
 	}
 	if a.Kind != "" {
@@ -413,6 +469,19 @@ func (s *mcpServeServer) getAgent(ctx context.Context, raw json.RawMessage) (any
 		return nil, err
 	}
 	out := map[string]any{"agent": w.agent()}
+	if w.Mode == "chat" {
+		items, _, err := s.transcript(ctx, w.ID, 0, 5, 600)
+		if err != nil {
+			return nil, err
+		}
+		for i := len(items) - 1; i >= 0; i-- {
+			if items[i].Role == "assistant" {
+				out["last_agent_message"] = items[i]
+				out["note"] = mcpServeUntrustedNote
+				break
+			}
+		}
+	}
 	if w.ProjectID != "" {
 		reports, err := s.reports(ctx, w.ProjectID)
 		if err != nil {
@@ -430,6 +499,78 @@ func (s *mcpServeServer) getAgent(ctx context.Context, raw json.RawMessage) (any
 		}
 	}
 	return out, nil
+}
+
+type mcpTranscriptItem struct {
+	Sequence      int64     `json:"sequence"`
+	Role          string    `json:"role"`
+	Steer         bool      `json:"steer,omitempty"`
+	UntrustedText string    `json:"untrusted_text"`
+	CreatedAt     time.Time `json:"created_at"`
+}
+
+// transcript returns up to want of the newest messages before `before` (0 for
+// the latest), oldest first, and whether older ones exist. The daemon's limit
+// counts more than messages, so it pages until the request is filled. Steers
+// are stored as system activities and come back as user messages.
+func (s *mcpServeServer) transcript(ctx context.Context, id string, before int64, want, maxRunes int) ([]mcpTranscriptItem, bool, error) {
+	var items []mcpTranscriptItem
+	more := true
+	for page := 0; page < 5 && more && len(items) < want; page++ {
+		q := url.Values{"limit": {"50"}}
+		if before > 0 {
+			q.Set("beforeSequence", strconv.FormatInt(before, 10))
+		}
+		var res struct {
+			Messages []struct {
+				Sequence  int64     `json:"sequence"`
+				Role      string    `json:"role"`
+				Text      string    `json:"text"`
+				CreatedAt time.Time `json:"createdAt"`
+			} `json:"messages"`
+			Activities []struct {
+				Sequence     int64     `json:"sequence"`
+				ActivityKind string    `json:"activityKind"`
+				CreatedAt    time.Time `json:"createdAt"`
+				Detail       struct {
+					Event string `json:"event"`
+					Text  string `json:"text"`
+				} `json:"detail"`
+			} `json:"activities"`
+			HasMoreBefore  bool  `json:"hasMoreBefore"`
+			OldestSequence int64 `json:"oldestSequence"`
+		}
+		if err := s.c.getJSON(ctx, "sessions/"+url.PathEscape(id)+"/conversation?"+q.Encode(), &res); err != nil {
+			return nil, false, err
+		}
+		var pageItems []mcpTranscriptItem
+		for _, m := range res.Messages {
+			if strings.TrimSpace(m.Text) != "" {
+				pageItems = append(pageItems, mcpTranscriptItem{Sequence: m.Sequence, Role: m.Role, UntrustedText: m.Text, CreatedAt: m.CreatedAt})
+			}
+		}
+		for _, act := range res.Activities {
+			if act.ActivityKind == "system" && act.Detail.Event == "steer" && strings.TrimSpace(act.Detail.Text) != "" {
+				pageItems = append(pageItems, mcpTranscriptItem{Sequence: act.Sequence, Role: "user", Steer: true, UntrustedText: act.Detail.Text, CreatedAt: act.CreatedAt})
+			}
+		}
+		slices.SortFunc(pageItems, func(x, y mcpTranscriptItem) int { return int(x.Sequence - y.Sequence) })
+		items = append(pageItems, items...)
+		more = res.HasMoreBefore
+		if res.OldestSequence <= 0 || (before > 0 && res.OldestSequence >= before) {
+			break
+		}
+		before = res.OldestSequence
+	}
+	if len(items) > want {
+		items, more = items[len(items)-want:], true
+	}
+	for i := range items {
+		if utf8.RuneCountInString(items[i].UntrustedText) > maxRunes {
+			items[i].UntrustedText = string([]rune(items[i].UntrustedText)[:maxRunes]) + " [truncated]"
+		}
+	}
+	return items, more, nil
 }
 
 func (s *mcpServeServer) getTranscript(ctx context.Context, raw json.RawMessage) (any, error) {
@@ -451,38 +592,13 @@ func (s *mcpServeServer) getTranscript(ctx context.Context, raw json.RawMessage)
 	if a.Limit <= 0 || a.Limit > 20 {
 		a.Limit = 10
 	}
-	q := url.Values{"limit": {strconv.Itoa(a.Limit)}}
-	if a.BeforeSequence > 0 {
-		q.Set("beforeSequence", strconv.FormatInt(a.BeforeSequence, 10))
-	}
-	var res struct {
-		Messages []struct {
-			Sequence  int64     `json:"sequence"`
-			Role      string    `json:"role"`
-			Text      string    `json:"text"`
-			CreatedAt time.Time `json:"createdAt"`
-		} `json:"messages"`
-		HasMoreBefore  bool  `json:"hasMoreBefore"`
-		OldestSequence int64 `json:"oldestSequence"`
-	}
-	if err := s.c.getJSON(ctx, "sessions/"+url.PathEscape(w.ID)+"/conversation?"+q.Encode(), &res); err != nil {
+	items, more, err := s.transcript(ctx, w.ID, a.BeforeSequence, a.Limit, mcpServeMaxMessage)
+	if err != nil {
 		return nil, err
 	}
-	messages := make([]map[string]any, 0, len(res.Messages))
-	oldest := int64(0)
-	for _, m := range res.Messages {
-		text := m.Text
-		if utf8.RuneCountInString(text) > mcpServeMaxMessage {
-			text = string([]rune(text)[:mcpServeMaxMessage]) + " [truncated]"
-		}
-		messages = append(messages, map[string]any{"sequence": m.Sequence, "role": m.Role, "untrusted_text": text, "created_at": m.CreatedAt})
-		if oldest == 0 || m.Sequence < oldest {
-			oldest = m.Sequence
-		}
-	}
-	out := map[string]any{"agent_id": w.ID, "messages": messages, "has_more_before": res.HasMoreBefore, "note": mcpServeUntrustedNote}
-	if oldest > 0 {
-		out["oldest_sequence"] = oldest
+	out := map[string]any{"agent_id": w.ID, "archived": w.IsTerminated, "messages": items, "has_more_before": more && len(items) > 0, "note": mcpServeUntrustedNote}
+	if len(items) > 0 {
+		out["oldest_sequence"] = items[0].Sequence
 	}
 	return out, nil
 }
@@ -510,6 +626,9 @@ func (s *mcpServeServer) getUpdates(ctx context.Context, raw json.RawMessage) (a
 	}
 	q := url.Values{"active": {"true"}}
 	if a.Project != "" {
+		if err := s.requireProject(ctx, a.Project); err != nil {
+			return nil, err
+		}
 		q.Set("project", a.Project)
 	}
 	var sessions struct {
@@ -584,6 +703,9 @@ func (s *mcpServeServer) createAgent(ctx context.Context, raw json.RawMessage, r
 	if strings.TrimSpace(a.Project) == "" || strings.TrimSpace(a.Prompt) == "" {
 		return nil, errors.New("project and prompt are required")
 	}
+	if err := s.requireProject(ctx, strings.TrimSpace(a.Project)); err != nil {
+		return nil, err
+	}
 	name := strings.TrimSpace(a.Name)
 	explicit := name != ""
 	if !explicit {
@@ -600,12 +722,15 @@ func (s *mcpServeServer) createAgent(ctx context.Context, raw json.RawMessage, r
 		},
 		ClientRequestID: mcpServeReplayKey("create_agent", requestID),
 	}
-	var res spawnResult
+	var res struct {
+		Session mcpSessionWire `json:"session"`
+	}
 	if err := s.c.postJSON(ctx, "sessions", req, &res); err != nil {
 		return nil, err
 	}
-	return map[string]any{"agent_id": res.Session.ID, "name": res.Session.DisplayName, "status": res.Session.Status,
-		"next": "The agent is starting. Use get_agent or get_updates to follow it."}, nil
+	agent := res.Session.agent()
+	return map[string]any{"agent_id": agent.AgentID, "name": agent.Name, "status": agent.Status,
+		"next": "The agent is starting, which can take a minute or two. Use get_agent or get_updates to follow it."}, nil
 }
 
 func (s *mcpServeServer) sendMessage(ctx context.Context, raw json.RawMessage, requestID string) (any, error) {
@@ -663,6 +788,9 @@ func (s *mcpServeServer) startOrchestrator(ctx context.Context, raw json.RawMess
 	if project == "" || strings.TrimSpace(a.Goal) == "" {
 		return nil, errors.New("project and goal are required")
 	}
+	if err := s.requireProject(ctx, project); err != nil {
+		return nil, err
+	}
 	var list struct {
 		Sessions []mcpSessionWire `json:"sessions"`
 	}
@@ -683,11 +811,13 @@ func (s *mcpServeServer) startOrchestrator(ctx context.Context, raw json.RawMess
 	}
 	// Orchestrators take no daemon replay key; the done cache covers retries.
 	req := spawnRequest{ProjectID: project, Kind: "orchestrator", Mode: "chat", Prompt: a.Goal, DisplayName: "Orchestrator", Async: true}
-	var res spawnResult
+	var res struct {
+		Session mcpSessionWire `json:"session"`
+	}
 	if err := s.c.postJSON(ctx, "sessions", req, &res); err != nil {
 		return nil, err
 	}
-	return map[string]any{"agent_id": res.Session.ID, "reused": false, "status": res.Session.Status,
+	return map[string]any{"agent_id": res.Session.ID, "reused": false, "status": res.Session.agent().Status,
 		"next": "The orchestrator is starting with this goal. Use get_updates to follow it and the workers it starts."}, nil
 }
 
