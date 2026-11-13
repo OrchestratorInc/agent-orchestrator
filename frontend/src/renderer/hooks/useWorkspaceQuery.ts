@@ -1,6 +1,5 @@
 import { markApiError } from "../lib/reported-errors";
 import { type QueryClient, useQueries, useQuery, useQueryClient, type Query } from "@tanstack/react-query";
-import { useUiStore } from "../stores/ui-store";
 import { useRemoteUnpinStore, withRemoteUnpins } from "../stores/remote-unpin-store";
 import { cleanUpLegacyPreparedCloudSessions } from "../lib/cloud-session-prestart";
 import type { TraySessionEntry } from "../../shared/tray";
@@ -87,11 +86,6 @@ function toSessionArtifact(artifact: components["schemas"]["SessionArtifact"]): 
 	};
 }
 
-// Program titles label sessions only in Developer Mode while they are previewed.
-function developerTerminalTitle(terminalTitle: string | undefined): string | undefined {
-	return useUiStore.getState().developerMode ? terminalTitle : undefined;
-}
-
 export function toWorkspaceSession(
 	session: components["schemas"]["ControllersSessionView"],
 	project: Pick<WorkspaceSummary, "id" | "name">,
@@ -111,7 +105,7 @@ export function toWorkspaceSession(
 		terminalGeneration: session.terminalGeneration,
 		workspaceId: project.id,
 		workspaceName: project.name,
-		title: developerTerminalTitle(session.terminalTitle) ?? session.displayName ?? session.issueId ?? session.id,
+		title: session.terminalTitle ?? session.displayName ?? session.issueId ?? session.id,
 		issueId: session.issueId,
 		provider: toAgentProvider(session.harness),
 		reviewerHarness: toReviewerHarnessId(session.reviewerHarness),
@@ -219,7 +213,7 @@ function toLocalWorkspaceSession(
 		terminalGeneration: session.terminalGeneration,
 		workspaceId,
 		workspaceName,
-		title: developerTerminalTitle(session.terminalTitle) ?? session.displayName ?? session.issueId ?? session.id,
+		title: session.terminalTitle ?? session.displayName ?? session.issueId ?? session.id,
 		issueId: session.issueId,
 		provider: toAgentProvider(session.harness),
 		reviewerHarness: toReviewerHarnessId(session.reviewerHarness),
@@ -465,6 +459,16 @@ export function refreshCloudSessionLifecycle(queryClient: QueryClient): Promise<
  * providers (Coder) are left to the next list refresh, so their start is
  * unchanged.
  */
+/**
+ * Adds a standalone agent's project the desktop just created to the projects
+ * list, so its session, listed under that project, shows in the Scratchpad and
+ * opens at once rather than after the list's next read.
+ */
+export function seedCreatedStandaloneAgent(queryClient: QueryClient, baseUrl: string, orgId: string, project: CloudCpProject): void {
+	queryClient.setQueryData<CloudCpProject[]>([...cloudProjectsQueryKey, baseUrl, orgId], (current) =>
+		current === undefined || current.some((candidate) => candidate.id === project.id) ? current : [...current, project]);
+}
+
 export function seedCreatedFreestyleSession(queryClient: QueryClient, baseUrl: string, orgId: string, session: CloudCpSession): void {
 	if (session.sandboxProvider !== FREESTYLE_PROVIDER) return;
 	queryClient.setQueryData<CloudCpSession[]>([...cloudSessionsQueryKey, baseUrl, orgId], (current) =>
@@ -574,6 +578,7 @@ export function toCloudWorkspace(project: CloudCpProject, sessions: CloudCpSessi
 				workspaceRepos: projectRepositoryUrls(project).map((url) => ({ name: repoDirName(url), relativePath: repoDirName(url), repo: url })),
 			}
 			: {}),
+		...(project.standaloneAgent ? { standaloneAgent: true } : {}),
 		// Cloud projects run in control-plane sandboxes; there is no local folder.
 		path: "",
 		sessions: sessions
@@ -656,9 +661,16 @@ export function useCloudProjectsQuery(options: WorkspaceSubscriptionOptions = {}
 		queryFn: async (): Promise<CloudCpProject[]> => {
 			if (orgId === undefined) return [];
 			// First page only (control-plane max page size); pagination UI is a
-			// later phase alongside cloud sessions.
-			const response = await client.listProjects(orgId, { limit: 100 });
-			return response.items;
+			// later phase alongside cloud sessions. Every standalone agent is a
+			// project of its own, so the projects and the agents are read apart:
+			// many agents would otherwise page the projects out. A control plane
+			// without agents lists every project in both, once each here.
+			const [projects, agents] = await Promise.all([
+				client.listProjects(orgId, { limit: 100, standaloneAgents: "exclude" }),
+				client.listProjects(orgId, { limit: 100, standaloneAgents: "only" }),
+			]);
+			const listed = new Set(projects.items.map((project) => project.id));
+			return [...projects.items, ...agents.items.filter((project) => !listed.has(project.id))];
 		},
 	});
 }
@@ -914,15 +926,13 @@ export function useRemoteWorkspaces(options: WorkspaceSubscriptionOptions & {
 	// Every render of the shell would otherwise hand out new lists, which
 	// re-renders the sidebar and its rows even with no remote hosts. Rebuild
 	// them only when something the mapping reads changed: a host's data, a
-	// pending unpin, Developer Mode (terminal titles), the language (the
-	// Scratchpad name) or an in-flight kill (a remote row hides at once).
-	const developerMode = useUiStore((state) => state.developerMode);
+	// pending unpin, the language (the Scratchpad name) or an in-flight kill
+	// (a remote row hides at once).
 	const language = useTranslation().i18n.language;
 	const killVersion = useSyncExternalStore(subscribeOptimisticSessionKills, optimisticSessionKillsVersion);
 	const dataInputs = useStableArray([
 		hostIds,
 		unpins,
-		developerMode,
 		language,
 		killVersion,
 		...projects.map((query) => query.data),
@@ -933,7 +943,7 @@ export function useRemoteWorkspaces(options: WorkspaceSubscriptionOptions & {
 			? toRemoteWorkspaces(hostId, projects[index].data, sessions[index]?.data ?? []).map((workspace) => withRemoteUnpins(workspace, unpins))
 			: []),
 		// dataInputs holds every value read here, including the ones the mapping
-		// reads outside React (Developer Mode, the language, in-flight kills).
+		// reads outside React (the language, in-flight kills).
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 		[dataInputs],
 	);
@@ -1182,7 +1192,7 @@ export function useRemoteSessionProjectKind(sessionId: string, hostId?: string):
 }
 
 export type WorkspaceScope = {
-	project?: Pick<WorkspaceSummary, "id" | "kind" | "name" | "orchestratorAgent">;
+	project?: Pick<WorkspaceSummary, "id" | "kind" | "name" | "orchestratorAgent" | "standaloneAgent">;
 	hasWorkerSessions: boolean;
 	session?: WorkspaceSession;
 	orchestrator?: WorkspaceSession;
@@ -1207,6 +1217,7 @@ function selectWorkspaceScope(
 				kind: workspace.kind,
 				name: workspace.name,
 				orchestratorAgent: workspace.orchestratorAgent,
+				...(workspace.standaloneAgent ? { standaloneAgent: true } : {}),
 			}
 		: undefined;
 	return {

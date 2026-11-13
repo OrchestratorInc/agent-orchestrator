@@ -74,7 +74,7 @@ import {
 	hidesShellTopbar,
 } from "../lib/platform";
 import { sidebarIsVisible, sidebarOccupiesLayout, useUiStore } from "../stores/ui-store";
-import { CLOUD_PROJECT_KIND, hasConfiguredOrchestratorAgent, newestActiveOrchestrator, sessionIsActive, STANDALONE_PROJECT_KIND, STANDALONE_WORKSPACE_ID, toProjectKind, type WorkspaceSession, type WorkspaceSummary } from "../types/workspace";
+import { CLOUD_PROJECT_KIND, hasConfiguredOrchestratorAgent, newestActiveOrchestrator, isScratchpadWorkspace, sessionIsActive, STANDALONE_WORKSPACE_ID, toProjectKind, type WorkspaceSession, type WorkspaceSummary } from "../types/workspace";
 import type { components } from "../../api/schema";
 import { useAgentInventoryTelemetry, useSetupCheckedTelemetry } from "../hooks/useAgentInventoryTelemetry";
 import { useSessionSwitchSnap } from "../hooks/useSessionSwitchSnap";
@@ -132,7 +132,7 @@ function lastProjectId(workspaces: WorkspaceSummary[]): string | undefined {
 	} catch {
 		return undefined;
 	}
-	return workspaces.some((workspace) => workspace.id === id && workspace.kind !== STANDALONE_PROJECT_KIND) ? id ?? undefined : undefined;
+	return workspaces.some((workspace) => workspace.id === id && !isScratchpadWorkspace(workspace)) ? id ?? undefined : undefined;
 }
 
 export const Route = createFileRoute("/_shell")({
@@ -241,6 +241,7 @@ function findRegisteredWorkspaceByPath(workspaces: WorkspaceSummary[], path: str
 type CreateProjectConfigInput = {
 	workerAgent: string;
 	orchestratorAgent: string;
+	reviewerAgent?: string;
 	trackerIntake?: components["schemas"]["TrackerIntakeConfig"];
 	defaultBranch?: string;
 };
@@ -250,6 +251,7 @@ export function createProjectConfig(input: CreateProjectConfigInput): components
 		...(input.defaultBranch ? { defaultBranch: input.defaultBranch } : {}),
 		worker: { agent: input.workerAgent as components["schemas"]["RoleOverride"]["agent"] },
 		orchestrator: { agent: input.orchestratorAgent as components["schemas"]["RoleOverride"]["agent"] },
+		...(input.reviewerAgent ? { reviewers: [{ harness: input.reviewerAgent }] } : {}),
 		...(input.trackerIntake ? { trackerIntake: input.trackerIntake } : {}),
 	};
 }
@@ -533,7 +535,7 @@ function ShellLayout() {
 	// The last project the user was in, so a new session started from outside any
 	// project opens there rather than in the scratchpad.
 	const scopedIsProject = Boolean(scopedProjectId) && workspaces.some(
-		(workspace) => workspace.id === scopedProjectId && workspace.kind !== STANDALONE_PROJECT_KIND,
+		(workspace) => workspace.id === scopedProjectId && !isScratchpadWorkspace(workspace),
 	);
 	useEffect(() => {
 		if (!scopedIsProject || !scopedProjectId || scopedProjectId === STANDALONE_WORKSPACE_ID) return;
@@ -751,19 +753,22 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 					? { ...item, sessions: [toWorkspaceSession(spawnData.session, { id: workspace.id, name: workspace.name }), ...item.sessions.filter((session) => session.id !== sessionId)] }
 					: item),
 			);
+			// Follow the new orchestrator only if the user is still waiting on
+			// this project's board; do not pull them back from another page.
+			// The provisioning gate stays up until the session route has landed,
+			// otherwise the board shows through for a beat between the two.
+			const current = routeParamsRef.current;
+			if (current.projectId === workspace.id && !current.sessionId && !current.hostId) {
+				// A failed navigation is not a failed start: the session exists.
+				await navigate({
+					to: "/projects/$projectId/sessions/$sessionId",
+					params: { projectId: workspace.id, sessionId },
+				}).catch(() => undefined);
+			}
 			// The session now exists, so the sidebar button can open it even if
 			// the user left while it spawned.
 			window.clearTimeout(provisioningGuard);
 			setProjectProvisioning(workspace.id, false);
-			// Follow the new orchestrator only if the user is still waiting on
-			// this project's board; do not pull them back from another page.
-			const current = routeParamsRef.current;
-			if (current.projectId === workspace.id && !current.sessionId && !current.hostId) {
-				void navigate({
-					to: "/projects/$projectId/sessions/$sessionId",
-					params: { projectId: workspace.id, sessionId },
-				});
-			}
 		} catch (spawnError) {
 			window.clearTimeout(provisioningGuard);
 			setProjectProvisioning(workspace.id, false);
@@ -813,6 +818,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			path: string;
 			workerAgent: string;
 			orchestratorAgent: string;
+			reviewerAgent?: string;
 			trackerIntake?: components["schemas"]["TrackerIntakeConfig"];
 			asWorkspace?: boolean;
 			clonePreparationId?: string;
@@ -911,6 +917,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			destinationParent: string;
 			workerAgent: string;
 			orchestratorAgent: string;
+			reviewerAgent?: string;
 			trackerIntake?: components["schemas"]["TrackerIntakeConfig"];
 			signal?: AbortSignal;
 		}) => {

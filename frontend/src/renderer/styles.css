@@ -2102,7 +2102,8 @@ textarea,
 }
 
 /* The live row's working mark (components/chat/LatticeLoader.tsx): sixteen 2.5px
-   dots on a 3.5px pitch, 13px across and centred in the 20px slot, so every dot
+   dots on a 3.5px pitch, 13px across. It starts at the left edge of the step
+   icons' 12px slot (STEP_MARK_SLOT_CLASS in ChatTimelineItems.tsx), so every dot
    lands on whole device pixels on a 2x display. The outer twelve share one beat,
    staggered inline. */
 .chat-lattice {
@@ -3671,7 +3672,8 @@ html[data-window-translucent="true"] :is(.queue-dock, .queue-dock-toggle, .queue
 	flex: 0 0 auto;
 	margin-inline: calc(-1 * var(--gap-topbar-control)) 0;
 	opacity: 0;
-	background: color-mix(in srgb, var(--color-border) 50%, transparent);
+	/* Spacer only: the line itself is not drawn. */
+	background: transparent;
 }
 
 .session-split:has(> [data-slot="inspector-gap"][data-motion="animated"]) .topbar-divider {

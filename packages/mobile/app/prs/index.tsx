@@ -2,7 +2,8 @@ import { useCallback, useMemo, useRef, useState } from "react";
 import { Platform, RefreshControl, SectionList, StyleSheet, View } from "react-native";
 import { useFocusEffect, useLocalSearchParams } from "expo-router";
 import type { Theme } from "../../lib/theme";
-import { PRCard } from "../../lib/PRCard";
+import { groupedRowPosition } from "../../lib/groupedRow";
+import { PRCard, PRSectionHeader } from "../../lib/PRCard";
 import { PRFilterControl } from "../../lib/pr-filter-control";
 import { ProjectSwitcher } from "../../lib/ProjectSwitcher";
 import { collectPRs, prFilterCounts, prInFilter, prLifecycle, prListSections, type PRListFilter } from "../../lib/prView";
@@ -16,11 +17,12 @@ import { isCloudHost } from "../../lib/cloud/mapping";
 import { useCloudPRSummaries } from "../../lib/cloud/useCloudPRSummaries";
 import { UnpairedState } from "../../lib/UnpairedState";
 import { PR_SUMMARY_REUSE_MS, usePRSummaries } from "../../lib/usePRSummaries";
+import { MINUTE_MS, useNow } from "../../lib/useNow";
 import { useBoardFailure } from "../../lib/useBoardFailure";
 import { TabPageScroll } from "../../lib/TabPageScroll";
 import { ToastHost } from "../../lib/Toast";
 import { useToast } from "../../lib/useToast";
-import { Button, EmptyState, ListSectionHeader } from "../../lib/ui";
+import { Button, EmptyState } from "../../lib/ui";
 import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
 import { space } from "../../lib/tokens";
 import type { HostedSession } from "../../lib/hostedRows";
@@ -76,6 +78,9 @@ export default function PRsScreen() {
 	const filtered = useMemo(() => prs.filter(({ pr }) => prInFilter(filter, prLifecycle(pr))), [prs, filter]);
 	const sections = useMemo(() => prListSections(prs, filter), [prs, filter]);
 	const counts = useMemo(() => prFilterCounts(prs), [prs]);
+	// Name each row's repository only when the list holds more than one.
+	const showProject = useMemo(() => new Set(prs.map(({ session }) => `${session.hostId}:${session.projectId}`)).size > 1, [prs]);
+	const now = useNow(MINUTE_MS);
 
 	// The rich per-PR detail the cards show lives on a separate endpoint, fetched
 	// once per session and cached — see usePRSummaries. Pull-to-refresh is the
@@ -158,14 +163,17 @@ export default function PRsScreen() {
 				stickySectionHeadersEnabled={false}
 				ListHeaderComponent={listHeader}
 				refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} {...refreshControlColors(t)} />}
-				renderSectionHeader={({ section }) => <ListSectionHeader label={section.label} />}
-				renderItem={({ item: { pr, session } }) => {
+				renderSectionHeader={({ section }) => <PRSectionHeader label={section.label} count={section.data.length} />}
+				renderItem={({ item: { pr, session }, index, section }) => {
 					const config = configForHost(session.hostId);
 					return <PRCard
 						pr={pr}
 						session={session}
 						hostId={session.hostId}
 						hostName={environmentCount > 1 ? session.hostName : undefined}
+						showProject={showProject}
+						position={groupedRowPosition(index, section.data.length)}
+						now={now}
 						summary={isCloudHost(session.hostId) ? cloudSummaries.summaryFor(session.id, pr.number) : config ? summaries.summaryFor(config, session.id, pr.number) : undefined}
 						onLinkCopied={linkCopied}
 					/>;

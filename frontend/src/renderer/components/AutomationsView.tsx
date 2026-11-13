@@ -413,7 +413,7 @@ function AutomationRow({ item, projectName, busy, expanded, onExpand, onEdit, on
 }
 
 
-type WorkspaceOption = { id: string; name: string };
+type WorkspaceOption = { id: string; name: string; standaloneAgent?: boolean };
 type AutomationFormSubmit = {
 	templateId?: AutomationTemplateID;
 	useCase?: AutomationUseCase;
@@ -540,7 +540,8 @@ function AutomationFormDialog({
 	// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [open, automation, initialTemplateId]);
 
-	const projectOptions = workspaces.map((item) => ({ value: item.id, label: item.name }));
+	// A Cloud standalone agent takes no session but its own, so it is no project for an automation.
+	const projectOptions = workspaces.filter((item) => !item.standaloneAgent).map((item) => ({ value: item.id, label: item.name }));
 	if (automation && !projectOptions.some((option) => option.value === automation.projectId)) {
 		projectOptions.unshift({ value: automation.projectId, label: automation.projectId });
 	}

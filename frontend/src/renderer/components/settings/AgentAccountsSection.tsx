@@ -243,15 +243,16 @@ function formatMoney(value: number, currency: string | undefined, locale: string
 
 function LimitRow({ window, locale }: { window: AgentAccountLimitWindow; locale: string }) {
 	const { t } = useTranslation();
-	const remaining = Math.max(0, Math.min(100, 100 - window.usedPercent));
-	const value = formatPercentage(remaining, locale);
+	// The provider reports consumed capacity; the meter fills as usage grows.
+	const used = Math.max(0, Math.min(100, window.usedPercent));
+	const value = formatPercentage(used, locale);
 	const reset = formatResetTime(window.resetsAt, locale);
-	const fill = remaining <= 0 ? "bg-error" : remaining <= 25 ? "bg-warning" : "bg-foreground/80";
+	const fill = used >= 100 ? "bg-error" : used >= 75 ? "bg-warning" : "bg-foreground/80";
 	return <>
 		<p className="whitespace-nowrap text-foreground">{window.label}</p>
 		<p className="min-w-0 truncate text-muted-foreground" title={reset?.full}>{reset ? t("settings.codexAccounts.capacityResets", { value: reset.visible }) : null}</p>
-		<div role="progressbar" aria-label={t("settings.codexAccounts.remainingForLimit", { label: window.label, value })} aria-valuemin={0} aria-valuemax={100} aria-valuenow={remaining} className="h-1.5 w-full overflow-hidden rounded-full bg-muted"><div className={`h-full rounded-full ${fill}`} style={{ width: `${remaining}%` }} /></div>
-		<p className="whitespace-nowrap text-right tabular-nums text-muted-foreground">{t("settings.codexAccounts.percentLeft", { value })}</p>
+		<div role="progressbar" aria-label={t("settings.codexAccounts.usedForLimit", { label: window.label, value })} aria-valuemin={0} aria-valuemax={100} aria-valuenow={used} className="h-1.5 w-full overflow-hidden rounded-full bg-muted"><div className={`h-full rounded-full ${fill}`} style={{ width: `${used}%` }} /></div>
+		<p className="whitespace-nowrap text-right tabular-nums text-muted-foreground">{t("settings.codexAccounts.percentUsed", { value })}</p>
 	</>;
 }
 
