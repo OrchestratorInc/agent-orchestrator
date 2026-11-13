@@ -93,3 +93,70 @@ func TestRemoveDeletesKeyAndDeviceMarker(t *testing.T) {
 		t.Fatalf("device list holds a value or is missing: %s, %v", data, err)
 	}
 }
+
+// blockMarker makes the next read of a marker file fail, as a write that
+// cannot complete would, and returns a func that puts the file back.
+func blockMarker(t *testing.T, dir, file string) func() {
+	t.Helper()
+	path := filepath.Join(dir, file)
+	if err := os.Rename(path, path+".saved"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(path, "blocked"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return func() {
+		if err := os.RemoveAll(path); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Rename(path+".saved", path); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// Turning sharing off never leaves a name published without its user-owned
+// mark: a later withdrawal would take the user's own value for AO's copy and
+// remove it from their environment.
+func TestUnpublishingNeverDropsOwnershipWhileStillPublished(t *testing.T) {
+	ctx := context.Background()
+	t.Run("device marker write fails", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := SetDevice(ctx, dir, "GROQ_API_KEY", true); err != nil {
+			t.Fatal(err)
+		}
+		if err := SetUserValue(ctx, dir, "GROQ_API_KEY", true); err != nil {
+			t.Fatal(err)
+		}
+		restore := blockMarker(t, dir, deviceFilename)
+		if err := SetDevice(ctx, dir, "GROQ_API_KEY", false); err == nil {
+			t.Fatal("unpublished although the device marker could not be written")
+		}
+		restore()
+		if device, _ := DeviceNames(dir); !device["GROQ_API_KEY"] {
+			t.Fatal("device marker changed although its write failed")
+		}
+		if users, _ := UserValueNames(dir); !users["GROQ_API_KEY"] {
+			t.Fatal("a still-published name lost its user-owned mark")
+		}
+	})
+	t.Run("user-owned marker write fails", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := SetDevice(ctx, dir, "GROQ_API_KEY", true); err != nil {
+			t.Fatal(err)
+		}
+		if err := SetUserValue(ctx, dir, "GROQ_API_KEY", true); err != nil {
+			t.Fatal(err)
+		}
+		restore := blockMarker(t, dir, userValueFilename)
+		if err := SetDevice(ctx, dir, "GROQ_API_KEY", false); err == nil {
+			t.Fatal("reported success although the user-owned marker could not be written")
+		}
+		restore()
+		// The name is unpublished first, so nothing withdraws it; the
+		// leftover mark is cleared when AO next publishes its own value.
+		if device, _ := DeviceNames(dir); device["GROQ_API_KEY"] {
+			t.Fatal("still published although the device marker was cleared first")
+		}
+	})
+}

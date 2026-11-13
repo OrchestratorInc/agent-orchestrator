@@ -140,13 +140,19 @@ func SetUserValue(ctx context.Context, dataDir, name string, users bool) error {
 	return setNameLocked(ctx, dataDir, userValueFilename, name, users)
 }
 
+// setDeviceLocked records whether name is published. Unpublishing clears the
+// device marker before the user-owned one: if the second write fails, the
+// name is left unpublished with a stale ownership mark, which nothing
+// withdraws, rather than published with no mark, which a later withdrawal
+// would take for AO's copy and remove from the user's environment.
 func setDeviceLocked(ctx context.Context, dataDir, name string, published bool) error {
-	if !published {
-		if err := setNameLocked(ctx, dataDir, userValueFilename, name, false); err != nil {
-			return err
-		}
+	if err := setNameLocked(ctx, dataDir, deviceFilename, name, published); err != nil {
+		return err
 	}
-	return setNameLocked(ctx, dataDir, deviceFilename, name, published)
+	if published {
+		return nil
+	}
+	return setNameLocked(ctx, dataDir, userValueFilename, name, false)
 }
 
 func setNameLocked(ctx context.Context, dataDir, file, name string, on bool) error {
