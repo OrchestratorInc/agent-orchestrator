@@ -194,7 +194,7 @@ func (s *Service) stepAccountHandoff(ctx context.Context, store accountHandoffSt
 	case !h.moved.Load():
 		return s.settleAccountHandoffMove(ctx, store, deps, h)
 	}
-	return s.retryAccountHandoff(ctx, store, h)
+	return s.retryAccountHandoff(ctx, store, deps, h)
 }
 
 func (s *Service) selectAccountHandoff(ctx context.Context, store accountHandoffStore, deps accountHandoffDeps, h *accountHandoff) (bool, error) {
@@ -282,26 +282,24 @@ func (s *Service) settleAccountHandoffMove(ctx context.Context, store accountHan
 		s.log.Info("account handoff: move did not commit", "session", h.sessionID, "turn", h.turnID, "phase", transition.Phase)
 		return true, nil
 	}
-	record, found, err := s.sessions.GetSession(ctx, h.sessionID)
-	if err != nil {
-		return false, err
-	}
-	if !found {
-		return true, nil
-	}
-	bound, err := deps.accounts.SessionAccountID(ctx, h.sessionID, record.Harness)
-	if err != nil {
-		return false, err
-	}
-	if bound != h.targetAccount {
-		return true, nil
+	if on, err := s.onHandoffTarget(ctx, deps, h); err != nil || !on {
+		return err == nil, err
 	}
 	if err := s.noteAccountHandoff(ctx, h, ""); err != nil {
 		return false, err
 	}
 	h.stepAt = s.now()
 	h.moved.Store(true)
-	return s.retryAccountHandoff(ctx, store, h)
+	return s.retryAccountHandoff(ctx, store, deps, h)
+}
+
+func (s *Service) onHandoffTarget(ctx context.Context, deps accountHandoffDeps, h *accountHandoff) (bool, error) {
+	record, found, err := s.sessions.GetSession(ctx, h.sessionID)
+	if err != nil || !found {
+		return false, err
+	}
+	bound, err := deps.accounts.SessionAccountID(ctx, h.sessionID, record.Harness)
+	return err == nil && bound == h.targetAccount, err
 }
 
 func (s *Service) noteAccountHandoff(ctx context.Context, h *accountHandoff, retry string) error {
@@ -333,7 +331,13 @@ func (s *Service) recordAccountHandoffRetry(ctx context.Context, h *accountHando
 	}
 }
 
-func (s *Service) retryAccountHandoff(ctx context.Context, store accountHandoffStore, h *accountHandoff) (bool, error) {
+func (s *Service) retryAccountHandoff(ctx context.Context, store accountHandoffStore, deps accountHandoffDeps, h *accountHandoff) (bool, error) {
+	if on, err := s.onHandoffTarget(ctx, deps, h); err != nil {
+		return false, err
+	} else if !on {
+		s.recordAccountHandoffRetry(ctx, h, accountHandoffRetrySkipped)
+		return true, nil
+	}
 	if pending, err := store.ListPendingSessionInterfaceTransitionMessages(ctx, h.transitionID); err != nil {
 		return false, err
 	} else if len(pending) > 0 {

@@ -447,6 +447,37 @@ func TestAccountHandoffSkipsRetryWhenTheSessionLeftTheTarget(t *testing.T) {
 	}
 }
 
+func TestAccountHandoffDeferredRetrySkipsAfterTheSessionLeftTheTarget(t *testing.T) {
+	h, _ := hibernationHarnessWith(t, "", func(opts *chatsvc.Options) { opts.HibernationEnabled = func() bool { return true } })
+	hh := handoffHarnessFor(t, h, domain.HarnessCodex)
+	ctx := context.Background()
+	source := failUsageLimitedTurn(t, h, usageLimitMessage(domain.HarnessCodex, true, h.now()))
+	hh.tick(t)
+	hh.mover.finish(t, domain.SessionInterfaceTransitionCompleted)
+	if slept, err := h.svc.HibernateChat(ctx, testSession); err != nil || !slept {
+		t.Fatalf("hibernate = %v, %v", slept, err)
+	}
+	var wakes atomic.Int32
+	h.svc.SetWakeCallback(func(context.Context, domain.SessionID) error {
+		wakes.Add(1)
+		return errors.New("native resume refused")
+	})
+	if err := h.svc.HandoffUsageLimitedTurns(ctx); err == nil {
+		t.Fatal("a failed wake reported success")
+	}
+	if err := hh.st.BindSessionAgentAccount(ctx, testSession, hh.provider, "acct-c", h.now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	h.advance(time.Minute)
+	hh.tick(t)
+	if wakes.Load() != 1 {
+		t.Fatalf("wakes = %d, want no retry attempt after the session left the target", wakes.Load())
+	}
+	if _, retry := handoffNotes(t, h, source.ID); retry != "skipped" {
+		t.Fatalf("handoff note retry = %q", retry)
+	}
+}
+
 func TestAccountHandoffPendingRetrySurvivesHibernation(t *testing.T) {
 	resumed := newFakeConversation()
 	resumed.turnSeq = 100
