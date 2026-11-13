@@ -37,7 +37,7 @@ import { useCloudOrg } from "../hooks/useCloudOrg";
 import { useCloudOrchestratorModel } from "../hooks/useCloudOrchestratorModel";
 import { useProviderConnections } from "../hooks/useProviderConnections";
 import { CLOUD_AGENT_PROVIDERS, cloudAgentInfos, connectedCredentialType, credentialModelScope } from "../lib/cloud-agents";
-import { createCloudChatSessionWithFiles, createCloudSession } from "../lib/cloud-session-create";
+import { CloudTaskFilesNeedChatError, CloudTaskFilesUndeliveredError, createCloudChatSessionWithFiles, createCloudSession } from "../lib/cloud-session-create";
 import { uploadCloudAttachment } from "../lib/cloud-attachments";
 import { reportCloudSessionCreateRequested } from "../lib/cloud-telemetry";
 import { rememberStandaloneAgent } from "../lib/cloud-standalone-agents";
@@ -241,17 +241,19 @@ export function useTaskLaunch({ projectId, hostId }: {
 	}).current;
 	const createCloudTask = useCallback(
 		async (input: CreateTaskInput): Promise<string> => {
+			const cloudFilesNeedChat = () => t("newTask.cloudAttachmentsNeedChat", { defaultValue: "Files can start a Cloud task in Chat only. Start it in Chat, or remove the files." });
 			try {
 				const files = input.attachments ?? [];
 				// Files ride the first message of a Chat session (createCloudChatSessionWithFiles),
 				// on a control plane that takes them. A standalone agent starts without
 				// them: its own project comes with its session, and a start the files
 				// did not reach would leave that project behind.
+				// Both are final refusals (a code), so the page hands the task back to change.
 				if (files.length > 0 && (isCloudStandalone || cloudOffering.maxAttachmentBytes === undefined)) {
-					throw new Error(t("newTask.cloudAttachmentsUnsupported", { defaultValue: "File attachments are not supported for cloud tasks yet." }));
+					throw new TaskCreateError(t("newTask.cloudAttachmentsUnsupported", { defaultValue: "File attachments are not supported for cloud tasks yet." }), "CLOUD_ATTACHMENTS_UNSUPPORTED");
 				}
 				if (files.length > 0 && input.mode !== "chat") {
-					throw new Error(t("newTask.cloudAttachmentsNeedChat", { defaultValue: "Files can start a Cloud task in Chat only. Start it in Chat, or remove the files." }));
+					throw new TaskCreateError(cloudFilesNeedChat(), "CLOUD_ATTACHMENTS_NEED_CHAT");
 				}
 				if (!cloudOrg?.id) throw new Error(t("newTask.unableToStart"));
 				// The agent is always the one the picker shows; with none there is nothing to start.
@@ -318,6 +320,9 @@ export function useTaskLaunch({ projectId, hostId }: {
 				}
 				// The code drives the same fallbacks a local create error does ("Create as Terminal").
 				if (err instanceof CloudCpError) throw new TaskCreateError(err.message, err.code, undefined, err.status);
+				// A task with files that left nothing behind is refused as final, to send again.
+				if (err instanceof CloudTaskFilesNeedChatError) throw new TaskCreateError(cloudFilesNeedChat(), err.code);
+				if (err instanceof CloudTaskFilesUndeliveredError) throw new TaskCreateError(err.message, err.code);
 				throw err instanceof Error ? err : new Error(t("newTask.unableToStart"));
 			}
 		},

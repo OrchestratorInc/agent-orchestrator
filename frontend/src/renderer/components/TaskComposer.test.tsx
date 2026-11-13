@@ -34,6 +34,8 @@ const h = vi.hoisted(() => ({
 	cloudOrgId: "org-1",
 	cloudBaseUrl: "https://cloud-a.example.test",
 	cloudUserId: "user-1",
+	cloudMaxAttachmentBytes: undefined as number | undefined,
+	cloudUpload: vi.fn(),
 }));
 
 vi.mock("../hooks/useChatPermissionModes", async (importOriginal) => {
@@ -131,7 +133,13 @@ vi.mock("../hooks/useCloudCp", () => ({
 }));
 
 vi.mock("../hooks/useCloudOffering", () => ({
-	useCloudOffering: () => ({ chatHarnesses: h.cloudChatHarnesses, loaded: h.cloudOfferingLoaded, defaultProvider: h.cloudDefaultProvider }),
+	useCloudOffering: () => ({ chatHarnesses: h.cloudChatHarnesses, loaded: h.cloudOfferingLoaded, defaultProvider: h.cloudDefaultProvider, maxAttachmentBytes: h.cloudMaxAttachmentBytes }),
+}));
+
+// A Cloud task's files upload to its session through the main process's binary channel.
+vi.mock("../lib/cloud-attachments", async (importOriginal) => ({
+	...await importOriginal<typeof import("../lib/cloud-attachments")>(),
+	uploadCloudAttachment: h.cloudUpload,
 }));
 
 import { TaskComposer, useTaskLaunch } from "./TaskComposer";
@@ -278,6 +286,8 @@ afterEach(() => {
 	h.cloudOrgId = "org-1";
 	h.cloudBaseUrl = "https://cloud-a.example.test";
 	h.cloudUserId = "user-1";
+	h.cloudMaxAttachmentBytes = undefined;
+	h.cloudUpload.mockReset();
 	vi.unstubAllGlobals();
 	h.agentValues.length = 0;
 	window.localStorage.removeItem("ao.taskComposer.preferences.v1");
@@ -4222,6 +4232,74 @@ describe("useTaskLaunch Cloud start on send", () => {
 		const [first, second] = h.cloudCreateSession.mock.calls.map((call) => call[2]);
 		expect(first?.idempotencyKey).toEqual(expect.any(String));
 		expect(second).toEqual(first);
+	});
+
+	// A refusal the page treats as uncertain keeps the send pinned and retries
+	// it as it was, so a task with files that cannot start must be refused as final.
+	it("refuses files on a Cloud task that starts in the terminal as final, creating nothing", async () => {
+		const queryClient = freestyleFixture();
+		h.cloudMaxAttachmentBytes = 25 * 1024 * 1024;
+		render(<Wrap queryClient={queryClient}><Launcher /></Wrap>);
+		await screen.findByText("ready");
+		let outcome: unknown;
+		await act(async () => {
+			outcome = await task.launch("Look at this", { clientRequestId: "req-f1", interfaceMode: "tui", attachments: [{ mimeType: "image/png", data: "aGk=", name: "shot.png" }] })
+				.catch((error: unknown) => error);
+		});
+		expect(outcome).toMatchObject({ name: "TaskCreateError", code: "CLOUD_ATTACHMENTS_NEED_CHAT", message: "Files can start a Cloud task in Chat only. Start it in Chat, or remove the files." });
+		expect(h.cloudCreateSession).not.toHaveBeenCalled();
+	});
+
+	it("refuses files as final where the control plane takes none", async () => {
+		const queryClient = freestyleFixture();
+		render(<Wrap queryClient={queryClient}><Launcher /></Wrap>);
+		await screen.findByText("ready");
+		let outcome: unknown;
+		await act(async () => {
+			outcome = await task.launch("Look at this", { clientRequestId: "req-f2", interfaceMode: "chat", attachments: [{ mimeType: "image/png", data: "aGk=", name: "shot.png" }] })
+				.catch((error: unknown) => error);
+		});
+		expect(outcome).toMatchObject({ name: "TaskCreateError", code: "CLOUD_ATTACHMENTS_UNSUPPORTED" });
+		expect(h.cloudCreateSession).not.toHaveBeenCalled();
+	});
+
+	// Its session was deleted again, so nothing is left to retry: the page
+	// hands the brief and files back with the reason.
+	it("returns a Cloud task whose files did not upload as final, once its session is deleted", async () => {
+		const queryClient = freestyleFixture();
+		h.cloudMaxAttachmentBytes = 25 * 1024 * 1024;
+		h.cloudCreateSession.mockResolvedValue({ session: { id: "s-f3", harness: "codex", interfaceMode: "chat" } });
+		h.cloudUpload.mockRejectedValue(new Error("This file type is not allowed."));
+		render(<Wrap queryClient={queryClient}><Launcher /></Wrap>);
+		await screen.findByText("ready");
+		let outcome: unknown;
+		await act(async () => {
+			outcome = await task.launch("Look at this", { clientRequestId: "req-f3", interfaceMode: "chat", attachments: [{ mimeType: "image/png", data: "aGk=", name: "shot.png" }] })
+				.catch((error: unknown) => error);
+		});
+		expect(h.cloudDeleteSession).toHaveBeenCalledWith("org-1", "s-f3");
+		expect(outcome).toMatchObject({ name: "TaskCreateError", code: "CLOUD_TASK_FILES_UNDELIVERED", message: "This file type is not allowed." });
+		expect(queryClient.getQueryData(["cloud-opening", "org-1", "s-f3"])).toBeUndefined();
+	});
+
+	// A session the cleanup could not delete may still take the brief: the
+	// failure stays uncertain, so the page retries it with the same request id.
+	it("keeps a Cloud task with files uncertain while its session may still exist", async () => {
+		const queryClient = freestyleFixture();
+		h.cloudMaxAttachmentBytes = 25 * 1024 * 1024;
+		h.cloudCreateSession.mockResolvedValue({ session: { id: "s-f4", harness: "codex", interfaceMode: "chat" } });
+		h.cloudUpload.mockRejectedValue(new Error("Couldn’t reach Orchestrator Cloud. Check the connection and try again."));
+		h.cloudDeleteSession.mockRejectedValue(new TypeError("Failed to fetch"));
+		render(<Wrap queryClient={queryClient}><Launcher /></Wrap>);
+		await screen.findByText("ready");
+		let outcome: unknown;
+		await act(async () => {
+			outcome = await task.launch("Look at this", { clientRequestId: "req-f4", interfaceMode: "chat", attachments: [{ mimeType: "image/png", data: "aGk=", name: "shot.png" }] })
+				.catch((error: unknown) => error);
+		});
+		expect(outcome).toBeInstanceOf(Error);
+		expect(outcome).not.toMatchObject({ name: "TaskCreateError" });
+		expect((outcome as { code?: string }).code).toBeUndefined();
 	});
 
 	it("keeps a full plan's refusal as the reason, and creates nothing else", async () => {

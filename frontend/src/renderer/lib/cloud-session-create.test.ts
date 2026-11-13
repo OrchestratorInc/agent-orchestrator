@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { CloudCpError } from "./cloud-cp";
 import type { CloudCpCreateSessionRequest } from "./cloud-cp";
-import { CloudTaskFilesNeedChatError, cloudDefaultInterfaceMode, createCloudChatSessionWithFiles, createCloudSession } from "./cloud-session-create";
+import { CloudTaskFilesNeedChatError, CloudTaskFilesUndeliveredError, cloudDefaultInterfaceMode, createCloudChatSessionWithFiles, createCloudSession } from "./cloud-session-create";
 
 const body: CloudCpCreateSessionRequest = {
 	projectId: "project-1",
@@ -111,6 +111,19 @@ describe("createCloudChatSessionWithFiles", () => {
 		if (failing === "send") client.sendSessionMessage.mockRejectedValue(refusal);
 		await expect(createCloudChatSessionWithFiles(client, "org-1", chatBody, files, upload)).rejects.toBe(refusal);
 		expect(client.deleteSession).toHaveBeenCalledWith("org-1", "s1");
+	});
+
+	// Only a session known to be gone makes the failure final: one the delete
+	// did not reach may still take the brief, so its error stays uncertain.
+	it("makes an upload failure final once its session is deleted, and only then", async () => {
+		const failure = new Error("Couldn’t reach Orchestrator Cloud. Check the connection and try again.");
+		const deleted = clientFor();
+		const outcome = await createCloudChatSessionWithFiles(deleted, "org-1", chatBody, files, vi.fn().mockRejectedValue(failure)).catch((error: unknown) => error);
+		expect(outcome).toBeInstanceOf(CloudTaskFilesUndeliveredError);
+		expect(outcome).toMatchObject({ code: "CLOUD_TASK_FILES_UNDELIVERED", message: failure.message });
+		const kept = clientFor();
+		kept.deleteSession.mockRejectedValue(new TypeError("Failed to fetch"));
+		await expect(createCloudChatSessionWithFiles(kept, "org-1", chatBody, files, vi.fn().mockRejectedValue(failure))).rejects.toBe(failure);
 	});
 
 	// A control plane that predates interfaceMode starts the session in the

@@ -66,9 +66,24 @@ export interface CloudTaskFile {
 
 /** Why a task with files cannot start: they ride a Chat session's first message. */
 export class CloudTaskFilesNeedChatError extends Error {
+	/** A refusal a retry cannot change: the composer keeps the task to change and send again. */
+	readonly code = "CLOUD_ATTACHMENTS_NEED_CHAT";
 	constructor() {
 		super("Files can start a Cloud task in Chat only. Start it in Chat, or remove the files.");
 		this.name = "CloudTaskFilesNeedChatError";
+	}
+}
+
+/**
+ * The files or the brief did not reach a new Cloud task, and its session was
+ * deleted again. Nothing is left behind, so the composer keeps the task, with
+ * the reason, to send again.
+ */
+export class CloudTaskFilesUndeliveredError extends Error {
+	readonly code = "CLOUD_TASK_FILES_UNDELIVERED";
+	constructor(message: string) {
+		super(message);
+		this.name = "CloudTaskFilesUndeliveredError";
 	}
 }
 
@@ -81,8 +96,11 @@ export class CloudTaskFilesNeedChatError extends Error {
  * permission. A session that did not start in Chat (a control plane that
  * predates interfaceMode starts it in the terminal), or that the files or the
  * brief did not reach, is deleted and the error thrown, so the composer keeps
- * the task to send again. Each attempt creates under its own key, since a
- * replay of the same create would answer with the deleted session.
+ * the task to send again. Once the delete went through the failure is final
+ * (a control plane's refusal keeps its own status); while the session may
+ * still be there the error stays as it was, so a retry can still reach it.
+ * Each attempt creates under its own key, since a replay of the same create
+ * would answer with the deleted session.
  */
 export async function createCloudChatSessionWithFiles(
 	client: Pick<CloudCpClient, "createSession" | "sendSessionMessage" | "deleteSession">,
@@ -106,8 +124,9 @@ export async function createCloudChatSessionWithFiles(
 			...(body.approvalMode ? { approvalMode: body.approvalMode } : {}),
 		}, { idempotencyKey: `${key}:brief` });
 	} catch (error) {
-		await client.deleteSession(orgId, sessionId).catch(() => undefined);
-		throw error;
+		const deleted = await client.deleteSession(orgId, sessionId).then(() => true, () => false);
+		if (!deleted || error instanceof CloudCpError || error instanceof CloudTaskFilesNeedChatError) throw error;
+		throw new CloudTaskFilesUndeliveredError(error instanceof Error ? error.message : String(error));
 	}
 	return created;
 }
