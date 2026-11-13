@@ -16,6 +16,7 @@ vi.mock("expo-splash-screen", () => ({ preventAutoHideAsync: vi.fn(async () => {
 vi.mock("expo-status-bar", () => ({ StatusBar: "StatusBar" }));
 vi.mock("react-native-gesture-handler", () => ({ GestureHandlerRootView: "GestureHandlerRootView" }));
 vi.mock("react-native-keyboard-controller", () => ({ KeyboardProvider: "KeyboardProvider" }));
+vi.mock("./KeyboardResumeResync", () => ({ KeyboardResumeResync: () => null }));
 vi.mock("react-native-safe-area-context", () => ({ SafeAreaProvider: "SafeAreaProvider" }));
 vi.mock("./ThemeProvider", () => ({ ThemeProvider: "ThemeProvider", useTheme: () => fixtures.theme, useThemeState: () => ({ scheme: "dark" }) }));
 vi.mock("./themeStore", () => ({ loadThemeSettings: async () => ({ preference: "system", style: "orchestrate" }) }));
