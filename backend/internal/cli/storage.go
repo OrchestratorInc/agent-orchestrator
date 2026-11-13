@@ -337,6 +337,9 @@ func (c *commandContext) cleanStorage(ctx context.Context, cmd *cobra.Command, o
 		}
 		req.Kinds = append(req.Kinds, kind)
 	}
+	if cmd.Flags().Changed("only") && len(req.Kinds) == 0 {
+		return usageError{errors.New("--only must name at least one cleanup kind")}
+	}
 	for _, raw := range opts.sessions {
 		id, err := normalizeSessionID(raw)
 		if err != nil {

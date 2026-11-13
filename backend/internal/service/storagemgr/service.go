@@ -639,8 +639,17 @@ func (s *Service) runOffload(ctx context.Context, action PlannedAction) domain.S
 		if project.Config.StorageOffloadDisabled {
 			return errors.New("offload is turned off for this project")
 		}
+		prev, hadPrev, err := s.store.GetSessionStorageFacts(ctx, rec.ID)
+		if err != nil {
+			return err
+		}
 		offloadedAt := s.now()
 		record := func(facts domain.SessionStorageFacts) error {
+			if hadPrev && prev.Offloaded() {
+				// An earlier offload's paths are still missing; keep them so a
+				// resume restores those too.
+				facts = mergeOffloadFacts(prev, facts)
+			}
 			facts.SessionID, facts.OffloadedAt = rec.ID, offloadedAt
 			return s.store.RecordSessionOffload(ctx, facts)
 		}
@@ -660,6 +669,33 @@ func (s *Service) runOffload(ctx context.Context, action PlannedAction) domain.S
 	// template is still on it.
 	out.Bytes = result.freed
 	return out
+}
+
+// mergeOffloadFacts combines an unsettled earlier offload with a new one. A
+// path the earlier offload removed is still missing, so the new run cannot
+// have found it again; the byte totals therefore add up.
+func mergeOffloadFacts(prev, next domain.SessionStorageFacts) domain.SessionStorageFacts {
+	merged := domain.SessionStorageFacts{
+		OffloadedPaths: append([]string(nil), next.OffloadedPaths...),
+		OffloadedBytes: next.OffloadedBytes + prev.OffloadedBytes,
+		TemplateKeys:   map[string]string{},
+	}
+	seen := map[string]bool{}
+	for _, p := range next.OffloadedPaths {
+		seen[p] = true
+	}
+	for _, p := range prev.OffloadedPaths {
+		if !seen[p] {
+			merged.OffloadedPaths = append(merged.OffloadedPaths, p)
+		}
+	}
+	for k, v := range prev.TemplateKeys {
+		merged.TemplateKeys[k] = v
+	}
+	for k, v := range next.TemplateKeys {
+		merged.TemplateKeys[k] = v
+	}
+	return merged
 }
 
 func (s *Service) cleanEnded(ctx context.Context, actions []PlannedAction) []domain.StorageAction {
@@ -756,8 +792,14 @@ func (s *Service) runVacuum(ctx context.Context, action PlannedAction) domain.St
 	}
 	// Small steps keep each write lock short; a busy daemon interleaves.
 	for range 200 {
+		if err := ctx.Err(); err != nil {
+			return s.record(action, domain.StorageActionFailed, err)
+		}
 		_, _, free, statErr := s.store.DatabasePageStats(ctx)
-		if statErr != nil || free == 0 || ctx.Err() != nil {
+		if statErr != nil {
+			return s.record(action, domain.StorageActionFailed, statErr)
+		}
+		if free == 0 {
 			break
 		}
 		if err := s.store.IncrementalVacuum(ctx, 1000); err != nil {
