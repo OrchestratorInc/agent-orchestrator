@@ -25,6 +25,7 @@ import { cn } from "../lib/utils";
 import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
 import { AppBrowserLinkContext } from "./AppLink";
 import { ArtifactActionsMenu, openCloudArtifactsFolder } from "./ArtifactActionsMenu";
+import { artifactAtPath, deliverableArtifacts } from "../../../../packages/shared/artifacts/deliverables";
 import { ShareArtifactButton } from "./ShareArtifactPopover";
 import { ArtifactGalleryCard } from "./ArtifactGalleryCard";
 import { ArtifactFileView } from "./ArtifactFileView";
@@ -657,13 +658,20 @@ export function SessionArtifactsView({
 			),
 		[cloud, cloudRoot, session.artifactFiles],
 	);
+	// The grid lists deliverables only. `artifacts` stays whole, so a link to any
+	// other file of the session still opens below.
+	const listedArtifacts = useMemo(() => deliverableArtifacts(artifacts), [artifacts]);
 	const livePreviewPaths = useMemo(() => new Set(
-		artifacts.filter((artifact) =>
+		listedArtifacts.filter((artifact) =>
 			(artifact.kind === "html" && (cloud || (artifact.inlineUrl && artifact.rawUrl)))
 			|| (/\.pdf$/i.test(artifact.path) && (cloud || artifact.rawUrl)),
 		).slice(0, 4).map((artifact) => artifact.path),
-	), [artifacts, cloud]);
+	), [listedArtifacts, cloud]);
 	const [selectedPath, setSelectedPath] = useState<string | null>(null);
+	// A file a request opened before the session listed it, until the list has
+	// it. Only that file gets the not-listed-yet note: one that leaves the list
+	// later (deleted here or by the agent) is gone, not on its way.
+	const [awaitedPath, setAwaitedPath] = useState<string | null>(null);
 	const [editingPath, setEditingPath] = useState<string | null>(null);
 	// Share hides while the open file is being edited.
 	const [editingFile, setEditingFile] = useState(false);
@@ -705,7 +713,7 @@ export function SessionArtifactsView({
 		await cloudClient.sendSessionMessage(cloudOrgId, session.id, { text: message });
 	}, [cloudClient, cloudOrgId, session.id, t]);
 
-	useEffect(() => { setSelectedPath(null); setEditingPath(null); setHtmlSourcePath(null); }, [uiKey]);
+	useEffect(() => { setSelectedPath(null); setAwaitedPath(null); setEditingPath(null); setHtmlSourcePath(null); }, [uiKey]);
 	// History is per file: opening another one starts on its live content.
 	useEffect(() => setPreviewVersion(null), [selectedPath, uiKey]);
 	// Every file, and each look at its page or source, opens at fit.
@@ -747,10 +755,19 @@ export function SessionArtifactsView({
 			setEditingPath(null);
 			setHtmlSourcePath(null);
 			setSelectedPath(request.path);
+			setAwaitedPath(request.path);
 		}
 	}, [request]);
 
-	const listed = artifacts.find((artifact) => artifact.path === selectedPath);
+	// A file renamed while it is open, or opened by a link from before its
+	// rename, is found by the path it had.
+	const listed = selectedPath === null ? undefined : artifactAtPath(artifacts, selectedPath);
+	// The awaited file is listed once the lookup finds it, under its own path
+	// or, renamed since the link was written, under a new one.
+	if (awaitedPath !== null && listed) setAwaitedPath(null);
+	useEffect(() => {
+		if (listed && listed.path !== selectedPath) setSelectedPath(listed.path);
+	}, [listed, selectedPath]);
 	// An open cloud file keeps the URL it opened with while the access prefix
 	// is refreshed, so the refresh does not reload it.
 	const pinned = usePinnedArtifactUrl(cloud ? cloudRoot : undefined, cloud ? listed?.path : undefined, listed?.updatedAt);
@@ -760,6 +777,7 @@ export function SessionArtifactsView({
 		sessionId: session.id,
 		sessionTitle: session.title ?? "",
 		cloud: session.cloud,
+		hostId,
 	});
 	const openArtifact = (artifact: Pick<SessionArtifact, "path">) => {
 		setEditingPath(null);
@@ -792,7 +810,8 @@ export function SessionArtifactsView({
 	// A page that opens another file of its session selects it, so the header
 	// names the file shown.
 	const followFrame = useCallback((path: string) => {
-		if (session.artifactFiles?.some((artifact) => artifact.path === path)) setSelectedPath(path);
+		const artifact = artifactAtPath(session.artifactFiles, path);
+		if (artifact) setSelectedPath(artifact.path);
 	}, [session.artifactFiles]);
 	const readRefused = selectedFile.error instanceof CloudArtifactAccessError;
 	useEffect(() => {
@@ -854,13 +873,15 @@ export function SessionArtifactsView({
 						    session publishes its files. */}
 						{editingFile || session.cloud?.shared ? null : session.cloud ? (!cloudOwner ? null : (
 							<ShareArtifactButton
-								file={{ source: "cloud", orgId: session.cloud.orgId, sessionId: session.id, path: selected.path, projectId: "" }}
+								file={{ source: "cloud", orgId: session.cloud.orgId, sessionId: session.id, path: selected.path, projectId: "", ...(selected.id ? { artifactId: selected.id } : {}) }}
 								name={selected.name}
+								revision={listed?.updatedAt}
 							/>
 						)) : !hostId ? (
 							<ShareArtifactButton
-								file={{ sessionId: session.id, path: selected.path, projectId: session.workspaceId }}
+								file={{ sessionId: session.id, path: selected.path, projectId: session.workspaceId, ...(selected.id ? { artifactId: selected.id } : {}) }}
 								name={selected.name}
+								revision={listed?.updatedAt}
 							/>
 						) : null}
 						<Tooltip>
@@ -939,11 +960,18 @@ export function SessionArtifactsView({
 				{!hostId && !session.cloud && artifacts.length > 0 ? <OpenArtifactsFolderButtons sessionId={session.id} /> : null}
 				{session.cloud && owner && artifacts.length > 0 ? <OpenCloudArtifactsFolderButton orgId={session.cloud.orgId} sessionId={session.id} /> : null}
 			</div>
-			{artifacts.length === 0 ? (
+			{/* A file opened by its path (a chat link to one the agent just wrote)
+			    shows once the session lists it; until then, say so rather than
+			    leave the gallery as if nothing was asked. */}
+			{selectedPath !== null && selectedPath === awaitedPath ? (
+				<PanelMessage action={<Button onClick={() => setSelectedPath(null)} size="sm" type="button" variant="secondary">{t("artifacts.back")}</Button>}>
+					{t("artifacts.notListedYet", { name: selectedPath })}
+				</PanelMessage>
+			) : artifacts.length === 0 ? (
 				<PanelMessage>{t("artifacts.sessionEmpty")}</PanelMessage>
 			) : (
 				<ul className="board-scrollbar grid min-h-0 flex-1 grid-cols-2 content-start gap-3 overflow-y-auto px-3 pb-3 pt-1">
-					{artifacts.map((artifact) => {
+					{listedArtifacts.map((artifact) => {
 						const row = artifactRow(artifact);
 						return (
 							<ArtifactGalleryCard
@@ -953,7 +981,8 @@ export function SessionArtifactsView({
 								// Every card here belongs to this session, so only its time shows.
 								context=""
 								onPreview={() => openArtifact(artifact)}
-								actions={<ArtifactActionsMenu
+								// File actions would reach only the one file a bundle's row opens.
+								actions={artifact.bundle ? null : <ArtifactActionsMenu
 									artifact={artifact}
 									hostId={hostId}
 									session={session}

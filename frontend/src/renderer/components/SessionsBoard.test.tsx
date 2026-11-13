@@ -28,17 +28,32 @@ const {
 	workspaceQueryMock,
 	cloudProjectsMock,
 	spawnCloudOrchestratorMock,
-} = vi.hoisted(() => ({
-	appMemoryMock: vi.fn(),
-	sessionMemoryMock: vi.fn(),
-	navigateMock: vi.fn(),
-	notificationShowMock: vi.fn(),
-	postMock: vi.fn(),
-	patchMock: vi.fn(),
-	workspaceQueryMock: vi.fn(),
-	cloudProjectsMock: vi.fn((): { id: string; config?: object }[] | undefined => undefined),
-	spawnCloudOrchestratorMock: vi.fn(),
-}));
+	routerListeners,
+	fakeRouter,
+} = vi.hoisted(() => {
+	// Stands in for the router's onBeforeNavigate events, which the archive host follows.
+	const listeners = new Set<(event: { pathChanged: boolean }) => void>();
+	return {
+		routerListeners: listeners,
+		fakeRouter: {
+			subscribe: (_type: string, listener: (event: { pathChanged: boolean }) => void) => {
+				listeners.add(listener);
+				return () => {
+					listeners.delete(listener);
+				};
+			},
+		},
+		appMemoryMock: vi.fn(),
+		sessionMemoryMock: vi.fn(),
+		navigateMock: vi.fn(),
+		notificationShowMock: vi.fn(),
+		postMock: vi.fn(),
+		patchMock: vi.fn(),
+		workspaceQueryMock: vi.fn(),
+		cloudProjectsMock: vi.fn((): { id: string; config?: object }[] | undefined => undefined),
+		spawnCloudOrchestratorMock: vi.fn(),
+	};
+});
 
 vi.mock("../lib/cloud-orchestrator", () => ({ spawnCloudOrchestrator: spawnCloudOrchestratorMock }));
 
@@ -47,6 +62,7 @@ vi.mock("../hooks/useCloudOffering", () => ({ useCloudOffering: () => ({ default
 
 vi.mock("@tanstack/react-router", () => ({
 	useNavigate: () => navigateMock,
+	useRouter: () => fakeRouter,
 }));
 
 vi.mock("../hooks/useWorkspaceQuery", () => ({
@@ -56,6 +72,7 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 	cloudSessionsQueryKey: ["cloud-sessions"],
 	useWorkspaceQuery: workspaceQueryMock,
 	useRemoteProjectQuery: () => ({ data: undefined, isError: false, isSuccess: false }),
+	useRemoteHostWorkspacesQuery: () => ({ data: undefined, isError: false, isSuccess: false }),
 	useCloudProjectsQuery: () => ({ data: cloudProjectsMock() }),
 	useWorkspaceScope: (projectId?: string) => {
 		const query = workspaceQueryMock();
@@ -129,6 +146,8 @@ vi.mock("../lib/platform", async (importOriginal) => {
 
 import { isMacPlatform } from "../lib/platform";
 import { useUiStore } from "../stores/ui-store";
+import { sessionScmSummaryQueryKey } from "../hooks/useSessionScmSummary";
+import { ArchiveModalHost } from "./ArchiveModalHost";
 import { SessionsBoard } from "./SessionsBoard";
 import { latestSessionArtifacts, toBoardSessionPresentation } from "./SessionsBoardAdapters";
 import { TooltipProvider } from "./ui/tooltip";
@@ -139,19 +158,21 @@ function renderBoard(projectId?: string) {
 	return queryClient;
 }
 
+/** The board with the shell's archive modal host beside it, as the app mounts them. */
 function renderBoardWithClient(queryClient: QueryClient, projectId?: string) {
 	return render(
 		<QueryClientProvider client={queryClient}>
 			<TooltipProvider>
 				<SessionsBoard projectId={projectId} />
+				<ArchiveModalHost />
 			</TooltipProvider>
 		</QueryClientProvider>,
 	);
 }
 
-/** Opens the board's archive modal; its cards mount the frame after it opens. */
+/** Opens the archive modal from the board's button; its cards mount the frame after it opens. */
 async function expandArchive() {
-	await userEvent.click(screen.getByRole("button", { name: /^Archive, \d+ sessions?$/ }));
+	await userEvent.click(screen.getByRole("button", { name: /^Archived sessions, \d+$/ }));
 	const dialog = await screen.findByRole("dialog", { name: "Archived sessions" });
 	await within(dialog).findAllByTestId("session-archive-card");
 	return dialog;
@@ -159,7 +180,7 @@ async function expandArchive() {
 
 beforeEach(() => {
 	// The memory light and card chips are Developer mode tools behind the Diagnostics toggle.
-	useUiStore.setState({ developerMode: true, diagnostics: true });
+	useUiStore.setState({ developerMode: true, diagnostics: true, archiveModal: null });
 	navigateMock.mockReset();
 	notificationShowMock.mockReset().mockResolvedValue(undefined);
 	postMock.mockReset().mockResolvedValue({ data: {} });
@@ -170,6 +191,15 @@ beforeEach(() => {
 });
 
 describe("SessionsBoard", () => {
+	it("leaves a Cloud standalone agent's project for Home: it has no board", async () => {
+		workspaceQueryMock.mockReturnValue({
+			data: [{ id: "agent-1", name: "Fix the flake", kind: "cloud", standaloneAgent: true, path: "", sessions: [] }],
+			isSuccess: true,
+		});
+		renderBoard("agent-1");
+		await waitFor(() => expect(navigateMock).toHaveBeenCalledWith({ to: "/", replace: true }));
+	});
+
 	it("shows the Cloud loader instead of Chat while a cloud orchestrator is starting", () => {
 		workspaceQueryMock.mockReturnValue({ data: [{ id: "p1", name: "Cloud project", kind: "cloud", path: "", sessions: [] }], isSuccess: true });
 		useUiStore.getState().setProjectProvisioning("p1", true);
@@ -253,7 +283,7 @@ describe("SessionsBoard", () => {
 		useUiStore.getState().setProjectProvisioning("p1", true);
 		try {
 			renderBoard("p1");
-			expect(screen.getByText("Getting your project ready")).toBeInTheDocument();
+			expect(screen.getByText("Starting your orchestrator")).toBeInTheDocument();
 			expect(screen.getByLabelText("Message the agent")).toBeInTheDocument();
 			expect(screen.getByTestId("session-workspace-topbar")).toBeInTheDocument();
 		} finally {
@@ -351,7 +381,7 @@ describe("SessionsBoard", () => {
 			isSuccess: true, isError: false,
 		});
 		renderBoard("p1");
-		expect(screen.queryByRole("button", { name: /^Archive, \d+ sessions?$/ })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: /^Archived sessions, \d+$/ })).not.toBeInTheDocument();
 		const indicator = screen.getByTestId("app-memory-indicator");
 		// In the board's action row, ahead of the Task button.
 		expect(indicator.closest(".workspace-topbar-actions")).not.toBeNull();
@@ -625,7 +655,7 @@ describe("SessionsBoard", () => {
 		expect(status.querySelector(".animate-spin")).toBeNull();
 	});
 
-	it("keeps the loader on a Review pending card", () => {
+	it("keeps the loader on a Retrying review card", () => {
 		workspaceQueryMock.mockReturnValue({
 			data: [
 				workspaceWithSessions([
@@ -633,8 +663,8 @@ describe("SessionsBoard", () => {
 						id: "s-review-pending",
 						title: "review-pending-card-task",
 						status: "review_pending",
-						displayStatus: "Review pending",
-						kanbanColumn: "needs_review",
+						displayStatus: "Retrying review",
+						kanbanColumn: "validating",
 						activity: { state: "idle", lastActivityAt: "2026-01-01T00:00:00Z" },
 					}),
 				]),
@@ -646,11 +676,13 @@ describe("SessionsBoard", () => {
 		renderBoard("p1");
 		const card = screen.getByText("review-pending-card-task").closest('[data-testid="board-session-card"]') as HTMLElement;
 		const status = within(card).getByTestId("session-status");
-		expect(status).toHaveTextContent("Review pending");
+		expect(status).toHaveTextContent("Retrying review");
 		expect(status.querySelector(".animate-spin")).not.toBeNull();
 	});
 
-	it("keeps the loader on a Mergeable card while its agent is actually working", () => {
+	// The loader follows the phrase: a working agent gets the "Working" phrase
+	// from the daemon, so a card that still reads "Mergeable" describes a settled PR.
+	it("does not spin a Mergeable card even while its agent is active", () => {
 		workspaceQueryMock.mockReturnValue({
 			data: [
 				workspaceWithSessions([
@@ -671,7 +703,7 @@ describe("SessionsBoard", () => {
 		renderBoard("p1");
 		const card = screen.getByText("mergeable-active-task").closest('[data-testid="board-session-card"]') as HTMLElement;
 		const status = within(card).getByTestId("session-status");
-		expect(status.querySelector(".animate-spin")).not.toBeNull();
+		expect(status.querySelector(".animate-spin")).toBeNull();
 	});
 
 	it("paints a Merged card purple and holds the loader even while its agent keeps running", () => {
@@ -778,16 +810,16 @@ describe("SessionsBoard", () => {
 		});
 		view.rerender(<QueryClientProvider client={queryClient}><TooltipProvider><SessionsBoard projectId="p1" /></TooltipProvider></QueryClientProvider>);
 		expect(within(card()).queryByRole("status")).not.toBeInTheDocument();
-		expect(within(card()).getByText("ao/composer-review/root")).toBeInTheDocument();
+		expect(within(card()).getByText("composer-review")).toBeInTheDocument();
 	});
 
-	it("shows start failure instead of Awaiting PR on a failed card", () => {
+	it("shows start failure instead of Idle on a failed card", () => {
 		workspaceQueryMock.mockReturnValue({
 			data: [workspaceWithSessions([boardSession({
 				id: "s-setup-failed",
 				title: "failed-setup-task",
 				status: "idle",
-				displayStatus: "Awaiting PR",
+				displayStatus: "Idle",
 				provisionState: "failed",
 			})])],
 			isError: false,
@@ -797,7 +829,7 @@ describe("SessionsBoard", () => {
 		renderBoard("p1");
 		const card = screen.getByText("failed-setup-task").closest('[data-testid="board-session-card"]') as HTMLElement;
 		expect(within(card).getByTestId("session-status")).toHaveTextContent("Start failed");
-		expect(within(card).queryByText("Awaiting PR")).not.toBeInTheDocument();
+		expect(within(card).queryByText("Idle")).not.toBeInTheDocument();
 	});
 
 	it("styles legacy statuses from their status-implied Kanban columns", () => {
@@ -1040,7 +1072,7 @@ describe("SessionsBoard", () => {
 		renderBoard("p1");
 
 		// The board keeps only a quiet entry point; no cards render until it opens.
-		const archiveButton = screen.getByRole("button", { name: "Archive, 2 sessions" });
+		const archiveButton = screen.getByRole("button", { name: "Archived sessions, 2" });
 		expect(archiveButton).toHaveAttribute("aria-haspopup", "dialog");
 		expect(within(archiveButton).getByText("2")).toBeInTheDocument();
 		expect(screen.queryByText("dead worker")).not.toBeInTheDocument();
@@ -1048,7 +1080,7 @@ describe("SessionsBoard", () => {
 		const archive = await expandArchive();
 		const search = within(archive).getByRole("combobox");
 		expect(search).toHaveFocus();
-		const row = within(archive).getByText("dead worker").closest<HTMLElement>("[cmdk-item]");
+		const row = within(archive).getByText("dead worker").closest<HTMLElement>("[role='gridcell']");
 		expect(row).not.toBeNull();
 		const card = within(row!).getByTestId("board-session-card");
 		expect(within(card).getByRole("img", { name: "claude-code" })).toBeInTheDocument();
@@ -1084,6 +1116,46 @@ describe("SessionsBoard", () => {
 
 		await userEvent.keyboard("{Escape}");
 		await waitFor(() => expect(screen.queryByRole("dialog", { name: "Archived sessions" })).not.toBeInTheDocument());
+	});
+
+	it("opens over any page from a request, without a board or navigation", async () => {
+		workspaceQueryMock.mockReturnValue({
+			data: twoProjectsWithArchives(),
+			isError: false,
+			isSuccess: true,
+		});
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		render(
+			<QueryClientProvider client={queryClient}>
+				<TooltipProvider>
+					<ArchiveModalHost />
+				</TooltipProvider>
+			</QueryClientProvider>,
+		);
+		expect(screen.queryByRole("dialog", { name: "Archived sessions" })).not.toBeInTheDocument();
+
+		// Where Cmd+K was opened from; its own search is gone by the time the archive closes.
+		const opener = document.createElement("button");
+		opener.textContent = "opener";
+		document.body.append(opener);
+
+		// What the sidebar's menu and Cmd+K do.
+		act(() => useUiStore.getState().openArchive({ projectId: "p1", query: "dead", returnFocus: opener }));
+
+		const archive = await screen.findByRole("dialog", { name: "Archived sessions" });
+		const search = within(archive).getByRole("combobox");
+		expect(search).toHaveValue("dead");
+		expect(await within(archive).findByText("dead worker")).toBeInTheDocument();
+		expect(within(archive).queryByText("p2 worker")).not.toBeInTheDocument();
+		expect(search).toHaveFocus();
+
+		await userEvent.keyboard("{Escape}");
+		await waitFor(() => expect(screen.queryByRole("dialog", { name: "Archived sessions" })).not.toBeInTheDocument());
+		expect(useUiStore.getState().archiveModal).toBeNull();
+		expect(navigateMock).not.toHaveBeenCalled();
+		// Closing hands focus back to where the opener came from.
+		await waitFor(() => expect(opener).toHaveFocus());
+		opener.remove();
 	});
 
 	it("hides PR progress for a live merged session that has not actually terminated", () => {
@@ -1214,6 +1286,24 @@ describe("SessionsBoard", () => {
 		expect(await screen.findByText("Session can no longer be restored")).toBeInTheDocument();
 	});
 
+	it("shows the archive's cards without fetching a PR summary for each", async () => {
+		workspaceQueryMock.mockReturnValue({
+			data: [workspaceWithSessions(Array.from({ length: 5 }, (_, index) => terminatedSession({ id: `s-${index}`, title: `archived ${index}` })))],
+			isError: false,
+			isSuccess: true,
+		});
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		renderBoardWithClient(queryClient, "p1");
+
+		const archive = await expandArchive();
+		expect(within(archive).getAllByTestId("session-archive-card")).toHaveLength(5);
+		// Each card shows the PRs its session recorded; none starts its own
+		// request (or a poll) for a live summary.
+		const summaries = queryClient.getQueryCache().findAll({ queryKey: sessionScmSummaryQueryKey() });
+		expect(summaries.every((query) => query.state.fetchStatus === "idle" && query.state.dataUpdateCount === 0 && query.state.errorUpdateCount === 0)).toBe(true);
+		expect(within(archive).getAllByRole("link", { name: /^PR #\d+/ }).length).toBeGreaterThan(0);
+	});
+
 	it("shows an archive row error when restore fails", async () => {
 		postMock.mockResolvedValueOnce({ error: { code: "RESTORE_FAILED", message: "boom" } });
 		workspaceQueryMock.mockReturnValue({
@@ -1262,7 +1352,7 @@ describe("SessionsBoard", () => {
 		renderBoard("p1");
 
 		await expandArchive();
-		await waitFor(() => expect(screen.getByText("dead worker").closest("[cmdk-item]")).toHaveAttribute("data-selected", "true"));
+		await waitFor(() => expect(screen.getByText("dead worker").closest("[role='gridcell']")).toHaveAttribute("aria-selected", "true"));
 		const mod = isMacPlatform() ? "Meta" : "Control";
 		await userEvent.keyboard(`{${mod}>}{Enter}{/${mod}}`);
 
@@ -1271,6 +1361,181 @@ describe("SessionsBoard", () => {
 				params: { path: { sessionId: "s-dead" } },
 			}),
 		);
+	});
+
+	it("moves the archive selection through the grid as laid out, with the search keeping focus", async () => {
+		const sessions = Array.from({ length: 5 }, (_, index) =>
+			terminatedSession({ id: `s-${index}`, title: `archived ${index}`, branch: `ao/archived-${index}`, prs: [], updatedAt: `2026-01-0${9 - index}T00:00:00Z` }),
+		);
+		workspaceQueryMock.mockReturnValue({ data: [workspaceWithSessions(sessions)], isError: false, isSuccess: true });
+		renderBoard("p1");
+
+		const archive = await expandArchive();
+		const search = within(archive).getByRole("combobox");
+		const grid = within(archive).getByRole("grid", { name: "Archived sessions" });
+		// Three columns, as the responsive grid would lay out a medium window:
+		//   0 1 2
+		//   3 4
+		const realGetComputedStyle = window.getComputedStyle.bind(window);
+		const styleSpy = vi.spyOn(window, "getComputedStyle").mockImplementation((element, pseudo) => {
+			const style = realGetComputedStyle(element, pseudo);
+			if (element !== grid) return style;
+			return {
+				display: style.display,
+				pointerEvents: style.pointerEvents,
+				visibility: style.visibility,
+				getPropertyValue: (name: string) => (name === "grid-template-columns" ? "100px 100px 100px" : style.getPropertyValue(name)),
+			} as CSSStyleDeclaration;
+		});
+		const selected = () => within(grid).getAllByRole("gridcell").find((option) => option.getAttribute("aria-selected") === "true");
+		const expectSelected = (title: string) => {
+			const option = selected();
+			expect(option).toHaveAccessibleName(title);
+			expect(search).toHaveAttribute("aria-activedescendant", option?.id);
+			expect(search).toHaveFocus();
+			expect(within(grid).getAllByTestId("board-session-card").filter((card) => card.hasAttribute("data-selected"))).toHaveLength(1);
+		};
+
+		expectSelected("archived 0");
+		await userEvent.keyboard("{ArrowRight}");
+		expectSelected("archived 1");
+		await userEvent.keyboard("{ArrowDown}");
+		expectSelected("archived 4");
+		// The last row is the floor.
+		await userEvent.keyboard("{ArrowDown}");
+		expectSelected("archived 4");
+		await userEvent.keyboard("{ArrowUp}");
+		expectSelected("archived 1");
+		// Down from a column the short last row lacks lands on its last card.
+		await userEvent.keyboard("{ArrowRight}{ArrowDown}");
+		expectSelected("archived 4");
+		await userEvent.keyboard("{ArrowLeft}");
+		expectSelected("archived 3");
+		await userEvent.keyboard("{ArrowUp}");
+		expectSelected("archived 0");
+		// The first row is the ceiling.
+		await userEvent.keyboard("{ArrowUp}");
+		expectSelected("archived 0");
+		await userEvent.keyboard("{End}");
+		expectSelected("archived 4");
+		await userEvent.keyboard("{Home}");
+		expectSelected("archived 0");
+
+		// A new search starts again at its first result.
+		await userEvent.keyboard("{End}");
+		await userEvent.type(search, "archived");
+		await waitFor(() => expectSelected("archived 0"));
+		styleSpy.mockRestore();
+
+		// Unmeasured, the grid is one column: Down steps to the next card.
+		await userEvent.keyboard("{ArrowDown}{Enter}");
+		expect(postMock).not.toHaveBeenCalled();
+		expect(navigateMock).toHaveBeenCalledWith({
+			to: "/projects/$projectId/sessions/$sessionId",
+			params: { projectId: "p1", sessionId: "s-1" },
+		});
+		await waitFor(() => expect(screen.queryByRole("dialog", { name: "Archived sessions" })).not.toBeInTheDocument());
+	});
+
+	it("selects the card under the pointer only when the pointer moves", async () => {
+		workspaceQueryMock.mockReturnValue({
+			data: [workspaceWithSessions([
+				terminatedSession({ id: "s-0", title: "archived 0", prs: [], updatedAt: "2026-01-03T00:00:00Z" }),
+				terminatedSession({ id: "s-1", title: "archived 1", prs: [], updatedAt: "2026-01-02T00:00:00Z" }),
+				terminatedSession({ id: "s-2", title: "archived 2", prs: [], updatedAt: "2026-01-01T00:00:00Z" }),
+			])],
+			isError: false,
+			isSuccess: true,
+		});
+		renderBoard("p1");
+
+		const archive = await expandArchive();
+		const [first, second, third] = within(archive).getAllByRole("gridcell");
+		const pointerMove = (target: HTMLElement, x: number, y: number) =>
+			act(() => {
+				target.dispatchEvent(new MouseEvent("pointermove", { bubbles: true, clientX: x, clientY: y }));
+			});
+
+		pointerMove(within(third!).getByText("archived 2"), 10, 10);
+		expect(third).toHaveAttribute("aria-selected", "true");
+		await userEvent.keyboard("{ArrowUp}");
+		expect(second).toHaveAttribute("aria-selected", "true");
+		// A card scrolling under a still pointer does not take the selection back.
+		pointerMove(within(third!).getByText("archived 2"), 10, 10);
+		expect(second).toHaveAttribute("aria-selected", "true");
+		pointerMove(within(first!).getByText("archived 0"), 12, 10);
+		expect(first).toHaveAttribute("aria-selected", "true");
+		expect(third).toHaveAttribute("aria-selected", "false");
+	});
+
+	it("tabs through the selected archive card's controls and deletes it with Mod+Backspace", async () => {
+		workspaceQueryMock.mockReturnValue({
+			data: [workspaceWithSessions([
+				terminatedSession({ updatedAt: "2026-01-02T00:00:00Z" }),
+				terminatedSession({ id: "s-other", title: "other worker", branch: "ao/other", prs: [] }),
+			])],
+			isError: false,
+			isSuccess: true,
+		});
+		renderBoard("p1");
+
+		const archive = await expandArchive();
+		const search = within(archive).getByRole("combobox");
+		await userEvent.keyboard("{ArrowDown}");
+		expect(within(archive).getByRole("gridcell", { name: "other worker" })).toHaveAttribute("aria-selected", "true");
+
+		// Tab walks only the selected card: restore, delete, copy branch, then the close button.
+		await userEvent.tab();
+		expect(screen.getByRole("button", { name: "Restore other worker" })).toHaveFocus();
+		await userEvent.tab();
+		expect(screen.getByRole("button", { name: "Delete other worker permanently" })).toHaveFocus();
+		await userEvent.tab();
+		expect(screen.getByRole("button", { name: "Copy branch ao/other" })).toHaveFocus();
+		await userEvent.tab();
+		expect(within(archive).getByRole("button", { name: "Close" })).toHaveFocus();
+		await userEvent.tab();
+		expect(search).toHaveFocus();
+		await userEvent.tab({ shift: true });
+		expect(within(archive).getByRole("button", { name: "Close" })).toHaveFocus();
+		await userEvent.tab({ shift: true });
+		expect(screen.getByRole("button", { name: "Copy branch ao/other" })).toHaveFocus();
+
+		// An arrow from a card's control moves the selection and hands focus back to the search.
+		await userEvent.keyboard("{ArrowUp}");
+		expect(search).toHaveFocus();
+		expect(within(archive).getByRole("gridcell", { name: "dead worker" })).toHaveAttribute("aria-selected", "true");
+
+		// With text before the caret, Mod+Backspace is still the search's own editing.
+		const mod = isMacPlatform() ? "Meta" : "Control";
+		await userEvent.type(search, "worker");
+		await userEvent.keyboard(`{${mod}>}{Backspace}{/${mod}}`);
+		expect(screen.queryByRole("dialog", { name: "Delete this session permanently?" })).not.toBeInTheDocument();
+		await userEvent.clear(search);
+
+		await userEvent.keyboard(`{${mod}>}{Backspace}{/${mod}}`);
+		const confirm = await screen.findByRole("dialog", { name: "Delete this session permanently?" });
+		expect(confirm).toBeInTheDocument();
+		expect(navigateMock).not.toHaveBeenCalled();
+		expect(postMock).not.toHaveBeenCalled();
+	});
+
+	it("ignores archive keys while an IME is composing", async () => {
+		workspaceQueryMock.mockReturnValue({
+			data: [workspaceWithSessions([
+				terminatedSession({ updatedAt: "2026-01-02T00:00:00Z" }),
+				terminatedSession({ id: "s-other", title: "other worker", branch: "ao/other", prs: [] }),
+			])],
+			isError: false,
+			isSuccess: true,
+		});
+		renderBoard("p1");
+
+		const archive = await expandArchive();
+		const search = within(archive).getByRole("combobox");
+		fireEvent.keyDown(search, { key: "ArrowDown", isComposing: true });
+		fireEvent.keyDown(search, { key: "Enter", isComposing: true });
+		expect(within(archive).getByRole("gridcell", { name: "dead worker" })).toHaveAttribute("aria-selected", "true");
+		expect(navigateMock).not.toHaveBeenCalled();
 	});
 
 	it("confirms before deleting an archived session from the archive", async () => {
@@ -1289,7 +1554,7 @@ describe("SessionsBoard", () => {
 		expect(navigateMock).not.toHaveBeenCalled();
 	});
 
-	it("ignores restore completion after navigating to another project board", async () => {
+	it("ignores restore completion after the archive closes", async () => {
 		let finishRestore: ((value: { data: Record<string, never> }) => void) | undefined;
 		postMock.mockReturnValueOnce(
 			new Promise((resolve) => {
@@ -1310,18 +1575,13 @@ describe("SessionsBoard", () => {
 			isSuccess: true,
 		});
 		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-		const view = renderBoardWithClient(queryClient, "p1");
+		renderBoardWithClient(queryClient, "p1");
 
 		await expandArchive();
 		await userEvent.click(screen.getByRole("button", { name: "Restore dead worker" }));
 
-		view.rerender(
-			<QueryClientProvider client={queryClient}>
-				<TooltipProvider>
-					<SessionsBoard projectId="p2" />
-				</TooltipProvider>
-			</QueryClientProvider>,
-		);
+		// Closed, the modal no longer stands for where the user is.
+		act(() => useUiStore.getState().closeArchive());
 		await act(async () => {
 			finishRestore?.({ data: {} });
 		});
@@ -1330,7 +1590,7 @@ describe("SessionsBoard", () => {
 		expect(screen.queryByText("Session can no longer be restored")).not.toBeInTheDocument();
 	});
 
-	it("ignores restore-unavailable completion after navigating to another project board", async () => {
+	it("ignores restore-unavailable completion after the archive closes", async () => {
 		let finishRestore: ((value: { error: { code: string } }) => void) | undefined;
 		postMock.mockReturnValueOnce(
 			new Promise((resolve) => {
@@ -1351,24 +1611,53 @@ describe("SessionsBoard", () => {
 			isSuccess: true,
 		});
 		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-		const view = renderBoardWithClient(queryClient, "p1");
+		renderBoardWithClient(queryClient, "p1");
 
 		await expandArchive();
 		await userEvent.click(screen.getByRole("button", { name: "Restore dead worker" }));
 
-		view.rerender(
-			<QueryClientProvider client={queryClient}>
-				<TooltipProvider>
-					<SessionsBoard projectId="p2" />
-				</TooltipProvider>
-			</QueryClientProvider>,
-		);
+		// Closed, the modal no longer stands for where the user is.
+		act(() => useUiStore.getState().closeArchive());
 		await act(async () => {
 			finishRestore?.({ error: { code: "SESSION_NOT_RESUMABLE" } });
 		});
 
 		expect(navigateMock).not.toHaveBeenCalled();
 		expect(screen.queryByText("Session can no longer be restored")).not.toBeInTheDocument();
+	});
+
+	it("closes when the user moves to another page, and drops a restore still running", async () => {
+		let finishRestore: ((value: { data: Record<string, never> }) => void) | undefined;
+		postMock.mockReturnValueOnce(
+			new Promise((resolve) => {
+				finishRestore = resolve;
+			}),
+		);
+		workspaceQueryMock.mockReturnValue({
+			data: [workspaceWithSessions([terminatedSession()])],
+			isError: false,
+			isSuccess: true,
+		});
+		renderBoard("p1");
+
+		await expandArchive();
+		await userEvent.click(screen.getByRole("button", { name: "Restore dead worker" }));
+
+		const navigateAway = (pathChanged: boolean) => act(() => {
+			for (const listener of [...routerListeners]) listener({ pathChanged });
+		});
+		// The same page with new search params is not leaving it.
+		navigateAway(false);
+		expect(screen.getByRole("dialog", { name: "Archived sessions" })).toBeInTheDocument();
+
+		// A shortcut, history or a notification moving to another page.
+		navigateAway(true);
+		await waitFor(() => expect(screen.queryByRole("dialog", { name: "Archived sessions" })).not.toBeInTheDocument());
+		expect(useUiStore.getState().archiveModal).toBeNull();
+		await act(async () => {
+			finishRestore?.({ data: {} });
+		});
+		expect(navigateMock).not.toHaveBeenCalled();
 	});
 
 	it("keeps a live merged session in the ready lane and opens its card without restore", async () => {
@@ -1383,7 +1672,7 @@ describe("SessionsBoard", () => {
 		const readyLane = screen.getByRole("region", { name: "Ready sessions" });
 		expect(within(readyLane).getByText("Ready")).toHaveClass("text-status-ready");
 		expect(within(readyLane).getByText("merged worker")).toBeInTheDocument();
-		expect(screen.queryByRole("button", { name: /^Archive, \d+ sessions?$/ })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: /^Archived sessions, \d+$/ })).not.toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Restore merged worker" })).not.toBeInTheDocument();
 
 		await userEvent.click(screen.getByText("merged worker"));
@@ -1597,7 +1886,7 @@ describe("SessionsBoard", () => {
 		const archive = await expandArchive();
 		const archivedMergedRow = within(archive)
 			.getByText("archived merged worker")
-			.closest<HTMLElement>("[cmdk-item]");
+			.closest<HTMLElement>("[role='gridcell']");
 		expect(archivedMergedRow).not.toBeNull();
 		expect(
 			within(archivedMergedRow!).queryByRole("button", { name: "Archive archived merged worker" }),
@@ -1929,6 +2218,20 @@ describe("SessionsBoard artifacts", () => {
 		expect(screen.queryByTestId("board-session-artifacts")).not.toBeInTheDocument();
 	});
 });
+
+/** p1 ("radic") and p2 ("other"), each with one archived worker. */
+function twoProjectsWithArchives(): WorkspaceSummary[] {
+	return [
+		workspaceWithSessions([terminatedSession()]),
+		{
+			id: "p2",
+			name: "other",
+			path: "/tmp/other",
+			kind: "single_repo",
+			sessions: [terminatedSession({ id: "s-p2", workspaceId: "p2", workspaceName: "other", title: "p2 worker", branch: "ao/p2-worker", prs: [] })],
+		},
+	];
+}
 
 function workspaceWithSessions(sessions: WorkspaceSession[]): WorkspaceSummary {
 	return {

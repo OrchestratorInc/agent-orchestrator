@@ -64,15 +64,37 @@ it.each([true, false])("marks the group tab's frame as the selected tab only whi
 it("names a grouped shell by the agent running in it and keeps the agent watch open", () => {
 	useShellAgentStore.setState({ agents: { "sh-1": { harness: "claude-code", state: "working" } } });
 	const member = (key: string, label: string, agentHandleId?: string) => ({ key, label, icon: null, onSelect: vi.fn(), onClose: vi.fn(), agentHandleId });
-	const { getByText, container } = render(
+	const { getByText, getByRole, container } = render(
 		<TooltipProvider>
 			<SplitGroupTab active focusedKey="sh-1" members={[member("session", "Greeting"), member("sh-1", "Terminal 1", "sh-1")]} menu={{ kind: "group", onUngroup: vi.fn() }} />
 		</TooltipProvider>,
 	);
 	expect(getByText("Claude Code")).toBeInTheDocument();
 	expect(container.querySelector("[data-shell-agent-state='working']")).not.toBeNull();
+	// The member's aria-label would hide the badge's text, so it carries the state.
+	expect(getByRole("tab", { name: "Claude Code · Claude Code is working" })).toBeInTheDocument();
 	expect(useShellAgentStream).toHaveBeenLastCalledWith(true);
 	useShellAgentStore.setState({ agents: {} });
+});
+
+it("closes the focused member's pane on a middle-click on its close button", () => {
+	const onClose = vi.fn();
+	const { getAllByRole } = render(
+		<TooltipProvider>
+			<SplitGroupTab
+				active
+				focusedKey="sh-1"
+				members={[
+					{ key: "session", label: "Greeting", icon: null, onSelect: vi.fn(), onClose: vi.fn() },
+					{ key: "sh-1", label: "Terminal 1", icon: null, onSelect: vi.fn(), onClose },
+				]}
+				menu={{ kind: "group", onUngroup: vi.fn() }}
+			/>
+		</TooltipProvider>,
+	);
+	const close = getAllByRole("button").find((button) => button.closest("[data-terminal-tab-action]"))!;
+	fireEvent(close, new MouseEvent("auxclick", { bubbles: true, button: 1 }));
+	expect(onClose).toHaveBeenCalledOnce();
 });
 
 it("lists the focused member's tab menu below Ungroup", () => {

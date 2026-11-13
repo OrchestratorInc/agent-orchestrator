@@ -111,11 +111,14 @@ describe("Cloud project settings", () => {
 		] } });
 		const view = mount();
 		const approval = role === "orchestrator" ? "Orchestrator agent approval" : `${label} approval`;
+		const effort = role === "orchestrator" ? "Orchestrator agent Effort" : `${label} Effort`;
 		expect(await screen.findByRole("button", { name: `${label} agent` })).toBeEnabled();
 		const model = await screen.findByRole("button", { name: `${label} model` });
 		// An unset model names the agent's real default instead of a placeholder.
-		await waitFor(() => expect(model).toHaveTextContent("Local default · High"));
+		await waitFor(() => expect(model).toHaveTextContent("Local default"));
 		expect(model).not.toHaveTextContent("Agent default");
+		expect(model).not.toHaveTextContent("High");
+		expect(screen.getByRole("button", { name: effort })).toHaveTextContent("High");
 		expect(model).toBeEnabled();
 		expect(screen.getByRole("button", { name: approval })).toBeEnabled();
 		const expectedPatch = (config: { model: string; effort: string; permissions: string }) => {
@@ -125,11 +128,14 @@ describe("Cloud project settings", () => {
 		await choose(approval, "Bypass permissions");
 		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", expectedPatch({ model: "", effort: "high", permissions: "bypass-permissions" })));
 		await choose(`${label} model`, "Other model");
-		await userEvent.click(screen.getByRole("menuitemradio", { name: "Low" }));
+		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", expectedPatch({ model: "other-model", effort: "high", permissions: "bypass-permissions" })));
+		await userEvent.click(screen.getByRole("button", { name: effort }));
+		await userEvent.click(await screen.findByRole("menuitemradio", { name: "Low" }));
 		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", expectedPatch({ model: "other-model", effort: "low", permissions: "bypass-permissions" })));
 		view.unmount();
 		mount();
-		await waitFor(() => expect(screen.getByRole("button", { name: `${label} model` })).toHaveTextContent("Other model · Low"));
+		await waitFor(() => expect(screen.getByRole("button", { name: `${label} model` })).toHaveTextContent("Other model"));
+		expect(screen.getByRole("button", { name: effort })).toHaveTextContent("Low");
 		expect(screen.getByRole("button", { name: approval })).toHaveTextContent("Bypass permissions");
 		expect(screen.getByRole("button", { name: `${label} agent` })).toHaveTextContent(agent === "codex" ? "Codex" : "Claude Code");
 	});
@@ -170,8 +176,8 @@ describe("Cloud project settings", () => {
 		expect(await screen.findByRole("menuitem", { name: /^Opus 5/ })).toBeInTheDocument();
 		expect(screen.queryByRole("menuitem", { name: /Only On This Computer/ })).not.toBeInTheDocument();
 		await userEvent.click(screen.getByRole("menuitem", { name: /^Opus 5/ }));
-		// Picking the model asks for its effort, as for any role's model.
-		await userEvent.click(await screen.findByRole("menuitemradio", { name: "High" }));
+		// Effort has its own picker beside the model, so picking a model just closes the menu.
+		expect(screen.queryByRole("menuitemradio")).not.toBeInTheDocument();
 		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", {
 			config: expect.objectContaining({ worker: { agent: "claude-code", agentConfig: expect.objectContaining({ model: "claude-opus-5" }) } }),
 		}));
@@ -259,7 +265,8 @@ describe("Cloud project settings", () => {
 		mount();
 		const reviewer = await screen.findByRole("button", { name: "Reviewer agent" });
 		expect(reviewer).toHaveTextContent("Codex");
-		await waitFor(() => expect(screen.getByRole("button", { name: "Reviewer model" })).toHaveTextContent("worker-model · Max"));
+		await waitFor(() => expect(screen.getByRole("button", { name: "Reviewer model" })).toHaveTextContent("worker-model"));
+		expect(screen.getByRole("button", { name: "Reviewer Effort" })).toHaveTextContent("Max");
 		await choose("Reviewer approval", "Bypass permissions");
 		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", {
 			config: { reviewers: [{ harness: "codex", agentConfig: { model: "worker-model", mode: "", effort: "max", permissions: "bypass-permissions" } }] },
@@ -407,6 +414,56 @@ describe("Cloud project settings", () => {
 		mount("general");
 		await userEvent.click(await screen.findByRole("switch", { name: "Workers request a built-in review" }));
 		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", { config: { workersRequestReview: true } }));
+	});
+
+	it("turns off naming Orchestrator a commit co-author through the settings patch", async () => {
+		mount("general");
+		const toggle = await screen.findByRole("switch", { name: "Add Orchestrator as a commit co-author" });
+		expect(toggle).toBeChecked();
+		// The page is read by admins too, for every session's commits: it promises nothing about who "you" are.
+		expect(screen.getByText("When enabled, commits the agents make in this project list the Orchestrator GitHub App as a co-author. The commit author does not change.")).toBeInTheDocument();
+		await userEvent.click(toggle);
+		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", { config: { coAuthorCommits: false } }));
+	});
+
+	it("puts the co-author switch back on when the control plane does not support it yet", async () => {
+		// A control plane from before the setting rejects it as unknown.
+		mocks.patch.mockRejectedValueOnce(new CloudCpError("unsupported or null config.coAuthorCommits", { status: 422, code: "validation_error" }));
+		useUiStore.setState({ globalToast: null, globalToasts: [] });
+		mount("general");
+		const toggle = await screen.findByRole("switch", { name: "Add Orchestrator as a commit co-author" });
+		await userEvent.click(toggle);
+		await waitFor(() => expect(useUiStore.getState().globalToast).toMatchObject({
+			title: "This Cloud control plane does not support the co-author setting yet, so it stays on.", tone: "error",
+		}));
+		await waitFor(() => expect(toggle).toBeChecked());
+		// Nothing else changed, so nothing else is sent, and the next edit does not resend the setting.
+		expect(mocks.patch).toHaveBeenCalledTimes(1);
+		await userEvent.click(screen.getByRole("switch", { name: "Workers request a built-in review" }));
+		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", { config: { workersRequestReview: true } }));
+	});
+
+	// Only an older control plane's exact rejection of the unknown setting puts
+	// the switch back; any other failure, even one naming the setting, is a
+	// failure to save.
+	it.each([
+		["an outage", new CloudCpError("Cloud is unavailable", { status: 503, code: "unavailable" })],
+		["an outage that names the setting", new CloudCpError("Failed to persist coAuthorCommits", { status: 503, code: "unavailable" })],
+		["another validation error on the setting", new CloudCpError("coAuthorCommits must be a boolean", { status: 422, code: "validation_error" })],
+		["the older rejection with another status", new CloudCpError("unsupported or null config.coAuthorCommits", { status: 400, code: "validation_error" })],
+		["the older rejection with another code", new CloudCpError("unsupported or null config.coAuthorCommits", { status: 422, code: "invalid_request" })],
+		["the older message without a control plane answer", new Error("unsupported or null config.coAuthorCommits")],
+	])("still reports %s when saving the co-author setting", async (_name, failure) => {
+		mocks.patch.mockRejectedValueOnce(failure);
+		useUiStore.setState({ globalToast: null, globalToasts: [] });
+		const onSaveState = vi.fn();
+		mount("general", onSaveState);
+		const toggle = await screen.findByRole("switch", { name: "Add Orchestrator as a commit co-author" });
+		await userEvent.click(toggle);
+		await waitFor(() => expect(onSaveState).toHaveBeenLastCalledWith(expect.objectContaining({ phase: "failed", error: failure.message })));
+		expect(toggle).not.toBeChecked();
+		expect(mocks.patch).toHaveBeenCalledTimes(1);
+		expect(useUiStore.getState().globalToast).toBeNull();
 	});
 });
 

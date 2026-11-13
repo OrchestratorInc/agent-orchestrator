@@ -1039,7 +1039,7 @@ func chatUserMessage(req SendConversationMessageRequest, sessionID string) (port
 	for _, excerpt := range req.Excerpts {
 		excerpts = append(excerpts, ports.ChatExcerptReference{
 			ConversationID: excerpt.ConversationID, MessageID: excerpt.MessageID,
-			Revision: excerpt.Revision, Text: excerpt.Text, ID: excerpt.ID, Order: excerpt.Order,
+			Revision: excerpt.Revision, Text: excerpt.Text, ID: excerpt.ID, Order: excerpt.Order, Snapshot: excerpt.Snapshot,
 		})
 	}
 	return ports.ChatUserMessage{
@@ -1342,6 +1342,14 @@ func writeConversationErrorWithCode(w http.ResponseWriter, r *http.Request, err 
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation",
 			"CHAT_TITLE_REQUIRED", "title is required", nil)
 
+	// Checked before ErrProviderRefused: a steer into a lost session is wrapped
+	// as a refusal so its delivery handle settles, but the conversation is not
+	// fine, and the client needs the resume guidance.
+	case errors.Is(err, ports.ErrChatProviderSessionLost):
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict",
+			"CHAT_PROVIDER_SESSION_LOST",
+			"the agent's process lost this conversation and was stopped; resume the agent to continue", nil)
+
 	case errors.Is(err, chatsvc.ErrProviderRefused):
 		// The provider declined and the conversation is fine. Its own explanation is
 		// carried through: it says something the user can act on, which a generic
@@ -1453,6 +1461,7 @@ func conversationSnapshotResponse(s chatsvc.Snapshot) ConversationSnapshotRespon
 			StartedAt:       optionalTimestamp(turn.StartedAt),
 			CompletedAt:     optionalTimestamp(turn.CompletedAt),
 			Diff:            turnDiffPayload(turn.Diff),
+			Artifacts:       turnArtifactsPayload(turn.Artifacts),
 			Plan:            turnPlanPayload(turn.Plan),
 			RolledBack:      turn.RolledBackAt != nil,
 		})
@@ -1556,18 +1565,19 @@ func conversationContentSummary(msg domain.ConversationMessage) ([]ConversationC
 			summary.AnnotationOrder = ref.Order
 		}
 		if block.Type == "excerpt" {
-			// Excerpts written by current versions carry verified structured
+			// Excerpts written by current versions carry captured structured
 			// context. Older durable messages only have the excerpt resource URI
 			// and selected text; keep those navigable without exposing the
 			// internal URI in the public content summary.
 			summary.Name = "Chat excerpt"
 			if block.Excerpt != nil {
+				summary.Snapshot = excerptSnapshotSummary(block.Excerpt.Reference.Snapshot)
 				summary.AnnotationID = block.Excerpt.Reference.ID
 				summary.AnnotationOrder = block.Excerpt.Reference.Order
 				summary.Text = block.Excerpt.SelectedText
 				summary.SourceConversationID = block.Excerpt.Reference.ConversationID
 				summary.SourceMessageID = block.Excerpt.Reference.MessageID
-				summary.SourceRevision = block.Excerpt.Reference.Revision
+				summary.SourceRevision = &block.Excerpt.Reference.Revision
 			} else {
 				summary.Text = block.Text
 				if strings.HasPrefix(block.URI, ports.ChatExcerptResourceURIPrefix) {
@@ -1633,6 +1643,18 @@ func turnDiffPayload(diff *domain.ConversationTurnDiff) *ConversationTurnDiffRes
 			Status:    file.Status,
 			OldPath:   file.OldPath,
 		})
+	}
+	return out
+}
+
+// turnArtifactsPayload maps the artifacts a turn changed onto the wire shape.
+func turnArtifactsPayload(artifacts *domain.ConversationTurnArtifacts) *ConversationTurnArtifactsResponse {
+	if artifacts == nil || len(artifacts.Files) == 0 {
+		return nil
+	}
+	out := &ConversationTurnArtifactsResponse{Files: make([]ConversationTurnArtifactResponse, 0, len(artifacts.Files))}
+	for _, file := range artifacts.Files {
+		out.Files = append(out.Files, ConversationTurnArtifactResponse{Path: file.Path, Status: file.Status})
 	}
 	return out
 }

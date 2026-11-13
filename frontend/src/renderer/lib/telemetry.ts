@@ -1592,16 +1592,9 @@ export async function captureRendererException(error: unknown, properties?: Reco
 		// The main-owned Sentry gate can still accept a crash when analytics cannot initialize.
 	}
 	if (isDeniedEvent("$exception")) return;
-	// Budget per error type and call site, so one noisy TypeError cannot starve
-	// a different failure that happens to share the same constructor name.
-	const site = typeof properties?.operation === "string" ? properties.operation : typeof properties?.source === "string" ? properties.source : "unknown";
-	// The source labels are shared by many locations (window-error,
-	// unhandledrejection, react_render). Use the first stack frame as well.
-	// This bounded key stays in memory and is never sent as telemetry.
-	const frame = error instanceof Error ? error.stack?.split("\n").slice(1).find((line) => /^\s*at\s/.test(line))?.trim().slice(0, 256) : undefined;
-	if (!reserveCapture(`exception:${exceptionName(error)}:${site.slice(0, 64)}:${frame ?? "unknown"}`)) return;
-	// The main-owned policy gate decides whether this reaches Sentry. Renderer
-	// exceptions no longer enter the PostHog product-analytics path.
+	// The main-owned policy gate decides whether this reaches Sentry, and
+	// Electron main samples and budgets it per install on the final scrubbed
+	// fingerprint. Renderer exceptions no longer enter the PostHog path.
 	const source = typeof properties?.source === "string" ? properties.source : undefined;
 	captureExceptionToSentry(normalizeException(error), {
 		category: source === "react-error-boundary" ? "render_crash" : undefined,

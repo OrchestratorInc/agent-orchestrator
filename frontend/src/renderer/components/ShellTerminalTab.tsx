@@ -1,12 +1,12 @@
 import { agentLabel } from "@aoagents/product-ui";
-import { CircleAlert, LoaderCircle, SquareTerminal, X } from "@/components/app-icons";
+import { SquareTerminal, X } from "@/components/app-icons";
 import { type KeyboardEvent, type MouseEvent, useEffect, useRef, useState } from "react";
+import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 import { useTruncatedText } from "../hooks/useTruncatedText";
 import type { ShellTerminal } from "../hooks/useShellTerminals";
 import { cn } from "../lib/utils";
 import { type ShellAgent, useShellAgentStore, useShellAgentStream } from "../stores/shell-agent-store";
-import { useUiStore } from "../stores/ui-store";
 import { AgentAvatar } from "./AgentAvatar";
 import { TabContextMenu } from "./TabContextMenu";
 import { TerminalTabFrame, terminalTabActionClassName, terminalTabRenameInputClassName } from "./TerminalTabFrame";
@@ -50,9 +50,8 @@ export function ShellTerminalTab({
 	const inputRef = useRef<HTMLInputElement | null>(null);
 	const lastClickAtRef = useRef(0);
 	const canEdit = Boolean(onRename) && !shell.optimistic;
-	// The agent tab is a Developer Mode preview, like the simplified topbar.
-	const developerMode = useUiStore((state) => state.developerMode);
-	const tracksAgent = developerMode && !shell.optimistic && !shell.cloud && !shell.hostId;
+	// Only the local daemon watches shells, so cloud and remote-host tabs stay plain.
+	const tracksAgent = !shell.optimistic && !shell.cloud && !shell.hostId;
 	useShellAgentStream(tracksAgent);
 	const agent = useShellAgentStore((state) => (tracksAgent ? state.agents[shell.handleId] : undefined));
 	const unseenDone = useShellAgentStore((state) => Boolean(state.unseenDone[shell.handleId]));
@@ -65,7 +64,7 @@ export function ShellTerminalTab({
 		Boolean(agent && stripShellHandleIds?.some((id) => id !== shell.handleId && state.agents[id]?.harness === agent.harness)),
 	);
 	const agentName = agent && defaultNumber ? agentLabel(agent.harness) : undefined;
-	const terminalTitle = developerMode ? shell.terminalTitle : undefined;
+	const terminalTitle = shell.terminalTitle;
 	const title = terminalTitle ?? (agentName ? (sharesAgent ? `${agentName} ${defaultNumber}` : agentName) : shell.title);
 	// An agent's name is display only, so renaming starts from the real title.
 	const renameBase = terminalTitle ?? shell.title;
@@ -173,6 +172,7 @@ export function ShellTerminalTab({
 				<TerminalTabFrame
 					wide={Boolean(agent)}
 					action={closeAction}
+					onClose={closeAction ? onClose : undefined}
 					active={isActive}
 					buttonProps={{
 						"aria-current": isActive,
@@ -191,13 +191,12 @@ export function ShellTerminalTab({
 					editingValue={draft}
 					icon={
 						agent ? (
-							<AgentAvatar className="size-icon-sm!" decorative provider={agent.harness} />
+							<ShellAgentIcon agent={agent} done={unseenDone && !isActive} />
 						) : (
 							<SquareTerminal aria-hidden="true" className="size-icon-sm" />
 						)
 					}
 					label={title}
-					trailing={agent ? <ShellAgentStatus agent={agent} done={unseenDone && !isActive} /> : undefined}
 				/>
 			</TabContextMenu>
 		);
@@ -264,26 +263,41 @@ export function ShellTerminalTab({
 	);
 }
 
-const AGENT_STATUS = {
-	working: {
-		label: "terminal.agentWorking",
-		icon: <LoaderCircle aria-hidden="true" className="size-3 animate-spin text-muted-foreground motion-reduce:animate-none" />,
-	},
-	waiting: { label: "terminal.agentWaiting", icon: <CircleAlert aria-hidden="true" className="size-3 text-destructive" /> },
-	done: { label: "terminal.agentDone", icon: <span aria-hidden="true" className="size-2 rounded-full bg-muted-foreground/60" /> },
+// The agent's state as a dot on its logo, the sidebar's vocabulary: pulsing
+// while it works, red while it waits on the user, muted for a finished turn
+// not yet seen. It sits on the icon, so it never moves the title.
+const AGENT_BADGE = {
+	working: { label: "terminal.agentWorking", className: "bg-foreground animate-pulse motion-reduce:animate-none" },
+	waiting: { label: "terminal.agentWaiting", className: "bg-destructive" },
+	done: { label: "terminal.agentDone", className: "bg-muted-foreground" },
 } as const;
 
-// The sidebar's status vocabulary: a spinner while the agent works, the red
-// alert while it waits on the user, and a dot for a finished turn not yet seen.
-export function ShellAgentStatus({ agent, done }: { agent: ShellAgent; done: boolean }) {
+function shellAgentBadgeState(agent: ShellAgent, done: boolean) {
+	return agent.state === "idle" ? (done ? "done" : undefined) : agent.state;
+}
+
+/** The agent's state in words, for an accessible name that would hide the badge's own text. */
+export function shellAgentStateLabel(t: TFunction, agent: ShellAgent, done: boolean): string | undefined {
+	const state = shellAgentBadgeState(agent, done);
+	return state ? t(AGENT_BADGE[state].label, { agent: agentLabel(agent.harness) }) : undefined;
+}
+
+/** A shell's agent logo, with its state as a badge on the logo's corner. */
+export function ShellAgentIcon({ agent, done }: { agent: ShellAgent; done: boolean }) {
 	const { t } = useTranslation();
-	const state = agent.state === "idle" ? (done ? "done" : undefined) : agent.state;
-	if (!state) return null;
-	const label = t(AGENT_STATUS[state].label, { agent: agentLabel(agent.harness) });
+	const state = shellAgentBadgeState(agent, done);
 	return (
-		<span className="inline-flex size-3 items-center justify-center" data-shell-agent-state={state} title={label}>
-			{AGENT_STATUS[state].icon}
-			<span className="sr-only">{label}</span>
+		<span className="relative grid size-icon-base place-items-center" data-shell-agent-state={state}>
+			<AgentAvatar className="size-icon-sm!" decorative provider={agent.harness} />
+			{state ? (
+				<>
+					<span
+						aria-hidden="true"
+						className={cn("absolute -bottom-px -right-px size-1.5 rounded-full ring-1 ring-background", AGENT_BADGE[state].className)}
+					/>
+					<span className="sr-only">{shellAgentStateLabel(t, agent, done)}</span>
+				</>
+			) : null}
 		</span>
 	);
 }

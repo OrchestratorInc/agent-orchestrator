@@ -248,6 +248,7 @@ html[data-window-translucent="true"]::view-transition-old(root) {
 	--spacing-shell-tab-min: var(--size-shell-tab-min);
 	--spacing-shell-tab-max: var(--size-shell-tab-max);
 	--spacing-agent-shell-tab-max: var(--size-agent-shell-tab-max);
+	--spacing-session-tab-max: var(--size-session-tab-max);
 	--spacing-board-empty: var(--size-board-empty);
 	--spacing-preview-content: var(--size-preview-content);
 	--spacing-preview-max: var(--size-preview-max);
@@ -1615,12 +1616,10 @@ body {
 	user-select: none;
 }
 
-button,
-input,
-textarea,
-select {
-	font: inherit;
-}
+/* Form controls inherit their font from Tailwind's preflight, inside
+ * `@layer base`. Do not repeat that rule here: unlayered CSS beats every
+ * layered utility, so `text-*` and `font-*` on buttons and inputs would be
+ * ignored. */
 
 /* Error copy stays copyable under the app-wide `user-select: none` (#4268). */
 input,
@@ -2103,7 +2102,8 @@ textarea,
 }
 
 /* The live row's working mark (components/chat/LatticeLoader.tsx): sixteen 2.5px
-   dots on a 3.5px pitch, 13px across and centred in the 20px slot, so every dot
+   dots on a 3.5px pitch, 13px across. It starts at the left edge of the step
+   icons' 12px slot (STEP_MARK_SLOT_CLASS in ChatTimelineItems.tsx), so every dot
    lands on whole device pixels on a 2x display. The outer twelve share one beat,
    staggered inline. */
 .chat-lattice {
@@ -2311,6 +2311,16 @@ textarea,
 	}
 }
 
+[data-host-offline] *,
+[data-host-offline] *::before,
+[data-host-offline] *::after {
+	animation: none;
+}
+
+[data-host-offline] .animate-attention-card-pulse::before {
+	opacity: 0.5;
+}
+
 @keyframes ao-startup-logo-breathe {
 	0%,
 	100% {
@@ -2348,14 +2358,6 @@ textarea,
 .ao-startup-logo {
 	animation: ao-startup-logo-breathe 3.2s ease-in-out infinite;
 	filter: drop-shadow(0 7px 20px rgb(0 0 0 / 0.28));
-}
-
-.ao-mascot-eyes {
-	fill: transparent;
-}
-
-:root[data-theme="light"] .ao-mascot-eyes {
-	fill: #000;
 }
 
 /* Startup requirements checklist — each row fades/slides in on its own
@@ -3060,6 +3062,12 @@ html.sidebar-reordering * {
 	left: 0;
 }
 
+/* On a translucent window bg-surface is a 5% tint, so the transcript under the
+   open dock showed through it. The queue box keeps its solid fill there. */
+html[data-window-translucent="true"] :is(.queue-dock, .queue-dock-toggle, .queue-dock-body) {
+	background-color: var(--solid-bg-secondary);
+}
+
 /* Clip-height collapse: one row stays visible when folded; up to five when open. */
 .queue-dock-body {
 	--queue-dock-row-height: 2.5rem;
@@ -3664,7 +3672,8 @@ html.sidebar-reordering * {
 	flex: 0 0 auto;
 	margin-inline: calc(-1 * var(--gap-topbar-control)) 0;
 	opacity: 0;
-	background: color-mix(in srgb, var(--color-border) 50%, transparent);
+	/* Spacer only: the line itself is not drawn. */
+	background: transparent;
 }
 
 .session-split:has(> [data-slot="inspector-gap"][data-motion="animated"]) .topbar-divider {
@@ -4996,13 +5005,15 @@ html.sidebar-reordering * {
    hides the shell topbar; windowed mode reserves the native traffic-light band,
    while native fullscreen keeps a 0px top inset. Linux keeps its ShellTopbar
    offset below. */
-/* Maximized files use the same geometry as the maximized browser (backdrop,
-   titlebar band, inset frame) but their own rules, so the native-view
-   composition overrides for the browser never reach the files overlay. */
+/* Maximized files share the maximized browser's overlay geometry (backdrop,
+   titlebar band, full-width frame) but keep their own frame and composition
+   rules, so the native-view overrides for the browser never reach files.
+   Browser maximize switches geometry atomically. A live WebContentsView cannot
+   share a compositor timeline with DOM layout; animating its box would resize
+   Chromium over IPC every frame and make the controls visibly trail the page. */
+.browser-popout-overlay,
 .files-popout-overlay {
 	--browser-popout-top: env(titlebar-area-height, 0px);
-	/* Maximized files use the window's full width: no inset strip beside the frame. */
-	--browser-popout-inline-inset: 0px;
 	box-sizing: border-box;
 	position: fixed;
 	inset: var(--browser-popout-top) 0 0;
@@ -5012,21 +5023,6 @@ html.sidebar-reordering * {
 	/* The macOS shell has a separate traffic-light drag strip. Keep the
 	   maximized surface interactive even if those regions overlap while the
 	   window is transitioning between layouts. */
-	-webkit-app-region: no-drag;
-}
-
-/* Browser maximize switches geometry atomically. A live WebContentsView cannot
-   share a compositor timeline with DOM layout; animating its box would resize
-   Chromium over IPC every frame and make the controls visibly trail the page. */
-.browser-popout-overlay {
-	--browser-popout-top: env(titlebar-area-height, 0px);
-	--browser-popout-inline-inset: var(--size-center-panel-inline-inset);
-	box-sizing: border-box;
-	position: fixed;
-	inset: var(--browser-popout-top) 0 0;
-	z-index: 40;
-	overflow: hidden;
-	background: transparent;
 	-webkit-app-region: no-drag;
 }
 
@@ -5042,8 +5038,8 @@ html.sidebar-reordering * {
 .browser-popout-frame {
 	position: absolute;
 	top: 0;
-	right: var(--browser-popout-inline-inset);
-	left: var(--browser-popout-inline-inset);
+	right: 0;
+	left: 0;
 	display: flex;
 	height: 100%;
 	flex-direction: column;
@@ -5062,8 +5058,8 @@ html.sidebar-reordering * {
 .files-popout-frame {
 	position: absolute;
 	top: 0;
-	right: var(--browser-popout-inline-inset);
-	left: var(--browser-popout-inline-inset);
+	right: 0;
+	left: 0;
 	display: flex;
 	height: 100%;
 	flex-direction: column;
@@ -5116,15 +5112,6 @@ html[data-shell-windows] body > .files-popout-overlay {
 	background: var(--bg);
 	border-bottom: 1px solid var(--border);
 	pointer-events: none;
-}
-
-.browser-popout-overlay--mac-windowed {
-	--browser-popout-inline-inset: var(--size-center-panel-inset-mac);
-}
-
-/* Maximized files keep the full width on macOS too (see .files-popout-overlay). */
-.files-popout-overlay--mac-windowed {
-	--browser-popout-inline-inset: 0px;
 }
 
 .browser-popout-overlay .browser-panel__toolbar,
@@ -6057,6 +6044,7 @@ html[data-native-browser-composition="true"][data-browser-popout-open] #root [da
 
 html[data-native-browser-composition="true"][data-browser-native-live] .center-panel-shell--session,
 html[data-native-browser-composition="true"][data-browser-native-live] .center-panel-shell--session > .center-panel-surface,
+html[data-native-browser-composition="true"][data-browser-native-live] .center-panel-shell--session > .center-panel-surface::before,
 html[data-native-browser-composition="true"][data-browser-native-live] [data-testid="session-detail"],
 html[data-native-browser-composition="true"][data-browser-native-live] .session-split {
 	background: transparent;
@@ -6519,6 +6507,19 @@ html[data-window-translucent="true"][data-browser-hole="true"]:has(.browser-pane
 	color: var(--color-foreground);
 }
 
+/* Keep a nav-row menu trigger (sidebar footer account and Mobile) lit while its
+   menu is open. Keyed on aria-expanded, not data-state: a Tooltip wrapped around
+   the trigger overwrites data-state with its own value. aria-haspopup keeps
+   collapsible rows, which also set aria-expanded, out of it. */
+.group\/nav-row[aria-haspopup="menu"][aria-expanded="true"] [data-nav-row-highlight-idle] {
+	width: 100%;
+	height: 100%;
+	opacity: 1;
+}
+.group\/nav-row[aria-haspopup="menu"][aria-expanded="true"] {
+	color: var(--color-foreground);
+}
+
 /* ── Split panes: tab drag ghost, drop preview, divider ──────────────────── */
 /* Positioned by lib/pane-drag.ts: the ghost moves by transform only, the
  * preview box moves only when the zone under the pointer changes. */
@@ -6535,6 +6536,7 @@ body.is-pane-dragging webview {
 }
 
 [data-pane-drag-source] [data-terminal-tab-frame],
+[data-pane-drag-source] [data-pane-drag-chip],
 [data-pane-drag-source][data-terminal-tab-frame] {
 	opacity: 0.4;
 	transition: opacity var(--duration-fast) ease-out;
@@ -6557,7 +6559,8 @@ body.is-pane-dragging webview {
 	transition: opacity var(--duration-fast) ease-out;
 }
 
-.pane-drag-ghost > [data-terminal-tab-frame] {
+.pane-drag-ghost > [data-terminal-tab-frame],
+.pane-drag-ghost > [data-pane-drag-chip] {
 	flex: 1;
 	min-width: 0;
 	max-width: none;
@@ -6611,18 +6614,35 @@ body.is-pane-dragging webview {
 	transition: none;
 }
 
-/* Unfocused panes of a split rest under a light veil of the background, so
- * the focused one stands out in either theme. */
-.pane-split-dim {
-	z-index: 5;
-	pointer-events: none;
-	background: color-mix(in oklch, var(--background) 45%, transparent);
-	opacity: 0;
-	transition: opacity var(--duration-fast) ease-out;
+/* What releasing a dragged tab here does, named inside the preview. */
+.pane-drop-preview[data-label]::after {
+	content: attr(data-label);
+	position: absolute;
+	left: 50%;
+	top: 50%;
+	max-width: calc(100% - 16px);
+	padding: 4px 10px;
+	overflow: hidden;
+	transform: translate(-50%, -50%);
+	border-radius: var(--radius-md);
+	background: color-mix(in oklch, var(--background) 90%, transparent);
+	box-shadow: 0 0 0 1px color-mix(in oklch, var(--primary) 32%, transparent);
+	color: var(--foreground);
+	font-size: 12px;
+	line-height: 16px;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 }
 
-.pane-split-dim[data-dimmed] {
-	opacity: 1;
+/* The title bar of one pane in a split: the pane's handle, name and exits. */
+.pane-split-header {
+	z-index: 5;
+	cursor: grab;
+	touch-action: none;
+}
+
+.pane-split-header:active {
+	cursor: grabbing;
 }
 
 /* Divider between the panes: a hairline, with the shared hover-only grip line. */
@@ -6672,6 +6692,33 @@ body.is-pane-dragging webview {
 	background: var(--color-border);
 }
 
+/* Where two dividers meet: a wider hit area that moves both at once, with a
+ * soft dot on hover. Above the dividers so it wins the overlap. */
+.pane-split-junction {
+	position: absolute;
+	z-index: 7;
+	width: 15px;
+	height: 15px;
+	margin: -7px 0 0 -7px;
+	border-radius: 9999px;
+	cursor: move;
+	touch-action: none;
+}
+
+.pane-split-junction::after {
+	content: "";
+	position: absolute;
+	inset: 4px;
+	border-radius: 9999px;
+	background: color-mix(in oklch, var(--foreground) 30%, transparent);
+	opacity: 0;
+	transition: opacity var(--duration-fast) ease-out;
+}
+
+.pane-split-junction:hover::after {
+	opacity: 1;
+}
+
 /* The hover grip, matching ResizeHandle: 2px, fading at both ends. */
 .pane-split-divider::after {
 	opacity: 0;
@@ -6702,8 +6749,8 @@ body.is-pane-dragging webview {
 @media (prefers-reduced-motion: reduce) {
 	.pane-drag-ghost,
 	.pane-drop-preview,
-	.pane-split-dim,
-	.pane-split-divider::after {
+	.pane-split-divider::after,
+	.pane-split-junction::after {
 		transition: none;
 	}
 }

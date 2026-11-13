@@ -12,7 +12,6 @@ import {
 	isSessionIdle,
 } from "./session-presentation";
 import type { WorkspaceSession } from "../types/workspace";
-import { useUiStore } from "../stores/ui-store";
 
 function sessionWith(overrides: Partial<WorkspaceSession>): WorkspaceSession {
 	return {
@@ -88,7 +87,8 @@ describe("session presentation", () => {
 
 	it.each([
 		["Draft", null],
-		["Review pending", "review"],
+		["Awaiting review", "review"],
+		["Merge conflicts", "attention"],
 	] as const)("maps in-review sessions with %s to marker %s", (displayStatus, marker) => {
 		expect(getSessionRowMarker(sessionWith({
 			status: "pr_open",
@@ -99,7 +99,7 @@ describe("session presentation", () => {
 	});
 
 	it.each([
-		["Needs review", null],
+		["Review cancelled", null],
 		["Review failed", "review"],
 		["Review scheduled", null],
 		["Reviewing", null],
@@ -226,11 +226,11 @@ describe("session presentation", () => {
 		expect(needsYou({ status: "working", activity: { state: "blocked", lastActivityAt: "" } }).className).toBe(
 			"bg-status-needs-you",
 		);
-		for (const displayStatus of ["Blocked", "CI failing", "Changes requested"]) {
+		for (const displayStatus of ["Blocked", "Needs input", "CI failing", "Merge conflicts", "Changes requested"]) {
 			expect(needsYou({ status: "working", displayStatus }).className).toBe("bg-status-needs-you");
 		}
 		// A calm display phrase keeps the lane tone.
-		expect(needsYou({ status: "working", displayStatus: "Review pending" }).className).toBe("bg-status-in-review");
+		expect(needsYou({ status: "working", displayStatus: "Awaiting review" }).className).toBe("bg-status-in-review");
 	});
 
 	it("prefers SCM state over runtime status for the dot tone", () => {
@@ -243,31 +243,6 @@ describe("session presentation", () => {
 		});
 
 		expect(getSessionStatusDotView(merged)).toEqual({ className: "bg-status-merged", breathe: false });
-	});
-
-	it("keeps the old dot when the new sidebar design is switched off in Developer mode", () => {
-		const merged = sessionWith({
-			status: "working",
-			scmStatus: "merged",
-			activity: { state: "active", lastActivityAt: "" },
-		});
-		useUiStore.setState({ developerMode: true, newSidebarDesign: false });
-		try {
-			// The old dot breathes with the agent even after the PR merged.
-			expect(getSessionStatusDotView(merged)).toEqual({ className: "bg-status-merged", breathe: true });
-		} finally {
-			useUiStore.setState({ developerMode: false, newSidebarDesign: true });
-		}
-	});
-
-	it("ignores the switched-off design outside Developer mode", () => {
-		useUiStore.setState({ developerMode: false, newSidebarDesign: false });
-		try {
-			const merged = sessionWith({ status: "working", scmStatus: "merged", activity: { state: "active", lastActivityAt: "" } });
-			expect(getSessionStatusDotView(merged)).toEqual({ className: "bg-status-merged", breathe: false });
-		} finally {
-			useUiStore.setState({ newSidebarDesign: true });
-		}
 	});
 
 	it("flags only sessions waiting on the user for the alert icon", () => {
@@ -322,6 +297,25 @@ describe("session presentation", () => {
 				sessionWith({ status: "working", scmStatus, activity: { state: "active", lastActivityAt: "" } }),
 			),
 		).toEqual({ className: "bg-status-ready", breathe: true });
+	});
+
+	it("colours the dot from the PR the card's phrase describes, not the worst PR", () => {
+		// Two PRs: the card reads "Mergeable" from one while the other fails CI,
+		// so scmStatus aggregates to ci_failed. The dot must agree with the card.
+		const session = sessionWith({ status: "idle", scmStatus: "ci_failed", kanbanColumn: "ready", displayStatus: "Mergeable" });
+
+		expect(getSessionStatusDotView(session)).toEqual({ className: "bg-status-ready", breathe: false });
+	});
+
+	it.each(["Working", "", undefined])("falls back to SCM state for the phrase %s", (displayStatus) => {
+		const session = sessionWith({
+			status: "working",
+			scmStatus: "mergeable",
+			displayStatus,
+			activity: { state: "active", lastActivityAt: "" },
+		});
+
+		expect(getSessionStatusDotView(session)).toEqual({ className: "bg-status-ready", breathe: true });
 	});
 
 	it("uses a blinking blue dot when an idle-section session starts working", () => {

@@ -4,6 +4,7 @@ import {
 	ArrowRight,
 	Bug,
 	Copy,
+	Download,
 	File,
 	FileSearch,
 	Folder,
@@ -24,6 +25,7 @@ import type { CommandGroupId, CommandItem } from "./command-palette";
 /** Exact-id icons for known actions. Add new command ids here as they ship. */
 const COMMAND_ICONS: Record<string, AppIcon> = {
 	"current-new-task": Plus,
+	"current-import-sessions": Download,
 	"current-open-orchestrator": OrchestratorIcon,
 	"current-project-settings": Settings,
 	"current-open-archive": Archive,
@@ -31,6 +33,7 @@ const COMMAND_ICONS: Record<string, AppIcon> = {
 	"current-search-files": FileSearch,
 	"global-home": House,
 	"global-new-project": FolderPlus,
+	"global-import-sessions": Download,
 	"global-usage": Gauge,
 	"global-settings": Settings,
 	"global-theme": Sun,

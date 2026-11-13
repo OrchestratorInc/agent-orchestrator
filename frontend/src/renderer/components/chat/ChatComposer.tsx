@@ -1,3 +1,5 @@
+import { excerptSizeError, fitExcerptContext, LOCAL_CHAT_MESSAGE_BYTES } from "../../../shared/chat-excerpt";
+import { upgradeExcerpt } from "../../lib/chat-excerpt-snapshot";
 import { hasCodeSelection } from "../diffs/SelectionStableContent";
 import { isDialogOrMenuOpen } from "../../lib/dom-selectors";
 import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
@@ -67,6 +69,7 @@ import { useUiStore } from "../../stores/ui-store";
 import { apiErrorCode, apiErrorMessage, getApiBaseUrl } from "../../lib/api-client";
 import { ComposerSuggestMenu } from "./ComposerSuggestMenu";
 import {
+	COMPOSER_SEND_INSET,
 	ComposerEditor,
 	type ComposerEditorHandle,
 	type ComposerImage,
@@ -124,7 +127,7 @@ import { rememberAttachmentName } from "../../lib/chat-attachment-names";
 import { rememberSentAttachments } from "../../lib/sent-attachment-previews";
 import { isCloudAttachmentReference } from "../../lib/cloud-attachment-reference";
 import { setChatDraftBoundary } from "../../lib/chat-draft-boundary";
-import { subscribeChatComposerReferences } from "../../lib/chat-context-bus";
+import { subscribeChatComposerReferences, subscribeChatComposerText } from "../../lib/chat-context-bus";
 
 // These responses precede AppendUserMessage. Provider/transport errors can
 // follow durable acceptance and must keep the original delivery ID for recovery.
@@ -286,6 +289,7 @@ export const ChatComposer = memo(function ChatComposer({
 	sentMessagesScope,
 	fileReferencesEnabled = false,
 	fileReferenceDelivery,
+	messageByteLimit = LOCAL_CHAT_MESSAGE_BYTES,
 	parkUnsentSends = true,
 }: {
 	onSelectAnnotation?: (annotation: { text: string; messageId?: string; revision?: number }) => void;
@@ -295,6 +299,8 @@ export const ChatComposer = memo(function ChatComposer({
 	sentMessagesScope?: string;
 	fileReferencesEnabled?: boolean;
 	fileReferenceDelivery?: import("../../../shared/chat-file-reference").FileReferenceDelivery;
+	/** Complete prepared annotation payload budget for the destination transport. */
+	messageByteLimit?: number;
 	focusRef?: Ref<ChatComposerHandle>;
 	onSend: (
 		text: string,
@@ -1337,6 +1343,21 @@ export const ChatComposer = memo(function ChatComposer({
 			);
 		}
 	}, [draftScope]);
+	// Quoted text from outside the chat (a PR comment's "Add to chat") joins the
+	// draft below what is already typed, ready for the person's own words.
+	useEffect(() => {
+		if (!draftSessionId || !draftScope) return;
+		return subscribeChatComposerText(draftSessionId, (text) => {
+			if (getChatComposerMutation(draftScope).pending || readChatSessionDraft(draftScope).composer.delivery) return false;
+			const current = textRef.current.replace(/\s+$/, "");
+			const next = current ? `${current}\n\n${text}\n\n` : `${text}\n\n`;
+			textRef.current = next;
+			editor.current?.setText(next, "end");
+			persistComposerText(next);
+			window.requestAnimationFrame(() => window.requestAnimationFrame(() => editor.current?.focus()));
+			return true;
+		});
+	}, [draftSessionId, draftScope, persistComposerText]);
 
 	const draftCaretRef = useRef<number | undefined>(undefined);
 	const onEditorChange = useCallback((snapshot: ComposerEditorSnapshot) => {
@@ -1714,9 +1735,31 @@ export const ChatComposer = memo(function ChatComposer({
    setSendError("chat.draft.fileReferencesUnsupported");
    return;
   }
-  const requestText = recoveringDelivery
+		const sizeError = !recoveringDelivery && excerptSizeError(chatReferences);
+		if (sizeError) {
+			setSendError(sizeError);
+			return;
+		}
+		const requestText = recoveringDelivery
 			? recoveringDelivery.requestText
 			: message;
+		const capturedFiles = recoveringDelivery?.fileReferences ?? fileReferences.map(ref => ({ ...ref, referenceFormat: "numbered-v1" as const }));
+		let capturedReferences = recoveringDelivery?.excerpts ?? chatReferences.map(upgradeExcerpt);
+		if (!recoveringDelivery && (capturedReferences.length || capturedFiles.length)) {
+			try {
+				capturedReferences = fitExcerptContext(capturedReferences, requestText, messageByteLimit, capturedFiles);
+			} catch (error) {
+				setSendError(apiErrorMessage(error));
+				return;
+			}
+			if (draftScope && JSON.stringify(capturedReferences) !== JSON.stringify(chatReferences)) {
+				const saved = writeChatExcerptReferences(draftScope, capturedReferences);
+				if (!saved.ok) {
+					setTextDraftPersistenceError("chat.draft.saveFailed");
+					return;
+				}
+			}
+		}
 		const prepared = prepareChatComposerDelivery(draftScope, {
 			kind: recoveringDelivery?.kind ?? (shouldSteer ? "steer" : "send"),
 			optimistic: !shouldSteer,
@@ -1733,8 +1776,8 @@ export const ChatComposer = memo(function ChatComposer({
 						}]
 					: [],
 			),
-			excerpts: recoveringDelivery?.excerpts ?? chatReferences,
-			fileReferences: recoveringDelivery?.fileReferences ?? fileReferences,
+			excerpts: capturedReferences,
+			fileReferences: capturedFiles,
 			requestText,
 			clientMessageId: recoveringDelivery?.clientMessageId ?? crypto.randomUUID(),
 		});
@@ -1897,7 +1940,7 @@ export const ChatComposer = memo(function ChatComposer({
 			void submit(undefined, wantsSteer);
 			return true;
 		},
-		[canSteerDraft, canSteerNext, enterSends, fileAttachments, onCompact, pick, suggestionsFor],
+		[canSteerDraft, canSteerNext, enterSends, fileAttachments, messageByteLimit, onCompact, pick, suggestionsFor],
 	);
 
 	function onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
@@ -2428,7 +2471,7 @@ export const ChatComposer = memo(function ChatComposer({
 						{settings}
 					</div>
 
-					<div role="group" aria-label="Send message controls" className="flex h-7 shrink-0 items-center">
+					<div role="group" aria-label="Send message controls" className={cn("flex h-7 shrink-0 items-center", COMPOSER_SEND_INSET)}>
 						{showSteerButton && canSteerDraft && (hasText || staged) ? (
 							<Button type="button" variant="ghost" size="sm" disabled={!sendActionEnabled} onClick={() => void submit(undefined, true)} aria-label="Steer into running turn">
 								Steer

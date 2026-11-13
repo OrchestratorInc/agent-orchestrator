@@ -25,7 +25,7 @@ const shellMocks = vi.hoisted(() => {
 		workspaces: [] as WorkspaceSummary[],
 		remoteWorkspaces: [] as WorkspaceSummary[],
 		remoteFailedHostIds: [] as string[],
-		removeRemoteProject: undefined as ((hostId: string, projectId: string) => Promise<void>) | undefined,
+		removeRemoteProject: undefined as ((hostId: string, projectId: string) => void) | undefined,
 		configureRemoteProject: undefined as ((hostId: string, projectId: string) => void) | undefined,
 		workspaceQuery: {
 			data: [] as WorkspaceSummary[],
@@ -119,7 +119,10 @@ const shellMocks = vi.hoisted(() => {
 			invalidateQueries: vi.fn(),
 			cancelQueries: vi.fn(),
 			prefetchQuery: vi.fn(async () => undefined),
+			refetchQueries: vi.fn(async () => undefined),
+			getQueriesData: vi.fn(() => []),
 			setQueryData: vi.fn(),
+			setQueriesData: vi.fn(),
 		},
 		remoteDelete: vi.fn(),
 		listRemoteHosts: vi.fn(async () => []),
@@ -190,6 +193,10 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 	useWorkspaceTraySessions: () => ({ data: [] }),
 	workspaceQueryKey: ["workspaces"],
 	remoteWorkspaceQueryKey: (hostId: string) => ["remote-workspaces", hostId],
+	remoteProjectsQueryKey: (hostId: string) => ["remote-workspaces", hostId, "projects"],
+	remoteSessionsQueryKey: (hostId: string) => ["remote-workspaces", hostId, "sessions"],
+	cloudProjectsQueryKey: ["cloud-projects"],
+	cloudSessionsQueryKey: ["cloud-sessions"],
 	workspaceQueryOptions: {},
 	toWorkspaceSession: (session: { id: string }, project: { id: string; name: string }) => ({ ...session, workspaceId: project.id, workspaceName: project.name }),
 }));
@@ -254,6 +261,7 @@ vi.mock("../hooks/useAgentReadinessQuery", () => ({
 	// which keeps these shortcut tests free of telemetry side effects.
 	useAgentReadinessQuery: () => ({ data: undefined }),
 	useEnsureAgentReadiness: vi.fn(),
+	useProjectAgentDefaults: () => async () => ({ workerAgent: "claude-code", orchestratorAgent: "claude-code", reviewerAgent: "claude-code" }),
 }));
 
 // ao.setup.checked reads the startup checks' react-query cache; these
@@ -348,7 +356,7 @@ vi.mock("../components/Sidebar", async () => {
 		SIDEBAR_DEFAULT_WIDTH: 240,
 		Sidebar: ({ topbarOffset, onRemoveRemoteProject, onConfigureRemoteProject }: {
 			topbarOffset?: string;
-			onRemoveRemoteProject: (hostId: string, projectId: string) => Promise<void>;
+			onRemoveRemoteProject: (hostId: string, projectId: string) => void;
 			onConfigureRemoteProject: (hostId: string, projectId: string) => void;
 		}) => {
 			shellMocks.state.removeRemoteProject = onRemoveRemoteProject;
@@ -534,10 +542,14 @@ describe("shell workspace startup", () => {
 		] as WorkspaceSummary[];
 		await renderShell();
 
-		await shellMocks.state.removeRemoteProject?.("box-b", "project-b");
+		// Removal is optimistic and runs in the background; the page is left
+		// before the project disappears, and only when it shows that project.
+		act(() => shellMocks.state.removeRemoteProject?.("box-b", "project-b"));
+		await waitFor(() => expect(shellMocks.remoteDelete).toHaveBeenCalledTimes(1));
 		expect(shellMocks.navigate).not.toHaveBeenCalled();
-		await shellMocks.state.removeRemoteProject?.("box-a", "project-a");
-		expect(shellMocks.navigate).toHaveBeenCalledWith({ to: "/" });
+		act(() => shellMocks.state.removeRemoteProject?.("box-a", "project-a"));
+		await waitFor(() => expect(shellMocks.remoteDelete).toHaveBeenCalledTimes(2));
+		expect(shellMocks.navigate).toHaveBeenCalledWith({ to: "/", replace: true });
 	});
 
 	it("resyncs Developer Mode when an attached daemon restarts on the same port", async () => {
@@ -622,7 +634,7 @@ describe("shell workspace startup", () => {
 			params: { projectId: "proj-1", sessionId: "orch-existing" },
 		}));
 		expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/sessions", {
-			body: { projectId: "proj-1", kind: "orchestrator", harness: "codex" },
+			body: { projectId: "proj-1", kind: "orchestrator", harness: "codex", async: true },
 		});
 		expect(apiClient.POST).toHaveBeenCalledTimes(3);
 		expect(useUiStore.getState().provisioningProjectIds.has("proj-1")).toBe(false);
@@ -737,13 +749,13 @@ describe("shell workspace startup", () => {
 			useUiStore.getState().setProjectCreationPending(false);
 		});
 		view.rerender(<Suspense fallback={null}><ShellRoute /></Suspense>);
-		expect(screen.getByText("Getting your project ready")).toBeInTheDocument();
+		expect(screen.getByText("Starting your orchestrator")).toBeInTheDocument();
 		shellMocks.state.routeParams = { projectId: "proj-1", sessionId: "sess-1" };
 		view.rerender(<Suspense fallback={null}><ShellRoute /></Suspense>);
 		expect(screen.getByLabelText("Message the agent")).toBe(composer);
-		expect(screen.getByText("Getting your project ready")).toBeInTheDocument();
+		expect(screen.getByText("Starting your orchestrator")).toBeInTheDocument();
 		act(() => useUiStore.getState().setProjectProvisioning("proj-1", false));
-		expect(screen.queryByText("Getting your project ready")).not.toBeInTheDocument();
+		expect(screen.queryByText("Starting your orchestrator")).not.toBeInTheDocument();
 	});
 
 	const spawnNewProject = () => {
@@ -775,6 +787,9 @@ describe("shell workspace startup", () => {
 			to: "/projects/$projectId/sessions/$sessionId",
 			params: { projectId: "proj-new", sessionId: "orch-new" },
 		}));
+		expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/sessions", {
+			body: { projectId: "proj-new", kind: "orchestrator", harness: "codex", async: true },
+		});
 		const publish = shellMocks.queryClient.setQueryData.mock.calls.at(-1)?.[1] as (current: WorkspaceSummary[]) => WorkspaceSummary[];
 		expect(publish([{ ...workspaces[0], id: "proj-new", name: "New", sessions: [] }])[0].sessions[0]).toMatchObject({ id: "orch-new", mode: "chat", provisionState: "provisioning" });
 		expect(useUiStore.getState().provisioningProjectIds.has("proj-new")).toBe(false);

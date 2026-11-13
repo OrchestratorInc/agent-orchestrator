@@ -91,6 +91,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	shellError,
 	onOpenFiles,
 	onOpenFile,
+	onOpenArtifact,
 	onOpenFileAnnotation,
 	onOpenLinkInBrowser,
 	headerActions,
@@ -145,6 +146,8 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	onOpenFiles?: () => void;
 	/** Opens the Files inspector focused on one changed path. */
 	onOpenFile?: (path: string, line?: number) => void;
+	/** Opens one of the session's artifacts in the inspector's Artifacts tab, by its artifact path. */
+	onOpenArtifact?: (target: { path: string }) => void;
 	onOpenFileAnnotation?: OpenFileAnnotation;
 	/** Opens a chat link in the active blank tab or a new tab in this session's AO Browser. */
 	onOpenLinkInBrowser?: (uri: string) => Promise<void>;
@@ -366,7 +369,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	// A sleeping, waking or reconnecting agent cannot report its settings yet; the bar shows the saved ones.
 	const waking = snapshot?.harness === session.provider &&
 		(snapshot.controller?.state === "hibernated" || snapshot.controller?.state === "connecting" || snapshot.controller?.state === "recovering");
-	const controllerCatalogsEnabled = targetChatControllerReady && !controllerTransitioning && !newWorkDisabled;
+	const controllerCatalogsEnabled = !hostUnreachable && targetChatControllerReady && !controllerTransitioning && !newWorkDisabled;
 	const configOptions = useConversationConfigOptions(
 		session.id,
 		Boolean(controllerCatalogsEnabled && snapshot && can(snapshot, "config_options")),
@@ -411,7 +414,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	const stageAttachments = useStageAttachments(session.id, hostId);
 	// Applied once: the chat below unmounts while the conversation reloads, and
 	// a request still held would scroll it back to the same message on return.
-	const annotationNavigation = useChatNavigationRequest<{ id: string; text: string; messageId?: string; revision?: number }>(uiSessionId);
+	const annotationNavigation = useChatNavigationRequest<{ id: string; text: string; snapshot?: import("../../../shared/chat-excerpt").ChatExcerptSnapshot; messageId?: string; revision?: number }>(uiSessionId);
 	const navigateToAnnotation = annotationNavigation.navigate;
 	useChatMessageFocus(uiSessionId, undefined, Boolean(snapshot), navigateToAnnotation);
 	const sideEnabled = useSideChatsAvailable(session, hostId) && !unavailable;
@@ -452,7 +455,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	const attachToSide = async (excerpt: ChatDraftExcerptReference) => {
 		const current = () => selectionSideScope.active && selectionSideScopeRef.current === selectionSideScope;
 		if (!current()) throw new Error("Side chat is no longer active.");
-		const identity = JSON.stringify([uiSessionId, excerpt.conversationId, excerpt.messageId, excerpt.revision, excerpt.text]);
+		const identity = JSON.stringify([uiSessionId, excerpt.conversationId, excerpt.messageId, excerpt.revision, excerpt.text, excerpt.snapshot?.sourceRange, excerpt.snapshot?.renderedRange]);
 		const pending = selectionSideScope.processing.get(identity);
 		if (pending) return pending;
 		const destination = selectionSideChatsRef.current;
@@ -463,7 +466,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 			openSideInspector();
 			if (destinationId) {
 				if (!selectionSideChatsRef.current.sides.some(side => side.id === destinationId)) throw new Error("Side chat is no longer active.");
-				destination.addReference(destinationId, excerpt);
+				await destination.addReference(destinationId, excerpt);
 				destination.show(destinationId);
 			} else {
 				let receipt = selectionSideScope.receipts.get(identity);
@@ -694,7 +697,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 						clientMessageId,
 						fileReferences,
 						excerpts: excerpts?.map((excerpt) => ({
-							id: excerpt.id, order: excerpt.order,
+							id: excerpt.id, order: excerpt.order, snapshot: excerpt.snapshot,
 							conversationId: excerpt.conversationId,
 							messageId: excerpt.messageId,
 							revision: excerpt.revision,
@@ -805,6 +808,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				rollbackError={commands.rollbackError}
 				onOpenFiles={onOpenFiles}
 				onOpenFile={onOpenFile}
+				onOpenArtifact={onOpenArtifact}
 				onOpenFileAnnotation={onOpenFileAnnotation}
 				retryControl={commands.retryControl}
 				onEditMessage={commands.editMessage}

@@ -1,3 +1,4 @@
+import { deliverableArtifacts, type Deliverable } from "../../../../packages/shared/artifacts/deliverables";
 import { attentionZone as presentationAttentionZone } from "../lib/session-presentation";
 import {
 	AGENT_OPTIONS,
@@ -70,6 +71,8 @@ export type ArtifactKind = "html" | "markdown" | "file";
  * never resolve to a workspace-relative file of the same path.
  */
 export type SessionArtifact = {
+	/** The artifact's identity, kept when its file is renamed. */
+	id?: string;
 	kind: ArtifactKind;
 	name: string;
 	path: string;
@@ -82,6 +85,12 @@ export type SessionArtifact = {
 	inlineUrl?: string;
 	size: number;
 	updatedAt: string;
+	/** Set on a file the agent registered with `ao artifact add`. */
+	registered?: boolean;
+	/** The paths the artifact had before it was renamed, latest last. */
+	previousPaths?: string[];
+	/** The file's public link while it is published from this computer. */
+	shareUrl?: string;
 };
 
 /** The daemon-committed controller currently responsible for the session. */
@@ -96,7 +105,23 @@ export type SessionProvisionStep = {
 };
 
 /** The daemon's observed branch facts. `unpushed` equals `commits` until the branch reaches its remote. */
-export type SessionBranchState = { commits: number; remoteBranch?: string; remoteHead?: string; unpushed: number };
+export type SessionBranchState = {
+	commits: number;
+	remoteBranch?: string;
+	/** The commit the remote branch points at, as last read. */
+	remoteHead?: string;
+	unpushed: number;
+	/** Short name of the branch commits and behind are counted against, such as "main". Absent when the daemon only knows the base as a commit. */
+	base?: string;
+	/** The exact ref that was read for base, such as "origin/main". */
+	baseRef?: string;
+	/** Commits on base the branch does not have. Only meaningful when base is set. */
+	behind: number;
+	/** Merging into base would conflict, read locally. Absent from daemons that predate it. */
+	conflicts?: boolean;
+	/** The branch's tip commit. */
+	head?: string;
+};
 
 /** The session's current launch still runs a harness release an update has replaced. */
 export type SessionStaleBinary = { version: string; since: string; switchFailedAt?: string };
@@ -239,6 +264,8 @@ export type WorkspaceSession = {
 	 * is `"artifact"`. Empty/absent for sessions whose output is a PR or nothing.
 	 */
 	artifactFiles?: SessionArtifact[];
+	/** A cloud session counts artifacts whose list has not loaded yet. */
+	artifactFilesPending?: boolean;
 	/**
 	 * Present only for sessions that run in a control-plane sandbox. Carries the
 	 * org the session is scoped to so its terminal can be opened against the CP;
@@ -290,6 +317,12 @@ export type ProjectKind = "single_repo" | "workspace" | "scratch";
 /** UI-only grouping for sessions that have no daemon project row. */
 export const STANDALONE_WORKSPACE_ID = "__standalone__" as const;
 export const STANDALONE_PROJECT_KIND = "standalone" as const;
+/**
+ * The new-chat target that starts a Cloud standalone agent: one worker session
+ * with no repository, its own (POST /orgs/{orgId}/standalone-agents). It names
+ * no project; the agent gets its own once created.
+ */
+export const CLOUD_STANDALONE_WORKSPACE_ID = "__cloud_standalone__" as const;
 
 /** Sentinel `kind` value for projects hosted by the AO cloud control plane. */
 export const CLOUD_PROJECT_KIND = "cloud" as const;
@@ -328,12 +361,21 @@ export function primaryPR(session: WorkspaceSession): PullRequestFacts | undefin
 	return sortedPRs(session)[0];
 }
 
-/** Artifact files to show in the Summary panel, newest first, for sessions whose output includes artifacts. */
+/** Every artifact file of a session whose output includes artifacts, listed or not, newest first. */
 export function sessionArtifacts(session: WorkspaceSession): SessionArtifact[] {
 	if (session.outputType !== "artifact" && session.outputType !== "pr_artifact") return [];
 	return [...(session.artifactFiles ?? [])].sort(
 		(a, b) => (Date.parse(b.updatedAt) || 0) - (Date.parse(a.updatedAt) || 0) || a.path.localeCompare(b.path),
 	);
+}
+
+/**
+ * The session's artifacts as the artifact lists show them. Use
+ * {@link sessionArtifacts} for anything that needs every file, such as a count
+ * of what a delete removes.
+ */
+export function sessionDeliverables(session: WorkspaceSession): Deliverable<SessionArtifact>[] {
+	return deliverableArtifacts(sessionArtifacts(session));
 }
 
 export function isOrchestratorSession(session: Pick<WorkspaceSession, "id" | "kind">): boolean {
@@ -491,9 +533,22 @@ export type WorkspaceSummary = {
 	 * `kind === CLOUD_PROJECT_KIND`.
 	 */
 	kind?: ProjectKind | typeof CLOUD_PROJECT_KIND | typeof STANDALONE_PROJECT_KIND;
+	/**
+	 * "workspace" on a cloud project laid out like a local workspace: every
+	 * repository (workspaceRepos) side by side in one folder.
+	 */
+	cloudLayout?: "workspace";
+	/**
+	 * Set on a Cloud standalone agent's project: it holds that one agent, which
+	 * the Scratchpad lists beside local standalone sessions, and is not shown
+	 * as a project.
+	 */
+	standaloneAgent?: boolean;
 	/** Local checkout path; empty string for cloud projects (no local folder). */
 	path: string;
 	folderMissing?: boolean;
+	/** Automatic starts (tracker intake, schedules) the daemon paused after repeated identical failures. */
+	autoSpawnPauses?: import("../hooks/useAutoSpawnPauseNotice").AutoSpawnPause[];
 	workspaceRepos?: WorkspaceRepoSummary[];
 	type?: "main" | "worktree";
 	orchestratorAgent?: AgentProvider;
@@ -504,6 +559,25 @@ export type WorkspaceSummary = {
 	};
 	sessions: WorkspaceSession[];
 };
+
+/**
+ * Whether the workspace is the Scratchpad's rather than a project: the local
+ * group of standalone sessions, or a Cloud standalone agent's project. Neither
+ * has an orchestrator, a board, or project settings.
+ */
+export function isScratchpadWorkspace(workspace: Pick<WorkspaceSummary, "kind" | "standaloneAgent"> | undefined): boolean {
+	return workspace?.kind === STANDALONE_PROJECT_KIND || workspace?.standaloneAgent === true;
+}
+
+/**
+ * The workspaces the Scratchpad lists: the local standalone sessions and the
+ * person's own Cloud standalone agents. A standalone agent someone shared with
+ * them stays with the other shared projects.
+ */
+export function ownScratchpadWorkspaces(workspaces: readonly WorkspaceSummary[]): WorkspaceSummary[] {
+	return workspaces.filter((workspace) =>
+		workspace.kind === STANDALONE_PROJECT_KIND || (workspace.standaloneAgent === true && !workspace.shared));
+}
 
 export function hasConfiguredOrchestratorAgent(
 	workspace: Pick<WorkspaceSummary, "orchestratorAgent"> | undefined,

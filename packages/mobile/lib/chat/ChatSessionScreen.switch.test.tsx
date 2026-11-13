@@ -120,7 +120,6 @@ vi.mock("./conversationBanners", () => ({
 	controllerStoppedBanner: () => ({ key: "stopped", title: "The agent stopped" }),
 	errorBanner: () => undefined,
 	mcpNoticeKey: () => "notice",
-	quotaBanner: () => undefined,
 	reauthBanner: () => undefined,
 	rolledBackBanner: () => undefined,
 	threadBanner: () => undefined,
@@ -149,6 +148,10 @@ vi.mock("../files/navigation", async () => {
 	return { changedPathCount: () => 0, fileRoute: vi.fn(), filesRoute: vi.fn(), FilesNavigationContext: React.createContext(null) };
 });
 vi.mock("../files/useChangeSummary", () => ({ useChangeSummary: () => undefined }));
+vi.mock("./TurnArtifacts", async () => {
+	const React = await import("react");
+	return { TurnArtifactsContext: React.createContext(null), useTurnArtifactSourceFor: () => null };
+});
 vi.mock("./automationMessages", () => ({ sessionLink: () => undefined }));
 vi.mock("./sessionLookup", () => ({ readSession: vi.fn(async () => undefined) }));
 

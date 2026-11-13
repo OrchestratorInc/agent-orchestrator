@@ -152,6 +152,7 @@ import {
 	ChartBar as MynaChartBar,
 } from "@mynaui/icons-react";
 import {
+	ArrowDownUp as LucideArrowDownUp,
 	Bot as LucideBot,
 	Brain as LucideBrain,
 	CalendarClock as LucideCalendarClock,
@@ -205,6 +206,7 @@ import {
 	Split as LucideSplit,
 	StickyNote as LucideStickyNote,
 	Strikethrough as LucideStrikethrough,
+	WifiOff as LucideWifiOff,
 	Workflow as LucideWorkflow,
 	WrapText as LucideWrapText,
 	Ungroup as LucideUngroup,
@@ -389,6 +391,7 @@ export const List = fromMyna(MynaList, "list");
 export const ListChecks = fromMyna(MynaListCheck, "list-checks");
 export const ListChevronsDownUp = fromLucide(LucideListChevronsDownUp, "list-chevrons-down-up");
 export const ListChevronsUpDown = fromLucide(LucideListChevronsUpDown, "list-chevrons-up-down");
+export const ArrowDownUp = fromLucide(LucideArrowDownUp, "arrow-down-up");
 export const ListOrdered = fromMyna(MynaListNumber, "list-ordered");
 export const ListTodo = fromMyna(MynaListCheck, "list-todo");
 export const Loader2 = fromMyna(MynaSpinner, "loader-circle");
@@ -427,6 +430,7 @@ export const Pin = fromMyna(MynaPin, "pin");
 export const PinOff = fromLucide(LucidePinOff, "pin-off");
 export const Play = fromLucide(LucidePlay, "play");
 export const Plug = fromLucide(LucidePlug, "plug");
+export const WifiOff = fromLucide(LucideWifiOff, "wifi-off");
 export const Plus = fromMyna(MynaPlus, "plus");
 export const Presentation = fromMyna(MynaPresentation, "presentation");
 export const QrCode = fromLucide(LucideQrCode, "qr-code");

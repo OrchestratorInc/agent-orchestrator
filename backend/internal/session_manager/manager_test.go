@@ -6528,9 +6528,10 @@ func TestSystemPrompt_AppendsConfidentialityGuard(t *testing.T) {
 				!strings.Contains(sp, "Do not create `.ao/launch.json` unless the user asks") {
 				t.Fatalf("%s: system prompt missing static-first preview safeguards:\n%s", tc.name, sp)
 			}
-			if !strings.Contains(sp, "immediately after creating or materially updating it") ||
-				!strings.Contains(sp, "do not replace an active application preview with a supporting asset") {
-				t.Fatalf("%s: system prompt missing automatic artifact handoff guidance:\n%s", tc.name, sp)
+			if !strings.Contains(sp, "Never open an artifact with `ao preview`, whatever its file type") ||
+				!strings.Contains(sp, "in the session's Artifacts tab") ||
+				strings.Contains(sp, "browser-displayable artifact") {
+				t.Fatalf("%s: system prompt missing Artifacts-tab handoff guidance:\n%s", tc.name, sp)
 			}
 		})
 	}
@@ -6556,6 +6557,9 @@ func TestSystemPrompt_AppendsArtifactGuidance(t *testing.T) {
 		t.Fatalf("buildSystemPrompt: %v", err)
 	}
 	wantDir := filepath.ToSlash(filepath.Join(m.dataDir, "artifacts", "mer-7"))
+	if !strings.Contains(sp, "Run `ao artifact add <path>`") {
+		t.Fatal("artifact guidance does not say how to register a deliverable")
+	}
 	if !strings.Contains(sp, "## Session Artifacts") {
 		t.Fatalf("system prompt missing artifacts section:\n%s", sp)
 	}
@@ -6588,6 +6592,36 @@ func TestSystemPrompt_AppendsArtifactGuidance(t *testing.T) {
 	}
 	if !strings.Contains(chatPrompt, inThread) {
 		t.Fatalf("chat session prompt missing %q", inThread)
+	}
+	// A kept render is not registered, and only a chat session can keep one.
+	const keptRender = "`ao render --artifact` or `artifact: true` in `html_render`, so run `ao artifact add` on the path it returns"
+	if !strings.Contains(chatPrompt, keptRender) {
+		t.Fatalf("chat session prompt missing %q", keptRender)
+	}
+	if strings.Contains(sp, "ao render --artifact") {
+		t.Fatalf("terminal session prompt names ao render:\n%s", sp)
+	}
+}
+
+// An orchestrator's files are listed by the same rule as a worker's, so its
+// prompt must name its own artifact directory and tell it to register them.
+func TestSystemPrompt_OrchestratorGetsArtifactGuidance(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: t.TempDir(), Config: testRoleAgents()}
+	lookPath := func(string) (string, error) { return "/bin/true", nil }
+	m := New(Deps{Runtime: &fakeRuntime{}, Agents: singleAgent{agent: &recordingAgent{}}, Workspace: &fakeWorkspace{}, Store: st, Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, DataDir: t.TempDir(), LookPath: lookPath})
+
+	for _, chat := range []bool{false, true} {
+		sp, err := m.buildSystemPrompt(ctx, domain.KindOrchestrator, "mer", "mer-orchestrator-2", "", chat)
+		if err != nil {
+			t.Fatalf("buildSystemPrompt chat=%v: %v", chat, err)
+		}
+		wantDir := filepath.ToSlash(filepath.Join(m.dataDir, "artifacts", "mer-orchestrator-2"))
+		for _, want := range []string{"## Session Artifacts", wantDir, "Run `ao artifact add <path>`"} {
+			if !strings.Contains(sp, want) {
+				t.Fatalf("orchestrator prompt (chat=%v) missing %q:\n%s", chat, want, sp)
+			}
+		}
 	}
 }
 
@@ -12259,6 +12293,56 @@ func TestResumeAgent_RuntimeFailureNamesRelaunchStep(t *testing.T) {
 	var relaunchErr *RelaunchError
 	if !errors.As(err, &relaunchErr) || relaunchErr.Step != "runtime" {
 		t.Fatalf("resume error = %v, want RelaunchError step runtime", err)
+	}
+}
+
+func TestSpawn_BaseBranchOverridesTheProjectDefaultForThisSessionOnly(t *testing.T) {
+	m, st, _, ws := newManager()
+	config := testRoleAgents()
+	config.DefaultBranch = "develop"
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Config: config}
+	if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, BaseBranch: "feat/parent"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := ws.lastCfg.BaseBranch; got != "feat/parent" {
+		t.Fatalf("workspace base branch = %q", got)
+	}
+	if got := ws.resolves[0].configuredBranch; got != "feat/parent" {
+		t.Fatalf("resolved branch = %q", got)
+	}
+	if got := st.projects["mer"].Config.DefaultBranch; got != "develop" {
+		t.Fatalf("project default changed to %q", got)
+	}
+}
+
+// An existing branch keeps its own history and would not start from the base,
+// so a branch named with a base must be new.
+func TestSpawn_BaseBranchWithANamedBranchRequiresItToBeNew(t *testing.T) {
+	m, st, _, ws := newManager()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Config: testRoleAgents()}
+	if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, BaseBranch: "feat/parent", Branch: "feat/child"}); err != nil {
+		t.Fatal(err)
+	}
+	if !ws.lastCfg.RequireNewBranch || ws.lastCfg.Branch != "feat/child" {
+		t.Fatalf("workspace branch = %q, require new = %v", ws.lastCfg.Branch, ws.lastCfg.RequireNewBranch)
+	}
+	// Without a base, a named branch may be an existing one to continue.
+	if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Branch: "feat/other"}); err != nil {
+		t.Fatal(err)
+	}
+	if ws.lastCfg.RequireNewBranch {
+		t.Fatal("a named branch without a base must not be required to be new")
+	}
+}
+
+func TestSpawn_BaseBranchNeedsARepositoryProject(t *testing.T) {
+	for _, kind := range []domain.ProjectKind{domain.ProjectKindScratch, domain.ProjectKindWorkspace} {
+		m, st, _, _ := newManager()
+		st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Kind: kind}
+		_, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, BaseBranch: "feat/parent"})
+		if !errors.Is(err, ErrBaseBranchUnsupported) {
+			t.Fatalf("%s: err = %v", kind, err)
+		}
 	}
 }
 

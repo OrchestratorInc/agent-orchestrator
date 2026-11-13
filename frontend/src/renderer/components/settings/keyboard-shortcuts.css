@@ -69,8 +69,3 @@
 	overflow-y: auto;
 	overscroll-behavior: contain;
 }
-
-/* The standalone customize modal already has a title above its body. */
-.shortcuts-customize-body [data-section="keyboard-shortcuts"] > div {
-	margin-top: 0;
-}

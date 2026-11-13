@@ -134,20 +134,21 @@ function StagedAttachmentItem({
 	onRemove?: (path: string) => void;
 }) {
 	const { t } = useTranslation();
+	// A local copy that fails to draw hands the tile to the daemon's copy.
 	const local = useSentAttachmentPreview(path);
-	const url = local ?? (apiBaseUrl === null ? undefined : attachmentURL(apiBaseUrl, sessionId, path));
+	const url = local.url ?? (apiBaseUrl === null ? undefined : attachmentURL(apiBaseUrl, sessionId, path));
 	const image = imageIndex >= 0;
 	// An image with no preview URL shows as a file chip, but it still can't go.
 	const remove = image ? undefined : onRemove;
 	const previewKind = attachmentPreviewKind(path);
 	return image && url ? (
 		<li className="max-w-full">
-			<ChatImage src={url} alt={t("chat.image.numbered", { index: imageIndex + 1 })} />
+			<ChatImage src={url} alt={t("chat.image.numbered", { index: imageIndex + 1 })} onError={local.onError} />
 		</li>
 	) : (
 		<li title={name} className={cn("group/attachment", ATTACHMENT_TILE_CLASS)}>
 			<AttachmentFileCard name={name} />
-			{previewKind && url ? <AttachmentFilePreview kind={previewKind} url={url} name={name} /> : null}
+			{previewKind && url ? <AttachmentFilePreview kind={previewKind} url={url} name={name} onError={local.onError} /> : null}
 			{/* Remove appears in the corner on hover, so the card keeps its size. */}
 			{remove ? (
 				<span className="absolute right-0.5 top-0.5 flex opacity-0 group-focus-within/attachment:opacity-100 group-hover/attachment:opacity-100">

@@ -16,6 +16,7 @@ import type { components } from "../../api/schema";
 import { apiClient, apiErrorCode, apiErrorMessage } from "../lib/api-client";
 import { clientForHost } from "../lib/host-clients";
 import { useConnectedHosts } from "../hooks/useHostConnection";
+import { useResetStaleProjectTuning } from "../hooks/useResetStaleProjectTuning";
 import { captureRendererEvent } from "../lib/telemetry";
 import { CloudCpError, type CloudCpSession } from "../lib/cloud-cp";
 import { seedCloudOpening } from "../lib/cloud-opening";
@@ -37,6 +38,8 @@ import { useCloudOrchestratorModel } from "../hooks/useCloudOrchestratorModel";
 import { useProviderConnections } from "../hooks/useProviderConnections";
 import { CLOUD_AGENT_PROVIDERS, cloudAgentInfos, connectedCredentialType, credentialModelScope } from "../lib/cloud-agents";
 import { createCloudSession } from "../lib/cloud-session-create";
+import { reportCloudSessionCreateRequested } from "../lib/cloud-telemetry";
+import { rememberStandaloneAgent } from "../lib/cloud-standalone-agents";
 import { cloudDefaultModel, cloudModelLabel, isConcreteModelID, isModelSelectable, modelChoiceLabel, splitClaudeModels, withoutLocalAvailability } from "../lib/agent-model-choices";
 import { collapseModelVariants, findModelVariant, listsModelVariants, pickModelVariant } from "../lib/model-variants";
 import { ToggleRow } from "./chat/AgentSwitchPicker";
@@ -49,7 +52,7 @@ import {
 	unknownAgentReadiness,
 	type AgentInfo,
 } from "../lib/agent-select-options";
-import { cloudSessionsQueryKey, seedCreatedFreestyleSession, useCloudProjectsQuery } from "../hooks/useWorkspaceQuery";
+import { cloudSessionsQueryKey, seedCreatedFreestyleSession, seedCreatedStandaloneAgent, useCloudProjectsQuery } from "../hooks/useWorkspaceQuery";
 import {
 	agentModelsQueryKey,
 	agentModelsQueryOptions,
@@ -61,7 +64,7 @@ import { useModelCatalogAuthRecovery } from "../hooks/useModelCatalogAuthRecover
 import { sessionNameFromBrief } from "../lib/report-problem";
 import { useUiStore } from "../stores/ui-store";
 import { ModelCatalogNotice } from "./ModelCatalogNotice";
-import { STANDALONE_WORKSPACE_ID, toAgentProvider } from "../types/workspace";
+import { CLOUD_STANDALONE_WORKSPACE_ID, STANDALONE_WORKSPACE_ID, toAgentProvider } from "../types/workspace";
 import { CODER_PROVIDER, projectSandboxProvider } from "../lib/cloud-offering";
 import { type EffortAvailability } from "./settings/EffortPicker";
 import { COMPOSER_MENU_WIDTH, TaskEffortPicker, TaskModelPicker } from "./TaskModelControls";
@@ -221,9 +224,12 @@ export function useTaskLaunch({ projectId, hostId }: {
 	const cloudOffering = useCloudOffering();
 	const cloudProjects = useCloudProjectsQuery();
 	const cloudProject = (cloudProjects.data ?? []).find((project) => project.id === projectId);
-	const isCloudProject = !hostId && Boolean(cloudProject);
+	// A Cloud standalone agent starts as a Cloud task with no project's
+	// settings: the control plane gives it a project of its own.
+	const isCloudStandalone = !hostId && projectId === CLOUD_STANDALONE_WORKSPACE_ID;
+	const isCloudProject = !hostId && (Boolean(cloudProject) || isCloudStandalone);
 	// Coder projects keep their own New Task dialog and start-up untouched.
-	const isCoderCloudProject = isCloudProject && projectSandboxProvider(cloudProject?.config, cloudOffering) === CODER_PROVIDER;
+	const isCoderCloudProject = isCloudProject && !isCloudStandalone && projectSandboxProvider(cloudProject?.config, cloudOffering) === CODER_PROVIDER;
 	const isStandalone = projectId === STANDALONE_WORKSPACE_ID;
 	const preferenceContext = hostId ? `${hostId}:${projectId ?? ""}` : projectId ?? "";
 	const persistedPreferences = useMemo(
@@ -246,9 +252,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 				// The task starts in the interface the composer resolved (its choice,
 				// else the default session interface); an older control plane that
 				// predates the field starts it in the terminal (createCloudSession).
-				const { session } = await createCloudSession(cloudClient, cloudOrg.id, {
-					projectId: input.projectId,
-					kind: "worker",
+				const body = {
 					harness: input.agent,
 					displayName: input.brief.trim().slice(0, 100) || input.agent,
 					prompt: input.brief,
@@ -258,7 +262,20 @@ export function useTaskLaunch({ projectId, hostId }: {
 					// Only a permission the user picked, as for a local task; without
 					// one the worker derives it from the session's mode.
 					...(input.approvalMode ? { approvalMode: input.approvalMode } : {}),
-				}, input.clientRequestId ? { idempotencyKey: input.clientRequestId } : undefined);
+				};
+				const createOptions = input.clientRequestId ? { idempotencyKey: input.clientRequestId } : undefined;
+				let session;
+				if (isCloudStandalone) {
+					// The agent and its project come back together; its project joins
+					// the list now so the Scratchpad shows the agent at once.
+					reportCloudSessionCreateRequested({ kind: "worker", projectId: "" });
+					const created = await cloudClient.createStandaloneAgent(cloudOrg.id, body, createOptions);
+					seedCreatedStandaloneAgent(queryClient, cloudBaseUrl, cloudOrg.id, created.project);
+					rememberStandaloneAgent(created.session.id, created.project.id);
+					session = created.session;
+				} else {
+					({ session } = await createCloudSession(cloudClient, cloudOrg.id, { projectId: input.projectId, kind: "worker", ...body }, createOptions));
+				}
 				// The session's Chat composer shows, and its turns keep, what the task
 				// was started with, as a local task's chat does.
 				rememberCloudChatSettings(cloudOrg.id, session.id, session.harness, input);
@@ -288,7 +305,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 				throw err instanceof Error ? err : new Error(t("newTask.unableToStart"));
 			}
 		},
-		[cloudBaseUrl, cloudClient, cloudOrg, cloudUserId, queryClient, t],
+		[cloudBaseUrl, cloudClient, cloudOrg, cloudUserId, isCloudStandalone, queryClient, t],
 	);
 
 	const createDaemonTask = useCallback(
@@ -526,7 +543,8 @@ export function useTaskLaunch({ projectId, hostId }: {
 		baseUrl: cloudBaseUrl,
 		orgId: cloudOrg?.id,
 		projectId,
-		enabled: isCloudProject,
+		// A standalone agent has no orchestrator to start beside.
+		enabled: isCloudProject && !isCloudStandalone,
 	});
 	const orchestratorModelForSelectedAgent = isCloudProject && cloudOrchestrator && cloudOrchestrator.harness === selectedAgent &&
 		isConcreteModelID(cloudOrchestrator.model) && !cloudModelUnavailable(cloudOrchestrator.model)
@@ -844,6 +862,15 @@ export function useTaskLaunch({ projectId, hostId }: {
 	const inheritedEffort = selectedAgent === configuredProjectAgent ? defaultWorkerEffort : "";
 	const implicitEffort = inheritedEffort || effortModel?.defaultEffort || "";
 	const selectedAgentLabel = availableAgents?.find((item) => item.id === selectedAgent)?.label || selectedAgent;
+	useResetStaleProjectTuning({
+		projectId: isCloudProject || isStandalone ? undefined : projectQuery.data?.id,
+		hostId,
+		agent: selectedAgent,
+		agentLabel: selectedAgentLabel,
+		projectAgent: configuredProjectAgent,
+		config: isCloudProject ? undefined : projectQuery.data?.config,
+		catalog: localCatalog,
+	});
 	// A cloud project's Chat-capable harnesses come from the control plane, as a
 	// local project's come from the daemon.
 	const chatHarnesses = isCloudProject ? cloudOffering.chatHarnesses : settings?.chatHarnesses;
@@ -1362,7 +1389,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 		model: {
 			agentId: selectedAgent,
 			agentLabel: selectedAgentLabel,
-			projectId: isStandalone ? "" : (projectId ?? ""),
+			projectId: isStandalone || isCloudStandalone ? "" : (projectId ?? ""),
 			disabled: isSubmitting,
 			value: selectedModel,
 			mode: selectedMode,
@@ -1435,6 +1462,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 		renderEffortControl: (control: TaskComposerEffortControl) => <TaskEffortPicker {...control} value={control.value || cloudDefaultEffort} defaultEffort={cursorChoice ? undefined : inheritedEffort || effortModel?.defaultEffort} availability={cursorChoice ? "supported" : effortAvailability}
 			footer={cursorChoice?.family.hasThinkingChoice ? <ToggleRow label={t("agentSwitch.thinking")} checked={cursorChoice.variant.thinking} onChange={(thinking) => pickCursorVariant({ thinking })} /> : undefined} />,
 		renderModelControl: (control: TaskComposerModelControl) => <TaskModelPicker {...control}
+			hostId={hostId}
 			onRefresh={isCloudProject && !cloudCatalogAgent ? undefined : refreshSelectedModels}
 			allowNativeSelection={isCloudProject}
 			footer={cloudModelSource}

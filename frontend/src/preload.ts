@@ -60,13 +60,18 @@ import type { UpdateSettings, UpdateStatus, UpdateInstallResult } from "./main/u
 import type { CloudAccount, CloudPendingSignIn } from "./shared/cloud-account";
 import {
 	CLOUD_SHARE_PROGRESS_CHANNEL,
+	type CloudShareAccess,
 	type CloudShareFile,
+	type CloudShareGrant,
 	type CloudShareInspection,
+	type CloudShareLink,
 	type CloudShareLinks,
 	type CloudShareProgress,
 	type CloudSharePublishResult,
 } from "./shared/cloud-share";
 import type { LocalLoginInput, LocalRegisterInput } from "./main/cloud-auth-local";
+import type { PushFolderInput, PushFolderPreview, PushFolderResult } from "./main/cloud-folder-push";
+export type { PushFolderInput, PushFolderPreview, PushFolderResult };
 import type {
 	CloudCpProxyRequestInit,
 	CloudCpProxyResponse,
@@ -461,6 +466,12 @@ const api = {
 		fetch: (url: string) => ipcRenderer.invoke("chatImage:fetch", url) as Promise<{ bytes: Uint8Array; mimeType: string }>,
 		save: (input: { name: string; bytes: Uint8Array }) => ipcRenderer.invoke("chatImage:save", input) as Promise<boolean>,
 	},
+	// Cached artifact preview images, rendered once in a hidden window (main/artifact-snapshots.ts).
+	// Cards load them from the snapshot scheme; this only asks for a missing one.
+	artifactSnapshot: {
+		/** Renders a missing preview; true once it is cached. */
+		request: (job: unknown) => ipcRenderer.invoke("artifactSnapshot:request", job) as Promise<boolean>,
+	},
 	// Session and project share links this device made (main/session-share-urls.ts).
 	sessionShareUrls: {
 		remember: (baseUrl: string, linkId: string, url: string) =>
@@ -470,7 +481,7 @@ const api = {
 		forget: (baseUrl: string, linkIds: readonly string[]) =>
 			ipcRenderer.invoke("sessionShareUrls:forget", { baseUrl, linkIds }) as Promise<void>,
 	},
-	// Public share links, published from the share popover's Publish button.
+	// Share links, published from the share popover's Publish button.
 	// The main process reads and uploads the file; the renderer never sees
 	// the file or the token. See shared/cloud-share.ts.
 	cloudShare: {
@@ -480,6 +491,13 @@ const api = {
 		publish: (file: CloudShareFile) => ipcRenderer.invoke("cloudShare:publish", file) as Promise<CloudSharePublishResult>,
 		cancel: () => ipcRenderer.invoke("cloudShare:cancel") as Promise<void>,
 		unpublish: (baseUrl: string, shareId: string) => ipcRenderer.invoke("cloudShare:unpublish", { baseUrl, shareId }) as Promise<void>,
+		setAccess: (baseUrl: string, shareId: string, access: CloudShareAccess) =>
+			ipcRenderer.invoke("cloudShare:setAccess", { baseUrl, shareId, access }) as Promise<CloudShareLink>,
+		grants: (baseUrl: string, shareId: string) => ipcRenderer.invoke("cloudShare:grants", { baseUrl, shareId }) as Promise<CloudShareGrant[]>,
+		invite: (baseUrl: string, shareId: string, emails: string[]) =>
+			ipcRenderer.invoke("cloudShare:invite", { baseUrl, shareId, emails }) as Promise<CloudShareGrant[]>,
+		removeGrant: (baseUrl: string, shareId: string, grantId: string) =>
+			ipcRenderer.invoke("cloudShare:removeGrant", { baseUrl, shareId, grantId }) as Promise<void>,
 		onProgress: (listener: (progress: CloudShareProgress) => void) => {
 			const wrapped = (_event: Electron.IpcRendererEvent, progress: CloudShareProgress) => listener(progress);
 			ipcRenderer.on(CLOUD_SHARE_PROGRESS_CHANNEL, wrapped);
@@ -960,6 +978,14 @@ const api = {
 		},
 		// One that arrived before the window was ready, taken once.
 		takePendingShareLink: () => ipcRenderer.invoke("cloud:takePendingShareLink") as Promise<string | null>,
+		// Uploads a local folder into the empty repository AO Cloud made for it
+		// (main/cloud-folder-push.ts); the token stays in main.
+		pushFolderToRepository: (input: PushFolderInput) =>
+			ipcRenderer.invoke("cloud:pushFolderToRepository", input) as Promise<PushFolderResult>,
+		// What uploading a picked folder would do, before anything is uploaded:
+		// the secret-looking files it leaves out, or why it cannot go.
+		previewFolderUpload: (input: { folder: string }) =>
+			ipcRenderer.invoke("cloud:previewFolderUpload", input) as Promise<PushFolderPreview>,
 		// The context a sign-in that just completed added (CloudSignInContext),
 		// with its account, taken once; null when there is none.
 		takePendingSignIn: () => ipcRenderer.invoke("cloud:takePendingSignIn") as Promise<CloudPendingSignIn | null>,

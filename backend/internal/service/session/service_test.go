@@ -23,6 +23,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
 	"github.com/aoagents/agent-orchestrator/backend/internal/observe/ownership"
+	"github.com/aoagents/agent-orchestrator/backend/internal/observe/sentryobs"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
@@ -66,6 +67,7 @@ func (f *fakeAgentReadiness) RecheckAgent(agentID string) {
 }
 
 type fakeStore struct {
+	artifacts           map[domain.SessionID][]string
 	cleanupFacts        map[domain.SessionID]domain.SessionCleanupRecord
 	sessions            map[domain.SessionID]domain.SessionRecord
 	getSessionErr       error
@@ -227,7 +229,7 @@ func TestInterruptedChatSessionShowsInterruptedOnTheBoard(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := map[domain.SessionID]domain.DisplayStatus{"mer-1": "Interrupted", "mer-2": "Awaiting PR"}
+	want := map[domain.SessionID]domain.DisplayStatus{"mer-1": "Interrupted", "mer-2": "Idle"}
 	for _, sess := range list {
 		if sess.KanbanColumn != "building" || sess.DisplayStatus != want[sess.ID] {
 			t.Fatalf("list %s = %q/%q, want building/%q", sess.ID, sess.KanbanColumn, sess.DisplayStatus, want[sess.ID])
@@ -379,6 +381,47 @@ func (f *fakeStore) GetSession(_ context.Context, id domain.SessionID) (domain.S
 	}
 	r, ok := f.sessions[id]
 	return r, ok, nil
+}
+
+func (f *fakeStore) AddSessionArtifacts(_ context.Context, id domain.SessionID, registrations []domain.SessionArtifactRegistration, _ time.Time) ([]string, bool, error) {
+	if _, ok := f.sessions[id]; !ok {
+		return nil, false, nil
+	}
+	if f.artifacts == nil {
+		f.artifacts = map[domain.SessionID][]string{}
+	}
+	for _, registration := range registrations {
+		path := registration.Path
+		if !slices.Contains(f.artifacts[id], path) {
+			f.artifacts[id] = append(f.artifacts[id], path)
+		}
+	}
+	return f.artifacts[id], true, nil
+}
+
+func (f *fakeStore) ListSessionArtifactsForSessions(_ context.Context, ids []domain.SessionID) (map[domain.SessionID][]domain.SessionArtifactRecord, error) {
+	out := make(map[domain.SessionID][]domain.SessionArtifactRecord, len(ids))
+	registeredAt := time.Unix(0, 0)
+	for _, id := range ids {
+		paths, ok := f.artifacts[id]
+		if !ok {
+			continue
+		}
+		for _, path := range paths {
+			out[id] = append(out[id], domain.SessionArtifactRecord{ID: "artifact:" + path, SessionID: id, Path: path, RegisteredAt: &registeredAt})
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeStore) RemoveSessionArtifact(_ context.Context, id domain.SessionID, path string) error {
+	f.artifacts[id] = slices.DeleteFunc(f.artifacts[id], func(p string) bool { return p == path })
+	return nil
+}
+
+func (f *fakeStore) ClearSessionArtifacts(_ context.Context, id domain.SessionID) error {
+	delete(f.artifacts, id)
+	return nil
 }
 
 func (f *fakeStore) GetSessionByClientRequestID(_ context.Context, id string) (domain.SessionRecord, bool, error) {
@@ -981,12 +1024,12 @@ func TestLinkedWorkspaceMissingCommonRepository(t *testing.T) {
 }
 
 func TestWorkspaceGitErrorClassificationPreservesUnknownFailure(t *testing.T) {
-	busy := classifyWorkspaceGitError(context.Background(), errors.New("git exit"), "fatal: Unable to create C:\\repo\\.git\\index.lock")
+	busy := classifyWorkspaceGitError(context.Background(), "/repo", "status", errors.New("git exit"), "fatal: Unable to create C:\\repo\\.git\\index.lock")
 	var apiErr *apierr.Error
 	if !errors.As(busy, &apiErr) || apiErr.Code != "WORKSPACE_GIT_BUSY" {
 		t.Fatalf("lock error = %v, want retryable WORKSPACE_GIT_BUSY", busy)
 	}
-	unknown := classifyWorkspaceGitError(context.Background(), errors.New("git exit"), "fatal: bad object")
+	unknown := classifyWorkspaceGitError(context.Background(), "/repo-unknown", "status", errors.New("git exit"), "fatal: bad object")
 	if !errors.As(unknown, &apiErr) || apiErr.Code != "WORKSPACE_GIT_READ_FAILED" {
 		t.Fatalf("unknown Git error = %v, want WORKSPACE_GIT_READ_FAILED", unknown)
 	}
@@ -5914,7 +5957,7 @@ func TestToSessionWithFactsRemapsTransferredAliasReviewRuns(t *testing.T) {
 		CreatedAt: rec.UpdatedAt,
 	}}
 
-	sess, err := (&Service{store: st, clock: func() time.Time { return rec.UpdatedAt.Add(2 * time.Minute) }}).toSessionWithFacts(context.Background(), rec, st.prFacts[rec.ID], st.reviewRuns[rec.ID], false, domain.SessionCleanupRecord{})
+	sess, err := (&Service{store: st, clock: func() time.Time { return rec.UpdatedAt.Add(2 * time.Minute) }}).toSessionWithFacts(context.Background(), rec, st.prFacts[rec.ID], st.reviewRuns[rec.ID], false, nil, domain.SessionCleanupRecord{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -5972,15 +6015,15 @@ func TestToSessionWithFactsCanonicalAliasRunSupersedesOlderAliasRun(t *testing.T
 		},
 	}
 
-	sess, err := (&Service{store: st, clock: func() time.Time { return rec.UpdatedAt.Add(2 * time.Minute) }}).toSessionWithFacts(context.Background(), rec, st.prFacts[rec.ID], st.reviewRuns[rec.ID], false, domain.SessionCleanupRecord{})
+	sess, err := (&Service{store: st, clock: func() time.Time { return rec.UpdatedAt.Add(2 * time.Minute) }}).toSessionWithFacts(context.Background(), rec, st.prFacts[rec.ID], st.reviewRuns[rec.ID], false, nil, domain.SessionCleanupRecord{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if sess.KanbanColumn != "needs_review" {
 		t.Fatalf("column = %q, want needs_review", sess.KanbanColumn)
 	}
-	if sess.DisplayStatus != "Needs human review" {
-		t.Fatalf("displayStatus = %q, want Needs human review", sess.DisplayStatus)
+	if sess.DisplayStatus != "Awaiting review" {
+		t.Fatalf("displayStatus = %q, want Awaiting review", sess.DisplayStatus)
 	}
 }
 
@@ -6589,5 +6632,68 @@ func TestDeleteExpiredDeletesSessionsArchivedLongEnough(t *testing.T) {
 	mgr.refuse["mer-old"] = errors.New("disk I/O error")
 	if err := svc.DeleteExpired(ctx, 30); err == nil || !strings.Contains(err.Error(), "mer-old") {
 		t.Fatalf("failed delete err = %v, want it reported", err)
+	}
+}
+
+// A polled read against a repository stuck in one broken state reports to
+// Sentry once per state change, not once per poll (AO-DAEMON-9).
+func TestWorkspaceGitReadFailureReportsOncePerStateChange(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "w-1")
+	read := func(detail string) error {
+		return classifyWorkspaceGitError(context.Background(), root, "status", errors.New("git exit"), detail)
+	}
+	steps := []struct {
+		name   string
+		run    func() error
+		repeat bool
+	}{
+		{"first failure", func() error { return read("fatal: bad object HEAD") }, false},
+		{"same failure on the next poll", func() error { return read("fatal: bad object HEAD") }, true},
+		{"and the poll after", func() error { return read("fatal: bad object HEAD") }, true},
+		{"a different failure", func() error { return read("fatal: your current branch appears to be broken") }, false},
+		{"after a successful read", func() error {
+			noteWorkspaceGitReadOK(root, "status")
+			return read("fatal: your current branch appears to be broken")
+		}, false},
+	}
+	for _, step := range steps {
+		err := step.run()
+		var apiErr *apierr.Error
+		if !errors.As(err, &apiErr) || apiErr.Code != "WORKSPACE_GIT_READ_FAILED" {
+			t.Fatalf("%s: client sees %v, want WORKSPACE_GIT_READ_FAILED", step.name, err)
+		}
+		if got := sentryobs.IsRepeat(err); got != step.repeat {
+			t.Errorf("%s: skipped by Sentry = %v, want %v", step.name, got, step.repeat)
+		}
+	}
+	other := classifyWorkspaceGitError(context.Background(), filepath.Join(t.TempDir(), "w-2"), "status", errors.New("git exit"), "fatal: bad object HEAD")
+	if sentryobs.IsRepeat(other) {
+		t.Error("a second workspace's first failure was skipped")
+	}
+}
+
+func TestWorkspaceGitRecoveryIsScopedToOperation(t *testing.T) {
+	root := newWorkspaceRepo(t)
+	read := func(op string) error {
+		return classifyWorkspaceGitError(t.Context(), root, op, errors.New("git exit"), "fatal: bad object HEAD")
+	}
+	read("diff")
+	for _, capped := range []bool{false, true} {
+		read("status")
+		if capped {
+			if _, _, err := gitWorkspaceOutputCapped(t.Context(), root, 1, "status"); err != nil {
+				t.Fatal(err)
+			}
+		} else {
+			if _, err := gitWorkspaceOutput(t.Context(), root, "status"); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if sentryobs.IsRepeat(read("status")) {
+			t.Error("recovered status was still suppressed")
+		}
+		if !sentryobs.IsRepeat(read("diff")) {
+			t.Error("successful status rearmed unrelated diff")
+		}
 	}
 }

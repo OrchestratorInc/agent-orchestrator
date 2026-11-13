@@ -8,7 +8,7 @@ import userEvent from "@testing-library/user-event";
 import { Activity, Profiler, useState } from "react";
 import { placeLexicalCaret, typeInLexicalEditor } from "../../test/lexical";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ChatWorkspace, promptSpacerHeight, promptTopInset } from "./ChatWorkspace";
+import { ChatWorkspace, forgetReadingPositions, promptSpacerHeight, promptTopInset } from "./ChatWorkspace";
 import { AssistantMessage, HumanMessage, OriginMessage } from "./ChatTimelineItems";
 import { AutomationMessage } from "./AutomationMessage";
 import { ChatLinkProvider } from "./ChatMarkdown";
@@ -32,6 +32,7 @@ import {
 	readChatSessionDraft,
 	writeChatInlineEdit,
 	writeChatComposerText,
+	writeChatExcerptReferences,
 } from "../../lib/chat-drafts";
 import {
 	getChatDraftBoundaries,
@@ -201,6 +202,7 @@ function stubGeometry(
 }
 
 beforeEach(() => {
+	forgetReadingPositions();
 	writeText.mockClear();
 	menuAction.mockClear();
 	previousTabListeners.clear();
@@ -215,6 +217,16 @@ beforeEach(() => {
 });
 
 describe("ChatWorkspace prompt suggestions", () => {
+	it("forwards the Cloud message budget to its composer", async () => {
+		const snapshot = { ...chatFixtureSettled, sessionId: "cloud-budget-workspace" };
+		const onSend = vi.fn();
+		writeChatComposerText(snapshot.sessionId, "q".repeat(70 * 1024));
+		writeChatExcerptReferences(snapshot.sessionId, [{ id: "quote", conversationId: snapshot.conversationId, messageId: "source", revision: 1, role: "assistant", text: "quote" }]);
+		render(<ChatWorkspace snapshot={snapshot} onSend={onSend} excerptsEnabled messageByteLimit={64 * 1024} />);
+		fireEvent.keyDown(screen.getByRole("combobox", { name: "Message the agent" }), { key: "Enter" });
+		await screen.findByText(appI18n.t("chat.draft.excerptMessageLimit"));
+		expect(onSend).not.toHaveBeenCalled();
+	});
 	it("shows cloud captured previews without querying the local daemon", async () => {
 		const snapshot={...chatFixtureEmpty,sessionId:"cloud-preview"};
 		const reference=captureFileReference({path:"cloud.ts",side:"file",line:1,endLine:1,lines:[{kind:"context",oldNo:1,newNo:1,text:"CLOUD_STATIC_PREVIEW"}]},snapshot.sessionId);
@@ -892,8 +904,8 @@ describe("ChatWorkspace timeline", () => {
 		const workerTab = screen.getByRole("tab", { name: "Reviewer chat · Codex · Working" });
 		expect(workerTab).toHaveTextContent(chatSession.title);
 		expect(workerTab).not.toHaveTextContent("Codex");
-		// The chat tab names its agent for assistive tech but draws no logo.
-		expect(workerTab.querySelector('img[aria-hidden="true"], [style*="mask"][aria-hidden="true"]')).toBeNull();
+		// The chat tab shows its agent's logo, as the terminal tab does (#8129).
+		expect(workerTab.querySelector('img[aria-hidden="true"], [style*="mask"][aria-hidden="true"]')).toBeInTheDocument();
 
 		view.rerender(
 			<ChatWorkspace
@@ -908,7 +920,8 @@ describe("ChatWorkspace timeline", () => {
 		const actionRegion = screen.getByTestId("session-action-region");
 		expect(actionRegion).toHaveClass("session-topbar-actions");
 		expect(actionRegion).not.toHaveClass("px-3");
-		expect(screen.getByRole("tab", { name: "Orchestrator · Codex · Working" })).toBeInTheDocument();
+		const orchestratorTab = screen.getByRole("tab", { name: "Orchestrator · Codex · Working" });
+		expect(orchestratorTab.querySelector('img[aria-hidden="true"], [style*="mask"][aria-hidden="true"]')).toBeInTheDocument();
 
 		view.rerender(
 			<ChatWorkspace
@@ -934,13 +947,24 @@ describe("ChatWorkspace timeline", () => {
 		const view = render(<ChatWorkspace snapshot={reported} />);
 		const composer = screen.getByLabelText("Message the agent").closest("form") as HTMLElement;
 		const gauge = within(composer).getByRole("progressbar", { name: "Context window used" });
-		expect(gauge).toHaveAttribute("aria-valuetext", "18,055 / 258,400 tokens (7%)");
+		expect(gauge).toHaveAttribute("aria-valuetext", `18,055 / ${(258400).toLocaleString()} tokens (7%)`);
 		gauge.focus();
 		fireEvent.click(gauge.querySelector("svg") as SVGSVGElement);
 		expect(gauge).toHaveFocus();
 
 		view.rerender(<ChatWorkspace snapshot={{ ...reported, usage: { ...reported.usage, contextUsed: 129_200 } }} />);
-		expect(within(composer).getByRole("progressbar", { name: "Context window used" })).toHaveAttribute("aria-valuetext", "129,200 / 258,400 tokens (50%)");
+		expect(within(composer).getByRole("progressbar", { name: "Context window used" })).toHaveAttribute("aria-valuetext", `${(129200).toLocaleString()} / ${(258400).toLocaleString()} tokens (50%)`);
+	});
+
+	// The meter can warn about the account's quota, but only if it is handed it.
+	it("warns beside the composer once the account's quota passes 75%", () => {
+		const reported = { ...idleSnapshot(chatFixture), rateLimits: { primaryUsedPercent: 40, secondaryUsedPercent: -1 } };
+		const view = render(<ChatWorkspace snapshot={reported} />);
+		const composer = screen.getByLabelText("Message the agent").closest("form") as HTMLElement;
+		expect(within(composer).queryByText(/% used/)).not.toBeInTheDocument();
+
+		view.rerender(<ChatWorkspace snapshot={{ ...reported, rateLimits: { primaryUsedPercent: 40, secondaryUsedPercent: 82 } }} />);
+		expect(within(composer).getByText("Weekly 82% used")).toBeInTheDocument();
 	});
 
 	it("refreshes the owning workspace after renaming the primary chat tab", async () => {
@@ -2642,6 +2666,77 @@ describe("ChatWorkspace timeline", () => {
 		expect(openShell).toHaveBeenCalledOnce();
 	});
 
+	// #6064: a reviewer whose controller died mid-turn spun "Working for…" forever.
+	it("settles a running turn with an unknown outcome once the controller stops", async () => {
+		const user = userEvent.setup();
+		const resume = vi.fn();
+		const openShell = vi.fn();
+		const live = structuredClone(chatFixture);
+		live.items = live.items.filter(
+			(item) => !(item.kind === "activity" && item.activityKind === "approval" && item.status === "pending"),
+		);
+		expect(live.turns.some((turn) => turn.state === "running")).toBe(true);
+
+		render(
+			<ChatWorkspace
+				snapshot={{ ...live, controller: { state: "stopped" } }}
+				onResumeAgent={resume}
+				onOpenShell={openShell}
+				onInterrupt={vi.fn()}
+				onRollback={vi.fn()}
+			/>,
+		);
+
+		expect(screen.queryByTestId("live-working-label")).not.toBeInTheDocument();
+		expect(screen.queryByTestId("response-spinner")).not.toBeInTheDocument();
+		expect(screen.getByText("The agent stopped before this turn finished")).toBeInTheDocument();
+		const unknownOutcome = document.querySelector<HTMLElement>('[data-turn-outcome="unknown"]');
+		expect(unknownOutcome).not.toBeNull();
+		// The daemon still holds the turn open, so neither stop nor rollback would be honoured.
+		// Earlier settled turns may keep their own rollback, so look only at this outcome.
+		expect(screen.queryByRole("button", { name: "Stop turn" })).not.toBeInTheDocument();
+		expect(within(unknownOutcome as HTMLElement).queryByRole("button", { name: "Roll back to here" })).not.toBeInTheDocument();
+		// The earlier turn keeps its rollback, but the daemon refuses it while this turn is open.
+		const rollbacks = screen.getAllByRole("button", { name: "Roll back to here" });
+		expect(rollbacks.length).toBeGreaterThan(0);
+		for (const rollback of rollbacks) expect(rollback).toBeDisabled();
+		await user.click(screen.getByRole("button", { name: "Resume agent" }));
+		await user.click(screen.getByRole("button", { name: "Open shell" }));
+		expect(resume).toHaveBeenCalledOnce();
+		expect(openShell).toHaveBeenCalledOnce();
+	});
+
+	it("does not dress a stopped opening turn as live again", () => {
+		const opening = structuredClone(chatFixture);
+		const first = { ...opening.turns[0]!, state: "running" as const, completedAt: undefined };
+		opening.turns = [first];
+		opening.items = opening.items.filter((item) => item.turnId === first.id);
+
+		render(
+			<ChatWorkspace
+				snapshot={{ ...opening, controller: { state: "stopped" } }}
+				openingStartedAt={first.requestedAt}
+				onResumeAgent={vi.fn()}
+			/>,
+		);
+
+		expect(screen.queryByTestId("live-working-label")).not.toBeInTheDocument();
+		expect(screen.queryByTestId("response-spinner")).not.toBeInTheDocument();
+		expect(screen.getByText("The agent stopped before this turn finished")).toBeInTheDocument();
+	});
+
+	it("keeps a running turn live while a stopped controller is only handing off", () => {
+		const live = structuredClone(chatFixture);
+		live.items = live.items.filter(
+			(item) => !(item.kind === "activity" && item.activityKind === "approval" && item.status === "pending"),
+		);
+
+		render(<ChatWorkspace snapshot={{ ...live, controller: { state: "stopped" } }} controllerTransitioning />);
+
+		expect(screen.getAllByTestId("live-working-label")).toHaveLength(1);
+		expect(screen.queryByText("The agent stopped before this turn finished")).not.toBeInTheDocument();
+	});
+
 	it.each([
 		["codex", false],
 		["opencode", true],
@@ -3028,14 +3123,17 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.queryByText("Starting sandbox")).not.toBeInTheDocument();
 	});
 
-	it.each([
-		["fetch", "Getting the latest code"],
-		["worktree", "Preparing your workspace"],
-		["setup", "Running your project setup"],
-		["agent", "Starting your orchestrator"],
-	] as const)("shows the actual %s setup step in the placeholder", (id, message) => {
-		render(<ChatWorkspace snapshot={{ ...chatFixtureEmpty, controller: { state: "connecting" } }} sessionRole="orchestrator" startingSteps={[{ id, status: "running" }]} />);
-		expect(screen.getByText(message)).toBeInTheDocument();
+	it("keeps one placeholder through every step of an orchestrator start", () => {
+		const view = render(<ChatWorkspace snapshot={{ ...chatFixtureEmpty, controller: { state: "connecting" } }} sessionRole="orchestrator" />);
+		expect(screen.getByText("Starting your orchestrator")).toBeInTheDocument();
+		for (const id of ["fetch", "worktree", "setup", "agent"] as const) {
+			view.rerender(<ChatWorkspace snapshot={{ ...chatFixtureEmpty, controller: { state: "connecting" } }} sessionRole="orchestrator" startingSteps={[{ id, status: "running" }]} />);
+			expect(screen.getByText("Starting your orchestrator")).toBeInTheDocument();
+		}
+		// A brand-new orchestrator's first connect is not a conversation to restore.
+		view.rerender(<ChatWorkspace snapshot={{ ...chatFixtureEmpty, controller: { state: "connecting" } }} sessionRole="orchestrator" session={{ ...chatSession, kind: "orchestrator", lastUserMessageAt: undefined }} controllerTransitioning />);
+		expect(screen.getByText("Starting your orchestrator")).toBeInTheDocument();
+		expect(screen.queryByText("Restoring your conversation")).not.toBeInTheDocument();
 	});
 
 	it("uses the report heading only while the welcome override is supplied", () => {
@@ -3084,6 +3182,19 @@ describe("ChatWorkspace timeline", () => {
 		await user.click(prompts[0]);
 		await waitFor(() => expect(screen.getByLabelText("Message the agent")).toHaveTextContent("Review my recent changes for bugs"));
 		await waitFor(() => expect(screen.queryByRole("list", { name: "Sample requests" })).not.toBeInTheDocument());
+	});
+
+	it("keeps the sample requests on screen but disabled while the orchestrator starts", () => {
+		const view = render(<ChatWorkspace sessionRole="orchestrator" snapshot={{ ...chatFixtureEmpty, controller: { state: "connecting" } }} newWorkDisabled />);
+
+		const prompts = within(screen.getByRole("list", { name: "Sample requests" })).getAllByRole("button");
+		expect(prompts).toHaveLength(4);
+		for (const prompt of prompts) expect(prompt).toBeDisabled();
+		view.unmount();
+
+		// Other fenced chats (an unreachable host, leaving for the terminal) keep them hidden.
+		render(<ChatWorkspace snapshot={chatFixtureEmpty} newWorkDisabled />);
+		expect(screen.queryByRole("list", { name: "Sample requests" })).not.toBeInTheDocument();
 	});
 
 	it("offers sample artifact requests to artifact sessions outside Scratchpad too", () => {
@@ -3500,6 +3611,10 @@ describe("ChatWorkspace timeline", () => {
 			const visible = loadHistory ? { ...snapshot, hasMoreBefore: true, oldestSequence: prompts[80]!.sequence, turns: snapshot.turns.slice(80), items: snapshot.items.filter((item) => item.sequence >= prompts[80]!.sequence) } : snapshot;
 			render(<ChatWorkspace snapshot={visible} />);
 			const log = screen.getByRole("log");
+			// JSDOM omits the browser scroll API used to center the active match.
+			Object.defineProperty(log, "scrollTo", { configurable: true, value: ({ top }: ScrollToOptions) => {
+				log.scrollTop = Math.max(0, Math.min(top ?? log.scrollTop, log.scrollHeight - log.clientHeight));
+			} });
 			log.focus();
 			fireEvent.keyDown(log, { key: "f", metaKey: true });
 			const input = await screen.findByRole("searchbox");
@@ -5533,6 +5648,122 @@ describe("ChatWorkspace message actions", () => {
 		expect(composer).toHaveTextContent("unsent composer draft");
 	});
 
+	it("disables an open edit of an earlier turn as soon as new work is fenced off", async () => {
+		const user = userEvent.setup();
+		const props = { snapshot: idleSnapshot(), onEditMessage: vi.fn(async () => undefined) };
+		const view = render(<ChatWorkspace {...props} />);
+		await user.click(screen.getAllByRole("button", { name: "Edit user message" })[0]!);
+		await user.type(screen.getByRole("textbox", { name: "Edit message" }), " Include staged files.");
+		expect(screen.getByRole("button", { name: "Send edited message" })).toBeEnabled();
+		// Only the turn being edited reads the flag, so that turn has to redraw when it flips.
+		view.rerender(<ChatWorkspace {...props} newWorkDisabled />);
+		expect(screen.getByRole("button", { name: "Send edited message" })).toBeDisabled();
+		expect(screen.getByText("Stop the current turn before branching")).toBeInTheDocument();
+		view.rerender(<ChatWorkspace {...props} />);
+		expect(screen.getByRole("button", { name: "Send edited message" })).toBeEnabled();
+	});
+
+	it("plays the entrance on the newest human message only, send after send", () => {
+		const base = idleSnapshot();
+		// Written now: a prompt that arrives while the reader watches.
+		const at = new Date().toISOString();
+		const send = (snapshot: ConversationSnapshot, turnId: string, text: string): ConversationSnapshot => {
+			const sequence = snapshot.latestSequence + 1;
+			return {
+				...snapshot,
+				latestSequence: sequence,
+				turns: [...snapshot.turns, { id: turnId, state: "completed", requestedAt: at, startedAt: at, completedAt: at }],
+				items: [...snapshot.items, {
+					kind: "message", id: `prompt-${turnId}`, turnId, sequence, revision: 0,
+					role: "user", origin: "human", text, streaming: false, createdAt: at,
+				}],
+			};
+		};
+		const entering = () => [...document.querySelectorAll(".chat-human-message-enter")];
+		const view = render(<ChatWorkspace snapshot={base} />);
+		expect(entering()).toHaveLength(0);
+		const first = send(base, "turn-3", "Now run the tests");
+		view.rerender(<ChatWorkspace snapshot={first} />);
+		expect(entering().length).toBeGreaterThan(0);
+		for (const node of entering()) expect(node).toHaveTextContent("Now run the tests");
+		// Each turn gets the new ids only while it holds one, so the previous turn redraws without them.
+		view.rerender(<ChatWorkspace snapshot={send(first, "turn-4", "Then open a PR")} />);
+		expect(entering().length).toBeGreaterThan(0);
+		for (const node of entering()) {
+			expect(node).toHaveTextContent("Then open a PR");
+			expect(node).not.toHaveTextContent("Now run the tests");
+		}
+	});
+
+	describe("rows the reader did not watch arrive", () => {
+		const sendAt = (snapshot: ConversationSnapshot, turnId: string, text: string, at: string): ConversationSnapshot => {
+			const sequence = snapshot.latestSequence + 1;
+			return {
+				...snapshot,
+				latestSequence: sequence,
+				turns: [...snapshot.turns, { id: turnId, state: "completed", requestedAt: at, startedAt: at, completedAt: at }],
+				items: [...snapshot.items, {
+					kind: "message", id: `prompt-${turnId}`, turnId, sequence, revision: 0,
+					role: "user", origin: "human", text, streaming: false, createdAt: at,
+				}],
+			};
+		};
+		const entering = () => [...document.querySelectorAll(".chat-human-message-enter")];
+		const setVisibility = (state: DocumentVisibilityState) => {
+			Object.defineProperty(document, "visibilityState", { configurable: true, get: () => state });
+			act(() => {
+				document.dispatchEvent(new Event("visibilitychange"));
+			});
+		};
+		afterEach(() => {
+			Reflect.deleteProperty(document, "visibilityState");
+		});
+
+		it("does not replay entrances for rows written while the reader was away (a stale copy catching up)", () => {
+			const base = idleSnapshot();
+			const view = render(<ChatWorkspace snapshot={base} />);
+			// The refetch after returning to the chat brings rows written ten minutes ago.
+			const away = new Date(Date.now() - 10 * 60_000).toISOString();
+			const caughtUp = sendAt(base, "turn-3", "Sent from my phone", away);
+			view.rerender(<ChatWorkspace snapshot={caughtUp} />);
+			expect(screen.getAllByText("Sent from my phone").length).toBeGreaterThan(0);
+			expect(entering()).toHaveLength(0);
+			// A prompt that then arrives while the reader watches still enters.
+			view.rerender(<ChatWorkspace snapshot={sendAt(caughtUp, "turn-4", "Now run the tests", new Date().toISOString())} />);
+			expect(entering().length).toBeGreaterThan(0);
+			for (const node of entering()) expect(node).toHaveTextContent("Now run the tests");
+		});
+
+		it("does not queue entrances for rows that land while the window is hidden", () => {
+			const base = idleSnapshot();
+			const view = render(<ChatWorkspace snapshot={base} />);
+			setVisibility("hidden");
+			const hidden = sendAt(base, "turn-3", "Arrived while hidden", new Date().toISOString());
+			view.rerender(<ChatWorkspace snapshot={hidden} />);
+			expect(screen.getAllByText("Arrived while hidden").length).toBeGreaterThan(0);
+			expect(entering()).toHaveLength(0);
+			// Back on screen: rows written before the return are history, newer ones enter.
+			setVisibility("visible");
+			view.rerender(<ChatWorkspace snapshot={sendAt(hidden, "turn-4", "Arrived on return", new Date().toISOString())} />);
+			for (const node of entering()) expect(node).toHaveTextContent("Arrived on return");
+			expect(entering().length).toBeGreaterThan(0);
+		});
+
+		it("does not enter a local echo that appears while the window is hidden", () => {
+			const base = idleSnapshot();
+			const view = render(<ChatWorkspace snapshot={base} />);
+			setVisibility("hidden");
+			// A send that resolved after the reader left: no new snapshot, only the echo.
+			const localEchos = [{ clientMessageId: "sent-before-leaving", text: "Echo while hidden", createdAt: new Date().toISOString() }];
+			view.rerender(<ChatWorkspace snapshot={base} localEchos={localEchos} />);
+			expect(screen.getAllByText("Echo while hidden").length).toBeGreaterThan(0);
+			expect(entering()).toHaveLength(0);
+			setVisibility("visible");
+			view.rerender(<ChatWorkspace snapshot={base} localEchos={localEchos} />);
+			expect(entering()).toHaveLength(0);
+		});
+	});
+
 	it("hides editing while another turn is active", () => {
 		render(<ChatWorkspace snapshot={chatFixture} onEditMessage={vi.fn(async () => undefined)} />);
 
@@ -6044,6 +6275,35 @@ describe("ChatWorkspace shell tabs", () => {
 			title: shell.title,
 		};
 	};
+
+	it("does not replay entrances for rows written while a shell covered the conversation", () => {
+		const opened = Date.now();
+		const now = vi.spyOn(Date, "now").mockReturnValue(opened);
+		try {
+			const base = idleSnapshot();
+			const common = { session: chatSession, shellTerminals: shells, onSelectChat: vi.fn() };
+			const view = render(<ChatWorkspace {...common} snapshot={base} />);
+			// A minute into the shell, a prompt lands; the held transcript only sees it on return.
+			const written = new Date(opened + 60_000).toISOString();
+			const sequence = base.latestSequence + 1;
+			const covered: ConversationSnapshot = {
+				...base,
+				latestSequence: sequence,
+				turns: [...base.turns, { id: "turn-shell", state: "completed", requestedAt: written, startedAt: written, completedAt: written }],
+				items: [...base.items, {
+					kind: "message", id: "prompt-turn-shell", turnId: "turn-shell", sequence, revision: 0,
+					role: "user", origin: "human", text: "Sent while the shell was open", streaming: false, createdAt: written,
+				}],
+			};
+			view.rerender(<ChatWorkspace {...common} snapshot={covered} shellTarget={shellTarget("shell-1")} />);
+			now.mockReturnValue(opened + 120_000);
+			view.rerender(<ChatWorkspace {...common} snapshot={covered} />);
+			expect(screen.getAllByText("Sent while the shell was open").length).toBeGreaterThan(0);
+			expect(document.querySelectorAll(".chat-human-message-enter")).toHaveLength(0);
+		} finally {
+			now.mockRestore();
+		}
+	});
 
 	// Shells are tabs inside the chat surface (#4033): opening one must not cost
 	// the conversation — the conversation panel hides instead of unmounting,

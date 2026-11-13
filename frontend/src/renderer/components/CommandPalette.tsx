@@ -3,7 +3,7 @@ import { keepPreviousData, useQueries, useQuery, useQueryClient } from "@tanstac
 import { useNavigate, useParams } from "@tanstack/react-router";
 import { ArrowLeft, ChevronRight, CircleAlert, Folder, Loader2 } from "@/components/app-icons";
 import { effectiveShortcutBindings, shortcutBindingKeys, type AppShortcutId } from "../../shared/shortcuts";
-import { useCallback, useEffect, useMemo, useRef, useState, type AnimationEvent, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type AnimationEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useCommandPaletteEnabled } from "../hooks/useCommandPaletteEnabled";
 import { useCloudCp } from "../hooks/useCloudCp";
@@ -60,6 +60,7 @@ import {
 	workerSessions,
 } from "../types/workspace";
 import { useUiStore } from "../stores/ui-store";
+import { useSessionImportStore } from "../stores/session-import-store";
 import { runAppShortcut, useAppShortcut } from "../hooks/useAppShortcut";
 import { CreateProjectFlow } from "./CreateProjectFlow";
 import { requestOpenShareLink } from "./OpenShareLinkDialog";
@@ -96,7 +97,9 @@ function isRowNavigationKey(event: { key: string; ctrlKey: boolean }): boolean {
 		|| (event.ctrlKey && ["n", "j", "p", "k"].includes(event.key));
 }
 
-export function CommandPalette() {
+// Memoized: it takes no props, so the shell's re-renders (several per route
+// change) skip the closed palette.
+export const CommandPalette = memo(function CommandPalette() {
 	const { i18n, t } = useTranslation();
 	const enabled = useCommandPaletteEnabled();
 	const navigate = useNavigate();
@@ -743,6 +746,11 @@ export function CommandPalette() {
 					closePalette();
 					useUiStore.getState().openGlobalSettings(action.section, action.focus ? { focusSetting: action.focus } : undefined);
 					break;
+				case "open-session-import":
+					closePalette();
+					if (action.projectId) useSessionImportStore.getState().openProjectImport(action.projectId);
+					else useSessionImportStore.getState().openFolderImport();
+					break;
 				case "run-shortcut": {
 					closePalette();
 					// After the palette has closed, so the action sees the screen
@@ -776,13 +784,15 @@ export function CommandPalette() {
 							await openOrchestrator(action.projectId, isCurrentRun);
 							break;
 					case "open-archive": {
-						// The project's board opens its archive once it is on screen.
-						useUiStore.getState().requestArchiveOpen(action.projectId, params.hostId);
-						if (params.hostId) {
-							void navigate({ to: "/host/$hostId/project/$projectId", params: { hostId: params.hostId, projectId: action.projectId } });
-						} else {
-							void navigate({ to: "/projects/$projectId", params: { projectId: action.projectId } });
-						}
+						// Over the current page, with no navigation. The palette's own
+						// focus goes with it, so the modal returns to where the palette
+						// was opened from (a composer, a terminal) when it closes.
+						const returnFocus = returnFocusRef.current;
+						useUiStore.getState().openArchive({
+							projectId: action.projectId,
+							hostId: params.hostId,
+							returnFocus: returnFocus instanceof HTMLElement ? returnFocus : null,
+						});
 						closePalette();
 						break;
 					}
@@ -1077,7 +1087,7 @@ export function CommandPalette() {
 			) : null}
 		</>
 	);
-}
+});
 
 /** Whether a palette action closes the palette into another modal. */
 function opensModal(action: NonNullable<CommandItemModel["action"]>, taskOpensModal: boolean): boolean {
@@ -1085,6 +1095,7 @@ function opensModal(action: NonNullable<CommandItemModel["action"]>, taskOpensMo
 		case "open-new-task":
 			return taskOpensModal;
 		case "open-new-project":
+		case "open-session-import":
 		case "open-archive":
 		case "open-shared-link":
 		case "open-settings-section":

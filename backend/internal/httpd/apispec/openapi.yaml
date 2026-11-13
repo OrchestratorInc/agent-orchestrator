@@ -3776,6 +3776,60 @@ paths:
       summary: Run the legacy AO project import through the daemon store
       tags:
       - import
+  /api/v1/imports/github-availability:
+    get:
+      operationId: checkImportGitHubAvailability
+      parameters:
+      - description: GitHub user or organization the repository would be created under.
+        in: query
+        name: owner
+        schema:
+          description: GitHub user or organization the repository would be created
+            under.
+          type: string
+      - description: Repository name to check.
+        in: query
+        name: name
+        schema:
+          description: Repository name to check.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ImporterGitHubAvailabilityResult'
+          description: OK
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Check whether a GitHub repository name is free to create for a project
+        import
+      tags:
+      - import
+  /api/v1/imports/github-owners:
+    get:
+      operationId: listImportGitHubOwners
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ImporterGitHubOwnersResult'
+          description: OK
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List the GitHub accounts gh on this machine can create a project's
+        repository under
+      tags:
+      - import
   /api/v1/imports/prepare-git:
     post:
       operationId: prepareImportGit
@@ -3941,19 +3995,19 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Service Unavailable
-      summary: List paired mobile devices with their live status
+      summary: List the devices that can reach this host, with their live status
       tags:
       - mobile
-  /api/v1/mobile/devices/{installId}:
+  /api/v1/mobile/devices/{id}:
     delete:
       operationId: removeMobileDevice
       parameters:
-      - description: The device's stable install id.
+      - description: The row's id from the device list.
         in: path
-        name: installId
+        name: id
         required: true
         schema:
-          description: The device's stable install id.
+          description: The row's id from the device list.
           type: string
       responses:
         "204":
@@ -3970,7 +4024,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Service Unavailable
-      summary: Remove a paired device from the roster
+      summary: 'Remove a device: revoke its token and stop its notifications'
       tags:
       - mobile
   /api/v1/mobile/disable:
@@ -4110,6 +4164,37 @@ paths:
       summary: Keep this Mac from idle-sleeping while Connect Mobile is on
       tags:
       - mobile
+  /api/v1/mobile/pairing-code:
+    post:
+      operationId: createMobilePairingCode
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ControllersPairingCodeResponse'
+          description: OK
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+      summary: Make a one-time code a new device exchanges for its own token
+      tags:
+      - mobile
   /api/v1/mobile/regenerate:
     post:
       operationId: regenerateMobile
@@ -4132,7 +4217,8 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Internal Server Error
-      summary: Rotate the Connect Mobile password, dropping any connected phone
+      summary: 'Revoke every device: rotate the pairing password, remove all device
+        tokens and unlink the account'
       tags:
       - mobile
   /api/v1/mobile/remote-access:
@@ -4158,6 +4244,43 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Internal Server Error
       summary: Look for a connector again and start it, without rotating the password
+      tags:
+      - mobile
+  /api/v1/mobile/require-device-credentials:
+    post:
+      operationId: setMobileRequireDeviceCredentials
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ControllersSetRequireDeviceCredentialsRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MobileStatusResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+      summary: Refuse or accept the pairing password on the remote listener
       tags:
       - mobile
   /api/v1/mobile/secure-pairing:
@@ -5265,6 +5388,152 @@ paths:
       summary: Initialize a selected folder as a Git repository with an initial commit
       tags:
       - projects
+  /api/v1/prs/{id}/attachment-access:
+    get:
+      operationId: getPRAttachmentAccess
+      parameters:
+      - description: PR number.
+        in: path
+        name: id
+        required: true
+        schema:
+          description: PR number.
+          type: string
+      - description: The pull request's URL.
+        in: query
+        name: prUrl
+        required: true
+        schema:
+          description: The pull request's URL.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PRAttachmentAccessResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+      summary: Whether files can be attached to a pull request's comments, and where
+        they would be stored
+      tags:
+      - prs
+  /api/v1/prs/{id}/comments:
+    post:
+      operationId: postPRComment
+      parameters:
+      - description: PR number.
+        in: path
+        name: id
+        required: true
+        schema:
+          description: PR number.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PostPRCommentRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PostPRCommentResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Unprocessable Entity
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Post a pull request conversation comment or review-thread reply
+      tags:
+      - prs
+  /api/v1/prs/{id}/details:
+    post:
+      operationId: loadPRDetails
+      parameters:
+      - description: PR number.
+        in: path
+        name: id
+        required: true
+        schema:
+          description: PR number.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoadPRDetailsRequest'
+        required: true
+      responses:
+        "204":
+          description: No Content
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Unprocessable Entity
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Read a tracked pull request's details from its provider when none are
+        stored
+      tags:
+      - prs
   /api/v1/prs/{id}/merge:
     post:
       operationId: mergePR
@@ -5319,7 +5588,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
-      summary: Squash-merge a pull request
+      summary: Merge a pull request (squash, merge commit, or rebase)
       tags:
       - prs
   /api/v1/prs/{id}/resolve-comments:
@@ -5359,6 +5628,211 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
       summary: Resolve review threads on a pull request
+      tags:
+      - prs
+  /api/v1/prs/{id}/stack:
+    get:
+      operationId: getPRStack
+      parameters:
+      - description: PR number.
+        in: path
+        name: id
+        required: true
+        schema:
+          description: PR number.
+          type: string
+      - description: The pull request's URL.
+        in: query
+        name: prUrl
+        required: true
+        schema:
+          description: The pull request's URL.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GetPRStackResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Read a pull request's stack, or the open pull request it could be stacked
+        on
+      tags:
+      - prs
+    post:
+      operationId: addPRToStack
+      parameters:
+      - description: PR number.
+        in: path
+        name: id
+        required: true
+        schema:
+          description: PR number.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddPRToStackRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GetPRStackResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Unprocessable Entity
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Stack a pull request on the open pull request it is based on
+      tags:
+      - prs
+  /api/v1/prs/{id}/stack/merge:
+    post:
+      operationId: mergePRStack
+      parameters:
+      - description: PR number.
+        in: path
+        name: id
+        required: true
+        schema:
+          description: PR number.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MergePRStackRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MergePRStackResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Unprocessable Entity
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Merge a pull request and the unmerged layers below it, all or nothing
+      tags:
+      - prs
+  /api/v1/prs/{id}/state:
+    post:
+      operationId: changePRState
+      parameters:
+      - description: PR number.
+        in: path
+        name: id
+        required: true
+        schema:
+          description: PR number.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChangePRStateRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChangePRStateResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Unprocessable Entity
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Close, reopen, mark ready, or convert a pull request to draft
       tags:
       - prs
   /api/v1/push/devices:
@@ -5476,7 +5950,57 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Forbidden
-      summary: Issue a host-scoped account credential using the pairing password
+      summary: Issue a host-scoped account credential using the pairing password or
+        a device token
+      tags:
+      - mobile
+  /api/v1/remote-host/devices:
+    post:
+      operationId: pairRemoteHostDevice
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ControllersPairDeviceRequest'
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ControllersPairDeviceResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+      summary: Exchange a one-time pairing code, or the pairing password, for this
+        device's own token
       tags:
       - mobile
   /api/v1/reports:
@@ -6717,6 +7241,63 @@ paths:
           description: Not Implemented
       summary: Serve a session artifact file sandboxed, an HTML page with the render
         theme bootstrap
+      tags:
+      - sessions
+  /api/v1/sessions/{sessionId}/artifact-registrations:
+    post:
+      operationId: registerSessionArtifacts
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterArtifactsRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegisterArtifactsResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Register files in the session's artifact directory as its deliverables
       tags:
       - sessions
   /api/v1/sessions/{sessionId}/artifact-versions:
@@ -13929,6 +14510,14 @@ components:
       required:
       - activeBranchId
       type: object
+    AddPRToStackRequest:
+      properties:
+        prUrl:
+          minLength: 1
+          type: string
+      required:
+      - prUrl
+      type: object
     AddProjectInput:
       properties:
         asWorkspace:
@@ -14882,6 +15471,32 @@ components:
       required:
       - data
       type: object
+    AutoSpawnPause:
+      properties:
+        effort:
+          type: string
+        errorCode:
+          type: string
+        failures:
+          type: integer
+        harness:
+          type: string
+        kind:
+          type: string
+        message:
+          type: string
+        model:
+          type: string
+        pausedAt:
+          format: date-time
+          type: string
+      required:
+      - harness
+      - errorCode
+      - message
+      - failures
+      - pausedAt
+      type: object
     AutomationEnvelope:
       properties:
         automation:
@@ -15483,6 +16098,43 @@ components:
       - ok
       - sessionId
       type: object
+    ChangePRStateRequest:
+      properties:
+        action:
+          enum:
+          - close
+          - reopen
+          - ready
+          - draft
+          type: string
+        prUrl:
+          minLength: 1
+          type: string
+      required:
+      - prUrl
+      - action
+      type: object
+    ChangePRStateResponse:
+      properties:
+        ok:
+          type: boolean
+        prNumber:
+          type: integer
+        state:
+          enum:
+          - open
+          - draft
+          - closed
+          type: string
+        stateChangedAt:
+          format: date-time
+          type: string
+      required:
+      - ok
+      - prNumber
+      - state
+      - stateChangedAt
+      type: object
     ChatAgentPermissionModes:
       properties:
         agent:
@@ -15494,6 +16146,89 @@ components:
       required:
       - agent
       - modes
+      type: object
+    ChatExcerptRange:
+      properties:
+        end:
+          type: integer
+        offsetUnit:
+          enum:
+          - utf-16
+          type: string
+        start:
+          type: integer
+      required:
+      - start
+      - end
+      - offsetUnit
+      type: object
+    ChatExcerptSnapshot:
+      properties:
+        badgeOnly:
+          type: boolean
+        captureMode:
+          enum:
+          - exact
+          - block
+          - legacy
+          type: string
+        containsFlowchart:
+          type: boolean
+        contextOmitted:
+          type: boolean
+        diagramRange:
+          $ref: '#/components/schemas/ChatExcerptRange'
+        prefix:
+          type: string
+        rawText:
+          type: string
+        referenceFormat:
+          enum:
+          - numbered-v1
+          type: string
+        renderedRange:
+          $ref: '#/components/schemas/ChatExcerptRange'
+        sourceRange:
+          $ref: '#/components/schemas/ChatExcerptRange'
+        sourceTurnId:
+          type: string
+        suffix:
+          type: string
+        turn:
+          $ref: '#/components/schemas/ChatExcerptTurnSnapshot'
+        version:
+          type: integer
+      required:
+      - version
+      - rawText
+      - captureMode
+      type: object
+    ChatExcerptTurnMessage:
+      properties:
+        role:
+          enum:
+          - user
+          - assistant
+          type: string
+        text:
+          type: string
+      required:
+      - role
+      - text
+      type: object
+    ChatExcerptTurnSnapshot:
+      properties:
+        id:
+          type: string
+        messages:
+          items:
+            $ref: '#/components/schemas/ChatExcerptTurnMessage'
+          type: array
+        truncated:
+          type: boolean
+      required:
+      - id
+      - messages
       type: object
     ChatFileReferenceLine:
       properties:
@@ -16533,6 +17268,28 @@ components:
       - hostPath
       - channels
       type: object
+    ControllersConversationTurnArtifactResponse:
+      properties:
+        path:
+          type: string
+        status:
+          enum:
+          - added
+          - modified
+          type: string
+      required:
+      - path
+      - status
+      type: object
+    ControllersConversationTurnArtifactsResponse:
+      properties:
+        files:
+          items:
+            $ref: '#/components/schemas/ControllersConversationTurnArtifactResponse'
+          type: array
+      required:
+      - files
+      type: object
     ControllersKeepAwakeStatus:
       properties:
         active:
@@ -16563,6 +17320,46 @@ components:
           type: string
         deleteArtifacts:
           type: boolean
+      type: object
+    ControllersPairDeviceRequest:
+      properties:
+        name:
+          description: Name shown in the host's device list.
+          type: string
+        platform:
+          description: The device's platform, such as ios, android, darwin, win32
+            or linux.
+          type: string
+      type: object
+    ControllersPairDeviceResponse:
+      properties:
+        credential:
+          enum:
+          - pairing-code
+          - password
+          type: string
+        deviceId:
+          type: string
+        hostId:
+          type: string
+        token:
+          type: string
+      required:
+      - hostId
+      - deviceId
+      - token
+      - credential
+      type: object
+    ControllersPairingCodeResponse:
+      properties:
+        code:
+          type: string
+        expiresAt:
+          format: date-time
+          type: string
+      required:
+      - code
+      - expiresAt
       type: object
     ControllersRemoteHostAccountTokenResponse:
       properties:
@@ -16686,22 +17483,24 @@ components:
           enum:
           - Working
           - Blocked
+          - Needs input
           - Exited
           - No signal
           - Interrupted
-          - Awaiting PR
+          - Idle
           - Fixing CI failures
           - Addressing comments
-          - Needs review
           - Review scheduled
           - Reviewing
-          - Review failed
-          - Review pending
+          - Retrying review
           - Draft
+          - Awaiting review
+          - Review failed
+          - Review cancelled
           - CI failing
+          - Merge conflicts
           - Commented
           - Changes requested
-          - Needs human review
           - Mergeable
           - Approved
           - Merged
@@ -16919,6 +17718,13 @@ components:
       required:
       - enabled
       type: object
+    ControllersSetRequireDeviceCredentialsRequest:
+      properties:
+        enabled:
+          type: boolean
+      required:
+      - enabled
+      type: object
     ControllersSetSecurePairingRequest:
       properties:
         enabled:
@@ -17131,13 +17937,16 @@ components:
           type: string
         name:
           type: string
+        snapshot:
+          $ref: '#/components/schemas/ChatExcerptSnapshot'
         sourceConversationId:
           type: string
         sourceMessageId:
           type: string
         sourceRevision:
-          format: int64
-          type: integer
+          type:
+          - "null"
+          - integer
         text:
           type: string
         type:
@@ -17186,6 +17995,8 @@ components:
         revision:
           format: int64
           type: integer
+        snapshot:
+          $ref: '#/components/schemas/ChatExcerptSnapshot'
         text:
           type: string
       required:
@@ -17224,6 +18035,10 @@ components:
         path:
           type: string
         previousPath:
+          type: string
+        referenceFormat:
+          enum:
+          - numbered-v1
           type: string
         scope:
           type: string
@@ -17731,6 +18546,8 @@ components:
       type: object
     ConversationTurnResponse:
       properties:
+        artifacts:
+          $ref: '#/components/schemas/ControllersConversationTurnArtifactsResponse'
         completedAt:
           type:
           - "null"
@@ -18098,6 +18915,9 @@ components:
           items:
             $ref: '#/components/schemas/AttachmentInput'
           type: array
+        baseBranch:
+          maxLength: 255
+          type: string
         branch:
           maxLength: 255
           type: string
@@ -18284,13 +19104,20 @@ components:
       properties:
         conversationId:
           type: string
+        id:
+          type: string
         messageId:
           type: string
+        order:
+          format: int64
+          type: integer
         revision:
           format: int64
           type: integer
         selection:
           type: string
+        snapshot:
+          $ref: '#/components/schemas/ChatExcerptSnapshot'
         sourceRole:
           type: string
       required:
@@ -18473,6 +19300,13 @@ components:
       - name
       - path
       - gitRepo
+      type: object
+    GetPRStackResponse:
+      properties:
+        parent:
+          $ref: '#/components/schemas/PRStackParentResponse'
+        stack:
+          $ref: '#/components/schemas/PRStackResponse'
       type: object
     GitHubRepo:
       properties:
@@ -18703,8 +19537,41 @@ components:
       - root
       - nextStep
       type: object
+    ImporterGitHubAvailabilityResult:
+      properties:
+        available:
+          type: boolean
+        message:
+          type: string
+      required:
+      - available
+      type: object
+    ImporterGitHubOwner:
+      properties:
+        avatarUrl:
+          type: string
+        login:
+          type: string
+      required:
+      - login
+      - avatarUrl
+      type: object
+    ImporterGitHubOwnersResult:
+      properties:
+        owners:
+          items:
+            $ref: '#/components/schemas/ImporterGitHubOwner'
+          type: array
+      required:
+      - owners
+      type: object
     InitializeRepositoryInput:
       properties:
+        create:
+          type: boolean
+        createId:
+          maxLength: 64
+          type: string
         path:
           type: string
       required:
@@ -19277,6 +20144,13 @@ components:
       - entries
       - truncated
       type: object
+    LoadPRDetailsRequest:
+      properties:
+        prUrl:
+          type: string
+      required:
+      - prUrl
+      type: object
     MarkAllNotificationsReadRequest:
       properties:
         ids:
@@ -19331,8 +20205,16 @@ components:
       type: object
     MergePRRequest:
       properties:
+        allowNoChecks:
+          type: boolean
         expectedHeadSha:
           minLength: 40
+          type: string
+        method:
+          enum:
+          - squash
+          - merge
+          - rebase
           type: string
         prUrl:
           minLength: 1
@@ -19363,6 +20245,57 @@ components:
       - state
       - stateChangedAt
       type: object
+    MergePRStackRequest:
+      properties:
+        allowNoChecks:
+          type: boolean
+        expectedHeads:
+          items:
+            $ref: '#/components/schemas/PRStackHead'
+          minItems: 1
+          type: array
+        method:
+          enum:
+          - squash
+          - merge
+          - rebase
+          type: string
+        prUrl:
+          minLength: 1
+          type: string
+      required:
+      - prUrl
+      - expectedHeads
+      type: object
+    MergePRStackResponse:
+      properties:
+        method:
+          type: string
+        numbers:
+          items:
+            type: integer
+          type: array
+        ok:
+          type: boolean
+        prNumber:
+          type: integer
+        stateChangedAt:
+          format: date-time
+          type: string
+        status:
+          enum:
+          - merged
+          - enqueued
+          - pending
+          type: string
+      required:
+      - ok
+      - prNumber
+      - numbers
+      - method
+      - status
+      - stateChangedAt
+      type: object
     MobileDeviceResponse:
       properties:
         createdAt:
@@ -19370,25 +20303,40 @@ components:
           type: string
         deviceName:
           type: string
+        id:
+          description: What DELETE /api/v1/mobile/devices/{id} takes.
+          type: string
         installId:
+          description: The phone's install id, or empty for a device that never registered
+            for notifications.
+          type: string
+        kind:
+          description: 'device: holds its own token. password: a phone that still
+            uses the pairing password, so removing it only stops its notifications.
+            account: every device signed in to the linked account; they share one
+            token.'
+          enum:
+          - device
+          - password
+          - account
           type: string
         lastSeenAt:
           format: date-time
           type: string
         live:
-          description: True when the phone's app is open and polling.
+          description: True when the device is connected, or the phone's app is open
+            and polling.
           type: boolean
         notificationsEnabled:
           description: True when this device has a push token registered.
           type: boolean
         platform:
-          enum:
-          - ios
-          - android
           type: string
         token:
           type: string
       required:
+      - id
+      - kind
       - installId
       - live
       - notificationsEnabled
@@ -19446,8 +20394,15 @@ components:
           type: boolean
         password:
           type: string
+        passwordLastUsedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
         port:
           type: integer
+        requireDeviceCredentials:
+          type: boolean
         securePairing:
           $ref: '#/components/schemas/ControllersSecurePairingStatus'
         tailscaleHost:
@@ -19473,6 +20428,7 @@ components:
       - warning
       - securePairing
       - keepAwake
+      - requireDeviceCredentials
       type: object
     MobileTunnelStatus:
       properties:
@@ -19632,6 +20588,35 @@ components:
       - id
       - projectId
       type: object
+    PRAttachmentAccessResponse:
+      properties:
+        allowed:
+          type: boolean
+        location:
+          type: string
+        reason:
+          enum:
+          - no_write_access
+          - unsupported
+          type: string
+      required:
+      - allowed
+      type: object
+    PRCommentAttachment:
+      properties:
+        contentType:
+          type: string
+        data:
+          minLength: 1
+          type: string
+        name:
+          minLength: 1
+          type: string
+      required:
+      - name
+      - contentType
+      - data
+      type: object
     PRReviewState:
       properties:
         latestRun:
@@ -19660,6 +20645,121 @@ components:
       - title
       - targetSha
       - status
+      type: object
+    PRStackHead:
+      properties:
+        headSha:
+          minLength: 40
+          type: string
+        number:
+          type: integer
+      required:
+      - number
+      - headSha
+      type: object
+    PRStackLayerResponse:
+      properties:
+        ci:
+          type: string
+        headBranch:
+          type: string
+        headSha:
+          type: string
+        mergeability:
+          type: string
+        noChecks:
+          type: boolean
+        number:
+          type: integer
+        reviewDecision:
+          type: string
+        sessionId:
+          type: string
+        state:
+          enum:
+          - draft
+          - open
+          - merged
+          - closed
+          type: string
+        title:
+          type: string
+        url:
+          type: string
+      required:
+      - number
+      - title
+      - url
+      - state
+      - headBranch
+      - headSha
+      type: object
+    PRStackParentResponse:
+      properties:
+        number:
+          type: integer
+        url:
+          type: string
+      required:
+      - number
+      - url
+      type: object
+    PRStackResponse:
+      properties:
+        baseBranch:
+          type: string
+        layers:
+          items:
+            $ref: '#/components/schemas/PRStackLayerResponse'
+          type: array
+        number:
+          type: integer
+        open:
+          type: boolean
+        url:
+          type: string
+      required:
+      - number
+      - url
+      - baseBranch
+      - open
+      - layers
+      type: object
+    PostPRCommentRequest:
+      properties:
+        attachments:
+          items:
+            $ref: '#/components/schemas/PRCommentAttachment'
+          maxItems: 10
+          type: array
+        body:
+          minLength: 1
+          type: string
+        prUrl:
+          minLength: 1
+          type: string
+        threadId:
+          type: string
+      required:
+      - prUrl
+      - body
+      type: object
+    PostPRCommentResponse:
+      properties:
+        createdAt:
+          format: date-time
+          type: string
+        id:
+          type: string
+        ok:
+          type: boolean
+        url:
+          type: string
+      required:
+      - ok
+      - id
+      - url
+      - createdAt
       type: object
     PrepareTaskResponse:
       properties:
@@ -19861,6 +20961,10 @@ components:
       type: object
     ProjectSummary:
       properties:
+        autoSpawnPauses:
+          items:
+            $ref: '#/components/schemas/AutoSpawnPause'
+          type: array
         folderMissing:
           type: boolean
         id:
@@ -20021,6 +21125,37 @@ components:
           type: integer
       required:
       - pat
+      type: object
+    RegisterArtifactsRequest:
+      properties:
+        paths:
+          description: 'Files or bundle directories in the session''s artifact directory:
+            absolute paths, or paths relative to it.'
+          items:
+            type: string
+          type: array
+      required:
+      - paths
+      type: object
+    RegisterArtifactsResponse:
+      properties:
+        otherFiles:
+          description: How many of the session's files are not registered.
+          type: integer
+        otherRootFiles:
+          description: The unregistered files at the root of the artifact directory.
+          items:
+            type: string
+          type: array
+        registered:
+          description: The requested paths, relative to the artifact directory.
+          items:
+            type: string
+          type: array
+      required:
+      - registered
+      - otherFiles
+      - otherRootFiles
       type: object
     RegisterPushDeviceRequest:
       properties:
@@ -20661,6 +21796,8 @@ components:
       type: object
     SessionArtifact:
       properties:
+        id:
+          type: string
         inlineUrl:
           type: string
         kind:
@@ -20675,8 +21812,14 @@ components:
           type: string
         previewUrl:
           type: string
+        previousPaths:
+          items:
+            type: string
+          type: array
         rawUrl:
           type: string
+        registered:
+          type: boolean
         shareUrl:
           type: string
         size:
@@ -20694,8 +21837,18 @@ components:
       type: object
     SessionBranchState:
       properties:
+        base:
+          type: string
+        baseRef:
+          type: string
+        behind:
+          type: integer
         commits:
           type: integer
+        conflicts:
+          type: boolean
+        head:
+          type: string
         remoteBranch:
           type: string
         remoteHead:
@@ -20705,6 +21858,8 @@ components:
       required:
       - commits
       - unpushed
+      - behind
+      - conflicts
       type: object
     SessionHistoryResponse:
       properties:
@@ -20968,6 +22123,10 @@ components:
       properties:
         autoInjectCI:
           type: boolean
+        checks:
+          items:
+            $ref: '#/components/schemas/SessionPRCheck'
+          type: array
         failingChecks:
           items:
             $ref: '#/components/schemas/SessionPRFailingCheck'
@@ -20982,7 +22141,68 @@ components:
       required:
       - state
       - failingChecks
+      - checks
       - autoInjectCI
+      type: object
+    SessionPRCheck:
+      properties:
+        name:
+          type: string
+        status:
+          enum:
+          - unknown
+          - queued
+          - in_progress
+          - passed
+          - failed
+          - skipped
+          - cancelled
+          type: string
+        url:
+          type: string
+      required:
+      - name
+      - status
+      type: object
+    SessionPRComment:
+      properties:
+        author:
+          type: string
+        body:
+          type: string
+        createdAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        id:
+          type: string
+        isBot:
+          type: boolean
+        url:
+          type: string
+      required:
+      - id
+      - author
+      - isBot
+      - body
+      type: object
+    SessionPRCommit:
+      properties:
+        author:
+          type: string
+        committedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        headline:
+          type: string
+        sha:
+          type: string
+      required:
+      - sha
+      - headline
       type: object
     SessionPRConflictFile:
       properties:
@@ -21061,6 +22281,15 @@ components:
       - status
       - conclusion
       type: object
+    SessionPRLabel:
+      properties:
+        color:
+          type: string
+        name:
+          type: string
+      required:
+      - name
+      type: object
     SessionPRMergeabilitySummary:
       properties:
         conflictFiles:
@@ -21107,6 +22336,17 @@ components:
       - host
       - repo
       - number
+      type: object
+    SessionPRRequestedReviewer:
+      properties:
+        avatarUrl:
+          type: string
+        isTeam:
+          type: boolean
+        login:
+          type: string
+      required:
+      - login
       type: object
     SessionPRReviewCommentLink:
       properties:
@@ -21200,6 +22440,16 @@ components:
         ciObservedAt:
           format: date-time
           type: string
+        commitCount:
+          type: integer
+        commits:
+          items:
+            $ref: '#/components/schemas/SessionPRCommit'
+          type: array
+        conversation:
+          items:
+            $ref: '#/components/schemas/SessionPRComment'
+          type: array
         createdAt:
           format: date-time
           type:
@@ -21207,10 +22457,23 @@ components:
           - string
         deletions:
           type: integer
+        description:
+          type: string
+        descriptionTruncated:
+          type: boolean
+        detailsObservedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
         headSha:
           type: string
         htmlUrl:
           type: string
+        labels:
+          items:
+            $ref: '#/components/schemas/SessionPRLabel'
+          type: array
         mergeability:
           $ref: '#/components/schemas/SessionPRMergeabilitySummary'
         number:
@@ -21225,6 +22488,10 @@ components:
           type: string
         repo:
           type: string
+        requestedReviewers:
+          items:
+            $ref: '#/components/schemas/SessionPRRequestedReviewer'
+          type: array
         review:
           $ref: '#/components/schemas/SessionPRReviewSummary'
         reviewObservedAt:
@@ -21246,6 +22513,10 @@ components:
           - string
         targetBranch:
           type: string
+        threads:
+          items:
+            $ref: '#/components/schemas/SessionPRThread'
+          type: array
         title:
           type: string
         updatedAt:
@@ -21271,6 +22542,29 @@ components:
       - review
       - mergeability
       - updatedAt
+      - labels
+      - requestedReviewers
+      - commits
+      - commitCount
+      type: object
+    SessionPRThread:
+      properties:
+        comments:
+          items:
+            $ref: '#/components/schemas/SessionPRComment'
+          type: array
+        id:
+          type: string
+        line:
+          type: integer
+        path:
+          type: string
+        resolved:
+          type: boolean
+      required:
+      - id
+      - resolved
+      - comments
       type: object
     SessionPRUnresolvedReviewer:
       properties:
@@ -22278,6 +23572,9 @@ components:
           items:
             $ref: '#/components/schemas/AttachmentInput'
           type: array
+        baseBranch:
+          maxLength: 255
+          type: string
         branch:
           type: string
         clientRequestId:
