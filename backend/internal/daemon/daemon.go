@@ -168,7 +168,6 @@ func Run(buildVersion string) (retErr error) {
 	// the agents it launches, or none of them would name itself to the daemon.
 	// Shell tabs set it again explicitly.
 	_ = os.Unsetenv(caller.ShellTerminalEnv)
-	_ = os.Unsetenv("CLAUDE_CODE_ENTRYPOINT")
 	if cwd, err := os.Getwd(); err == nil {
 		cfg.StartupWorkingDirectory = cwd
 	}
