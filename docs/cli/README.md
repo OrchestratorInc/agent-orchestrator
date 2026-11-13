@@ -94,6 +94,10 @@ See the [command reference](../../backend/internal/skillassets/using-ao/commands
 | `ao account switch <session-id> <account-id>` | `PUT /api/v1/agents/accounts/sessions/{id}`; `--wait` polls `GET /api/v1/sessions/{id}/interface-transition` |
 | `ao automation create/list/get/update/delete/runs` | `POST/GET/PATCH/DELETE /api/v1/automations` |
 | `ao cue create/list`                | `POST/GET /api/v1/projects/{id}/cues`         |
+| `ao storage`                        | `GET /api/v1/storage` (`--refresh`: `POST /api/v1/storage/scan`) |
+| `ao storage clean`                  | `POST /api/v1/storage/clean` (dry run, then run) |
+| `ao storage log`                    | `GET /api/v1/storage/actions`                  |
+| `ao storage settings`               | `PATCH /api/v1/storage/settings`               |
 | `ao spawn`                          | Targeted launch ensure, then `POST /api/v1/sessions` |
 | `ao session ls`                     | `GET /api/v1/sessions` plus per-session PR summaries; shows branch, PR, CI, review, unresolved threads, activity, and age. |
 | `ao session get <id>`               | `GET /api/v1/sessions/{id}`. `--transcript N` also reads `GET /api/v1/sessions/{id}/conversation` for chat sessions on the local daemon. |

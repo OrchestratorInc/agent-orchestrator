@@ -1,5 +1,5 @@
 import { BrowserIcon, type AppIcon } from "../icons";
-import { Activity, Bot, CircleHelp, CreditCard, Keyboard, MousePointerClick, RefreshCw, Server, Settings2, Smartphone, Users } from "@/components/app-icons";
+import { Activity, Bot, CircleHelp, CreditCard, Database, Keyboard, MousePointerClick, RefreshCw, Server, Settings2, Smartphone, Users } from "@/components/app-icons";
 import { lazy, type ReactNode } from "react";
 import type { TFunction } from "i18next";
 import type { GlobalSettingsSection, HarnessDiagnosticsRequest } from "../../stores/ui-store";
@@ -17,6 +17,7 @@ import { MobileDevicesSection } from "./MobileDevicesSection";
 import { ReportProblemContent } from "./ReportProblemContent";
 import { RemoteHostsSettings } from "./RemoteHostsSettings";
 import { SettingsSection } from "./SettingsSection";
+import { StorageSettingsSection } from "./StorageSettingsSection";
 import { teamsUnavailable } from "../../hooks/useTeams";
 import { TeamsSection } from "./TeamsSection";
 
@@ -180,6 +181,15 @@ const globalSettingsCatalog: SettingsCatalogItem[] = [
 				<MemoryDiagnostics />
 			</SettingsSection>
 		),
+	},
+	{
+		id: "storage",
+		icon: Database,
+		label: (t) => t("settings.storage"),
+		// Its own page: opening it measures AO's disk usage, which the
+		// whole-settings view should not start on every open.
+		pageOnly: true,
+		render: (_t, titleHidden) => <StorageSettingsSection titleHidden={titleHidden} />,
 	},
 	{
 		id: "updates",

@@ -965,6 +965,16 @@ type SessionSearchOwner struct {
 	Token string
 }
 
+type SessionStorageFact struct {
+	SessionID      string
+	OffloadedAtMs  int64
+	OffloadedBytes int64
+	OffloadedPaths string
+	TemplateKeys   string
+	RestoredAtMs   int64
+	RestoreError   string
+}
+
 type SessionTelemetry struct {
 	SessionID         string
 	CreatedBy         string
@@ -1017,6 +1027,35 @@ type ShellTerminal struct {
 	EndedAt                   sql.NullTime
 	LastAgentHarness          string
 	AgentConversationID       string
+}
+
+type StorageAction struct {
+	ID        int64
+	AtMs      int64
+	Kind      string
+	Target    string
+	SessionID string
+	Reason    string
+	Bytes     int64
+	DryRun    int64
+	Result    string
+	Error     string
+}
+
+type StorageSetting struct {
+	ID                       int64
+	AutoClean                int64
+	OffloadEnabled           int64
+	OffloadIdleHours         int64
+	OffloadNoPRGraceHours    int64
+	OffloadMergedIdleMinutes int64
+	EndedWorktreeDays        int64
+	BackupDays               int64
+	LogDays                  int64
+	CleanDevProfiles         int64
+	DevProfileDays           int64
+	TemplateDays             int64
+	UpdatedAtMs              int64
 }
 
 type TelemetryEvent struct {
