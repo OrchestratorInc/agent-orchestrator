@@ -26,7 +26,7 @@ const h = vi.hoisted(() => ({
 	approvalModes: undefined as ApprovalMode[] | undefined,
 	modelWarning: undefined as string | undefined,
 	modelWarningRetries: true,
-	offering: { ready: false, org: undefined as { id: string } | undefined, features: [] as string[] },
+	offering: { ready: false, org: undefined as { id: string } | undefined, features: [] as string[], maxAttachmentBytes: undefined as number | undefined },
 	workspaces: [] as Array<Record<string, unknown>>,
 }));
 
@@ -105,7 +105,7 @@ beforeEach(() => {
 	h.approvalModes = undefined;
 	h.modelWarning = undefined;
 	h.modelWarningRetries = true;
-	h.offering = { ready: false, org: undefined, features: [] };
+	h.offering = { ready: false, org: undefined, features: [], maxAttachmentBytes: undefined };
 	h.workspaces = [{ id: "proj-1", name: "Project", kind: "project", sessions: [] }];
 	window.localStorage.clear();
 });
@@ -216,10 +216,24 @@ describe("NewChatPage", () => {
 		expect(await screen.findByRole("menuitem", { name: "Scratchpad" })).toBeInTheDocument();
 		expect(screen.queryByRole("menuitem", { name: "Cloud scratchpad" })).toBeNull();
 
-		h.offering = { ready: true, org: { id: "org-1" }, features: ["share", "standalone_agents"] };
+		h.offering = { ready: true, org: { id: "org-1" }, features: ["share", "standalone_agents"], maxAttachmentBytes: undefined };
 		await openPicker();
 		await user.click(await screen.findByRole("menuitem", { name: "Cloud scratchpad" }));
 		expect(h.navigate).toHaveBeenCalledWith(expect.objectContaining({ to: "/new", search: expect.objectContaining({ project: CLOUD_STANDALONE_WORKSPACE_ID }) }));
+	});
+
+	// A Cloud standalone agent starts without files: its own project comes
+	// with its session, so a start the files did not reach would leave it behind.
+	it("offers files on a Cloud project's task where the control plane takes them, and not on a Cloud standalone agent", () => {
+		h.isCloudProject = true;
+		h.offering = { ready: true, org: { id: "org-1" }, features: ["attachments", "standalone_agents"], maxAttachmentBytes: 25 * 1024 * 1024 };
+		renderPage();
+		expect(h.workspace?.holdAttachments).toBe(true);
+		expect(h.workspace?.cloudAttachments).toEqual({ maxBytes: 25 * 1024 * 1024 });
+		cleanup();
+		render(<QueryClientProvider client={new QueryClient()}><NewChatPage projectId={CLOUD_STANDALONE_WORKSPACE_ID} /></QueryClientProvider>);
+		expect(h.workspace?.holdAttachments).toBe(false);
+		expect(h.workspace?.cloudAttachments).toBeUndefined();
 	});
 
 	it("opens a new Cloud standalone agent on the project the control plane made for it", async () => {

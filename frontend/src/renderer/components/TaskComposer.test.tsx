@@ -4302,6 +4302,29 @@ describe("useTaskLaunch Cloud start on send", () => {
 		expect((outcome as { code?: string }).code).toBeUndefined();
 	});
 
+	// Its own project comes with its session, so a start the files did not
+	// reach would leave that project behind: it starts without them.
+	it("refuses files on a Cloud standalone agent as final, starting nothing", async () => {
+		const queryClient = freestyleFixture();
+		h.cloudMaxAttachmentBytes = 25 * 1024 * 1024;
+		let standalone!: ReturnType<typeof useTaskLaunch>;
+		function StandaloneLauncher() {
+			standalone = useTaskLaunch({ projectId: CLOUD_STANDALONE_WORKSPACE_ID });
+			return <p>{standalone.canSubmit ? "ready" : "loading"}</p>;
+		}
+		render(<Wrap queryClient={queryClient}><StandaloneLauncher /></Wrap>);
+		await screen.findByText("ready");
+		let outcome: unknown;
+		await act(async () => {
+			outcome = await standalone.launch("Look at this", { clientRequestId: "req-f5", interfaceMode: "chat", attachments: [{ mimeType: "image/png", data: "aGk=", name: "shot.png" }] })
+				.catch((error: unknown) => error);
+		});
+		expect(outcome).toMatchObject({ name: "TaskCreateError", code: "CLOUD_ATTACHMENTS_UNSUPPORTED" });
+		expect(h.cloudCreateStandaloneAgent).not.toHaveBeenCalled();
+		expect(h.cloudCreateSession).not.toHaveBeenCalled();
+		expect(h.cloudUpload).not.toHaveBeenCalled();
+	});
+
 	it("keeps a full plan's refusal as the reason, and creates nothing else", async () => {
 		const queryClient = freestyleFixture();
 		h.cloudCreateSession.mockRejectedValue(new CloudCpError("All your plan's running sessions are in use. Pause or archive one, or upgrade your plan.", { status: 409, code: "WORKER_SLOTS_FULL" }));
