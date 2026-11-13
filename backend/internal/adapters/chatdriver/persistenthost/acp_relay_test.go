@@ -434,8 +434,10 @@ func TestACPRelaySettlesStalledPrompt(t *testing.T) {
 	if failure.Error.Code != -32603 || !strings.Contains(failure.Error.Message, "provider stopped responding") {
 		t.Fatalf("stalled response error = %+v", failure.Error)
 	}
-	if !strings.Contains(string(response), `"`+ACPPromptStalledDataKey+`":true`) {
-		t.Fatalf("stalled response lacks the %s marker: %s", ACPPromptStalledDataKey, response)
+	// An adapter that ignored the cancel may still emit, so the failure must not
+	// carry the marker that releases the controller's queue.
+	if strings.Contains(string(response), ACPPromptStalledDataKey) {
+		t.Fatalf("wedged-adapter failure carries the %s marker: %s", ACPPromptStalledDataKey, response)
 	}
 
 	state := relay.snapshot()

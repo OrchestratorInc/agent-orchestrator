@@ -473,8 +473,11 @@ func (r *acpRelay) providerFrame(
 // the prompt active: the adapter still owns the turn, and anything it emits
 // until it answers belongs to that turn, not to the prompt the controller sends
 // next. When the adapter answers, providerFrame turns its answer into the stall
-// failure. If it has not answered after promptStallCancelGrace it is wedged, and
-// the second step settles the prompt without it; its late answer is dropped.
+// failure, which marks the adapter quiet and lets the controller release its
+// queue. If it has not answered after promptStallCancelGrace it is wedged, and
+// the second step settles the prompt without it and without the marker, so the
+// queue stays held: the adapter may still emit from the old turn. Its late
+// answer is dropped.
 //
 // The prompt may belong to an earlier controller generation: providerFrame then
 // turns the failure into the private prompt result, which the reattached
@@ -513,7 +516,14 @@ func (r *acpRelay) failStalledPrompt(
 			}, nil)
 			return acpClientFrames{provider: cancel}, nil
 		}
-		completion, _, err := r.providerFrame(ctx, stalledPromptFailure(json.RawMessage(providerID)), generation, attached)
+		// The adapter ignored the cancel. Settle without the stall marker: the
+		// adapter may still emit from the old turn, so the controller must hold
+		// its queue like any other failure rather than start a prompt on it.
+		r.stallCancelledAt = time.Time{}
+		failure := rpcErrorFrame(json.RawMessage(providerID), -32603, fmt.Sprintf(
+			"provider stopped responding: no ACP output for %s and no answer to the cancel; failing the stalled prompt",
+			promptStallTimeout), nil)
+		completion, _, err := r.providerFrame(ctx, failure, generation, attached)
 		if err != nil {
 			return acpClientFrames{}, err
 		}
