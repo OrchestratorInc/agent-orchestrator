@@ -156,6 +156,33 @@ describe("optimistic composer drafts", () => {
 		}
 	});
 
+	it("journals a detached send without touching the next draft in the composer", () => {
+		const storage = new MemoryStorage();
+		writeChatComposerText("detached", "typed after it", storage);
+		writeChatAttachments("detached", [next], storage);
+		const before = readChatSessionDraft("detached", storage).composer;
+		const held = { ...input, composerText: "held message", attachments: [], requestText: "held message", clientMessageId: "held-1", detached: true };
+		const prepared = prepareChatComposerDelivery("detached", held, storage);
+		if (!prepared.ok) throw new Error("Failed to prepare test delivery");
+		expect(prepared.draft.composer).toMatchObject({
+			revision: before.revision, text: "typed after it", attachments: [next],
+			delivery: { clientMessageId: "held-1", requestText: "held message", draft: { text: "held message", attachments: [] } },
+		});
+		expect(markChatComposerDeliveryAccepted("detached", "held-1", prepared.mutation.revision, storage).ok).toBe(true);
+		expect(clearAcceptedChatComposer("detached", prepared.mutation.revision, storage)).toMatchObject({ ok: true, cleared: false });
+		expect(readChatSessionDraft("detached", storage).composer).toMatchObject({ text: "typed after it", attachments: [next] });
+		expect(readChatSessionDraft("detached", storage).composer.delivery).toBeUndefined();
+	});
+
+	it("refuses a detached delivery that could not carry its own copy of the message", () => {
+		const storage = new MemoryStorage();
+		writeChatComposerText("detached-steer", "typed after it", storage);
+		const steer = { ...input, kind: "steer" as const, composerText: "held steer", attachments: [], requestText: "held steer", clientMessageId: "held-steer", detached: true };
+		expect(prepareChatComposerDelivery("detached-steer", steer, storage).ok).toBe(false);
+		expect(readChatSessionDraft("detached-steer", storage).composer).toMatchObject({ text: "typed after it" });
+		expect(readChatSessionDraft("detached-steer", storage).composer.delivery).toBeUndefined();
+	});
+
 	it("keeps the editable draft intact when optimistic preparation cannot persist", () => {
 		const backing = new MemoryStorage();
 		writeChatComposerText("unproven-optimistic", input.composerText, backing);

@@ -9,6 +9,7 @@ import { Activity, Profiler } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useUiStore } from "../../stores/ui-store";
 import { ChatComposer } from "./ChatComposer";
+import { QueuedMessageDock } from "./QueuedMessageDock";
 import { captureFileReference } from "../../../shared/chat-file-reference";
 import { sendReferenceToChat } from "../../lib/chat-context-bus";
 import { attachmentURL } from "./messageAttachments";
@@ -3084,13 +3085,100 @@ describe("unavailable states", () => {
 
 		expect(onSend).not.toHaveBeenCalled();
 		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-		expect(field).toHaveTextContent("follow up");
+		// Its Enter took it out of the box; it waits in the queue dock.
+		expect(field.textContent).toBe("");
+		expect(screen.getByTestId("queued-message-dock")).toHaveTextContent("follow up");
 
 		view.rerender(<ChatComposer onSend={onSend} willQueue />);
 
 		await waitFor(() => expect(onSend).toHaveBeenCalledOnce());
 		expect(onSend).toHaveBeenCalledWith("follow up");
-		await waitFor(() => expect(field.textContent).toBe(""));
+		await waitFor(() => expect(screen.queryByTestId("queued-message-dock")).not.toBeInTheDocument());
+		expect(field.textContent).toBe("");
+	});
+
+	it("lists a held message after the queued rows already in the dock, until the dock lists it", async () => {
+		const sessionId = "composer-held-row-in-dock";
+		const queued = (turnId: string, text: string, clientMessageId?: string, pending?: boolean) => ({
+			turnId,
+			...(pending ? { pending } : {}),
+			message: {
+				kind: "message" as const,
+				id: `message-${turnId}`,
+				turnId,
+				sequence: 1,
+				revision: 0,
+				role: "user" as const,
+				origin: "human" as const,
+				text,
+				streaming: false,
+				...(clientMessageId ? { clientMessageId } : {}),
+				createdAt: "2026-11-13T10:00:00Z",
+			},
+		});
+		const onSend = vi.fn().mockResolvedValue(undefined);
+		const dock = (messages: ReturnType<typeof queued>[]) => <QueuedMessageDock messages={messages} />;
+		const view = render(
+			<ChatComposer busy onSend={onSend} willQueue draftSessionId={sessionId} queuedDock={dock([queued("queued-1", "already queued")])} />,
+		);
+		const field = screen.getByLabelText("Message the agent");
+
+		await typeInComposer(field, "follow up");
+		await userEvent.keyboard("{Enter}");
+
+		const rows = () => Array.from(screen.getByTestId("queued-message-dock").querySelectorAll(".queue-dock-row-text"), (row) => row.textContent);
+		expect(rows()).toEqual(["already queued", "follow up"]);
+
+		view.rerender(
+			<ChatComposer onSend={onSend} willQueue draftSessionId={sessionId} queuedDock={dock([queued("queued-1", "already queued")])} />,
+		);
+		await waitFor(() => expect(onSend).toHaveBeenCalledOnce());
+		const clientMessageId = onSend.mock.calls[0][2] as string;
+		// The surface's own row for the sent message takes over: it is listed once.
+		view.rerender(
+			<ChatComposer
+				onSend={onSend}
+				willQueue
+				draftSessionId={sessionId}
+				queuedDock={dock([queued("queued-1", "already queued"), queued(`local:${clientMessageId}`, "follow up", clientMessageId, true)])}
+			/>,
+		);
+		expect(rows()).toEqual(["already queued", "follow up"]);
+	});
+
+	it("keeps the box editable for the next message while a held one is being sent", async () => {
+		const send = deferred<void>();
+		const onSend = vi.fn().mockReturnValue(send.promise);
+		const view = render(<ChatComposer busy onSend={onSend} willQueue />);
+		const field = screen.getByLabelText("Message the agent");
+
+		await typeInComposer(field, "follow up");
+		await userEvent.keyboard("{Enter}");
+		view.rerender(<ChatComposer onSend={onSend} willQueue />);
+		await waitFor(() => expect(onSend).toHaveBeenCalledWith("follow up"));
+
+		expect(field).toHaveAttribute("contenteditable", "true");
+		await typeInComposer(field, "next one");
+		await act(async () => send.resolve());
+
+		expect(onSend).toHaveBeenCalledOnce();
+		expect(field).toHaveTextContent("next one");
+	});
+
+	it("leaves a steer entered while the previous message is still sending in the box and says so", async () => {
+		const onSend = vi.fn().mockResolvedValue(undefined);
+		const onSteer = vi.fn().mockResolvedValue(undefined);
+		render(<ChatComposer busy onSend={onSend} onSteer={onSteer} canSteer willQueue />);
+		const field = screen.getByLabelText("Message the agent");
+
+		await typeInComposer(field, "steer this");
+		await userEvent.keyboard("{Control>}{Enter}{/Control}");
+
+		expect(onSteer).not.toHaveBeenCalled();
+		expect(onSend).not.toHaveBeenCalled();
+		expect(await screen.findByRole("alert")).toHaveTextContent(/still sending the previous message/i);
+		expect(field).toHaveTextContent("steer this");
+		expect(screen.queryByTestId("queued-message-dock")).not.toBeInTheDocument();
 	});
 
 	it("keeps a held message in the box when the previous send is parked as unsent", async () => {
@@ -3124,7 +3212,7 @@ describe("unavailable states", () => {
 		expect(field).toHaveTextContent("follow up");
 	});
 
-	it("does not send a held message that was edited before the previous one landed", async () => {
+	it("sends a held message on its own and keeps what was typed after it as the next draft", async () => {
 		const onSend = vi.fn().mockResolvedValue(undefined);
 		const view = render(<ChatComposer busy onSend={onSend} willQueue />);
 		const field = screen.getByLabelText("Message the agent");
@@ -3132,13 +3220,15 @@ describe("unavailable states", () => {
 		await typeInComposer(field, "follow up");
 		await userEvent.keyboard("{Enter}");
 		await waitFor(() => expect(field).toHaveAttribute("contenteditable", "true"));
-		await typeInComposer(field, " and more");
+		await typeInComposer(field, "and more");
 
 		view.rerender(<ChatComposer onSend={onSend} willQueue />);
-		await act(async () => {});
 
-		expect(onSend).not.toHaveBeenCalled();
-		expect(field).toHaveTextContent("follow up and more");
+		await waitFor(() => expect(onSend).toHaveBeenCalledOnce());
+		expect(onSend).toHaveBeenCalledWith("follow up");
+		await act(async () => {});
+		expect(onSend).toHaveBeenCalledOnce();
+		expect(field).toHaveTextContent("and more");
 	});
 });
 
