@@ -87,7 +87,11 @@ func (l *adapterLog) rotate() {
 	previous := l.path + ".1"
 	// Windows refuses to rename over an existing file.
 	_ = os.Remove(previous)
-	_ = os.Rename(l.path, previous)
+	if err := os.Rename(l.path, previous); err != nil {
+		// Truncating now would destroy the only copy. Stop logging and keep it.
+		l.file = nil
+		return
+	}
 	l.open(true)
 }
 
