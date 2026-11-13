@@ -73,14 +73,20 @@ describe("ActivityRail", () => {
 		expect(rows[0]).toContain("grace commented");
 		expect(rows[0]).toContain("Looks good");
 		expect(rows[1]).toContain("ada opened #7");
-		expect(rows[2]).toContain("ada pushed a commit");
-		expect(rows[2]).toContain("aaaaaaa Fix the chart");
+		// A commit by someone on the PR is their face and its subject.
+		expect(rows[2]).toContain("ada: Fix the chart");
+		expect(rows[2]).not.toContain("pushed a commit");
 		expect(rows[3]).toContain("Created workspace");
 		expect(rows[3]).toContain("fix/dashboard");
 		// Two days, each its own list under its divider.
 		expect(within(rail).getAllByRole("list")).toHaveLength(2);
-		// No profile pictures: every node is a badge.
-		expect(rail.querySelector("img")).toBeNull();
+		// Three weights: what someone wrote is loud and leads with their face, a PR
+		// milestone leads with its glyph, and machine rows are quiet one-liners (a
+		// commit by someone on the PR still carries their face).
+		const items = within(rail).getAllByRole("listitem");
+		expect(items.map((row) => row.querySelector("[data-tier]")?.getAttribute("data-tier"))).toEqual(["talk", "state", "quiet", "quiet"]);
+		expect(items.map((row) => Boolean(row.querySelector("img")))).toEqual([true, false, true, false]);
+		expect(rail.querySelector("img")?.getAttribute("src")).toBe("https://github.com/grace.png?size=40");
 	});
 
 	it("keeps colour for what it means on a PR: opened and approved, merged, closed and changes requested", () => {
@@ -112,8 +118,23 @@ describe("ActivityRail", () => {
 		expect(toneOf("linus requested changes")).toBe("error");
 		expect(toneOf("ada opened #7")).toBe("success");
 		expect(toneOf("grace commented")).toBe("neutral");
-		expect(toneOf("ada pushed a commit")).toBe("neutral");
+		expect(toneOf("ada: Fix the chart")).toBe("neutral");
 		expect(toneOf("Created workspace")).toBe("neutral");
+	});
+
+	it("names a commit's author in words when they aren't anyone on the PR, with no face", () => {
+		render(
+			<ActivityRail
+				commits={[{ sha: "bbbbbbb1", subject: "Tidy", timestamp: "2026-10-20T09:00:00Z", author: "Ada Lovelace" }, { sha: "ccccccc1", subject: "More", timestamp: "2026-10-19T09:00:00Z", author: "torvalds" }]}
+				prs={[pr({ createdAt: "2026-10-20T10:00:00Z" })]}
+				session={session}
+				status={<span>Idle</span>}
+			/>,
+		);
+		const rows = within(screen.getByTestId("activity-rail")).getAllByRole("listitem");
+		const commitRows = rows.filter((row) => (row.textContent ?? "").includes("pushed a commit"));
+		expect(commitRows).toHaveLength(2);
+		for (const row of commitRows) expect(row.querySelector("img")).toBeNull();
 	});
 
 	it("lists a row's folded commits when it is opened", async () => {
