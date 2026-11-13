@@ -45,7 +45,7 @@ func InstallBugTriageSkill(skillsDir string) error {
 		if !managed {
 			entries, err := os.ReadDir(skillDir)
 			if err != nil {
-				return nil
+				return fmt.Errorf("read bug-triage skill: %w", err)
 			}
 			// A temp file left by a write killed before the marker landed does
 			// not make the folder the project's.
