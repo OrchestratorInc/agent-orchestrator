@@ -437,6 +437,60 @@ func TestClaimPRSnapshotsDisabledSessionAutoInjectCI(t *testing.T) {
 	}
 }
 
+// A session reviewing someone else's PR turns CI fixing off before claiming it.
+// When the PR row already exists from an earlier, finished owner whose switch
+// was on, the claim must apply the new owner's switch, not keep the old one.
+func TestClaimPRTakeoverAppliesNewOwnerAutoInjectCI(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "mer")
+	firstRecord := sampleRecord("mer")
+	firstRecord.AutoInjectCI = true
+	first, err := s.CreateSession(ctx, firstRecord)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reviewerRecord := sampleRecord("mer")
+	reviewerRecord.AutoInjectCI = false
+	reviewer, err := s.CreateSession(ctx, reviewerRecord)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pr := domain.PullRequest{
+		URL:       "https://github.com/acme/repo/pull/125",
+		SessionID: first.ID,
+		Number:    125,
+		CI:        domain.CIFailing,
+		UpdatedAt: time.Now().UTC(),
+	}
+	if _, err := s.ClaimPR(ctx, pr, nil, nil, nil, nil, ports.ReviewWritePreserve, true); err != nil {
+		t.Fatal(err)
+	}
+	if got, _, _ := s.GetPR(ctx, pr.URL); !got.AutoInjectCI {
+		t.Fatal("first claim did not snapshot the enabled CI injection policy")
+	}
+	first.IsTerminated = true
+	first.UpdatedAt = time.Now().UTC().Truncate(time.Second)
+	if err := s.UpdateSession(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+
+	pr.SessionID = reviewer.ID
+	if _, err := s.ClaimPR(ctx, pr, nil, nil, nil, nil, ports.ReviewWritePreserve, false); err != nil {
+		t.Fatalf("claim from terminated owner: %v", err)
+	}
+	got, ok, err := s.GetPR(ctx, pr.URL)
+	if err != nil || !ok {
+		t.Fatalf("get claimed PR: ok=%v err=%v", ok, err)
+	}
+	if got.SessionID != reviewer.ID {
+		t.Fatalf("owner = %s, want %s", got.SessionID, reviewer.ID)
+	}
+	if got.AutoInjectCI {
+		t.Fatal("claimed PR kept the previous owner's enabled CI injection policy")
+	}
+}
+
 func TestClaimPRCreatedCDCUsesClaimReviewDecision(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

@@ -19,6 +19,9 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?,
     COALESCE((SELECT auto_inject_ci FROM sessions WHERE id = ?), TRUE))
 ON CONFLICT (url) DO UPDATE SET
     session_id = excluded.session_id,
+    -- The PR follows its new owner's "Automatically fix CI failures" switch,
+    -- not the previous owner's.
+    auto_inject_ci = excluded.auto_inject_ci,
     state_changed_at = CASE
         WHEN pr.pr_state != excluded.pr_state THEN excluded.updated_at
         WHEN pr.state_changed_at IS NULL THEN excluded.state_changed_at
