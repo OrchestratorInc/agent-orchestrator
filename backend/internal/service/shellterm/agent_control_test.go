@@ -66,6 +66,13 @@ func TestSessionTerminalControlInterruptsAndReads(t *testing.T) {
 	if err != nil || output != "$ ls\nREADME.md" {
 		t.Fatalf("output = %q, %v", output, err)
 	}
+	// A rendered screen that is empty is the answer: the terminal shows nothing,
+	// whatever raw output it once produced.
+	rt.styledOutput = "   \n\n"
+	output, err = svc.SessionTerminalOutput(ctx, "s-1", "sh-own", 0)
+	if err != nil || output != "" {
+		t.Fatalf("empty screen read %q, %v; want empty", output, err)
+	}
 	// Without a rendered screen, raw output is cleaned of control sequences.
 	rt.styledErr = errors.New("no surface")
 	output, err = svc.SessionTerminalOutput(ctx, "s-1", "sh-own", 0)

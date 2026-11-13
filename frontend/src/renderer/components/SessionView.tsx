@@ -2186,13 +2186,13 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 				// the real terminal to be listed: its key is the one later commands
 				// must use, and a failed creation must not read as success.
 				let seen = false;
-				let confirmed = false;
+				let confirmed: string | undefined;
 				for (let waited = 0; waited < 15_000 && !confirmed; waited += 100) {
 					await new Promise((resolve) => setTimeout(resolve, 100));
 					const keys = new Set(latestPaneLayout(sessionId)?.tabs.map((candidate) => candidate.key) ?? []);
 					const real = adoptedShellHandle(opened);
 					if (real && keys.has(real)) {
-						confirmed = true;
+						confirmed = real;
 					} else if (keys.has(opened)) {
 						seen = true;
 					} else if (!real && (seen || waited >= 1_000)) {
@@ -2200,6 +2200,9 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 					}
 				}
 				if (!confirmed) throw new PaneCommandError("TERMINAL_TIMEOUT", "The terminal did not open in time.");
+				// Selection can still name the placeholder; the agent types into the
+				// selected terminal, so point it at the real one.
+				selectTab(confirmed);
 			} else if (tab.startsWith("file:")) {
 				const registration = paneRegistrationRef.current;
 				const path = await resolvePaneFile(tab.slice("file:".length));

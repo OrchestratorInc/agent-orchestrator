@@ -358,6 +358,7 @@ func (c *commandContext) runInPane(ctx context.Context, w io.Writer, tab, comman
 	deadline := time.Now().Add(wait.timeout)
 	previous, settledSince := "", time.Time{}
 	var out paneOutputDTO
+	haveOutput := false
 	for {
 		timer := time.NewTimer(paneSettleInterval / 2)
 		select {
@@ -371,14 +372,14 @@ func (c *commandContext) runInPane(ctx context.Context, w io.Writer, tab, comman
 		next, err := c.readPane(readCtx, tab, wait.lines)
 		cancelRead()
 		if err != nil {
-			if ctx.Err() == nil && readCtx.Err() != nil && out.Tab != "" {
+			if ctx.Err() == nil && readCtx.Err() != nil && haveOutput {
 				// The deadline passed mid-read: show the last screen we did get.
 				_, _ = fmt.Fprintf(w, "(timed out after %s; it may still be running. Check again with `ao pane read %s`.)\n", wait.timeout, tab)
 				break
 			}
 			return err
 		}
-		out = next
+		out, haveOutput = next, true
 		now := time.Now()
 		if out.Output != previous || settledSince.IsZero() {
 			previous, settledSince = out.Output, now
