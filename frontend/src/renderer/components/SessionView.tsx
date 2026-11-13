@@ -2206,6 +2206,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			} else if (tab.startsWith("file:")) {
 				const registration = paneRegistrationRef.current;
 				const path = await resolvePaneFile(tab.slice("file:".length));
+				if (anchor === `file:${path}`) throw new PaneCommandError("INVALID_PANE_COMMAND", "A tab cannot be split beside itself.");
 				// Opening a file resets this view's selection, so it must still be
 				// the view the command was sent to.
 				if (paneRegistrationRef.current !== registration) {

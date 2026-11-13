@@ -120,6 +120,11 @@ func (s *Service) SessionTerminalOutput(ctx context.Context, sessionID domain.Se
 	for i, line := range trimmed {
 		trimmed[i] = strings.TrimRight(line, " \t\r")
 	}
+	// A rendered screen ends with a newline after its last row; that empty
+	// entry is not a row, and must not use up one of the requested lines.
+	for len(trimmed) > 0 && trimmed[len(trimmed)-1] == "" {
+		trimmed = trimmed[:len(trimmed)-1]
+	}
 	if len(trimmed) > lines {
 		trimmed = trimmed[len(trimmed)-lines:]
 	}

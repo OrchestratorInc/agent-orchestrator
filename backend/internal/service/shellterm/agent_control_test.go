@@ -73,6 +73,12 @@ func TestSessionTerminalControlInterruptsAndReads(t *testing.T) {
 	if err != nil || output != "" {
 		t.Fatalf("empty screen read %q, %v; want empty", output, err)
 	}
+	// The newline after the last row is not a row: one line asks for the last row.
+	rt.styledOutput = "$ ls\nREADME.md\n"
+	output, err = svc.SessionTerminalOutput(ctx, "s-1", "sh-own", 1)
+	if err != nil || output != "README.md" {
+		t.Fatalf("last line = %q, %v; want README.md", output, err)
+	}
 	// Without a rendered screen, raw output is cleaned of control sequences.
 	rt.styledErr = errors.New("no surface")
 	output, err = svc.SessionTerminalOutput(ctx, "s-1", "sh-own", 0)
