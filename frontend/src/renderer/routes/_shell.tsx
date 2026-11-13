@@ -4,7 +4,7 @@ import { useAutoSpawnPauseNotice } from "../hooks/useAutoSpawnPauseNotice";
 import { AppBrowserLinkContext } from "../components/AppLink";
 import { useSessionBrowserLink } from "../hooks/useSessionBrowserLink";
 import { CatchBoundary, createFileRoute, Outlet, useMatch, useMatchRoute, useNavigate, useParams, useRouter, useRouterState } from "@tanstack/react-router";
-import { isCancelledError, useQueryClient } from "@tanstack/react-query";
+import { hashKey, isCancelledError, useQueryClient } from "@tanstack/react-query";
 import { lazy, memo, Suspense, type ComponentProps, type CSSProperties, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FolderPlus } from "@/components/app-icons";
 import { motion, useReducedMotion } from "motion/react";
@@ -98,6 +98,7 @@ import { useAppShortcut } from "../hooks/useAppShortcut";
 import { recordManualWorkerOpen, recordSessionSurface } from "../lib/session-management-telemetry";
 
 const SHELL_LOADER_STALE_MS = 2_000;
+const workspaceQueryHash = hashKey(workspaceQueryKey);
 
 // Only shown while an orchestrator is starting, but it pulls in the whole chat
 // stack (ChatWorkspace, lexical, markdown). Lazy keeps that off every route.
@@ -1272,24 +1273,22 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 	// The first confirmed fetch may fail transiently even though the daemon is
 	// ready. React Query keeps polling and the event transport may invalidate
 	// the workspace query later, so let a newer successful result recover the
-	// shell without requiring a daemon restart or port change.
+	// shell without requiring a daemon restart or port change. This watches the
+	// cache rather than reading dataUpdatedAt during render: that field changes
+	// on every poll, so reading it would re-render the whole shell each time.
 	useEffect(() => {
-		if (
-			usesPreviewWorkspaceData ||
-			daemonStatus.state !== "ready" ||
-			workspaceStartupState === "ready" ||
-			!workspaceQuery.isSuccess ||
-			workspaceQuery.dataUpdatedAt <= workspaceStartupBaselineRef.current
-		) {
-			return;
-		}
-		setWorkspaceStartupState("ready");
-	}, [
-		daemonStatus.state,
-		workspaceQuery.dataUpdatedAt,
-		workspaceQuery.isSuccess,
-		workspaceStartupState,
-	]);
+		if (usesPreviewWorkspaceData || daemonStatus.state !== "ready" || workspaceStartupState === "ready") return;
+		const recoverIfNewer = () => {
+			const state = queryClient.getQueryState(workspaceQueryKey);
+			if (state?.status === "success" && state.dataUpdatedAt > workspaceStartupBaselineRef.current) {
+				setWorkspaceStartupState("ready");
+			}
+		};
+		recoverIfNewer();
+		return queryClient.getQueryCache().subscribe((event) => {
+			if (event.query.queryHash === workspaceQueryHash) recoverIfNewer();
+		});
+	}, [daemonStatus.state, queryClient, workspaceStartupState]);
 
 	// Cursor Agent reads TERM_THEME at spawn from this file. Persist the same
 	// resolved light/dark scheme the terminal uses, not nativeTheme alone.

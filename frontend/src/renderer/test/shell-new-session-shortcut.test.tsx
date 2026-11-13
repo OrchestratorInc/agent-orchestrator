@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { CancelledError, type QueryClient } from "@tanstack/react-query";
+import { CancelledError, hashKey, type QueryClient, type QueryCacheNotifyEvent } from "@tanstack/react-query";
 import { Suspense, type ComponentType, type PropsWithChildren } from "react";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppShortcutEvent, KeybindingOverrides } from "../../shared/shortcuts";
@@ -110,10 +110,17 @@ const shellMocks = vi.hoisted(() => {
 		getKeybindings: vi.fn(async () => ({})),
 		setKeybindings: vi.fn(async (overrides: KeybindingOverrides) => overrides),
 		setKeybindingRecording: vi.fn(async () => undefined),
+		queryCacheListeners: new Set<(event: QueryCacheNotifyEvent) => void>(),
 		queryClient: {
 			ensureQueryData: vi.fn(),
 			fetchQuery: vi.fn(),
-			getQueryCache: () => ({ findAll: () => [], subscribe: () => () => undefined }),
+			getQueryCache: () => ({
+				findAll: () => [],
+				subscribe: (listener: (event: QueryCacheNotifyEvent) => void) => {
+					shellMocks.queryCacheListeners.add(listener);
+					return () => shellMocks.queryCacheListeners.delete(listener);
+				},
+			}),
 			getQueryData: vi.fn(),
 			getQueryState: vi.fn(),
 			invalidateQueries: vi.fn(),
@@ -900,18 +907,17 @@ describe("shell workspace startup", () => {
 		shellMocks.queryClient.getQueryState.mockReturnValue({ dataUpdatedAt: 100 });
 		shellMocks.queryClient.fetchQuery.mockRejectedValueOnce(new Error("temporary failure"));
 
-		const view = await renderShell();
+		await renderShell();
 		await waitFor(() => expect(shellMocks.state.shellValue?.workspaceStartupState).toBe("error"));
 
-		shellMocks.state.workspaceQuery = {
-			...shellMocks.state.workspaceQuery,
-			dataUpdatedAt: 200,
-		};
-		view.rerender(
-			<Suspense fallback={null}>
-				<ShellRoute />
-			</Suspense>,
-		);
+		// A later poll succeeds. The shell learns of it from the query cache, not
+		// by re-rendering on every poll's dataUpdatedAt.
+		shellMocks.queryClient.getQueryState.mockReturnValue({ status: "success", dataUpdatedAt: 200 });
+		act(() => {
+			for (const listener of shellMocks.queryCacheListeners) {
+				listener({ type: "updated", action: { type: "success" }, query: { queryKey: ["workspaces"], queryHash: hashKey(["workspaces"]) } } as unknown as QueryCacheNotifyEvent);
+			}
+		});
 
 		await waitFor(() => expect(shellMocks.state.shellValue?.workspaceStartupState).toBe("ready"));
 	});
