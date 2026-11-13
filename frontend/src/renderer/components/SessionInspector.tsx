@@ -88,7 +88,7 @@ import { sanitizeWorkerMessagePart } from "../lib/worker-message";
 import { pendingMergeRequestFor, useMergeRequestActions, useProjectMergeRequests } from "../hooks/useProjectMergeRequests";
 import { useSessionBrowserLink } from "../hooks/useSessionBrowserLink";
 import { clearTerminateSessionState, useTerminateSession } from "../hooks/useTerminateSession";
-import { prBrowserUrl, prCanMerge, prCardPresentation, prHasNoChecks, prNounKeys, prRepositoryFromUrl, prsSpanRepositories, sessionBranchPR, sessionPRDisplaySummaries } from "../lib/pr-display";
+import { prBrowserUrl, prCanMerge, prCardPresentation, prHasNoChecks, prNounKeys, prRepositoryFromUrl, prsSpanRepositories, sessionBranchPR, sessionPRDisplaySummaries, prRepositoryShortName } from "../lib/pr-display";
 import type { SessionArtifact, WorkspaceSession, WorkspaceSummary } from "../types/workspace";
 import {
 	openPRs,
@@ -1169,7 +1169,8 @@ function PRViewSummaryCard({
 	const openTab = (section?: PRTabSection) => openPRTab(sessionUiKey(sessionId, hostId), pr.url, section);
 	const titleLabel = (
 		<>
-			<span className="font-medium">{viewModel.repositoryLabel ? `${viewModel.repositoryLabel} ` : ""}PR #{pr.number}</span>
+			{/* The chips above name the repository in full on hover; here its short name leaves room for the title. */}
+			<span className="font-medium">{viewModel.repositoryLabel ? `${prRepositoryShortName(viewModel.repositoryLabel)} ` : ""}PR #{pr.number}</span>
 			{pr.title ? <span> {pr.title}</span> : null}
 			{/* The icon carries the state; keep it for screen readers. */}
 			<span className="sr-only"> {viewModel.stateLabel}</span>
