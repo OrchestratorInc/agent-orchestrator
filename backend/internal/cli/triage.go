@@ -182,6 +182,10 @@ const triageBudget = 10 * time.Second
 
 const triageTimestamp = "2006-01-02T15-04-05.000000000Z"
 
+// triageRetention is how long scratch folders, and the daemon crash output a
+// snapshot reports, stay relevant.
+const triageRetention = 7 * 24 * time.Hour
+
 func pruneTriage(parent string, now time.Time) error {
 	info, err := os.Lstat(parent)
 	if os.IsNotExist(err) {
@@ -204,7 +208,7 @@ func pruneTriage(parent string, now time.Time) error {
 		}
 		path := filepath.Join(parent, entry.Name())
 		info, err := os.Lstat(path)
-		if err == nil && info.IsDir() && info.Mode()&os.ModeSymlink == 0 && info.ModTime().Before(now.Add(-7*24*time.Hour)) {
+		if err == nil && info.IsDir() && info.Mode()&os.ModeSymlink == 0 && info.ModTime().Before(now.Add(-triageRetention)) {
 			if err := os.RemoveAll(path); err != nil {
 				return err
 			}

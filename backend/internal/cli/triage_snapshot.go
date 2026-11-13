@@ -87,6 +87,9 @@ func (c *commandContext) triageSnapshot(ctx context.Context, state, data, run st
 	for _, path := range []string{filepath.Join(data, "daemon.log"), filepath.Join(data, "desktop.log"), filepath.Join(data, "hooks.log"), crashLog} {
 		fmt.Fprintf(&b, "\n## Log: %s\n", path)
 		tail, err := triageLogTail(ctx, path)
+		if err == nil && path == crashLog {
+			tail = triageRecentCrashes(tail, c.deps.Now())
+		}
 		if err != nil {
 			fmt.Fprintf(&b, "unavailable: %s\n", triageErrorReason(err))
 		} else {
@@ -214,6 +217,35 @@ func (b *triageOutput) Write(p []byte) (int, error) {
 	_, _ = b.Builder.Write(p[:keep])
 	b.remaining -= keep
 	return n, nil
+}
+
+// triageRecentCrashes keeps the crash file's sections from daemon runs started
+// within triageRetention of now. The file only grows (each start appends a
+// "=== daemon pid … started <RFC3339>" header), so an old panic would otherwise
+// read as current evidence. Lines whose header fell outside the tail cannot be
+// dated and are dropped. A kept panic names its run's start time.
+func triageRecentCrashes(tail string, now time.Time) string {
+	var kept []string
+	keep, started := false, ""
+	for _, line := range strings.Split(tail, "\n") {
+		if rest, ok := strings.CutPrefix(line, "=== daemon pid "); ok {
+			_, stamp, found := strings.Cut(rest, " started ")
+			at, err := time.Parse(time.RFC3339, strings.TrimSpace(stamp))
+			keep, started = found && err == nil && !at.Before(now.Add(-triageRetention)), strings.TrimSpace(stamp)
+			if keep {
+				kept = append(kept, line)
+			}
+			continue
+		}
+		if !keep {
+			continue
+		}
+		if strings.HasPrefix(line, "panic: ") || strings.HasPrefix(line, "fatal error: ") {
+			line += " (daemon started " + started + ")"
+		}
+		kept = append(kept, line)
+	}
+	return strings.Join(kept, "\n")
 }
 
 func triageLogTail(ctx context.Context, path string) (string, error) {
