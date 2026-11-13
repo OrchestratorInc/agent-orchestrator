@@ -275,7 +275,7 @@ func (r *acpRelay) clientFrame(ctx context.Context, frame []byte, generation uin
 	}
 
 	if method == "session/prompt" && (r.state.ActivePrompt || r.state.PendingResultEventID != "") {
-		return acpClientFrames{client: rpcErrorFrame(id, -32602, "previous ACP prompt is active or not acknowledged")}, nil
+		return acpClientFrames{client: rpcErrorFrame(id, -32602, "previous ACP prompt is active or not acknowledged", nil)}, nil
 	}
 	r.nextRequestID++
 	providerID, _ := json.Marshal(r.nextRequestID)
@@ -311,21 +311,21 @@ func (r *acpRelay) acceptInteractionCommand(
 	}
 	params := envelope["params"]
 	if len(id) == 0 || string(id) == "null" || json.Unmarshal(params, &identity) != nil || identity.RequestID == "" {
-		return acpClientFrames{client: rpcErrorFrame(id, -32602, "invalid persistent interaction command")}, nil //nolint:nilerr // protocol validation errors are returned in-band
+		return acpClientFrames{client: rpcErrorFrame(id, -32602, "invalid persistent interaction command", nil)}, nil //nolint:nilerr // protocol validation errors are returned in-band
 	}
 	canonical, err := canonicalJSON(params)
 	if err != nil {
-		return acpClientFrames{client: rpcErrorFrame(id, -32602, "invalid persistent interaction command")}, nil //nolint:nilerr // protocol validation errors are returned in-band
+		return acpClientFrames{client: rpcErrorFrame(id, -32602, "invalid persistent interaction command", nil)}, nil //nolint:nilerr // protocol validation errors are returned in-band
 	}
 	if existing, ok := r.commands[identity.RequestID]; ok {
 		if existing.canonical != canonical {
-			return acpClientFrames{client: rpcErrorFrame(id, -32602, "persistent interaction command changed")}, nil
+			return acpClientFrames{client: rpcErrorFrame(id, -32602, "persistent interaction command changed", nil)}, nil
 		}
 		return acpClientFrames{client: rpcResultFrame(id, map[string]string{"eventId": existing.eventID})}, nil
 	}
 	request, pending := r.serverRequest(identity.RequestID)
 	if !pending {
-		return acpClientFrames{client: rpcErrorFrame(id, -32602, "persistent interaction is not pending")}, nil
+		return acpClientFrames{client: rpcErrorFrame(id, -32602, "persistent interaction is not pending", nil)}, nil
 	}
 	if err := ctx.Err(); err != nil {
 		return acpClientFrames{}, err
@@ -472,7 +472,7 @@ func (r *acpRelay) failStalledPrompt(
 		if request.method != "session/prompt" {
 			continue
 		}
-		failure := rpcErrorFrameWithData(json.RawMessage(providerID), -32603, fmt.Sprintf(
+		failure := rpcErrorFrame(json.RawMessage(providerID), -32603, fmt.Sprintf(
 			"provider stopped responding: no ACP output for %s; failing the stalled prompt", promptStallTimeout),
 			map[string]any{ACPPromptStalledDataKey: true})
 		completion, _, err := r.providerFrame(ctx, failure, generation, attached)
@@ -556,11 +556,7 @@ func rpcResultFrame(id json.RawMessage, result any) []byte {
 	}, nil)
 }
 
-func rpcErrorFrame(id json.RawMessage, code int, message string) []byte {
-	return rpcErrorFrameWithData(id, code, message, nil)
-}
-
-func rpcErrorFrameWithData(id json.RawMessage, code int, message string, data map[string]any) []byte {
+func rpcErrorFrame(id json.RawMessage, code int, message string, data map[string]any) []byte {
 	body := map[string]any{"code": code, "message": message}
 	if data != nil {
 		body["data"] = data
