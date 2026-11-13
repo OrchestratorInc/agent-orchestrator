@@ -39,6 +39,7 @@ import { subscribeConversationEvents } from "./conversationEvents";
 import { conversationPollIntervalFor } from "./conversationPoll";
 import { createAsyncValueCache } from "./asyncValueCache";
 import { createRefreshQueue } from "./refreshQueue";
+import { conversationSaver, loadSavedConversation } from "./savedConversations";
 import { withAttachmentReferences } from "./messageAttachments";
 import { isEmptyTurnOptionCatalog, loadTurnOptionCatalog } from "./turnOptionsCatalog";
 import { rememberedTurnOptions, rememberTurnOptions, type TurnOptions } from "./lastTurnOptions";
@@ -230,7 +231,11 @@ export function useMobileConversation(
 				if (!mounted.current || !isCurrent()) return;
 				setPages((old) => {
 					const next = withLivePage(old, live);
-					if (next !== old) conversationPageCache.set(cacheKey, next);
+					if (next !== old) {
+						conversationPageCache.set(cacheKey, next);
+						// Also on the phone, for after the app is closed (see savedConversations).
+						conversationSaver.schedule(cacheKey, next[0]);
+					}
 					return next;
 				});
 				setUnavailable(undefined);
@@ -283,6 +288,16 @@ export function useMobileConversation(
 		setPages(cached.pages);
 		setLoading(cached.loading);
 		setUnavailable(undefined);
+		// Nothing in memory (the app was closed since): the page saved on the phone
+		// shows until the first read answers, which replaces it.
+		if (!cacheKey || cached.pages.length) return;
+		let active = true;
+		void loadSavedConversation(cacheKey).then((saved) => {
+			if (!active || !saved) return;
+			setPages((current) => current.length ? current : [saved]);
+			setLoading(false);
+		});
+		return () => { active = false; };
 	}, [cacheKey]);
 
 	// Asks the machine whenever a verified connection to it is (again) available.
