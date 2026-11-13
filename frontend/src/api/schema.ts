@@ -4879,6 +4879,91 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/storage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Report what AO stores on disk and what cleanup would free */
+        get: operations["getStorage"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/storage/actions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List what storage cleanups did, newest first */
+        get: operations["listStorageActions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/storage/clean": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Preview or start a storage cleanup */
+        post: operations["cleanStorage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/storage/scan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Measure the disk usage of AO again in the background */
+        post: operations["scanStorage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/storage/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Change storage cleanup settings */
+        patch: operations["updateStorageSettings"];
+        trace?: never;
+    };
     "/api/v1/system/github-auth": {
         parameters: {
             query?: never;
@@ -7754,6 +7839,8 @@ export interface components {
             preRemove?: string[];
             reviewers?: components["schemas"]["DomainReviewerConfig"][];
             sessionPrefix?: string;
+            storageOffloadDisabled?: boolean;
+            storageOffloadPaths?: string[];
             symlinks?: string[];
             trackerIntake?: components["schemas"]["TrackerIntakeConfig"];
             worker?: components["schemas"]["RoleOverride"];
@@ -9044,6 +9131,146 @@ export interface components {
             state?: "queued" | "running" | "completed" | "recovered" | "interrupted" | "failed";
             turnId?: string;
         };
+        StorageAction: {
+            /** Format: date-time */
+            at: string;
+            /** Format: int64 */
+            bytes: number;
+            dryRun: boolean;
+            error?: string;
+            /** Format: int64 */
+            id?: number;
+            /** @enum {string} */
+            kind: "offload" | "ended_worktrees" | "orphan_worktrees" | "db_backups" | "logs" | "dev_profiles" | "dependency_templates" | "database" | "trash" | "restore";
+            reason: string;
+            /** @enum {string} */
+            result: "planned" | "done" | "skipped" | "failed";
+            sessionId?: string;
+            target: string;
+        };
+        StorageActionsResponse: {
+            actions: components["schemas"]["StorageAction"][];
+        };
+        StorageCategoryUsage: {
+            /** Format: int64 */
+            bytes: number;
+            /** @enum {string} */
+            category: "worktrees" | "database" | "db_backups" | "harnesses" | "browser_data" | "logs" | "dev_profiles" | "dependency_templates" | "other";
+            /** Format: int64 */
+            reclaimableBytes: number;
+        };
+        StorageCleanRequest: {
+            dryRun?: boolean;
+            includeDev?: boolean;
+            kinds?: string[];
+            sessionIds?: string[];
+        };
+        StorageCleanResponse: {
+            actions: components["schemas"]["StorageAction"][];
+            dryRun: boolean;
+            /** Format: date-time */
+            finishedAt?: null | string;
+            /** Format: int64 */
+            freedBytes: number;
+            running: boolean;
+            /** Format: date-time */
+            startedAt: string;
+        };
+        StorageDatabase: {
+            /** Format: int64 */
+            fileBytes: number;
+            /** Format: int64 */
+            freeBytes: number;
+            tables: components["schemas"]["StorageTableSize"][];
+            tablesKnown: boolean;
+            /** Format: int64 */
+            walBytes: number;
+        };
+        StorageDisk: {
+            /** Format: date-time */
+            checkedAt?: null | string;
+            error?: string;
+            /** Format: int64 */
+            freeBytes: number;
+            /** @enum {string} */
+            level: "normal" | "low" | "critical";
+            path: string;
+            /** Format: int64 */
+            totalBytes: number;
+        };
+        StoragePlannedAction: {
+            automatic: boolean;
+            /** Format: int64 */
+            bytes: number;
+            /** @enum {string} */
+            kind: "offload" | "ended_worktrees" | "orphan_worktrees" | "db_backups" | "logs" | "dev_profiles" | "dependency_templates" | "database" | "trash";
+            reason: string;
+            sessionId?: string;
+            target: string;
+        };
+        StorageReportResponse: {
+            autoCleanAllowed: boolean;
+            /** Format: int64 */
+            autoReclaimableBytes: number;
+            categories: components["schemas"]["StorageCategoryUsage"][];
+            cleaning: boolean;
+            copyOnWrite: boolean;
+            database: components["schemas"]["StorageDatabase"];
+            disk: components["schemas"]["StorageDisk"];
+            lastClean?: components["schemas"]["StorageCleanResponse"];
+            plan: components["schemas"]["StoragePlannedAction"][];
+            /** Format: int64 */
+            reclaimableBytes: number;
+            /** Format: int64 */
+            scanDurationMs: number;
+            scanError?: string;
+            /** Format: date-time */
+            scannedAt?: null | string;
+            scanning: boolean;
+            settings: components["schemas"]["StorageSettings"];
+            /** Format: int64 */
+            totalBytes: number;
+            worktrees: components["schemas"]["StorageWorktree"][];
+        };
+        StorageSettings: {
+            autoClean: boolean;
+            backupDays: number;
+            cleanDevProfiles: boolean;
+            devProfileDays: number;
+            endedWorktreeDays: number;
+            logDays: number;
+            offloadEnabled: boolean;
+            offloadIdleHours: number;
+            offloadMergedIdleMinutes: number;
+            offloadNoPrGraceHours: number;
+            templateDays: number;
+            /** Format: date-time */
+            updatedAt?: null | string;
+        };
+        StorageTableSize: {
+            /** Format: int64 */
+            bytes: number;
+            name: string;
+        };
+        StorageWorktree: {
+            /** Format: int64 */
+            bytes: number;
+            /** Format: int64 */
+            dependencyBytes: number;
+            /** Format: date-time */
+            lastUsedAt?: null | string;
+            offloaded: boolean;
+            /** Format: date-time */
+            offloadedAt?: null | string;
+            /** Format: int64 */
+            offloadedBytes: number;
+            path: string;
+            projectId?: string;
+            restoreError?: string;
+            sessionId?: string;
+            /** @enum {string} */
+            state: "live" | "quiet" | "ended" | "orphan";
+        };
         SubmitAgentUILoginCodeRequest: {
             code: string;
         };
@@ -9246,6 +9473,19 @@ export interface components {
         UpdateShellTerminalRequest: {
             /** @description New tab title for the shell terminal. Trimmed; must be non-empty. */
             title: string;
+        };
+        UpdateStorageSettingsRequest: {
+            autoClean?: null | boolean;
+            backupDays?: null | number;
+            cleanDevProfiles?: null | boolean;
+            devProfileDays?: null | number;
+            endedWorktreeDays?: null | number;
+            logDays?: null | number;
+            offloadEnabled?: null | boolean;
+            offloadIdleHours?: null | number;
+            offloadMergedIdleMinutes?: null | number;
+            offloadNoPrGraceHours?: null | number;
+            templateDays?: null | number;
         };
         UpdateVersionRefreshRequest: {
             enabled: null | boolean;
@@ -27881,6 +28121,251 @@ export interface operations {
             };
             /** @description Conflict */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getStorage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StorageReportResponse"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    listStorageActions: {
+        parameters: {
+            query?: {
+                limit?: null | number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StorageActionsResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    cleanStorage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StorageCleanRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StorageCleanResponse"];
+                };
+            };
+            /** @description Accepted */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StorageCleanResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    scanStorage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StorageReportResponse"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    updateStorageSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateStorageSettingsRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StorageSettings"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
                 headers: {
                     [name: string]: unknown;
                 };

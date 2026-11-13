@@ -696,6 +696,7 @@ func Run(buildVersion string) (retErr error) {
 		},
 	})
 	sessMgr = wiredSessMgr
+	storageSvc, storageDone := startStorage(ctx, cfg, store, sessionSvc, wiredSessMgr, log)
 	if switcher, ok := wiredSessMgr.(chatsvc.TerminalProviderSwitcher); ok {
 		chatSvc.SetTerminalProviderSwitcher(switcher)
 	}
@@ -1248,6 +1249,7 @@ func Run(buildVersion string) (retErr error) {
 		CodexAccounts:      agentSvc,
 		AgentAccounts:      freshAccountUsage{agentAccountSvc, usagePipeline},
 		SystemChecks:       systemChecks,
+		Storage:            storageSvc,
 		Installer:          systemInstall,
 		ComputerUse:        computerUse,
 		Sessions:           sessionSvc,
@@ -1571,6 +1573,13 @@ func Run(buildVersion string) (retErr error) {
 	stop()
 	if usageLimitResumeDone != nil {
 		<-usageLimitResumeDone
+	}
+	// A storage pass stops between actions; one large delete may still be
+	// finishing, so shutdown waits for it only so long.
+	select {
+	case <-storageDone:
+	case <-time.After(cfg.ShutdownTimeout):
+		log.Warn("storage cleanup still finishing at shutdown")
 	}
 	installStopCtx, installStopCancel := context.WithTimeout(context.Background(), installerShutdownTimeout)
 	if err := systemInstall.Close(installStopCtx); err != nil {

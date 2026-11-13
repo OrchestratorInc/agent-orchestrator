@@ -1604,6 +1604,32 @@ func (s *Service) Cleanup(ctx context.Context, project domain.ProjectID) (Cleanu
 	return out, nil
 }
 
+// sessionCleaner is optional so focused manager fakes need not implement it.
+type sessionCleaner interface {
+	CleanupSessions(ctx context.Context, ids []domain.SessionID) (sessionmanager.CleanupResult, error)
+}
+
+// CleanupSessions reclaims the workspaces of the named terminal sessions, as
+// Cleanup does for a project: dirty or locked workspaces are preserved and
+// reported in Skipped, never forced.
+func (s *Service) CleanupSessions(ctx context.Context, ids []domain.SessionID) (CleanupOutcome, error) {
+	out := CleanupOutcome{Cleaned: []domain.SessionID{}, AlreadyGone: []domain.SessionID{}, Skipped: []CleanupSkipped{}}
+	cleaner, ok := s.manager.(sessionCleaner)
+	if !ok || len(ids) == 0 {
+		return out, nil
+	}
+	res, err := cleaner.CleanupSessions(ctx, ids)
+	if err != nil {
+		return CleanupOutcome{}, err
+	}
+	out.Cleaned = append(out.Cleaned, res.Cleaned...)
+	out.AlreadyGone = append(out.AlreadyGone, res.AlreadyGone...)
+	for _, skip := range res.Skipped {
+		out.Skipped = append(out.Skipped, CleanupSkipped{SessionID: skip.SessionID, Code: skip.Code, Reason: skip.Reason})
+	}
+	return out, nil
+}
+
 // TeardownProject stops every live session in a project concurrently, then asks
 // the session manager to reclaim terminal workspaces. The expensive per-session
 // work (agent/runtime shutdown, controller teardown) is independent, so running
