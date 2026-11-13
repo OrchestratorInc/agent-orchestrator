@@ -1022,3 +1022,36 @@ func TestAnOlderReadDoesNotReplaceANewerOne(t *testing.T) {
 		t.Fatalf("view = %+v, want b@ with its limits", views[0])
 	}
 }
+
+func TestAFailedNewerReadDoesNotHideANewerIdentity(t *testing.T) {
+	ctx := context.Background()
+	claude := &fakeClaude{
+		signedInAs: map[string]string{"": "a@example.com"},
+		failing:    map[string]bool{},
+		windows:    []domain.AgentAccountLimitWindow{{ID: "seven_day", UsedPercent: 40}},
+	}
+	store := &memStore{defaults: map[domain.AgentAccountProvider]string{}, bindings: map[domain.SessionID]string{}}
+	svc := New(store, []ports.AgentAccountProviderCLI{claude}, t.TempDir(), fakeTerminals{}, nil)
+	if _, err := svc.List(ctx, true); err != nil {
+		t.Fatal(err)
+	}
+	claude.signedInAs[""] = "b@example.com"
+	claude.onLimits = func() {
+		claude.failing[""] = true
+		if _, err := svc.List(ctx, true); err != nil {
+			t.Error(err)
+		}
+		claude.failing[""] = false
+	}
+	views, err := svc.List(ctx, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	device := domain.DeviceAgentAccountID(domain.AgentAccountProviderClaude)
+	if got := svc.ConfirmedLogins()[device]; got.Email != "b@example.com" {
+		t.Fatalf("confirmed = %+v, want b@ from the last successful check", got)
+	}
+	if views[0].Account.Email != "b@example.com" || views[0].IdentityErr != "" {
+		t.Fatalf("view = %+v, want the successful b@ reading", views[0])
+	}
+}

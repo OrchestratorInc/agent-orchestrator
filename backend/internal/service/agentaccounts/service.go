@@ -87,10 +87,11 @@ type reading struct {
 	limitsErr     string
 	limitsProblem domain.AgentAccountProblemKind
 	// failures counts checks in a row that failed on their own.
-	failures  int
-	at        time.Time
-	seq       uint64
-	confirmed *domain.AgentAccountIdentityCheck
+	failures     int
+	at           time.Time
+	seq          uint64
+	confirmed    *domain.AgentAccountIdentityCheck
+	confirmedSeq uint64
 }
 
 // failedOnItsOwn reports a reading whose check failed in a way the next check
@@ -357,11 +358,8 @@ func (s *Service) read(ctx context.Context, account domain.AgentAccount) *readin
 		// A failed check (a timeout under load) says nothing about the login:
 		// keep what the last good one found, so it does not read as signed out.
 		s.mu.Lock()
-		if prev := s.readings[account.ID]; prev != nil {
-			r.confirmed = prev.confirmed
-			if prev.identityErr == "" {
-				r.identity, r.limits = prev.identity, prev.limits
-			}
+		if prev := s.readings[account.ID]; prev != nil && prev.identityErr == "" {
+			r.identity, r.limits = prev.identity, prev.limits
 		}
 		s.mu.Unlock()
 	}
@@ -406,7 +404,7 @@ func (s *Service) read(ctx context.Context, account domain.AgentAccount) *readin
 	}
 	if err == nil {
 		confirmed := r.identity
-		r.confirmed = &confirmed
+		r.confirmed, r.confirmedSeq = &confirmed, r.seq
 	}
 	// A caller that went away (a closed request, a cancelled move) says nothing
 	// about the account; caching its failure would refuse the account for the
@@ -415,9 +413,14 @@ func (s *Service) read(ctx context.Context, account domain.AgentAccount) *readin
 		return r
 	}
 	s.mu.Lock()
-	if prev := s.readings[account.ID]; prev != nil && prev.seq > r.seq {
-		s.mu.Unlock()
-		return prev
+	if prev := s.readings[account.ID]; prev != nil {
+		if prev.confirmedSeq > r.seq {
+			s.mu.Unlock()
+			return prev
+		}
+		if err != nil {
+			r.confirmed, r.confirmedSeq = prev.confirmed, prev.confirmedSeq
+		}
 	}
 	if r.failedOnItsOwn() {
 		r.failures = 1
