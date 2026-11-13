@@ -14,7 +14,7 @@ import { useUiStore } from "../../stores/ui-store";
 import type { ChatConfigOption, ChatModel, TurnSettings } from "../../types/conversation";
 import type { AgentSwitchProps, PickerSource } from "./AgentSwitchPicker";
 import { cloudSessionsQueryKey, sharedCloudWorkspacesQueryKey } from "../../hooks/useWorkspaceQuery";
-import { QUEUED_STEER_STALE_MS, appendCloudEvents, CHAT_EVENTS_CACHE_MS, cloudExcerptText, cloudAnnotationContent, cloudMessageBody, cloudQueuedSteerErrors, CloudSessionChatSurface, cloudStartupChecklist, cloudWorkspaceFilePath, ownMessageTurns, toSnapshot } from "./CloudSessionChatSurface";
+import { QUEUED_STEER_STALE_MS, nextQueuedSteerDeadline, appendCloudEvents, CHAT_EVENTS_CACHE_MS, cloudExcerptText, cloudAnnotationContent, cloudMessageBody, cloudQueuedSteerErrors, CloudSessionChatSurface, cloudStartupChecklist, cloudWorkspaceFilePath, ownMessageTurns, toSnapshot } from "./CloudSessionChatSurface";
 import { CLOUD_CHAT_NEWEST, cloudChatHistoryKey, mergeCloudEvents } from "../../lib/cloud-chat-history";
 import { clearPreviousAccountState } from "../../hooks/useCloudAccountSwitchReset";
 import { TurnSettingsBar } from "./TurnSettingsBar";
@@ -718,6 +718,14 @@ describe("CloudSessionChatSurface", () => {
 		expect(cloudQueuedSteerErrors(queued, requestedAt + QUEUED_STEER_STALE_MS)).toEqual({
 			"turn-orch": "Couldn't steer: the agent did not answer in time. It's back in the queue; select Steer to try again.",
 		});
+
+		// The chat's clock moves on at each unanswered steer's deadline in turn,
+		// so a later one fails too after an earlier one did.
+		const later = { ...queued[5], sequence: 7, createdAt: new Date(requestedAt + 30_000).toISOString(), payload: { ...queued[5].payload, queuedTurnId: "turn-mine" } };
+		const both = [...queued, later];
+		expect(nextQueuedSteerDeadline(both, requestedAt)).toBe(requestedAt + QUEUED_STEER_STALE_MS);
+		expect(nextQueuedSteerDeadline(both, requestedAt + QUEUED_STEER_STALE_MS)).toBe(requestedAt + 30_000 + QUEUED_STEER_STALE_MS);
+		expect(nextQueuedSteerDeadline(both, requestedAt + 30_000 + QUEUED_STEER_STALE_MS)).toBeUndefined();
 	});
 
 	// What the chat shows after a failed or a delivered steer comes from the

@@ -294,8 +294,8 @@ export function cloudQueuedSteerErrors(events: readonly CloudCpClientEvent[], no
 	return errors;
 }
 
-/** When the oldest unanswered queued-message steer turns stale, or undefined with none waiting. */
-export function nextQueuedSteerDeadline(events: readonly CloudCpClientEvent[]): number | undefined {
+/** When the next unanswered queued-message steer turns stale after `after`, or undefined with none left. */
+export function nextQueuedSteerDeadline(events: readonly CloudCpClientEvent[], after: number): number | undefined {
 	const pending = new Map<string, CloudCpClientEvent>();
 	for (const event of events) {
 		const queuedTurnID = queuedSteerTurnID(event);
@@ -303,7 +303,7 @@ export function nextQueuedSteerDeadline(events: readonly CloudCpClientEvent[]): 
 		if (event.type === "chat.turn_steer_requested") pending.set(queuedTurnID, event);
 		else pending.delete(queuedTurnID);
 	}
-	const deadlines = [...pending.values()].map((event) => Date.parse(event.createdAt) + QUEUED_STEER_STALE_MS);
+	const deadlines = [...pending.values()].map((event) => Date.parse(event.createdAt) + QUEUED_STEER_STALE_MS).filter((deadline) => deadline > after);
 	return deadlines.length > 0 ? Math.min(...deadlines) : undefined;
 }
 
@@ -1797,9 +1797,9 @@ export function CloudSessionChatSurface({
 	// The clock a queued message's unanswered steer is read against, moved on
 	// when the oldest one would turn stale, so it then shows as failed.
 	const [steerClock, setSteerClock] = useState(() => Date.now());
-	const steerDeadline = useMemo(() => nextQueuedSteerDeadline(eventsQuery.data ?? []), [eventsQuery.data]);
+	const steerDeadline = useMemo(() => nextQueuedSteerDeadline(eventsQuery.data ?? [], steerClock), [eventsQuery.data, steerClock]);
 	useEffect(() => {
-		if (steerDeadline === undefined || steerDeadline <= steerClock) return;
+		if (steerDeadline === undefined) return;
 		const timer = window.setTimeout(() => setSteerClock(Date.now()), steerDeadline - Date.now() + 250);
 		return () => window.clearTimeout(timer);
 	}, [steerClock, steerDeadline]);
