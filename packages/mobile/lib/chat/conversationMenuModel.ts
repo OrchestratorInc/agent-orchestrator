@@ -45,7 +45,6 @@ export type ConversationMenuState = {
 	canDelete: boolean;
 	/** The agent can carry this conversation on in Terminal UI. */
 	canSwitchToTerminal?: boolean;
-	/** The account the agent runs on, when it has one to move; its row opens the machine's other accounts. */
 	account?: { name: string; moving: boolean; canMove: boolean };
 	/** A switch to Terminal UI is starting or under way. */
 	switchingToTerminal?: boolean;

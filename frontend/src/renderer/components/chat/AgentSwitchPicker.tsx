@@ -107,7 +107,6 @@ export interface AgentSwitchProps {
 	agents?: Array<{ id: string; label: string }>;
 	/** Which agents settings "Manage agents" opens: a Cloud session's are the Cloud ones. */
 	harnessView?: "local" | "cloud";
-	/** The subscription account the current agent runs on, for Claude Code and Codex. */
 	account?: AccountChoice;
 }
 

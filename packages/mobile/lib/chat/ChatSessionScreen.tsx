@@ -957,7 +957,6 @@ function interfacePhaseLabel(phase?: string): string {
 		default: return "Checking that the terminal can resume this agent's native conversation.";
 	}
 }
-/** The card's phase while the agent moves to another account in the same Chat. */
 function accountPhaseLabel(phase?: string): string {
 	switch (phase) {
 		case "draining": return "Waiting for the current turn to finish.";

@@ -98,7 +98,6 @@ export function useSessionAccountSwitch(session: WorkspaceSession, sessionHostId
 	return { shown, choice, account, moving, status, dialog };
 }
 
-/** The account the session's agent runs under, its limits, and the move to another account. */
 export function SessionAccountSummary({ session, hostId }: { session: WorkspaceSession; hostId?: string }) {
 	const { t } = useTranslation();
 	const { shown, choice, account, moving, status, dialog } = useSessionAccountSwitch(session, hostId ?? session.hostId);

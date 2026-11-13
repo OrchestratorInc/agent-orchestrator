@@ -59,7 +59,6 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 	// Sends read the latest render's launch, not the one they started in.
 	const taskRef = useRef(task);
 	taskRef.current = task;
-	// A picked account that was removed or signed out falls back to the default.
 	const stalePick = Boolean(task.account?.value && hostAccounts.data && !accountRows.some((row) => row.id === task.account?.value && row.signedIn));
 	useEffect(() => {
 		if (stalePick) taskRef.current.account?.choose(undefined);

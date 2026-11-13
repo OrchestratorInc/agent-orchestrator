@@ -93,8 +93,6 @@ func rendererOriginMiddleware(allowedOrigins []string) func(http.Handler) http.H
 
 const agentAccountsArea = "agent accounts"
 
-// mobileAgentAccountsRequest lets a paired phone manage the host's
-// subscription accounts with the Origin React Native pins.
 func mobileAgentAccountsRequest(r *http.Request, area string) bool {
 	return area == agentAccountsArea && r.Header.Get("Origin") == "http://localhost" && authenticatedLANBearer(r)
 }

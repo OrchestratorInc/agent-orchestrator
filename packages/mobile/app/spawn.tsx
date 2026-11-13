@@ -121,7 +121,6 @@ export default function SpawnScreen() {
 	// before it is picked. The picked agent's list is the project-aware catalog.
 	const [agentModelLists, setAgentModelLists] = useState<Record<string, AgentModelInfo[]>>({});
 	const [approvalChoice, setApprovalChoice] = useState<ApprovalMode>();
-	// An account picked here; until then the machine's default for the agent.
 	const [accountPick, setAccountPick] = useState<string>();
 	const spawnAccounts = useAgentAccounts(config, cloudSelected ? undefined : harness);
 	useEffect(() => setAccountPick(undefined), [selectedHostId, harness]);

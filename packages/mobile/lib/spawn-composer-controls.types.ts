@@ -48,7 +48,6 @@ export type SpawnComposerControlsProps = {
 	projects: readonly SpawnComposerOption[];
 	projectId: string | null;
 	onSelectProject: (projectId: string) => void;
-	/** The machine's signed-in accounts for the picked agent; the row shows only with a choice to make. */
 	accounts?: readonly SpawnComposerOption[];
 	accountId?: string;
 	onSelectAccount?: (accountId: string) => void;

@@ -194,7 +194,6 @@ export function useTaskLaunch({ projectId, hostId }: {
 	const [status, setStatus] = useState<string | undefined>();
 	const [errorAction, setErrorAction] = useState<"install-agent" | "choose-branch" | undefined>();
 	const [branchOverride, setBranchOverride] = useState("");
-	// The account picked per provider; none starts on the provider's default.
 	const [accountPicks, setAccountPicks] = useState<Partial<Record<AgentAccountProvider, string>>>({});
 	useEffect(() => setAccountPicks({}), [hostId]);
 	const [branchDraft, setBranchDraft] = useState("");
@@ -1352,7 +1351,6 @@ export function useTaskLaunch({ projectId, hostId }: {
 			mode: submitMode,
 			accountId,
 		}),
-		/** The account the task starts on, for Claude Code and Codex on a daemon. */
 		account: accountProvider && !isCloudProject ? {
 			provider: accountProvider,
 			value: accountId,

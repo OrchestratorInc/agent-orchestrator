@@ -15,27 +15,23 @@ export type AgentAccount = {
 	default: boolean;
 };
 
-/** The subscription a harness signs in with, or undefined when it has none. */
 export function agentAccountProvider(harness?: string): AgentAccountProvider | undefined {
 	if (harness === "claude-code") return "claude";
 	if (harness === "codex") return "codex";
 	return undefined;
 }
 
-/** An account's name: its email, else what kind of login it is. */
 export function agentAccountName(account: Pick<AgentAccount, "email" | "provider">): string {
 	if (account.email) return account.email;
 	return account.provider === "claude" ? "OAuth token" : "Codex CLI login";
 }
 
-/** The machine's accounts for one provider. */
 export async function getAgentAccounts(cfg: ServerConfig, provider: AgentAccountProvider): Promise<AgentAccount[]> {
 	const res = await apiRequest(cfg, API);
 	const accounts = ((await res.json())?.accounts ?? []) as AgentAccount[];
 	return accounts.filter((account) => account.provider === provider);
 }
 
-/** The account id a session runs on, per provider. */
 export async function getSessionAgentAccount(cfg: ServerConfig, sessionId: string, provider: AgentAccountProvider): Promise<string | undefined> {
 	const res = await apiRequest(cfg, `${API}/sessions/${encodeURIComponent(sessionId)}`);
 	return ((await res.json()) as Partial<Record<AgentAccountProvider, string>>)?.[provider];
@@ -49,7 +45,6 @@ export async function moveSessionAgentAccount(cfg: ServerConfig, sessionId: stri
 	});
 }
 
-/** Accounts as sheet rows; a signed-out one shows but cannot take a session. */
 export function agentAccountOptions(accounts: readonly AgentAccount[]): PickerOption[] {
 	return accounts.map((account) => ({
 		id: account.id,
@@ -59,11 +54,7 @@ export function agentAccountOptions(accounts: readonly AgentAccount[]): PickerOp
 	}));
 }
 
-/**
- * The machine's accounts for a harness and, given a session, the one it runs
- * on. Reloads when `reloadKey` changes, such as when a move settles. An older
- * machine that refuses the phone answers nothing, and no account is offered.
- */
+/** Reloads when `reloadKey` changes. An older machine that refuses the phone offers no accounts. */
 export function useAgentAccounts(cfg: ServerConfig | null | undefined, harness: string | undefined, sessionId?: string, reloadKey?: unknown) {
 	const provider = agentAccountProvider(harness);
 	const [accounts, setAccounts] = useState<AgentAccount[]>([]);
