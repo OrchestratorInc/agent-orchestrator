@@ -218,6 +218,15 @@ export interface CloudCpListQuery {
 	cursor?: string;
 }
 
+/**
+ * GET /orgs/{orgId}/projects: the projects without the caller's standalone
+ * agents ("exclude"), or only those agents ("only"). Omitted lists both; an
+ * older control plane ignores it and lists every project.
+ */
+export interface CloudCpProjectListQuery extends CloudCpListQuery {
+	standaloneAgents?: "exclude" | "only";
+}
+
 // ---------------------------------------------------------------------------
 // Projects (`resource_handlers.go`)
 // ---------------------------------------------------------------------------
@@ -304,8 +313,27 @@ export interface CloudCpProject {
 	defaultBranch: string;
 	githubRepositoryId?: string;
 	config: ProjectConfig;
+	/**
+	 * A standalone agent's project: its owner's one worker session, with no
+	 * repository. Only its owner lists it; others reach it through a share.
+	 * Absent from older control planes.
+	 */
+	standaloneAgent?: boolean;
 	createdAt: string;
 	updatedAt: string;
+}
+
+/**
+ * POST /orgs/{orgId}/standalone-agents (requires an Idempotency-Key header): a
+ * standalone agent, the session create's body without projectId and kind. The
+ * control plane makes the agent its own project and starts its one worker
+ * session there. Offered when offering.features lists "standalone_agents".
+ */
+export type CloudCpCreateStandaloneAgentRequest = Omit<CloudCpCreateSessionRequest, "projectId" | "kind">;
+
+export interface CloudCpStandaloneAgentResponse {
+	project: CloudCpProject;
+	session: CloudCpSession;
 }
 
 /** POST /orgs/{orgId}/projects (requires an Idempotency-Key header). */

@@ -228,10 +228,16 @@ if (typeof window !== "undefined") {
 		cloudShare: {
 			available: async () => true,
 			inspect: async () => ({ name: "", size: 0, secretFindings: [], unsupported: false, fingerprint: "" }),
-			list: async () => ({ shares: [], limit: 3, used: 0, unlimited: false }),
+			list: async () => ({ shares: [], limit: 3, used: 0, unlimited: false, privateLinks: false }),
 			publish: async () => ({ status: "cancelled" as const }),
 			cancel: async () => undefined,
 			unpublish: async () => undefined,
+			setAccess: async () => {
+				throw new Error("not stubbed");
+			},
+			grants: async () => [],
+			invite: async () => [],
+			removeGrant: async () => undefined,
 			onProgress: () => () => undefined,
 		},
 		cloudArtifact: {

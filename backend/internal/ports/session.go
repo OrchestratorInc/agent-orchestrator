@@ -41,10 +41,14 @@ type SpawnConfig struct {
 	TrackerProvider domain.TrackerProvider
 	// IssueContext is optional pre-fetched tracker context for the task prompt.
 	// Standing rules stay in SystemPrompt; issue facts belong to the user task.
-	IssueContext     string
-	Kind             domain.SessionKind
-	Harness          domain.AgentHarness
-	Branch           string
+	IssueContext string
+	Kind         domain.SessionKind
+	Harness      domain.AgentHarness
+	Branch       string
+	// BaseBranch starts the session's branch from this branch instead of the
+	// project's default, and its pull request is meant to target it: stacking
+	// on another PR. Only ordinary repository projects can honor it.
+	BaseBranch       string
 	RequireNewBranch bool
 	Prompt           string
 	// AgentConfig overrides the resolved project/role agent config for this

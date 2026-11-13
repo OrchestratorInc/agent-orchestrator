@@ -11,7 +11,7 @@ import {
 	sessionIsActive,
 	sessionCueTargetAvailable,
 	CLOUD_PROJECT_KIND,
-	STANDALONE_PROJECT_KIND,
+	isScratchpadWorkspace,
 	STANDALONE_WORKSPACE_ID,
 	toProjectKind,
 	type WorkspaceSession,
@@ -78,7 +78,8 @@ export function SessionTopbarActions({
 	const project = workspaceScope?.project;
 	const supportsLocalCues = Boolean(!hostId && project && toProjectKind(project.kind));
 	const orchestrator = workspaceScope?.orchestrator;
-	const supportsProjectActions = project?.kind !== STANDALONE_PROJECT_KIND && projectId !== STANDALONE_WORKSPACE_ID;
+	// A scratchpad session, local or a Cloud standalone agent, has no orchestrator or board.
+	const supportsProjectActions = !isScratchpadWorkspace(project) && projectId !== STANDALONE_WORKSPACE_ID;
 	const projectActions = useProjectOrchestratorAction({
 		projectId: supportsProjectActions ? projectId : undefined,
 		project: supportsProjectActions ? project : undefined,
@@ -226,7 +227,7 @@ export function SessionTopbarActions({
 							void navigate(sessionNavigateTarget(workspaceId, nextRoute.sessionId, hostId));
 							return;
 						}
-						if (workspaceId === STANDALONE_WORKSPACE_ID) {
+						if (workspaceId === STANDALONE_WORKSPACE_ID || (workspaceId === project?.id && isScratchpadWorkspace(project))) {
 							void navigate({ to: "/" });
 							return;
 						}

@@ -13,3 +13,9 @@ export const touchTarget: number = 44;
  * see the Android file for why that one names a value.
  */
 export const sheetCornerRadius: number | undefined = undefined;
+
+/**
+ * An inset-grouped list drawn in React Native: iOS 26's List section, one
+ * rounded card whose rows meet flush, divided by hairlines.
+ */
+export const groupedCorner: { outer: number; inner: number; gap: number } = { outer: 26, inner: 0, gap: 0 };
