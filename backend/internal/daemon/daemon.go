@@ -143,6 +143,7 @@ var _ interface {
 	sessionmanager.TerminalInputGate
 	sessionmanager.TerminalInputObserver
 	sessionmanager.TerminalInputFencer
+	sessionmanager.TerminalInputForgetter
 } = (*terminal.Manager)(nil)
 
 // daemonShutdownContext separates worker cancellation from signal cleanup.
@@ -929,7 +930,7 @@ func Run(buildVersion string) (retErr error) {
 	// behind them. They reuse the same runtime adapter (and therefore the same
 	// terminal mux) as session panes, but keep their own ids, storage, and
 	// lifetime — see internal/service/shellterm.
-	shellTermSvc := startShellTerminals(ctx, cfg, runtimeAdapter, store, projectSvc, sessionSvc, log)
+	shellTermSvc := startShellTerminals(ctx, cfg, runtimeAdapter, store, projectSvc, sessionSvc, termMgr, log)
 	var shellTrackers []shelltermsvc.TerminalTracker
 	// Agents started by hand in a shell give its tab their logo and status.
 	if rt, ok := runtimeAdapter.(shellagent.Runtime); ok {
