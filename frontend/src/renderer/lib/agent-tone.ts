@@ -39,6 +39,7 @@ const AGENT_HUES: Record<AgentId, number | null> = {
 	"command-code": null,
 	memcode: 140,
 	hermes: 75,
+	zcode: null,
 };
 
 export function agentTone(harness: string): string {
