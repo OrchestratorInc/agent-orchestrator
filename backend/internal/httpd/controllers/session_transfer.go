@@ -90,9 +90,11 @@ type CommitTransferResponse struct {
 	MovedTo domain.SessionMovedTo `json:"movedTo"`
 }
 
-// SessionTransferStateResponse reports where a session moved, if it did.
+// SessionTransferStateResponse reports where a session moved, or is being moved.
 type SessionTransferStateResponse struct {
 	MovedTo *domain.SessionMovedTo `json:"movedTo,omitempty"`
+	// Pending is a move that was prepared but not finished; its sessionId is empty.
+	Pending *domain.SessionMovedTo `json:"pending,omitempty" description:"A move that was prepared but not finished. Resume is refused until it is finished or cancelled."`
 }
 
 func (c *SessionsController) transferService(w http.ResponseWriter, r *http.Request, method, path string) (sessionTransferService, bool) {
@@ -236,7 +238,10 @@ func (c *SessionsController) transferState(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	var resp SessionTransferStateResponse
-	if found {
+	switch {
+	case found && moved.Pending():
+		resp.Pending = &moved
+	case found:
 		resp.MovedTo = &moved
 	}
 	envelope.WriteJSON(w, http.StatusOK, resp)

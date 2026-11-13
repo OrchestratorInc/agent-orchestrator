@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -265,11 +266,20 @@ func (m *Manager) sweepTransfers(ctx context.Context) {
 	}
 	for _, e := range entries {
 		info, err := e.Info()
-		if err != nil || !e.IsDir() || m.clock().Sub(info.ModTime()) < transferStaleAfter {
+		if err != nil || !e.IsDir() {
+			continue
+		}
+		data, readErr := os.ReadFile(filepath.Join(root, e.Name(), "payload.json"))
+		// Uploads for a receive are redone on every attempt, so they go stale sooner.
+		staleAfter := transferStaleAfter
+		if errors.Is(readErr, os.ErrNotExist) {
+			staleAfter = time.Hour
+		}
+		if m.clock().Sub(info.ModTime()) < staleAfter {
 			continue
 		}
 		var t domain.SessionTransfer
-		if data, err := os.ReadFile(filepath.Join(root, e.Name(), "payload.json")); err == nil && json.Unmarshal(data, &t) == nil && t.PreservedRef != "" {
+		if readErr == nil && json.Unmarshal(data, &t) == nil && t.PreservedRef != "" {
 			m.deletePreservedRef(ctx, t.Source.SessionID, t.PreservedRef)
 		}
 		_ = os.RemoveAll(filepath.Join(root, e.Name()))
@@ -410,6 +420,9 @@ func (m *Manager) assembleTransferArchive(transferID string, native domain.Sessi
 	if size, sum, err := fileDigest(archive); err == nil && size == native.Size && sum == native.SHA256 {
 		return archive, nil
 	}
+	if _, err := os.Stat(filepath.Join(dir, "incoming")); err != nil {
+		return "", fmt.Errorf("%w: the conversation was not uploaded", ErrTransferArchive)
+	}
 	out, err := os.OpenFile(archive+".tmp", os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
 		return "", err
@@ -447,13 +460,21 @@ func (m *Manager) assembleTransferArchive(transferID string, native domain.Sessi
 // ReceiveTransfer starts a session here that continues a transfer prepared
 // on another machine. prompt is the first turn of the resumed conversation.
 // A retry with the same transfer id returns the session already started.
-func (m *Manager) ReceiveTransfer(ctx context.Context, projectID domain.ProjectID, t domain.SessionTransfer, prompt string) (domain.SessionRecord, error) {
+func (m *Manager) ReceiveTransfer(ctx context.Context, projectID domain.ProjectID, t domain.SessionTransfer, prompt string) (rec domain.SessionRecord, err error) {
 	dir, err := m.transferDir(t.TransferID)
 	if err != nil {
 		return domain.SessionRecord{}, err
 	}
+	defer func() {
+		if err != nil {
+			_ = os.RemoveAll(dir)
+		}
+	}()
 	if !commitSHAPattern.MatchString(t.HeadSHA) {
 		return domain.SessionRecord{}, fmt.Errorf("%w: invalid head %q", ErrTransferUnsupported, t.HeadSHA)
+	}
+	if ref, ok := strings.CutPrefix(t.PreservedRef, "refs/ao/preserved/"); t.PreservedRef != "" && (!ok || !transferIDPattern.MatchString(ref)) {
+		return domain.SessionRecord{}, fmt.Errorf("%w: invalid preserved ref %q", ErrTransferUnsupported, t.PreservedRef)
 	}
 	clientRequestID := "transfer-" + t.TransferID
 	if existing, found, err := m.store.GetSessionByClientRequestID(ctx, clientRequestID); err != nil {
@@ -495,7 +516,7 @@ func (m *Manager) ReceiveTransfer(ctx context.Context, projectID domain.ProjectI
 			return domain.SessionRecord{}, ErrTransferPreservedMismatch
 		}
 	}
-	rec, _, _, err := m.Spawn(ctx, ports.SpawnConfig{
+	rec, _, _, err = m.Spawn(ctx, ports.SpawnConfig{
 		ProjectID:         projectID,
 		IssueID:           t.IssueID,
 		Kind:              domain.KindWorker,
@@ -622,7 +643,7 @@ func (m *Manager) CommitTransfer(ctx context.Context, id domain.SessionID, trans
 
 // SessionMovedTo reports where a moved session continues.
 func (m *Manager) SessionMovedTo(ctx context.Context, id domain.SessionID) (domain.SessionMovedTo, bool, error) {
-	return m.sessionMovedTo(ctx, id)
+	return m.transferState(ctx, id)
 }
 
 func (m *Manager) sessionMovedTo(ctx context.Context, id domain.SessionID) (domain.SessionMovedTo, bool, error) {

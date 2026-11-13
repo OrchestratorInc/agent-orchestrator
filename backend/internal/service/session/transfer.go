@@ -220,6 +220,8 @@ func transferError(err error) error {
 		return apierr.Invalid("TRANSFER_ARCHIVE_INVALID", msg, nil)
 	case errors.Is(err, sessionmanager.ErrTransferUnsupported):
 		return apierr.Invalid("TRANSFER_UNSUPPORTED", msg, nil)
+	case errors.Is(err, ports.ErrWorkspaceBranchInvalid):
+		return apierr.Invalid("TRANSFER_UNSUPPORTED", msg, nil)
 	}
 	return err
 }
