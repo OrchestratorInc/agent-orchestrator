@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Animated, StyleSheet, Text, View } from "react-native";
 import { AgentLogo } from "../AgentLogo";
 import { getAgentModels, type AgentModelInfo } from "../api";
-import type { ServerConfig } from "../config";
+import { machineIdentity, type ServerConfig } from "../config";
 import { Feather } from "../icons";
 import { useApp } from "../store";
 import { useBreathing } from "../ui";
@@ -68,7 +68,9 @@ function Side({ side, bright }: { side: ProviderSwitchSide; bright?: boolean }) 
 const catalogs = new Map<string, Promise<readonly AgentModelInfo[]>>();
 
 function recordedModels(cfg: ServerConfig, harness: string): Promise<readonly AgentModelInfo[]> {
-	const key = `${cfg.hostId ?? ""}|${harness}`;
+	// The machine's identity, not just its host id: a pairing migrated from
+	// before host ids has none, and two such machines must not share names.
+	const key = `${machineIdentity(cfg)}|${harness}`;
 	let pending = catalogs.get(key);
 	if (!pending) {
 		pending = getAgentModels(cfg, harness).then((catalog) => catalog.models ?? []);

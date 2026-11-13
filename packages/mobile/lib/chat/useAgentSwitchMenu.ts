@@ -40,13 +40,22 @@ export function useAgentSwitchMenu({ cfg, current, projectId, enabled }: {
 
 	const targets = useMemo(() => (agents ?? []).map((agent) => agent.id).join("|"), [agents]);
 	useEffect(() => {
-		if (!cfg || !targets) { setModels({}); return; }
+		setModels({});
+		if (!cfg || !targets) return;
 		let cancelled = false;
-		void Promise.all(targets.split("|").map(async (id) => {
-			const catalog = await getAgentModels(cfg, id, catalogProject).catch(() => undefined);
-			return [id, menuModels(catalog?.models ?? [], AUTOMATIC_MODEL)] as const;
-		})).then((entries) => { if (!cancelled) setModels(Object.fromEntries(entries)); });
-		return () => { cancelled = true; };
+		// getAgentModels keeps polling while an agent is still discovering its
+		// catalog: each agent's models show as soon as they arrive, so one slow
+		// agent does not hold the others back, and leaving stops the polling.
+		const abort = new AbortController();
+		for (const id of targets.split("|")) {
+			void getAgentModels(cfg, id, catalogProject, abort.signal)
+				.catch(() => undefined)
+				.then((catalog) => {
+					if (cancelled) return;
+					setModels((current) => ({ ...current, [id]: menuModels(catalog?.models ?? [], AUTOMATIC_MODEL) }));
+				});
+		}
+		return () => { cancelled = true; abort.abort(); };
 	}, [catalogProject, cfg, targets]);
 
 	return useMemo(() => (agents?.length ? { agents, models } : undefined), [agents, models]);
