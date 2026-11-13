@@ -83,10 +83,10 @@ func agentAccountResponse(view agentaccounts.AccountView) AgentAccountResponse {
 	out := AgentAccountResponse{
 		ID: view.Account.ID, Provider: view.Account.Provider, Device: view.Account.Device(),
 		Email: view.Account.Email, Plan: view.Account.Plan, Default: view.Default, SignedIn: view.SignedIn, LoggedIn: view.LoggedIn,
-		Problem: view.IdentityErr, Limits: view.Limits,
+		Problem: view.IdentityErr, ProblemKind: view.IdentityProblem, Limits: view.Limits,
 	}
 	if out.Problem == "" && view.SignedIn {
-		out.Problem = view.LimitsErr
+		out.Problem, out.ProblemKind = view.LimitsErr, view.LimitsProblem
 	}
 	if !view.Account.CreatedAt.IsZero() {
 		created := view.Account.CreatedAt

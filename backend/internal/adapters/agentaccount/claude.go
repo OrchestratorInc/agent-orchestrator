@@ -439,5 +439,10 @@ func (c *Claude) run(ctx context.Context, bin, home string, stdin []byte, args .
 	if stdin != nil {
 		cmd.Stdin = bytes.NewReader(stdin)
 	}
-	return cmd.Output()
+	out, err := cmd.Output()
+	if err != nil && ctx.Err() != nil {
+		// A killed CLI reports "signal: killed"; the reason is the deadline.
+		return out, ctx.Err()
+	}
+	return out, err
 }

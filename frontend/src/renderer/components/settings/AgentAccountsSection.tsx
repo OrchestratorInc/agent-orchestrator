@@ -1,9 +1,11 @@
-import { LoaderCircle, Plus, RefreshCw, RotateCcw, Trash2, X } from "@/components/app-icons";
+import { LoaderCircle, Plus, RefreshCw, RotateCcw, Trash2, TriangleAlert, X } from "@/components/app-icons";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { agentAccountName, agentAccountProviderNames, useAgentAccountActions, useAgentAccounts, useAgentAccountUsage, type AgentAccount, type AgentAccountLimitWindow, type AgentAccountLogin, type AgentAccountProvider } from "../../hooks/useAgentAccounts";
+import { agentAccountName, agentAccountProviderNames, describeAccountProblem, useAgentAccountActions, useAgentAccounts, useAgentAccountUsage, type AgentAccount, type AgentAccountLimitWindow, type AgentAccountLogin, type AgentAccountProvider } from "../../hooks/useAgentAccounts";
 import type { TerminalSessionState } from "../../hooks/useTerminalSession";
 import { useShellMaybe } from "../../lib/shell-context";
+import { formatRelativeTime } from "../../lib/usage-format";
+import { cn } from "../../lib/utils";
 import { useResolvedTheme, useUiStore } from "../../stores/ui-store";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { TerminalPane } from "../TerminalPane";
@@ -179,9 +181,27 @@ function AccountRow({ account, aoTokens, busy, cliLogin, onMakeDefault, onUseRes
 					: <Tooltip><TooltipTrigger asChild><Button type="button" size="icon-sm" variant="destructive-ghost" aria-label={t("settings.agentAccounts.remove")} disabled={busy !== null} onClick={onRemove}><Trash2 aria-hidden="true" /></Button></TooltipTrigger><TooltipContent>{t("settings.agentAccounts.remove")}</TooltipContent></Tooltip>}
 			</div>
 		</div>
-		{account.problem ? <p className="mt-2 text-xs text-warning">{account.problem}</p> : null}
+		<AccountProblemNote account={account} />
 		<AccountLimits account={account} />
 	</div>;
+}
+
+/** Why the account's last check failed, in plain words. A failure that clears
+ * on its own reads as a muted note beside the age of the numbers still shown;
+ * one that needs the user is a warning. The CLI's own error is under Details. */
+export function AccountProblemNote({ account }: { account: AgentAccount }) {
+	const { t, i18n } = useTranslation();
+	const problem = describeAccountProblem(account, t);
+	if (!problem) return null;
+	const fetchedAt = account.limits?.windows.length ? account.limits.fetchedAt : undefined;
+	const age = !problem.actionable && fetchedAt ? t("settings.agentAccounts.updatedAt", { value: formatRelativeTime(fetchedAt, new Date(), i18n.language) }) : null;
+	return <p className={cn("mt-2 flex items-start gap-1.5 text-xs", problem.actionable ? "text-warning" : "text-muted-foreground")} data-account-problem={account.problemKind ?? "unavailable"}>
+		{problem.actionable ? <TriangleAlert aria-hidden="true" className="mt-px size-icon-sm shrink-0" /> : null}
+		<span className="min-w-0">
+			{age ? `${age} · ${problem.text}` : problem.text}
+			{problem.detail ? <> <Tooltip><TooltipTrigger asChild><button type="button" className="text-muted-foreground underline decoration-dotted underline-offset-2 hover:text-foreground focus-visible:text-foreground">{t("settings.agentAccounts.problemDetails")}</button></TooltipTrigger><TooltipContent className="max-w-sm break-words font-mono">{problem.detail}</TooltipContent></Tooltip></> : null}
+		</span>
+	</p>;
 }
 
 /** The account's limit meters, shared by the Harness Account tab and the session summary. */

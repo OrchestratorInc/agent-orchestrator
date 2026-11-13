@@ -1,5 +1,6 @@
 import { apiErrorException } from "../lib/api-error-exception";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../api/schema";
 import { apiClient } from "../lib/api-client";
@@ -54,6 +55,25 @@ export function agentAccountName(account: Pick<AgentAccount, "email" | "provider
 	return account.provider === "claude"
 		? t("settings.agentAccounts.oauthToken")
 		: t("settings.agentAccounts.cliLoginOf", { provider: agentAccountProviderNames[account.provider] });
+}
+
+/** A failed check of an account, said plainly. `detail` is the CLI's own
+ * error, kept for a Details tooltip; `actionable` needs the user, the rest
+ * clears on a later check. */
+export type AgentAccountProblem = { text: string; detail: string | null; actionable: boolean };
+
+export function describeAccountProblem(account: Pick<AgentAccount, "problem" | "problemKind" | "provider">, t: TFunction): AgentAccountProblem | null {
+	const detail = account.problem?.trim() || null;
+	if (!detail && !account.problemKind) return null;
+	const provider = agentAccountProviderNames[account.provider];
+	// A daemon from before problem kinds sends only the error text.
+	switch (account.problemKind ?? "unavailable") {
+		case "slow": return { text: t("settings.agentAccounts.problem.slow", { provider }), detail, actionable: false };
+		case "rate_limited": return { text: t("settings.agentAccounts.problem.rateLimited", { provider }), detail, actionable: false };
+		case "cli_missing": return { text: t("settings.agentAccounts.problem.cliMissing", { provider }), detail, actionable: true };
+		case "other_login": return { text: t("settings.agentAccounts.problem.otherLogin"), detail, actionable: true };
+		default: return { text: t("settings.agentAccounts.problem.unavailable"), detail, actionable: false };
+	}
 }
 
 /** Names an account by id in status text, such as "Moved from … to …". */

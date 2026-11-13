@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -340,5 +341,25 @@ func TestClaudeIdentityCountsSubscriptionLogins(t *testing.T) {
 		if err != nil || got.SignedIn != tc.signedIn || got.LoggedIn != tc.loggedIn || got.Email != tc.email {
 			t.Fatalf("%s: identity = %+v, %v", tc.name, got, err)
 		}
+	}
+}
+
+// TestClaudeSlowCheckReportsTheDeadline: a CLI killed at the deadline says
+// "signal: killed"; the check reports the deadline, so the app can say the CLI
+// was slow rather than that it failed.
+func TestClaudeSlowCheckReportsTheDeadline(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses a shell script as the CLI")
+	}
+	bin := filepath.Join(t.TempDir(), "claude")
+	write(t, bin, "#!/bin/sh\nexec sleep 10\n")
+	if err := os.Chmod(bin, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	c := &Claude{Binary: func(context.Context) (string, error) { return bin, nil }}
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	if _, err := c.Identity(ctx, t.TempDir()); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("slow identity check = %v, want the deadline", err)
 	}
 }

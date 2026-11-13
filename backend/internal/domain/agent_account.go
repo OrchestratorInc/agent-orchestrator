@@ -49,6 +49,30 @@ type AgentAccount struct {
 // Device reports the "This computer" account.
 func (a AgentAccount) Device() bool { return strings.TrimSpace(a.Home) == "" }
 
+// AgentAccountProblemKind says why an account's identity or limits could not
+// be read, so the app can say it plainly instead of showing the CLI's error.
+type AgentAccountProblemKind string
+
+// Problem kinds. Slow, rate limited and unavailable pass on their own; a
+// missing CLI and another login need the user.
+const (
+	// AgentAccountProblemSlow: the CLI did not answer in time.
+	AgentAccountProblemSlow AgentAccountProblemKind = "slow"
+	// AgentAccountProblemRateLimited: the provider refused the check for now.
+	AgentAccountProblemRateLimited AgentAccountProblemKind = "rate_limited"
+	// AgentAccountProblemUnavailable: any other failed check.
+	AgentAccountProblemUnavailable AgentAccountProblemKind = "unavailable"
+	// AgentAccountProblemCLIMissing: the provider's CLI is not installed.
+	AgentAccountProblemCLIMissing AgentAccountProblemKind = "cli_missing"
+	// AgentAccountProblemOtherLogin: the folder is signed in as another login.
+	AgentAccountProblemOtherLogin AgentAccountProblemKind = "other_login"
+)
+
+// Transient reports a problem the next check may not have.
+func (k AgentAccountProblemKind) Transient() bool {
+	return k == AgentAccountProblemSlow || k == AgentAccountProblemRateLimited || k == AgentAccountProblemUnavailable
+}
+
 // AgentAccountLimitWindow is one usage meter of an account, such as the
 // five-hour session or the weekly limit.
 type AgentAccountLimitWindow struct {
