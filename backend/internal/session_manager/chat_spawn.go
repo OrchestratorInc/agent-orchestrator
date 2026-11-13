@@ -168,9 +168,9 @@ func (m *Manager) runRecordBackgroundTask(ctx context.Context, rec domain.Sessio
 }
 
 func backgroundTaskPermissions(harness domain.AgentHarness) ports.PermissionMode {
-	// Kimi ACP exposes only its default mode; every other driver gets AO's
-	// workspace sandbox so title generation cannot inherit a bypass policy.
-	if harness == domain.HarnessKimi {
+	// Kimi and Grok ACP do not support accept-edits. Background tasks disable
+	// tools, so their default mode is sufficient without a bypass policy.
+	if harness == domain.HarnessKimi || harness == domain.HarnessGrok {
 		return ports.PermissionModeDefault
 	}
 	return ports.PermissionModeAcceptEdits

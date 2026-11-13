@@ -1744,10 +1744,10 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 		resolved.Effort = requested.Effort
 	}
 	if cfg.Harness == domain.HarnessGrok && cfg.RequestedMode == domain.SessionModeChat {
-		// Grok's ACP session advertises and validates reasoning_effort. Its
-		// terminal adapter does not support effort, so keep this Chat-only and
-		// leave validation to the live ACP catalog instead of the TUI catalog.
-		if modelChangedWithoutExplicitEffort {
+		// Project/role effort may be tuned for another harness or Grok model.
+		// Only an explicit request should override the live ACP model's default;
+		// its advertised reasoning_effort catalog validates that request.
+		if !cfg.EffortOverride {
 			resolved.Effort = ""
 		}
 		return resolved, nil

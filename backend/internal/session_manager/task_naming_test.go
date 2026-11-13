@@ -58,6 +58,9 @@ func TestTaskNamingAllShippedAgents(t *testing.T) {
 			if len(launcher.backgroundHarnesses) != 1 || launcher.backgroundHarnesses[0] != agent.Harness || launcher.background[0].Model != "selected-model" {
 				t.Fatalf("selected agent/model not preserved: %v, %+v", launcher.backgroundHarnesses, launcher.background)
 			}
+			if agent.Harness == domain.HarnessGrok && launcher.background[0].Permissions != ports.PermissionModeDefault {
+				t.Fatalf("Grok naming permissions = %q, want supported default mode", launcher.background[0].Permissions)
+			}
 		})
 	}
 }
