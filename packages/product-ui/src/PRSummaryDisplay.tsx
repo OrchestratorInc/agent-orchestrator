@@ -323,7 +323,7 @@ export function PRCardStatusSummary({
 			<div className={cn("border-t border-border pt-2", className)}>
 				<div className="grid min-w-0 grid-cols-1 gap-y-1.5">
 					{rows.map((status) => (
-						<StatusRow externalLink={externalLink} key={status.key} reviewDetailsAction={reviewDetailsAction} status={status} />
+						<StatusRow dot externalLink={externalLink} key={status.key} reviewDetailsAction={reviewDetailsAction} status={status} />
 					))}
 				</div>
 				<div className="mt-2 border-t border-border pt-2">
@@ -414,12 +414,15 @@ export function PRCardStatusSummary({
 
 function StatusRow({
 	details,
+	dot = false,
 	externalLink: ExternalLink,
 	reviewDetailsAction,
 	status,
 }: {
 	/** What opens from this row (such as which checks failed). */
 	details?: ReactNode;
+	/** A coloured dot before the label. The PR view's rows go without: the label's colour already says it. */
+	dot?: boolean;
 	externalLink: ExternalLinkComponent;
 	reviewDetailsAction?: ReactNode;
 	status: PRCardStatus;
@@ -432,7 +435,7 @@ function StatusRow({
 	return (
 		<div className="min-w-0">
 			<div className={cn("flex min-w-0 items-center gap-2 text-xs font-medium leading-4", tally ? "text-foreground" : toneClass[status.tone])}>
-				{tally ? null : <span aria-hidden="true" className={cn("size-dot-sm shrink-0 rounded-full bg-current", status.breathe && "animate-status-pulse")} />}
+				{dot && !tally ? <span aria-hidden="true" className={cn("size-dot-sm shrink-0 rounded-full bg-current", status.breathe && "animate-status-pulse")} /> : null}
 				{details ? (
 					<>
 						<button
@@ -465,7 +468,7 @@ function StatusRow({
 				)}
 			</div>
 			{status.detail || (status.key === "review" && reviewDetailsAction) ? (
-				<div className="mt-0.5 flex min-w-0 items-baseline gap-2 pl-4 text-xs leading-4">
+				<div className={cn("mt-0.5 flex min-w-0 items-baseline gap-2 text-xs leading-4", dot && "pl-4")}>
 					{status.detail ? <span className="text-muted-foreground">{status.detail}</span> : null}
 					{status.key === "review" && reviewDetailsAction ? reviewDetailsAction : null}
 				</div>
@@ -569,11 +572,11 @@ function ReadinessFacts({
 	const leadMore = lead ? details?.[lead.key] : readiness.detail;
 	const more = leadMore || others.length > 0 ? (
 		<div className="grid min-w-0 grid-cols-1 gap-y-1.5">
-			{leadMore ? <div className="min-w-0 pl-4 text-xs leading-4 text-muted-foreground">{leadMore}</div> : null}
+			{leadMore ? <div className="min-w-0 text-xs leading-4 text-muted-foreground">{leadMore}</div> : null}
 			{others.map((status) => (
 				<div className="min-w-0" key={status.key}>
 					<StatusRow externalLink={externalLink} reviewDetailsAction={reviewDetailsAction} status={status} />
-					{details?.[status.key] ? <div className="mt-1 min-w-0 pl-4">{details[status.key]}</div> : null}
+					{details?.[status.key] ? <div className="mt-1 min-w-0">{details[status.key]}</div> : null}
 				</div>
 			))}
 		</div>

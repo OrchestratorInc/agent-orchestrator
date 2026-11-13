@@ -1365,8 +1365,6 @@
 	"pr.openTab": "Tab öffnen",
 	"pr.description.images_one": "{{count}} Bild",
 	"pr.description.images_other": "{{count}} Bilder",
-	"pr.description.tables_one": "{{count}} Tabelle",
-	"pr.description.tables_other": "{{count}} Tabellen",
 	"pr.description.imagePosition": "{{index}} von {{count}}",
 	"pr.description.previousImage": "Vorheriges Bild",
 	"pr.description.nextImage": "Nächstes Bild",

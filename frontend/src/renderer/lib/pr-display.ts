@@ -1073,6 +1073,29 @@ export function prRepositoryFromUrl(raw: string | undefined): string | undefined
  * multi-repository cloud session can open one per repository), in which case
  * each one is labelled with its repository.
  */
+/** A repository's name without its owner: "acme/app" is "app". */
+export function prRepositoryShortName(repository: string): string {
+	return repository.slice(repository.lastIndexOf("/") + 1) || repository;
+}
+
+/**
+ * What to call each repository beside a PR number when a session's PRs span
+ * several: its short name, or its full name when two owners share that name
+ * (a fork and its upstream), keyed by the full name.
+ */
+export function prRepositoryLabels(prs: ReadonlyArray<{ url?: string; htmlUrl?: string; repo?: string }>): Map<string, string> {
+	const owners = new Map<string, Set<string>>();
+	const repositories = prs.map((pr) => pr.repo || prRepositoryFromUrl(pr.htmlUrl || pr.url) || "").filter(Boolean);
+	for (const repository of repositories) {
+		const short = prRepositoryShortName(repository).toLowerCase();
+		owners.set(short, (owners.get(short) ?? new Set()).add(repository.toLowerCase()));
+	}
+	return new Map(repositories.map((repository) => {
+		const short = prRepositoryShortName(repository);
+		return [repository, (owners.get(short.toLowerCase())?.size ?? 0) > 1 ? repository : short];
+	}));
+}
+
 export function prsSpanRepositories(prs: ReadonlyArray<{ url?: string; htmlUrl?: string; repo?: string }>): boolean {
 	const repositories = new Set(prs.map((pr) => (pr.repo || prRepositoryFromUrl(pr.htmlUrl || pr.url) || "").toLowerCase()).filter(Boolean));
 	return repositories.size > 1;

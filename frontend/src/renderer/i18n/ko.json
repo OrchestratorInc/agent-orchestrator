@@ -1365,8 +1365,6 @@
 	"pr.openTab": "탭 열기",
 	"pr.description.images_one": "이미지 {{count}}개",
 	"pr.description.images_other": "이미지 {{count}}개",
-	"pr.description.tables_one": "표 {{count}}개",
-	"pr.description.tables_other": "표 {{count}}개",
 	"pr.description.imagePosition": "{{index}} / {{count}}",
 	"pr.description.previousImage": "이전 이미지",
 	"pr.description.nextImage": "다음 이미지",

@@ -6352,6 +6352,8 @@ describe("SessionInspector branch summary", () => {
     await userEvent.click(screen.getByRole("button", { name: /^Checks/ }));
     expect(within(await screen.findByTestId("pr-checks")).getByText("format")).toBeInTheDocument();
     expect(screen.getByText("No conflicts")).toBeInTheDocument();
+    // The label's colour says the state; these rows carry no dot before it.
+    expect(screen.getByText("No conflicts").parentElement?.querySelector("span[aria-hidden='true'].rounded-full")).toBeNull();
   });
 
   it("says the PR row opens a tab, until that tab is showing", async () => {

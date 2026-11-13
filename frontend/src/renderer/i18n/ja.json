@@ -1365,8 +1365,6 @@
 	"pr.openTab": "タブを開く",
 	"pr.description.images_one": "画像 {{count}} 枚",
 	"pr.description.images_other": "画像 {{count}} 枚",
-	"pr.description.tables_one": "表 {{count}} 個",
-	"pr.description.tables_other": "表 {{count}} 個",
 	"pr.description.imagePosition": "{{index}} / {{count}}",
 	"pr.description.previousImage": "前の画像",
 	"pr.description.nextImage": "次の画像",

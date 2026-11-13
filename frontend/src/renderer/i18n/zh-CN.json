@@ -1347,8 +1347,6 @@
 	"pr.openTab": "打开标签页",
 	"pr.description.images_one": "{{count}} 张图片",
 	"pr.description.images_other": "{{count}} 张图片",
-	"pr.description.tables_one": "{{count}} 个表格",
-	"pr.description.tables_other": "{{count}} 个表格",
 	"pr.description.imagePosition": "第 {{index}} 张，共 {{count}} 张",
 	"pr.description.previousImage": "上一张图片",
 	"pr.description.nextImage": "下一张图片",

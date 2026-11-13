@@ -1173,6 +1173,20 @@ describe("pull request repositories", () => {
 		expect(prsSpanRepositories([{ url: "https://github.com/acme/a/pull/1" }, { url: "https://github.com/acme/a/pull/2" }])).toBe(false);
 		expect(prsSpanRepositories([{ url: "https://github.com/acme/a/pull/1" }, { url: "https://github.com/acme/b/pull/1" }])).toBe(true);
 	});
+
+	it("calls a repository by its short name, and by its full name when two owners share it", async () => {
+		const { prRepositoryLabels, prRepositoryShortName } = await import("./pr-display");
+		expect(prRepositoryShortName("acme-platform/landing-site")).toBe("landing-site");
+		expect(prRepositoryShortName("landing-site")).toBe("landing-site");
+		const apart = prRepositoryLabels([{ repo: "acme-platform/landing-site" }, { repo: "acme-platform/control-plane" }]);
+		expect(apart.get("acme-platform/landing-site")).toBe("landing-site");
+		expect(apart.get("acme-platform/control-plane")).toBe("control-plane");
+		// A fork and its upstream share a short name, so each keeps its owner.
+		const fork = prRepositoryLabels([{ repo: "acme/app" }, { repo: "ada/app" }, { url: "https://github.com/acme/docs/pull/3" }]);
+		expect(fork.get("acme/app")).toBe("acme/app");
+		expect(fork.get("ada/app")).toBe("ada/app");
+		expect(fork.get("acme/docs")).toBe("docs");
+	});
 });
 
 // GitHub reports no status rollup for a head nothing checks, which reaches the

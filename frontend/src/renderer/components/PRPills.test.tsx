@@ -1,7 +1,8 @@
+import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import type { SessionPRSummary } from "../hooks/useSessionScmSummary";
 import { noPRDetails } from "../lib/pr-display";
-import { prStatusDot, sortSessionPRs } from "./PRPills";
+import { PRPills, prStatusDot, sortSessionPRs } from "./PRPills";
 
 const pr = (number: number, overrides: Partial<SessionPRSummary> = {}): SessionPRSummary => ({
 	...noPRDetails(),
@@ -38,5 +39,21 @@ describe("PR pills", () => {
 		expect(prStatusDot(pr(4)).labelKey).toBe("pr.card.readyToMerge");
 		expect(prStatusDot(pr(5, { ci: { autoInjectCI: true, state: "pending", failingChecks: [], checks: [] } }))).toMatchObject({ labelKey: "pr.card.checksPending", breathe: true });
 		expect(prStatusDot(pr(6, { state: "merged" })).labelKey).toBe("pr.state.merged");
+	});
+
+	it("names a PR in another repository by its short name, which gives way before it can cover the earlier menu", () => {
+		const site = pr(12, { state: "merged", repo: "acme-platform/landing-site", url: "https://github.com/acme-platform/landing-site/pull/12", title: "docs: tidy the landing page" });
+		const others = [3, 4, 5].map((number) => pr(number, { state: "merged", repo: "acme-platform/control-plane", url: `https://github.com/acme-platform/control-plane/pull/${number}` }));
+		render(<PRPills focused={site} onFocus={() => {}} prs={[site, ...others]} showRepository />);
+		const pills = within(screen.getByTestId("pr-pills"));
+		const chip = pills.getByRole("button", { pressed: true });
+		expect(chip).toHaveTextContent("landing-site#12");
+		expect(chip).not.toHaveTextContent("acme-platform");
+		expect(chip.getAttribute("title")).toContain("acme-platform/landing-site");
+		// The repository can shrink and truncate; the number never does.
+		expect(within(chip).getByText("landing-site")).toHaveClass("min-w-0", "truncate");
+		expect(within(chip).getByText("#12")).toHaveClass("shrink-0");
+		// The three other merged PRs stay one click away.
+		expect(pills.getByTestId("pr-pills-earlier")).toHaveTextContent("+3 earlier");
 	});
 });
