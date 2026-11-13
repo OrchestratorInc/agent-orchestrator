@@ -5700,10 +5700,26 @@ html[data-shell-linux] body > .files-popout-overlay {
 	display: none;
 }
 
-/* A tab's slot in the strip; its look is the shared tab frame's. */
+/* A tab's slot in the strip; its look is the shared tab frame's. Unlike the
+ * session strip's content-sized tabs, these keep a 200px width and shrink to
+ * 150px before the strip scrolls. */
 .browser-panel__tab {
 	display: flex;
-	flex-shrink: 0;
+	width: 200px;
+	min-width: 150px;
+	flex: 0 1 200px;
+}
+
+.browser-panel__tab > [data-terminal-tab-frame] {
+	min-width: 0;
+	max-width: none;
+	flex: 1 1 auto;
+}
+
+/* Past seven tabs only the selected tab keeps its close button, so titles keep
+ * their room. */
+.browser-panel__tab-strip:has(> .browser-panel__tab:nth-child(8)) > .browser-panel__tab:not(:has([data-active])) [data-terminal-tab-action] {
+	display: none;
 }
 
 .browser-panel__tab--drag-placeholder {
@@ -5714,6 +5730,9 @@ html[data-shell-linux] body > .files-popout-overlay {
 /* The dragged tab: its hover pill on the panel's fill, so it hides the tabs
  * it crosses, as a dragged session tab does. */
 .browser-panel__tab--drag-overlay {
+	width: 100%;
+	min-width: 0;
+	flex: none;
 	height: 100%;
 	background: var(--bg);
 	cursor: grabbing;

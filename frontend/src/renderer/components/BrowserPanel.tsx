@@ -1848,8 +1848,9 @@ function BrowserControlTooltip({
 }
 
 // A page's tab: the shared tab frame, with the page's favicon in the icon
-// slot and the ghost close button over it on hover. The slot around it is
-// what the strip sorts; the frame's button carries the drag listeners.
+// slot and the ghost close button always showing at its right end. The slot
+// around it is what the strip sorts; the frame's button carries the drag
+// listeners.
 const SortableBrowserTopTab = memo(function SortableBrowserTopTab({
 	tab,
 	selected,
@@ -1874,6 +1875,8 @@ const SortableBrowserTopTab = memo(function SortableBrowserTopTab({
 		>
 			<TerminalTabFrame
 				action={<TabCloseButton label={t("browser.closeTab", { title: label.title })} onClose={close} />}
+				actionPinned
+				actionPosition="end"
 				active={selected}
 				buttonProps={{
 					...attributes,
@@ -1904,7 +1907,7 @@ function BrowserTabIcon({ favicon }: { favicon?: string }) {
 const noop = () => undefined;
 
 // The tab under the pointer while it is dragged: the same frame in its
-// dragging look (close button over the icon), as a dragged session tab shows.
+// dragging look, as a dragged session tab shows.
 export const BrowserTopTabDragOverlay = memo(function BrowserTopTabDragOverlay({
 	tab,
 }: {
@@ -1922,6 +1925,8 @@ export const BrowserTopTabDragOverlay = memo(function BrowserTopTabDragOverlay({
 		>
 			<TerminalTabFrame
 				action={<TabCloseButton label={t("browser.closeTab", { title: label.title })} onClose={noop} />}
+				actionPinned
+				actionPosition="end"
 				active={tab.active}
 				buttonProps={{ tabIndex: -1, type: "button" }}
 				icon={<BrowserTabIcon favicon={tab.favicon} />}

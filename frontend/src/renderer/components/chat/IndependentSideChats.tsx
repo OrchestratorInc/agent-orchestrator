@@ -1361,6 +1361,8 @@ export function useIndependentSideChats(
 											<TabCloseButton label={t("sideChat.closeNamed", { name: side.label })} onClose={requestClose} />
 										)
 									}
+									actionPinned
+									actionPosition="end"
 									active={active}
 									buttonProps={{
 										"aria-keyshortcuts": "F2",
