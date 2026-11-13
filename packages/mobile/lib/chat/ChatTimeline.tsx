@@ -103,7 +103,8 @@ import { iconSize, radius, type, space, touchTarget } from "../tokens";
 import { useFilesNavigation } from "../files/navigation";
 import { userFacingError } from "../connectionError";
 import { SentResponseQuotes } from "./SentResponseQuotes";
-import { TurnRollbackButton } from "./TurnRollbackButton";
+import { TURN_ACTION_SIZE, TURN_ACTION_SLOP, TurnRollbackButton } from "./TurnRollbackButton";
+import { formatReplyTime } from "./replyTime";
 import { TurnArtifacts, useTurnArtifactSource } from "./TurnArtifacts";
 import { turnResults } from "./turnArtifactsModel";
 import { ConversationHarness, LatestWorkerUpdates, OriginMessageView, WorkerSessionsProvider, WorkerUpdateRows } from "./AutomationMessage";
@@ -525,8 +526,10 @@ function ConversationTurnGroup({ group, snapshot, approvalPending, inputPending,
 	const editing = Boolean(editDraft && group.turnId === editDraft.turnId);
 	const WorkBody = editing ? View : FoldBody;
 	const BelowFold = editing ? View : FoldLayout;
-	const summary = group.turn ? <TurnSummary turn={group.turn} plan={group.plan} onRollback={canRollbackTurn(snapshot, group.turn) ? onRollback : undefined} /> : null;
+	const summary = group.turn ? <TurnSummary turn={group.turn} plan={group.plan} /> : null;
 	if (!partition || !group.turn) return <View>{renderRows(items)}{summary}</View>;
+	const reply = partition.final.find((item): item is ConversationMessage => item.kind === "message");
+	const actions = <TurnActions turn={group.turn} reply={reply} onRollback={canRollbackTurn(snapshot, group.turn) ? onRollback : undefined} />;
 	// Running: the prompt, a live Working row, then the work as it streams in.
 	// Settled: the same row becomes "Worked for", folding the work away and
 	// leaving the notices and the final reply in view.
@@ -534,7 +537,7 @@ function ConversationTurnGroup({ group, snapshot, approvalPending, inputPending,
 		{renderRows(partition.prompt)}
 		<TurnStatusRow turn={group.turn} foldable={partition.settled && partition.work.length > 0} open={workedOpen} onToggle={() => onToggleWorked(group.key)} />
 		{partition.settled ? (workedOpen ? <WorkBody style={{ gap: space.xs, paddingBottom: space.xs }}>{renderRows(partition.work)}</WorkBody> : null) : renderRows(partition.work)}
-		<BelowFold>{renderRows(partition.notices)}{renderRows(partition.final)}{summary}</BelowFold>
+		<BelowFold>{renderRows(partition.notices)}{renderRows(partition.final)}{actions}{summary}</BelowFold>
 	</View>;
 }
 
@@ -613,9 +616,6 @@ const TimelineItem = memo(function TimelineItem({
 			<View style={styles.assistantRow}>
 				{item.senderLabel ? <Text style={styles.sender}>{item.senderLabel}</Text> : null}
 				<ChatMarkdown text={showCursor ? `${item.text || ""} ▍` : item.text} streaming={item.streaming} continuousSelection selectionSource={completed && !item.streaming ? { conversationId, messageId: item.id, revision: item.revision } : undefined} />
-				{!item.streaming && item.text ? <View style={styles.responseActions}>
-					<CopyResponseButton text={item.text} />
-				</View> : null}
 			</View>
 		);
 	}
@@ -646,10 +646,34 @@ const TimelineItem = memo(function TimelineItem({
 	return <ActivityRow activity={item} />;
 });
 
-/** How long a copy control shows its checkmark before it turns back. */
+/**
+ * The row a turn closes on, under its reply: copy, roll back, and when the reply
+ * was written (the desktop's TurnActions; the time shows outright, a phone
+ * having no hover). One per turn, not one under every fragment of prose.
+ *
+ * Its height is held from the moment the turn starts, so settling fills the row
+ * rather than adding one, and the controls are small with their touch taken out
+ * by slop: the row never moves the conversation or the composer over it.
+ */
+function TurnActions({ turn, reply, onRollback }: { turn: ConversationTurn; reply?: ConversationMessage; onRollback?(turnId: string): Promise<number> }) {
+	const styles = useThemedStyles(makeStyles);
+	const settled = turn.state !== "running" && turn.state !== "queued";
+	const copyText = settled && reply && !reply.streaming && reply.text.trim() ? reply.text : undefined;
+	const canRollBack = settled && Boolean(onRollback) && Boolean(turn.providerTurnId) && !turn.rolledBack;
+	const time = settled ? formatReplyTime(reply?.createdAt ?? turn.completedAt) : "";
+	return (
+		<View style={styles.turnActions}>
+			{copyText ? <CopyResponseButton text={copyText} /> : null}
+			{canRollBack && onRollback ? <TurnRollbackButton turnId={turn.id} onRollback={onRollback} compact /> : null}
+			{time ? <Text style={styles.turnTime} accessibilityLabel={`Written ${time}`}>{time}</Text> : null}
+		</View>
+	);
+}
+
+/** How long the copy control shows its checkmark before it turns back. */
 const COPIED_MS = 1_400;
 
-/** Copies the whole reply in one tap, without selecting it first. */
+/** Copies the whole reply, as the agent wrote it, in one tap. */
 function CopyResponseButton({ text }: { text: string }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
@@ -664,10 +688,11 @@ function CopyResponseButton({ text }: { text: string }) {
 		accessibilityRole="button"
 		accessibilityLabel="Copy response"
 		onPress={() => { void Clipboard.setStringAsync(text); haptics.success(); setCopied(true); }}
+		hitSlop={TURN_ACTION_SLOP}
 		android_ripple={feedback.android_ripple}
-		style={({ pressed }) => [styles.copy, pressed && feedback.pressed]}
+		style={({ pressed }) => [styles.turnAction, pressed && feedback.pressed]}
 	>
-		<AppSymbol name={copied ? "checkmark" : "copy"} size={iconSize.md} color={copied ? t.green : t.textTertiary} />
+		<AppSymbol name={copied ? "checkmark" : "copy"} size={iconSize.sm} color={copied ? t.green : t.textTertiary} />
 	</Pressable>;
 }
 
@@ -1098,10 +1123,8 @@ function TurnStatusRow({ turn, foldable, open, onToggle }: { turn: ConversationT
 	</Pressable>;
 }
 
-function TurnSummary({ turn, plan, onRollback }: { turn: ConversationTurn; plan?: ConversationPlan; onRollback?(turnId: string): Promise<number> }) {
+function TurnSummary({ turn, plan }: { turn: ConversationTurn; plan?: ConversationPlan }) {
 	const styles = useThemedStyles(makeStyles);
-	const settled = turn.state !== "running" && turn.state !== "queued";
-	const canRollBack = settled && Boolean(turn.providerTurnId) && !turn.rolledBack;
 	// The deliverables a completed turn made show as tiles; every other changed
 	// file stays in the changed-files card, so nothing shows twice or goes
 	// missing (the desktop's TurnResults).
@@ -1109,13 +1132,12 @@ function TurnSummary({ turn, plan, onRollback }: { turn: ConversationTurn; plan?
 	const results = useMemo(() => turnResults(turn, source), [source, turn]);
 	// Nothing to show draws nothing: an empty one still padded every turn's end,
 	// most of the gap between a reply and the next prompt.
-	if (!plan && !results.artifacts.length && !results.files.length && !(onRollback && canRollBack) && !turn.errorMessage) return null;
+	if (!plan && !results.artifacts.length && !results.files.length && !turn.errorMessage) return null;
 	return (
 		<View style={styles.turnWrap}>
 			{plan ? <TurnPlan plan={plan} live={turn.state === "running"} /> : null}
 			{results.artifacts.length && source ? <TurnArtifacts artifacts={results.artifacts} source={source} /> : null}
 			{results.files.length ? <ChangedFiles turn={turn} changed={results.files} /> : null}
-			{onRollback && canRollBack ? <View style={styles.turnLine}><TurnRollbackButton turnId={turn.id} onRollback={onRollback} /></View> : null}
 			{turn.errorMessage ? <Text style={styles.turnError}>{turn.errorMessage}</Text> : null}
 		</View>
 	);
@@ -1438,11 +1460,9 @@ const makeStyles = (t: Theme) => {
 		steerLabel: { fontFamily: "DMSans_600SemiBold", color: t.textTertiary, fontSize: type.footnote.fontSize, fontWeight: "600", marginBottom: space.hair },
 		assistantRow: { paddingTop: space.sm, paddingBottom: space.xs },
 		sender: { fontFamily: "DMSans_600SemiBold", color: t.textTertiary, fontSize: type.footnote.fontSize, fontWeight: "600", marginBottom: space.xxs },
-		responseActions: { flexDirection: "row", alignItems: "center", gap: space.md },
 		// The glyph lines up with the reply's left edge, and the row ends at its
 		// foot. The target reaches into the row's bottom padding rather than up
 		// over the text, where a long press selects.
-		copy: { alignSelf: "flex-start", alignItems: "center", justifyContent: "center", width: touchTarget, height: touchTarget, marginLeft: -(touchTarget - iconSize.md) / 2, marginBottom: -(touchTarget - iconSize.md) / 2 },
 		systemSignal: { ...card, marginVertical: space.xs, flexDirection: "row", alignItems: "flex-start", gap: space.sm, borderColor: t.borderDefault, backgroundColor: t.bgSurface, padding: space.sm },
 		systemTitle: { fontFamily: "DMSans_600SemiBold", color: t.textPrimary, fontSize: type.footnote.fontSize, fontWeight: "600" },
 		systemDetail: { fontFamily: "DMSans_400Regular", color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, marginTop: space.hair },
@@ -1479,7 +1499,10 @@ const makeStyles = (t: Theme) => {
 		output: { color: t.textSecondary, backgroundColor: t.bgColumn, borderRadius: radius.sm, padding: space.sm, fontFamily: t.fontMono, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 		partial: { fontFamily: "DMSans_400Regular", color: t.textFaint, fontSize: type.footnote.fontSize },
 		turnWrap: { paddingTop: space.sm, paddingBottom: space.lg, gap: space.sm },
-		turnLine: { flexDirection: "row", alignItems: "center", justifyContent: "flex-end", gap: space.sm },
+		// The leading glyph lines up with the reply's text above it.
+		turnActions: { height: TURN_ACTION_SIZE, flexDirection: "row", alignItems: "center", gap: space.xxs, marginLeft: -(TURN_ACTION_SIZE - iconSize.sm) / 2 },
+		turnAction: { width: TURN_ACTION_SIZE, height: TURN_ACTION_SIZE, borderRadius: TURN_ACTION_SIZE / 2, alignItems: "center", justifyContent: "center" },
+		turnTime: { fontFamily: "DMSans_400Regular", paddingHorizontal: space.xs, color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontVariant: ["tabular-nums"] },
 		// Full width with a rule under it, matching the desktop's Working / Worked
 		// rows and the setup checklist header, so the line holds through the handoff.
 		statusRow: { minHeight: touchTarget, flexDirection: "row", alignItems: "center", gap: space.xs, paddingVertical: space.xs, borderBottomWidth: rowDividerWidth, borderBottomColor: t.borderDefault },

@@ -110,16 +110,27 @@ describe("sent human message actions", () => {
 	});
 });
 
-describe("response copy control", () => {
-	const control = source.slice(source.indexOf("function CopyResponseButton"), source.indexOf("function SystemSignal"));
 
-	// A 12pt faint glyph in a 28pt box was nearly invisible and under the
-	// minimum target on both platforms.
-	it("is a visible system glyph in a touch-target-sized button", () => {
-		expect(control).toContain('accessibilityLabel="Copy response"');
-		expect(control).toContain('<AppSymbol name={copied ? "checkmark" : "copy"} size={iconSize.md} color={copied ? t.green : t.textTertiary} />');
-		expect(source).toMatch(/copy: \{[^}]*width: touchTarget, height: touchTarget/);
-		expect(control).not.toContain("t.textFaint");
+// One row closes a turn, under its reply, as on the desktop: copy, roll back,
+// and the time. It must never move the conversation: the copy row that came
+// and went under every reply was a band the composer and keyboard jumped over.
+describe("a turn's action row", () => {
+	const actions = source.slice(source.indexOf("function TurnActions"), source.indexOf("function SystemSignal"));
+	it("copies the reply, rolls the turn back, and says when it was written", () => {
+		expect(actions).toContain('accessibilityLabel="Copy response"');
+		expect(actions).toContain("<TurnRollbackButton turnId={turn.id} onRollback={onRollback} compact />");
+		expect(actions).toContain("formatReplyTime(reply?.createdAt ?? turn.completedAt)");
+	});
+	it("holds its height from the turn's start and takes its touch out by slop", () => {
+		expect(source).toContain("turnActions: { height: TURN_ACTION_SIZE,");
+		expect(actions).toContain("<View style={styles.turnActions}>");
+		expect(actions).toContain("hitSlop={TURN_ACTION_SLOP}");
+	});
+	it("is drawn once per turn, under the final reply, and the summary no longer rolls back", () => {
+		expect(source).toContain("{renderRows(partition.final)}{actions}{summary}");
+		expect(source).not.toContain("styles.responseActions");
+		const summary = source.slice(source.indexOf("function TurnSummary"), source.indexOf("function ChangedFiles"));
+		expect(summary).not.toContain("TurnRollbackButton");
 	});
 });
 
@@ -155,15 +166,15 @@ describe("jump to latest", () => {
 
 // TurnRollbackButton.test and ElicitationInputField.test render these controls.
 describe("turn rollback", () => {
-	const summary = source.slice(source.indexOf("function TurnSummary"), source.indexOf("function TurnPlan"));
+	const actions = source.slice(source.indexOf("function TurnActions"), source.indexOf("function SystemSignal"));
 
 	// Forgetting a turn cannot be undone, so the control asks through the
 	// system's destructive alert rather than a card drawn into the timeline.
 	it("offers the confirming control on a settled turn the provider knows", () => {
-		expect(summary).toContain("const canRollBack = settled && Boolean(turn.providerTurnId) && !turn.rolledBack;");
-		expect(summary).toContain("{onRollback && canRollBack ? <View style={styles.turnLine}><TurnRollbackButton turnId={turn.id} onRollback={onRollback} /></View> : null}");
-		expect(summary).not.toContain("rollbackConfirm");
-		expect(summary).not.toContain("setConfirming");
+		expect(actions).toContain("const canRollBack = settled && Boolean(onRollback) && Boolean(turn.providerTurnId) && !turn.rolledBack;");
+		expect(actions).toContain("{canRollBack && onRollback ? <TurnRollbackButton turnId={turn.id} onRollback={onRollback} compact /> : null}");
+		expect(actions).not.toContain("rollbackConfirm");
+		expect(actions).not.toContain("setConfirming");
 	});
 });
 
