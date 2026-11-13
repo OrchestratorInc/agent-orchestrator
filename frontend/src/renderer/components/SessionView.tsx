@@ -2165,6 +2165,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// changed, or the relay was switched off), so a command that waited on a slow
 	// lookup can tell the view it was sent to is gone.
 	const paneRegistrationRef = useRef(0);
+	// A command that waits across renders must select with the latest callback,
+	// which knows the terminals listed by then.
+	const selectTabRef = useRef(selectTab);
+	selectTabRef.current = selectTab;
 	const paneCommandRef = useRef<PaneCommandHandler>(async () => describeSessionPanesRef.current());
 	paneCommandRef.current = async (request) => {
 		if (!splitPanes) {
@@ -2202,7 +2206,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 				if (!confirmed) throw new PaneCommandError("TERMINAL_TIMEOUT", "The terminal did not open in time.");
 				// Selection can still name the placeholder; the agent types into the
 				// selected terminal, so point it at the real one.
-				selectTab(confirmed);
+				selectTabRef.current(confirmed);
 			} else if (tab.startsWith("file:")) {
 				const registration = paneRegistrationRef.current;
 				const path = await resolvePaneFile(tab.slice("file:".length));
