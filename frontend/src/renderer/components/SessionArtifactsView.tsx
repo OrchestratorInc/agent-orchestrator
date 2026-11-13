@@ -37,6 +37,7 @@ import { DropdownMenuItem, DropdownMenuRadioGroup, DropdownMenuRadioItem, Dropdo
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { BrowserIcon } from "./icons";
 import { FileAnnotationComposer, PanelMessage, RetryButton } from "./WorkspaceDiffView";
+import { GridSpacer, useVirtualGridRows } from "../hooks/useVirtualGridRows";
 
 export type ArtifactOpenRequest = { feedback?: boolean; key: number; path: string };
 
@@ -834,6 +835,8 @@ export function SessionArtifactsView({
 		content.addEventListener("wheel", onWheel, { passive: false });
 		return () => content.removeEventListener("wheel", onWheel);
 	}, [hasSelection, zoomController]);
+	// Only the cards in view and near it are built; the list itself scrolls.
+	const grid = useVirtualGridRows(listedArtifacts.length);
 	if (selected) {
 		const fullscreenLabel = t(fullscreen ? "common.returnToPanel" : "common.maximize");
 		const FullscreenIcon = fullscreen ? Minimize2 : Maximize2;
@@ -970,8 +973,9 @@ export function SessionArtifactsView({
 			) : artifacts.length === 0 ? (
 				<PanelMessage>{t("artifacts.sessionEmpty")}</PanelMessage>
 			) : (
-				<ul className="board-scrollbar grid min-h-0 flex-1 grid-cols-2 content-start gap-3 overflow-y-auto px-3 pb-3 pt-1">
-					{listedArtifacts.map((artifact) => {
+				<ul ref={grid.listRef} className="board-scrollbar grid min-h-0 flex-1 grid-cols-2 content-start gap-3 overflow-y-auto px-3 pb-3 pt-1">
+					<GridSpacer height={grid.before} />
+					{listedArtifacts.slice(grid.start, grid.end).map((artifact) => {
 						const row = artifactRow(artifact);
 						return (
 							<ArtifactGalleryCard
@@ -994,6 +998,7 @@ export function SessionArtifactsView({
 							/>
 						);
 					})}
+					<GridSpacer height={grid.after} />
 				</ul>
 			)}
 		</div>
