@@ -4895,5 +4895,22 @@
 	"chat.find.nextFailed": "Impossible de charger les correspondances suivantes.",
 	"chat.find.wrappedFirst": "Retour à la première correspondance.",
 	"chat.find.wrappedLast": "Retour à la dernière correspondance.",
-	"chat.find.notRevealed": "Impossible d'afficher cette correspondance. Relancez la recherche."
+	"chat.find.notRevealed": "Impossible d'afficher cette correspondance. Relancez la recherche.",
+	"sessionFork.fork": "Bifurquer",
+	"sessionFork.tooltip": "Bifurquer cette session vers une nouvelle",
+	"sessionFork.forking": "Bifurcation…",
+	"sessionFork.unavailable": "Les options de bifurcation sont indisponibles",
+	"sessionFork.failed": "Impossible de bifurquer cette session",
+	"sessionFork.sectionTitle": "Bifurcations",
+	"sessionFork.originalPRs": "PR de l'original",
+	"sessionFork.originalPR": "PR #{{number}} de l'original",
+	"sessionFork.forkSession": "Bifurquer la session",
+	"sessionFork.forkedFromSentence": "Cette session a été dérivée de <session>{{title}}</session>.",
+	"sessionFork.originalDeleted": "La session d'origine a depuis été supprimée.",
+	"sessionFork.forkedInto_one": "{{count}} session a été dérivée de celle-ci :",
+	"sessionFork.forkedInto_many": "{{count}} sessions ont été dérivées de celle-ci :",
+	"sessionFork.forkedInto_other": "{{count}} sessions ont été dérivées de celle-ci :",
+	"sessionFork.forkDeleted": "{{title}} (supprimée)",
+	"sessionFork.textCopy": "Conversation copiée en texte",
+	"sessionFork.textCopyNotice": "Dérivée de {{title}}. Cet agent ne peut pas copier sa propre conversation : il a donc reçu la conversation de l'original sous forme de texte."
 }

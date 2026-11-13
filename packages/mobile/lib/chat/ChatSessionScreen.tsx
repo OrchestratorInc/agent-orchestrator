@@ -26,7 +26,7 @@ import type { Theme } from "../theme";
 import { Frost, FROST_TAIL, frostStops } from "../frost";
 import { stackScreenOptions, SYSTEM_GLASS_HEADER } from "../stackScreenOptions";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
-import { getWorkspacePaths, openSessionShell } from "./api";
+import { getWorkspacePaths, openSessionShell, forkSession, getForkOptions, type ForkOptions } from "./api";
 import { requestDockModel } from "./requestDockModel";
 import type { ResponseQuoteRequest } from "./responseQuotes";
 import { ChatComposer } from "./ChatComposer";
@@ -45,7 +45,7 @@ import { contextReadout } from "./conversationChrome";
 import { conversationActionError, conversationActionUnsupported } from "./conversationErrors";
 import { providerCatalogLive, turnOptionsLoadFor } from "./turnOptionsCatalog";
 import { brokenMcpServers, can, type ChatExcerpt, type ChatImage, type ChatResource, type ConversationSnapshot } from "./types";
-import { useMobileConversation } from "./useConversation";
+import { clientMessageId, useMobileConversation } from "./useConversation";
 import { useLastVerifiedConfig } from "../useLastVerifiedConfig";
 import { SessionStartupStatus } from "./SessionStartup";
 import type { TimelineStartup } from "./ChatTimeline";
@@ -315,6 +315,29 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	const headerState = conversation.snapshot?.controller.state;
 	// The PR ready for review, as a chip over the composer that opens it.
 	const reviewPromptPR = "projectName" in session ? undefined : sessionPRReadyForReview(session);
+	// Session fork: offered when the daemon supports it.
+	const [forkOptions, setForkOptions] = useState<ForkOptions | null>(null);
+	const forkTurnCount = conversation.snapshot?.turns.length ?? 0;
+	const forkLatestState = conversation.snapshot?.turns.at(-1)?.state;
+	// Keyed on the connection, not the config object, which can be rebuilt on
+	// a render without anything changing; refetching then would never settle.
+	const forkConfigRef = useRef(config);
+	forkConfigRef.current = config;
+	const forkConnection = config ? `${config.secure ? "https" : "http"}://${config.host}:${config.httpPort}` : "";
+	useEffect(() => {
+		const cfg = forkConfigRef.current;
+		if (!cfg) return;
+		let live = true;
+		getForkOptions(cfg, session.id)
+			.then((options) => { if (live) setForkOptions(options); })
+			.catch(() => { if (live) setForkOptions(null); });
+		return () => { live = false; };
+	}, [forkConnection, session.id, forkTurnCount, forkLatestState]);
+	const forkTurn = useCallback(async (turnId: string) => {
+		if (!config) return;
+		const fork = await forkSession(config, session.id, turnId, clientMessageId());
+		router.push({ pathname: "/session/[id]", params: { id: fork.sessionId, projectId: session.projectId, hostId: config.hostId } });
+	}, [config, router, session.id, session.projectId]);
 	// Fetched only over the live connection; read through the last verified one
 	// too, so the card stays put while an app switch has the connection down.
 	const reviewSummaries = usePRSummaries(config && reviewPromptPR ? [{ config, sessionId: session.id }] : []);
@@ -811,6 +834,8 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 					onDecide={conversation.resolveApproval}
 					onResolveInput={conversation.resolveInput}
 					onRollback={conversation.rollback}
+					onFork={forkOptions?.allowed ? forkTurn : undefined}
+					forkAnyTurn={forkOptions?.anyTurn === true}
 					onEditMessage={conversation.editMessage}
 					onEditingChange={setEditingMessage}
 					jumpToSequence={jumpToSequence}

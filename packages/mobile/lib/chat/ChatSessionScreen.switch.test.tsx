@@ -101,7 +101,14 @@ vi.mock("../ThemeProvider", () => {
 	const theme = new Proxy({}, { get: (_target, key) => `#${String(key)}` });
 	return { useTheme: () => theme, useThemedStyles: (factory: (value: unknown) => unknown) => factory(theme) };
 });
-vi.mock("./api", () => ({ getWorkspacePaths: vi.fn(), openSessionShell: vi.fn(), prewarmChatAgent: vi.fn() }));
+vi.mock("./api", () => ({
+	getWorkspacePaths: vi.fn(),
+	openSessionShell: vi.fn(),
+	prewarmChatAgent: vi.fn(),
+	// The screen asks whether its turns can be forked.
+	getForkOptions: () => Promise.resolve({ allowed: false }),
+	forkSession: () => Promise.resolve(undefined),
+}));
 vi.mock("./requestDockModel", () => ({ requestDockModel: () => undefined }));
 vi.mock("./ChatComposer", async () => ({ ChatComposer: await host("ChatComposer") }));
 vi.mock("./KeyboardFollower", async () => ({ KeyboardFollower: await host("KeyboardFollower") }));

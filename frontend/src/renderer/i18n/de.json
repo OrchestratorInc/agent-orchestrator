@@ -4778,5 +4778,21 @@
 	"chat.find.nextFailed": "Die nächsten Treffer konnten nicht geladen werden.",
 	"chat.find.wrappedFirst": "Zurück zum ersten Treffer.",
 	"chat.find.wrappedLast": "Weiter zum letzten Treffer.",
-	"chat.find.notRevealed": "Dieser Treffer konnte nicht angezeigt werden. Suche wiederholen."
+	"chat.find.notRevealed": "Dieser Treffer konnte nicht angezeigt werden. Suche wiederholen.",
+	"sessionFork.fork": "Abzweigen",
+	"sessionFork.tooltip": "Diese Sitzung in eine neue abzweigen",
+	"sessionFork.forking": "Wird abgezweigt…",
+	"sessionFork.unavailable": "Abzweig-Optionen sind nicht verfügbar",
+	"sessionFork.failed": "Sitzung konnte nicht abgezweigt werden",
+	"sessionFork.sectionTitle": "Abzweigungen",
+	"sessionFork.originalPRs": "PRs des Originals",
+	"sessionFork.originalPR": "PR #{{number}} des Originals",
+	"sessionFork.forkSession": "Sitzung abzweigen",
+	"sessionFork.forkedFromSentence": "Diese Sitzung wurde von <session>{{title}}</session> abgezweigt.",
+	"sessionFork.originalDeleted": "Die ursprüngliche Sitzung wurde inzwischen gelöscht.",
+	"sessionFork.forkedInto_one": "{{count}} Sitzung wurde von dieser abgezweigt:",
+	"sessionFork.forkedInto_other": "{{count}} Sitzungen wurden von dieser abgezweigt:",
+	"sessionFork.forkDeleted": "{{title}} (gelöscht)",
+	"sessionFork.textCopy": "Unterhaltung als Text kopiert",
+	"sessionFork.textCopyNotice": "Abgezweigt von {{title}}. Dieser Agent kann seine Unterhaltung nicht selbst kopieren, deshalb hat er die Unterhaltung des Originals als Text erhalten."
 }

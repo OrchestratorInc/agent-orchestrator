@@ -3793,6 +3793,29 @@ func sessionOperations() []operation {
 			},
 		},
 		{
+			method: http.MethodGet, path: "/api/v1/sessions/{sessionId}/fork-options", id: "getSessionForkOptions", tag: "sessions",
+			summary:    "Report whether a session can be forked",
+			pathParams: []any{controllers.SessionIDParam{}},
+			resps: []respUnit{
+				{http.StatusOK, controllers.SessionForkOptionsResponse{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/fork", id: "forkSession", tag: "sessions",
+			summary:    "Fork a session at a finished turn",
+			pathParams: []any{controllers.SessionIDParam{}},
+			reqBody:    controllers.ForkSessionRequest{},
+			resps: []respUnit{
+				{http.StatusCreated, controllers.ForkSessionResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusConflict, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+			},
+		},
+		{
 			method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/pr/claim", id: "claimSessionPR", tag: "sessions",
 			summary:    "Claim an existing pull request for a session",
 			pathParams: []any{controllers.SessionIDParam{}},

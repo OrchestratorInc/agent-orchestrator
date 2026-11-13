@@ -4895,5 +4895,22 @@
 	"chat.find.nextFailed": "No se pudieron cargar las siguientes coincidencias.",
 	"chat.find.wrappedFirst": "Se volvió a la primera coincidencia.",
 	"chat.find.wrappedLast": "Se volvió a la última coincidencia.",
-	"chat.find.notRevealed": "No se pudo mostrar esta coincidencia. Repite la búsqueda."
+	"chat.find.notRevealed": "No se pudo mostrar esta coincidencia. Repite la búsqueda.",
+	"sessionFork.fork": "Bifurcar",
+	"sessionFork.tooltip": "Bifurcar esta sesión en una nueva",
+	"sessionFork.forking": "Bifurcando…",
+	"sessionFork.unavailable": "Las opciones de bifurcación no están disponibles",
+	"sessionFork.failed": "No se pudo bifurcar esta sesión",
+	"sessionFork.sectionTitle": "Bifurcaciones",
+	"sessionFork.originalPRs": "PR del original",
+	"sessionFork.originalPR": "PR #{{number}} del original",
+	"sessionFork.forkSession": "Bifurcar sesión",
+	"sessionFork.forkedFromSentence": "Esta sesión se bifurcó de <session>{{title}}</session>.",
+	"sessionFork.originalDeleted": "La sesión original se ha eliminado desde entonces.",
+	"sessionFork.forkedInto_one": "{{count}} sesión se bifurcó de esta:",
+	"sessionFork.forkedInto_many": "{{count}} sesiones se bifurcaron de esta:",
+	"sessionFork.forkedInto_other": "{{count}} sesiones se bifurcaron de esta:",
+	"sessionFork.forkDeleted": "{{title}} (eliminada)",
+	"sessionFork.textCopy": "Conversación copiada como texto",
+	"sessionFork.textCopyNotice": "Bifurcada de {{title}}. Este agente no puede copiar su propia conversación, así que recibió la conversación del original como texto."
 }

@@ -1,5 +1,6 @@
 import { apiErrorException } from "../../lib/api-error-exception";
 import type { OpenFileAnnotation } from "../../../shared/chat-file-reference";
+import { ForkSessionContext } from "../SessionForkControls";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { agentLabel } from "../../lib/agent-options";
@@ -616,6 +617,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		<div className="relative h-full min-h-0">
 			{refreshError && !hostUnreachable ? <p role="alert" className="px-4 py-2 text-xs text-destructive">{refreshError}</p> : null}
 			{sideChatContainer ? createPortal(sideChats.panel, sideChatContainer) : null}
+			<ForkSessionContext.Provider value={session}>
 			<ChatWorkspace
 				showSetupStep={showSetupStep}
 				onAddToSideChat={sideEnabled && (sideChats.activeId || sideCreationEnabled) ? attachToSide : undefined}
@@ -844,6 +846,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				cancelQueuedTurnPendingTurnId={commands.cancelQueuedTurnPendingTurnId}
 				editQueuedTurnPendingTurnId={commands.editQueuedTurnPendingTurnId}
 			/>
+			</ForkSessionContext.Provider>
 		</div>
 	);
 });
