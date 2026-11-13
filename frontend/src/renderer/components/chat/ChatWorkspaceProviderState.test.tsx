@@ -203,7 +203,7 @@ describe("plan", () => {
 			};
 			const { container } = render(<ChatWorkspace snapshot={ended} />);
 			expect(screen.getByLabelText("Run the backend tests — in progress")).toBeInTheDocument();
-			expect(container.querySelector("[data-turn-plan] .animate-spin")).toHaveClass("opacity-0");
+			expect(container.querySelector("[data-turn-plan] .animate-spin")).not.toBeInTheDocument();
 		},
 	);
 
