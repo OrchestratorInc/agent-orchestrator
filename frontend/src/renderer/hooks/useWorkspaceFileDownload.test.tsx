@@ -73,6 +73,16 @@ describe("downloadWorkspaceFile", () => {
 		expect(sent()).toBeLessThan(10);
 	});
 
+	it("stops reading when the save location cannot be opened", async () => {
+		const { response, sent } = streamOf(1000, new Uint8Array(1024));
+		vi.spyOn(globalThis, "fetch").mockResolvedValue(response);
+		const save = transfer();
+		save.start.mockRejectedValueOnce(new Error("EACCES"));
+		await expect(downloadWorkspaceFile(base, "s1", "a.bin")).rejects.toThrow("EACCES");
+		expect(sent()).toBeLessThan(10);
+		expect(save.cancel).not.toHaveBeenCalled();
+	});
+
 	it("reports a failed request before asking where to save", async () => {
 		vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("gone", { status: 404 }));
 		const save = transfer();
