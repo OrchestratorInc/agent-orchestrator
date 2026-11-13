@@ -32,6 +32,7 @@ import { LatticeLoader } from "./LatticeLoader";
 import { TurnPlan } from "./TurnPlan";
 import { ChatMarkdown } from "./ChatMarkdown";
 import { FirstLineMarker } from "./FirstLineMarker";
+import { ProviderSwitchMarker } from "./ProviderSwitchMarker";
 import { RenderFrame } from "./RenderFrame";
 import { artifactRenderRef, notifyRenderViewport, readArtifactRef, readRenderRef } from "./renderFrameModel";
 import { HighlightedCodeText } from "./HighlightedCodeText";
@@ -627,6 +628,9 @@ const TimelineItem = memo(function TimelineItem({
 	}
 	if (item.activityKind === "system" && item.detail?.event === "compaction") {
 		return <CompactionMarker activity={item} />;
+	}
+	if (item.detail?.event === "provider_switch") {
+		return <ProviderSwitchMarker activity={item} />;
 	}
 	if (item.activityKind === "system" && item.detail?.event === "steer") {
 		const { body, attachments } = stagedAttachmentParts(item.detail.text || item.summary);
