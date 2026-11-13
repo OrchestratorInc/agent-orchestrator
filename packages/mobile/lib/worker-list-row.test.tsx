@@ -223,6 +223,22 @@ describe("WorkerListRow", () => {
 		expect(renderer.root.findByProps({ testID: "machine-identity-symbol" }).props.appearance).toEqual({ symbol: "server" });
 	});
 
+	// The row of a machine that can't be reached shows the last thing heard: it
+	// stays readable, at a lower voice, and says so to a screen reader.
+	it("dims a row whose machine can't be reached and says it is the last known state", () => {
+		let renderer!: ReactTestRenderer;
+		const handlers = {
+			onSwipeOpen: vi.fn(), onSwipeClose: vi.fn(), onRenameStart: vi.fn(), onRenameCancel: vi.fn(),
+			onRename: vi.fn(async () => {}), onSetPinned: vi.fn(async () => {}), onDelete: vi.fn(), onResume: vi.fn(), onRestore: vi.fn(),
+		};
+		act(() => {
+			renderer = create(<WorkerListRow session={session} projectName="Agent Orchestrator" unreachable isRenaming={false} nowBucket={1} {...handlers} />);
+		});
+		const dimmed = renderer.root.findAll((node) => Array.isArray(node.props.style) && node.props.style.some((value: { opacity?: number } | false) => value && value.opacity === 0.5));
+		expect(dimmed.length).toBeGreaterThanOrEqual(2);
+		expect(renderer.root.findAll((node) => typeof node.props.accessibilityLabel === "string" && node.props.accessibilityLabel.endsWith("Last known; its machine can't be reached.")).length).toBeGreaterThan(0);
+	});
+
 });
 
 // Haptics mark an outcome or a destructive confirmation; opening a row,

@@ -28,6 +28,8 @@ export type FreshnessInput = {
 	connection: "closed" | "connecting" | "open";
 	loading: boolean;
 	error: string | null;
+	/** The HTTP status of the last failure; null when nothing answered at all. */
+	errorStatus?: number | null;
 	lastSyncAt: number;
 	linkTracker?: LinkTracker;
 };
@@ -41,8 +43,10 @@ export function machineFreshness(host: FreshnessInput, phone: PhoneNetwork, now:
 	const link = classifyLink(host.linkTracker ?? EMPTY_LINK_TRACKER, phone, now);
 	if (link === "phone-offline") return "live";
 	if (link === "unreachable") return "unreachable";
-	// Answered, but with an error: the link works and the machine said no.
-	if (host.connection !== "open" && host.error && !host.loading) return "unreachable";
+	// Answered, but with an error: the link works and the machine said no. A
+	// failure with no status (a timeout, a refused connection) is the link's,
+	// and classifyLink gives that its grace period above.
+	if (host.connection !== "open" && host.error && host.errorStatus != null && !host.loading) return "unreachable";
 	if (link === "reconnecting") return "lagging";
 	// Never synced is a first connection, which the board's loader covers.
 	if (host.lastSyncAt > 0 && now - host.lastSyncAt >= STALE_AFTER_MS) return "lagging";
@@ -108,13 +112,14 @@ export function freshnessLine({
 	phoneOffline: boolean;
 	now: number;
 }): { tone: FreshnessTone; text: string; retry: boolean } | null {
-	const age = lastSyncAt > 0 ? ` · updated ${staleAgeLabel(now - lastSyncAt)}` : "";
+	// Under a minute, the age says nothing the state doesn't ("updated moments
+	// ago" beside "Can't reach" reads as a contradiction), so it is left off.
+	const age = lastSyncAt > 0 && now - lastSyncAt >= 60_000 ? ` · updated ${staleAgeLabel(now - lastSyncAt)}` : "";
 	if (phoneOffline) return { tone: "muted", text: `You're offline${age}`, retry: false };
 	const name = machine?.trim() || "your machine";
 	if (freshness === "unreachable") return { tone: "danger", text: `Can't reach ${name}${age}`, retry: true };
 	if (freshness !== "lagging") return null;
 	// Lagging only because the link just dropped: the rows are still recent, so
 	// their age says nothing useful yet.
-	const recent = lastSyncAt <= 0 || now - lastSyncAt < STALE_AFTER_MS;
-	return { tone: "warning", text: recent ? `Reconnecting to ${name}…` : `${name}${age}`, retry: true };
+	return { tone: "warning", text: age ? `${name}${age}` : `Reconnecting to ${name}…`, retry: true };
 }

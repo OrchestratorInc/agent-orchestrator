@@ -35,6 +35,7 @@ export const WorkerListRow = memo(
 	rowKey,
 	projectName,
 	machine,
+	unreachable = false,
 	isRenaming,
 	activeSwipeId,
 	nowBucket,
@@ -54,6 +55,11 @@ export const WorkerListRow = memo(
 	rowKey?: string;
 	projectName?: string;
 	machine?: { name: string; appearance: MachineAppearance; freshness?: MachineFreshness };
+	/**
+	 * The row's machine can't be reached, so what it shows is the last thing
+	 * heard. Dimmed rather than hidden: the rows are still worth reading.
+	 */
+	unreachable?: boolean;
 	isRenaming: boolean;
 	activeSwipeId?: string;
 	/**
@@ -215,7 +221,7 @@ export const WorkerListRow = memo(
 			rowStyle={styles.row}
 			// No gesture hint: a screen reader reaches pin, rename and archive as
 			// the row's actions, and announces that it has them.
-			accessibilityLabel={`${row.title}. ${visual.label}. ${row.project}.`}
+			accessibilityLabel={`${row.title}. ${visual.label}. ${row.project}.${unreachable ? " Last known; its machine can't be reached." : ""}`}
 			onPress={openSession}
 			actions={contextActions}
 			onAction={runAction}
@@ -232,6 +238,7 @@ export const WorkerListRow = memo(
 					prsTone={prs?.tone}
 					harness={session.harness}
 					machine={machine}
+					unreachable={unreachable}
 					isRenaming
 					renameTitle={renameTitle}
 					renameSaving={renameSaving}
@@ -250,6 +257,7 @@ export const WorkerListRow = memo(
 					prsTone={prs?.tone}
 					harness={session.harness}
 					machine={machine}
+					unreachable={unreachable}
 					styles={styles}
 					t={t}
 				/>
@@ -267,6 +275,7 @@ export const WorkerListRow = memo(
 		prev.machine?.name === next.machine?.name &&
 		prev.machine?.appearance.symbol === next.machine?.appearance.symbol &&
 		prev.machine?.freshness === next.machine?.freshness &&
+		prev.unreachable === next.unreachable &&
 		prev.isRenaming === next.isRenaming &&
 		prev.activeSwipeId === next.activeSwipeId &&
 		prev.session === next.session &&
@@ -284,6 +293,7 @@ function WorkerRowContents({
 	prsTone,
 	harness,
 	machine,
+	unreachable = false,
 	isRenaming = false,
 	renameTitle = "",
 	renameSaving = false,
@@ -300,6 +310,7 @@ function WorkerRowContents({
 	prsTone?: Parameters<typeof toneColor>[1];
 	harness: DashboardSession["harness"];
 	machine?: { name: string; appearance: MachineAppearance; freshness?: MachineFreshness };
+	unreachable?: boolean;
 	isRenaming?: boolean;
 	renameTitle?: string;
 	renameSaving?: boolean;
@@ -311,7 +322,7 @@ function WorkerRowContents({
 }) {
 	return (
 		<>
-			<View style={styles.eyebrow}>
+			<View style={[styles.eyebrow, unreachable && styles.lastKnown]}>
 				<AgentLogo harness={harness} size={14} />
 				<Text style={styles.project} numberOfLines={1}>
 					{row.project}
@@ -358,15 +369,13 @@ function WorkerRowContents({
 					{renameSaving ? <Spinner size={iconSize.md} accessibilityLabel="Saving worker name" /> : null}
 				</View>
 			) : (
-				// Softened while its machine can't be reached: the status above it is
-				// the last one heard, so the row should not read as live.
-				<Text style={[styles.title, machine?.freshness === "unreachable" && styles.titleUnreachable]} numberOfLines={1}>
+				<Text style={[styles.title, unreachable && styles.lastKnown]} numberOfLines={1}>
 					{row.title}
 				</Text>
 			)}
 
 			{details || machine ? (
-				<View style={styles.metadata}>
+				<View style={[styles.metadata, unreachable && styles.lastKnown]}>
 					{details ? (
 						<Text style={[styles.details, prsTone && { color: toneColor(t, prsTone) }]} numberOfLines={1}>
 							{details}
@@ -418,7 +427,9 @@ const makeStyles = (t: Theme) =>
 		project: { fontFamily: "DMSans_500Medium", flex: 1, color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "500" },
 		trailing: { fontFamily: "DMSans_500Medium", flexShrink: 0, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "500", fontVariant: ["tabular-nums"] },
 		title: { fontFamily: "DMSans_600SemiBold", color: t.textPrimary, fontSize: 16, lineHeight: 21, fontWeight: "600", letterSpacing: -0.15 },
-		titleUnreachable: { color: t.textSecondary },
+		// A row whose machine can't be reached shows the last thing heard, so it
+		// must not read as live: the spinner and status stay, at a lower voice.
+		lastKnown: { opacity: 0.5 },
 		metadata: { minWidth: 0, flexDirection: "row", alignItems: "center", gap: space.sm },
 		metadataSpacer: { flex: 1 },
 		details: { flex: 1, minWidth: 0, color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontFamily: t.fontMono },

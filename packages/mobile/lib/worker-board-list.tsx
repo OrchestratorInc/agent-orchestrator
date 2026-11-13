@@ -548,7 +548,7 @@ function WorkerBoard({
 			projectName={showProject ? projectNameFor(item.session) : item.session.harness || "Agent"}
 			isRenaming={renamingWorkerId === item.key} activeSwipeId={activeSwipeId}
 			onSwipeOpen={openExclusiveSwipe} onSwipeClose={closeExclusiveSwipe} actions={actions} showMachine={showMachine}
-			freshness={showMachine ? freshness.get(sessionHostId(item.session) ?? currentHostId ?? "") : undefined} />;
+			freshness={freshness.get(sessionHostId(item.session) ?? currentHostId ?? "")} />;
 	}, [archiveCount, archiveOpen, pagedArchive.loading, pagedArchive.error, pagedArchive.hasMore, pagedArchive.retry, pagedArchive.loadMore, toggleArchive, toggleSection, currentHostId, nowBucket, showProject, showMachine, projectNameFor,
 		renamingWorkerId, activeSwipeId, openExclusiveSwipe, closeExclusiveSwipe, actions, restoringKey, restoreErrors, restoreArchived, machineOffline, freshness]);
 
@@ -633,7 +633,7 @@ function WorkerBoard({
 type BoundWorkerRowProps = Pick<ComponentProps<typeof WorkerListRow>,
 	"session" | "hostId" | "projectName" | "nowBucket" | "isRenaming" | "activeSwipeId" | "onSwipeOpen" | "onSwipeClose"> & {
 	showMachine: boolean;
-	/** The row's machine's freshness, for the dot beside its name. */
+	/** The row's machine's freshness: a dot beside its name, and a dimmed row once it can't be reached. */
 	freshness?: MachineFreshness;
 	actions: {
 		renameStart(id: string | undefined): void;
@@ -661,7 +661,7 @@ const BoundWorkerRow = memo(function BoundWorkerRow({ actions, showMachine, fres
 		onResume: () => { void actions.recover(session, "resume"); },
 		onRestore: () => { void actions.recover(session, "restore"); },
 	}), [actions, session, rowKey]);
-	return <WorkerListRow {...props} rowKey={rowKey} machine={machine} {...handlers} />;
+	return <WorkerListRow {...props} rowKey={rowKey} machine={machine} unreachable={freshness === "unreachable"} {...handlers} />;
 });
 
 /**

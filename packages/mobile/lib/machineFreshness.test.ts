@@ -43,7 +43,14 @@ describe("machineFreshness", () => {
 	});
 
 	it("is unreachable when the machine answers with an error", () => {
-		expect(machineFreshness(host({ connection: "closed", error: "missing or invalid connection password" }), online, NOW)).toBe("unreachable");
+		expect(machineFreshness(host({ connection: "closed", error: "missing or invalid connection password", errorStatus: 401 }), online, NOW)).toBe("unreachable");
+	});
+
+	// A timed-out poll sets the error too, with no status. One of those is a
+	// blip, not a machine that is down.
+	it("only lags after one poll times out, even though the poll set an error", () => {
+		const tracker = track(["ok", "timeout"], NOW - 8_000);
+		expect(machineFreshness(host({ connection: "closed", error: "Your machine didn't respond in time", errorStatus: null, linkTracker: tracker }), online, NOW)).toBe("lagging");
 	});
 
 	it("never blames the machine for the phone being offline", () => {
@@ -79,6 +86,11 @@ describe("freshnessLine", () => {
 
 	it("is red when the machine can't be reached", () => {
 		expect(freshnessLine({ ...base, freshness: "unreachable" })).toEqual({ tone: "danger", text: "Can't reach Mac · updated 3m ago", retry: true });
+	});
+
+	it("leaves the age off under a minute, where it would contradict the state", () => {
+		expect(freshnessLine({ ...base, freshness: "unreachable", lastSyncAt: NOW - 40_000 })?.text).toBe("Can't reach Mac");
+		expect(freshnessLine({ ...base, freshness: "lagging", lastSyncAt: NOW - 40_000 })?.text).toBe("Reconnecting to Mac…");
 	});
 
 	it("leaves the age off when nothing ever synced", () => {
