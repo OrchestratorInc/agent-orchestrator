@@ -159,7 +159,7 @@ import { isMacPlatform } from "../lib/platform";
 import { useShell } from "../lib/shell-context";
 import { cn } from "../lib/utils";
 import { usesPreviewWorkspaceData } from "../lib/preview-mode";
-import { isOrchestratorSession, sessionAgentExited, sessionIsActive, type SessionArtifact, type WorkspaceSummary } from "../types/workspace";
+import { canArchiveWorkerSession, isOrchestratorSession, sessionAgentExited, sessionIsActive, type SessionArtifact, type WorkspaceSummary } from "../types/workspace";
 import { terminalTargetBelongsToSession, type TerminalTarget } from "../types/terminal";
 import { useCloudSessionPresence } from "../hooks/useCloudSessionPresence";
 import { SessionPeopleControl } from "./SessionPeople";
@@ -2056,7 +2056,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			const base = { tabKey: key, closeShortcut: shown, onClose: () => closePane(key) };
 			if (key === SESSION_TAB_KEY) {
 				if (!session) return { ...base, kind: "plain" };
-				const canArchive = !isOrchestrator && !session.cloud && sessionIsActive(session);
+				const canArchive = !isOrchestrator && canArchiveWorkerSession(session);
 				return { ...base, kind: "session", session, canArchive };
 			}
 			if (filePath) {
@@ -3297,6 +3297,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 							view={inspectorView}
 							browserView={hostId || inspectorView === "browser" ? browserView : undefined}
 							session={session}
+							standaloneAgent={sessionWorkspace?.standaloneAgent === true}
 						/>
 					</SessionInspectorRail>
 				) : null}

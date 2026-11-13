@@ -2415,6 +2415,38 @@ describe("SessionInspector completion controls", () => {
     expect(navigateMock).toHaveBeenCalledWith({ to: "/" });
   });
 
+  it("offers Archive in a Cloud standalone agent's inspector, returning home once confirmed", async () => {
+    renderWithQuery(
+      <SessionInspector
+        session={session([], { workspaceId: "agent-1", workspaceName: "Fix the flake", status: "idle", cloud: { orgId: "org-1" } })}
+        standaloneAgent
+      />,
+    );
+
+    expect(screen.getByText("Session controls")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("switch", { name: "Archive session when pull requests merge" }),
+    ).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Archive session" }));
+    await userEvent.click(
+      within(screen.getByRole("dialog")).getByRole("button", { name: "Confirm, archive session" }),
+    );
+
+    // A Cloud archive goes to the control plane, never to the local daemon.
+    expect(postMock).not.toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/kill", expect.anything());
+    expect(navigateMock).toHaveBeenCalledWith({ to: "/" });
+  });
+
+  it("keeps Archive out of a shared Cloud standalone agent, and out of a Cloud project session without a PR", () => {
+    const { unmount } = renderWithQuery(
+      <SessionInspector session={session([], { workspaceId: "agent-1", status: "idle", cloud: { orgId: "org-1", shared: true } })} standaloneAgent />,
+    );
+    expect(screen.queryByRole("button", { name: "Archive session" })).not.toBeInTheDocument();
+    unmount();
+    renderWithQuery(<SessionInspector session={session([], { status: "idle", cloud: { orgId: "org-1" } })} />);
+    expect(screen.queryByRole("button", { name: "Archive session" })).not.toBeInTheDocument();
+  });
+
   it("keeps the confirmation dismissed after a termination failure", async () => {
     postMock.mockResolvedValueOnce({
       error: new Error("runtime teardown failed"),

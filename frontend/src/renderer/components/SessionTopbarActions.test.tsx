@@ -326,6 +326,34 @@ describe("SessionTopbarActions embedded actions", () => {
 		expect(screen.queryByRole("button", { name: "Open orchestrator" })).toBeNull();
 	});
 
+	it("opens the archive confirmation from ⌘⇧A in a Cloud standalone agent, and returns home once confirmed", async () => {
+		const agent = sessionWith({ workspaceId: "agent-1", workspaceName: "Fix the flake", cloud: { orgId: "org" } });
+		const data: WorkspaceSummary[] = [
+			{ id: "agent-1", name: "Fix the flake", path: "", kind: "cloud", cloudOrgId: "org", standaloneAgent: true, sessions: [agent] },
+		];
+		useWorkspaceQueryMock.mockReturnValue({ data, isError: false, isLoading: false, isSuccess: true });
+		paramsMock.projectId = "agent-1";
+		paramsMock.sessionId = agent.id;
+		render(
+			<QueryClientProvider client={new QueryClient()}>
+				<TooltipProvider>
+					<SessionTopbarActions />
+				</TooltipProvider>
+			</QueryClientProvider>,
+		);
+		openArchiveConfirm();
+		await clickKillDialogConfirm();
+		// The Cloud archive goes to the control plane, not the local daemon.
+		expect(postMock).not.toHaveBeenCalled();
+		expect(navigateMock).toHaveBeenCalledWith({ to: "/" });
+	});
+
+	it("leaves ⌘⇧A inert on a Cloud session shared from another organization", () => {
+		renderTopbar(sessionWith({ cloud: { orgId: "org", shared: true } }));
+		openArchiveConfirm();
+		expect(screen.queryByRole("dialog")).toBeNull();
+	});
+
 	it("renders only session actions when embedded in the terminal bar", () => {
 		renderTopbar(
 			sessionWith(),
