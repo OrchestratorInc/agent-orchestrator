@@ -424,6 +424,9 @@ func TestACPRelaySettlesStalledPrompt(t *testing.T) {
 	if failure.Error.Code != -32603 || !strings.Contains(failure.Error.Message, "provider stopped responding") {
 		t.Fatalf("stalled response error = %+v", failure.Error)
 	}
+	if !strings.Contains(string(response), `"`+ACPPromptStalledDataKey+`":true`) {
+		t.Fatalf("stalled response lacks the %s marker: %s", ACPPromptStalledDataKey, response)
+	}
 
 	state := relay.snapshot()
 	if state.ActivePrompt || state.PendingResultEventID == "" {

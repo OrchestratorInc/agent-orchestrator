@@ -16,6 +16,11 @@ const (
 	// value to every durable event derived from that frame.
 	ACPEventIDMetaKey = "ao.persistentEventId"
 
+	// ACPPromptStalledDataKey marks the error data of a prompt the stall
+	// watchdog failed. The daemon reads it to tell a silent adapter from a
+	// provider that answered with an error.
+	ACPPromptStalledDataKey = "ao.promptStalled"
+
 	// promptStallTimeout is how long an in-flight session/prompt may hear
 	// nothing from the adapter, while the adapter is not waiting on the client,
 	// before the relay settles it synthetically. A live turn streams tool
@@ -467,8 +472,9 @@ func (r *acpRelay) failStalledPrompt(
 		if request.method != "session/prompt" {
 			continue
 		}
-		failure := rpcErrorFrame(json.RawMessage(providerID), -32603, fmt.Sprintf(
-			"provider stopped responding: no ACP output for %s; failing the stalled prompt", promptStallTimeout))
+		failure := rpcErrorFrameWithData(json.RawMessage(providerID), -32603, fmt.Sprintf(
+			"provider stopped responding: no ACP output for %s; failing the stalled prompt", promptStallTimeout),
+			map[string]any{ACPPromptStalledDataKey: true})
 		completion, _, err := r.providerFrame(ctx, failure, generation, attached)
 		if err != nil {
 			return acpClientFrames{}, err
@@ -551,7 +557,15 @@ func rpcResultFrame(id json.RawMessage, result any) []byte {
 }
 
 func rpcErrorFrame(id json.RawMessage, code int, message string) []byte {
-	encoded, _ := json.Marshal(map[string]any{"code": code, "message": message})
+	return rpcErrorFrameWithData(id, code, message, nil)
+}
+
+func rpcErrorFrameWithData(id json.RawMessage, code int, message string, data map[string]any) []byte {
+	body := map[string]any{"code": code, "message": message}
+	if data != nil {
+		body["data"] = data
+	}
+	encoded, _ := json.Marshal(body)
 	return marshalFrame(map[string]json.RawMessage{
 		"jsonrpc": json.RawMessage(`"2.0"`), "id": id, "error": encoded,
 	}, nil)
