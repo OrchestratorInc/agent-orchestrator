@@ -1,3 +1,5 @@
+import { agentSwitchTarget } from "../hooks/useCloudAgentSwitch";
+import { agentLabel } from "../lib/agent-options";
 import {
 	ArrowRightLeft,
 	Loader2,
@@ -82,6 +84,22 @@ const accountPhaseCopy: Record<SessionInterfaceTransition["phase"], string> = {
 	recovery_required: "Account switch needs attention",
 };
 
+// An agent switch is the same durable handoff, usually in the same interface;
+// it names the agent it switches to.
+const agentPhaseCopy: Record<SessionInterfaceTransition["phase"], string> = {
+	requested: "Preparing agent switch…",
+	preflighting: "Preparing the new agent…",
+	draining: "Waiting for the turn to finish…",
+	source_stopping: "Stopping the agent…",
+	source_stopped: "Handing over the conversation…",
+	target_starting: "Starting the new agent…",
+	activating: "Starting the new agent…",
+	completed: "Agent switched",
+	failed: "Agent switch failed",
+	cancelled: "Agent switch cancelled",
+	recovery_required: "Agent switch needs attention",
+};
+
 const targetStopUnconfirmedDetail =
 	"Orchestrator could not confirm the target controller stopped. Restart Orchestrator to retry shutdown before restoring the original interface.";
 
@@ -117,12 +135,15 @@ export function SessionInterfaceSwitchButton({
 		const needsRestart = interfaceTransitionNeedsRestart(transition);
 		const cancellable = !needsRestart && interfaceTransitionIsCancellable(transition) && Boolean(onCancel);
 		const accountMove = Boolean(transition.targetAccountId);
+		const agentTo = agentSwitchTarget(transition);
 		const statusLabel = needsRestart
-			? `${accountMove ? "Account" : "Interface"} switch needs attention. ${transition.errorDetail || targetStopUnconfirmedDetail}`
+			? `${accountMove ? "Account" : agentTo ? "Agent" : "Interface"} switch needs attention. ${transition.errorDetail || targetStopUnconfirmedDetail}`
 			: cancelError || (accountMove
 				? accountPhaseCopy[transition.phase]
-				: `${phaseCopy[transition.phase]} Switching to ${targetTitleLabel(transition.targetMode)}.`);
-		const cancelLabel = accountMove ? "Cancel account switch" : `Cancel switch to ${targetTitleLabel(transition.targetMode)}`;
+				: agentTo
+					? `${agentPhaseCopy[transition.phase]} Switching to ${agentLabel(agentTo)}.`
+					: `${phaseCopy[transition.phase]} Switching to ${targetTitleLabel(transition.targetMode)}.`);
+		const cancelLabel = accountMove ? "Cancel account switch" : `Cancel switch to ${agentTo ? agentLabel(agentTo) : targetTitleLabel(transition.targetMode)}`;
 		return (
 			<div
 				role="status"
@@ -429,7 +450,8 @@ export function SessionInterfaceTransitionNotice({
 	const recovered =
 		transition.phase === "recovery_required" && transition.errorCode === "DAEMON_RESTARTED";
 	const accountMove = Boolean(transition.targetAccountId);
-	const copy = accountMove ? accountPhaseCopy : phaseCopy;
+	const agentSwitch = Boolean(agentSwitchTarget(transition));
+	const copy = accountMove ? accountPhaseCopy : agentSwitch ? agentPhaseCopy : phaseCopy;
 	const historyRecoveryPolicy = interfaceTransitionHistoryRecoveryPolicy(transition);
 	const interactiveSourceUnverified =
 		transition.phase === "failed" &&
@@ -457,7 +479,7 @@ export function SessionInterfaceTransitionNotice({
 					{needsRestart
 						? copy.recovery_required
 						: recovered
-							? accountMove ? "Account switch recovered" : "Interface switch recovered"
+							? accountMove ? "Account switch recovered" : agentSwitch ? "Agent switch recovered" : "Interface switch recovered"
 							: copy[transition.phase]}
 				</strong>
 				<p className="mt-0.5 text-caption leading-4 text-muted-foreground">
@@ -467,7 +489,7 @@ export function SessionInterfaceTransitionNotice({
 						(needsRestart
 							? targetStopUnconfirmedDetail
 							: recovered
-								? accountMove ? "The session stays on its previous account." : "Orchestrator restored the session in its last committed interface."
+								? accountMove ? "The session stays on its previous account." : agentSwitch ? "The session stays on its previous agent." : "Orchestrator restored the session in its last committed interface."
 								: transition.phase === "recovery_required"
 									? "Restart Orchestrator to reconcile this session before sending more work."
 									: accountMove

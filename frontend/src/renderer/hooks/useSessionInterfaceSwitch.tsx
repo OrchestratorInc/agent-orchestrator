@@ -31,6 +31,7 @@ import {
 	type ChatDraftBoundaryKind,
 } from "../lib/chat-draft-boundary";
 import { sessionUiKey } from "../lib/hosts";
+import { agentSwitchTarget } from "./useCloudAgentSwitch";
 import type { WorkspaceSession } from "../types/workspace";
 import { ComposerErrorNotice } from "../components/chat/AgentSwitchPicker";
 import { readCloudTurnSettings } from "../components/chat/CloudSessionChatSurface";
@@ -249,7 +250,12 @@ export function useSessionInterfaceSwitch(sessionId: string, session: WorkspaceS
 		(interfaceSwitch.transition?.policy === "drain" &&
 			["requested", "preflighting", "draining"].includes(interfaceSwitch.transition.phase))
 	));
-	const cloudLoader = Boolean(isCloud && !cloudDrainWaiting && (
+	// An agent switch keeps the interface: the agent it switches to, while it
+	// runs. Chat keeps its conversation on screen with the "Switching" line, as a
+	// local switch does; the terminal is covered while the worker restarts on
+	// the new agent.
+	const agentSwitchTo = activeTransition || interfaceSwitch.settling ? agentSwitchTarget(interfaceSwitch.transition) : undefined;
+	const cloudLoader = Boolean(isCloud && !cloudDrainWaiting && !(agentSwitchTo && session?.mode === "chat") && (
 		interfaceSwitch.starting || activeTransition || interfaceSwitch.settling ||
 		(interfaceSwitch.transition?.phase === "completed" && session?.mode !== interfaceSwitch.transition.targetMode)
 	));
@@ -546,6 +552,7 @@ export function useSessionInterfaceSwitch(sessionId: string, session: WorkspaceS
 		accountMoveQueues,
 		accountMoveTarget,
 		activeTransition,
+		agentSwitchTo,
 		agentInputDisabled: Boolean((interfaceSwitch.starting || activeTransition) && !cloudDrainWaiting && session?.mode === "tui"),
 		cloudLoader,
 		confirmUnsafeDraftLeave,
