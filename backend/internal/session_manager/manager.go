@@ -3707,9 +3707,6 @@ func (m *Manager) RestoreWithMode(ctx context.Context, id domain.SessionID) (res
 	if err != nil {
 		return RestoreResult{}, fmt.Errorf("restore %s: workspace: %w", id, err)
 	}
-	// A worktree kept through termination may still have its dependencies
-	// offloaded; a recreated one already ran Setup and settles here at once.
-	m.restoreOffloadedDependencies(ctx, rec)
 	return m.relaunchRestoredSession(ctx, rec, project, ws)
 }
 
@@ -3717,6 +3714,10 @@ func (m *Manager) relaunchRestoredSession(ctx context.Context, rec domain.Sessio
 	if rec.Metadata.Branch != "" && projectKindForSession(project, rec.ProjectID) != domain.ProjectKindWorkspace {
 		ws.Branch = rec.Metadata.Branch
 	}
+	// Every relaunch (restore, live reconcile, boot restore-all) brings back
+	// offloaded dependencies first; a worktree kept through termination may
+	// still have them offloaded, and a recreated one settles here at once.
+	m.restoreOffloadedDependencies(ctx, rec)
 	result, err := m.relaunchSession(ctx, "restore", rec, project, ws, nil)
 	if err != nil {
 		return RestoreResult{}, err
