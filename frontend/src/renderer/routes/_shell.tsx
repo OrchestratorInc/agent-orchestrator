@@ -296,6 +296,9 @@ const ShellCenter = memo(function ShellCenter({
 	startingHarness?: string;
 }) {
 	const panelClassName = isSessionRoute || startingOrchestrator ? "center-panel-shell--session" : undefined;
+	// Once the new chat page sends, it takes the session's top bar so the first
+	// message lands where the session will show it, and nothing moves at handoff.
+	const newChatSending = useUiStore((state) => state.newChatSending);
 	const startingChat = startingOrchestrator ? <LazyChunkBoundary><Suspense fallback={null}><OrchestratorStartingChat steps={startingSteps} cloud={startingCloudOrchestrator} coderWorkspaceUrl={startingCoderWorkspaceUrl} harness={startingHarness} /></Suspense></LazyChunkBoundary> : null;
 	// Settings is a self-framed route, so its starting chat gets its own panel.
 	const selfFramedOutlet = <>
@@ -309,8 +312,8 @@ const ShellCenter = memo(function ShellCenter({
 		<CenterPanelShell
 			className={panelClassName}
 			notifications={!isHomeRoute || startingOrchestrator}
-			// The home and new chat pages have no top bar, so their panel takes the band back.
-			topbar={pageHasTopbar({ isHomeRoute, isNewChatRoute, startingOrchestrator })}
+			// The home and unsent new chat pages have no top bar, so their panel takes the band back.
+			topbar={pageHasTopbar({ isHomeRoute, isNewChatRoute: isNewChatRoute && !newChatSending, startingOrchestrator })}
 		>
 			<ShellOutlet startingChat={startingChat} />
 		</CenterPanelShell>

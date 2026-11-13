@@ -189,6 +189,8 @@ export type UiState = {
 	isSidebarOpen: boolean;
 	inspectorSessions: Record<string, InspectorSessionState>;
 	isCommandPaletteOpen: boolean;
+	/** The new chat page has sent its first message and is waiting to hand off to the session. */
+	newChatSending: boolean;
 	settingsModal: SettingsModal | null;
 	accountLogin: string | null;
 	themePreference: ThemePreference;
@@ -336,6 +338,7 @@ export type UiState = {
 	setCloudReviewUi: (sessionId: string, repository: string | undefined, changes: CloudReviewUiState) => void;
 	setFileDisplayMode: (sessionId: string, path: string, mode: FileDisplayMode, requestKey: number) => void;
 	setCommandPaletteOpen: (open: boolean) => void;
+	setNewChatSending: (sending: boolean) => void;
 	setProjectRestarting: (projectId: string, restarting: boolean, hostId?: string) => void;
 	setProjectProvisioning: (projectId: string, provisioning: boolean, hostId?: string) => void;
 	setAutoStartOrchestrator: (projectId: string, autoStart: boolean) => void;
@@ -483,6 +486,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 	isSidebarOpen: initialSidebarOpen(),
 	inspectorSessions: {},
 	isCommandPaletteOpen: false,
+	newChatSending: false,
 	settingsModal: null,
 	accountLogin: null,
 	themePreference: initialThemePreference,
@@ -846,6 +850,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 			};
 		}),
 	setCommandPaletteOpen: (isCommandPaletteOpen) => set({ isCommandPaletteOpen }),
+	setNewChatSending: (newChatSending) => set({ newChatSending }),
 	setProjectRestarting: (projectId, restarting, hostId) =>
 		set((state) => {
 			const restartingProjectIds = new Set(state.restartingProjectIds);

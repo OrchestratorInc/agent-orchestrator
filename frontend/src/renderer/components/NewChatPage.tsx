@@ -2,7 +2,7 @@ import { apiErrorException } from "../lib/api-error-exception";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useRouter } from "@tanstack/react-router";
 import { Cloud, Folder, Plus, Smartphone, StickyNote } from "@/components/app-icons";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useRemoteWorkspaces, useWorkspaceQuery, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { seedOpeningLocalEcho, useStageAttachments, type ConversationLocalEcho } from "../hooks/useConversation";
@@ -366,6 +366,12 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 	const frozen = pending || Boolean(pendingLaunch);
 	const frozenSettings = launched ?? pendingLaunch?.settings;
 	pendingRef.current = pending;
+	// From the send on, the shell gives this page the session's top bar, before the
+	// first message paints, so the message sits where the session shows it.
+	useLayoutEffect(() => {
+		useUiStore.getState().setNewChatSending(pending);
+		return () => useUiStore.getState().setNewChatSending(false);
+	}, [pending]);
 	const notice = pending ? null : task.error && (task.errorAction || fallbackFailed) ? (
 		<div role="alert" className="flex items-center gap-2 px-1 text-xs text-destructive">
 			<span>{task.error}</span>
