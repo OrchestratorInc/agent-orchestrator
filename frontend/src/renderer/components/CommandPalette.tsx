@@ -59,6 +59,7 @@ import {
 	workerSessions,
 } from "../types/workspace";
 import { useUiStore } from "../stores/ui-store";
+import { useSessionImportStore } from "../stores/session-import-store";
 import { runAppShortcut, useAppShortcut } from "../hooks/useAppShortcut";
 import { CreateProjectFlow } from "./CreateProjectFlow";
 import { requestOpenShareLink } from "./OpenShareLinkDialog";
@@ -737,6 +738,11 @@ export const CommandPalette = memo(function CommandPalette() {
 					closePalette();
 					useUiStore.getState().openGlobalSettings(action.section, action.focus ? { focusSetting: action.focus } : undefined);
 					break;
+				case "open-session-import":
+					closePalette();
+					if (action.projectId) useSessionImportStore.getState().openProjectImport(action.projectId);
+					else useSessionImportStore.getState().openFolderImport();
+					break;
 				case "run-shortcut": {
 					closePalette();
 					// After the palette has closed, so the action sees the screen
@@ -1081,6 +1087,7 @@ function opensModal(action: NonNullable<CommandItemModel["action"]>, taskOpensMo
 		case "open-new-task":
 			return taskOpensModal;
 		case "open-new-project":
+		case "open-session-import":
 		case "open-archive":
 		case "open-shared-link":
 		case "open-settings-section":

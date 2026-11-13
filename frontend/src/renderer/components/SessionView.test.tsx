@@ -1,9 +1,12 @@
 import { StrictMode, useEffect, type ReactNode } from "react";
+import { noPRDetails } from "../lib/pr-display";
+import type { SessionPRSummary } from "../hooks/useSessionScmSummary";
 import { sessionUiKey } from "../lib/hosts";
 import { createPortal } from "react-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render as rtlRender, renderHook, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { activatePRTab, deactivatePRTab, openPRTab, resetPRTabs } from "../lib/pr-tabs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionView } from "./SessionView";
 import { appShortcutBus } from "../test/app-shortcut-bus";
@@ -959,6 +962,31 @@ function render(ui: ReactNode) {
 	};
 }
 
+/** A PR the session's summary reports, as the inspector reads it. */
+function prSummaryFixture(number: number, url: string): SessionPRSummary {
+	return {
+		...noPRDetails(),
+		url,
+		htmlUrl: url,
+		number,
+		title: `PR ${number}`,
+		state: "open",
+		provider: "github",
+		repo: "acme/app",
+		author: "ada",
+		sourceBranch: `feat/${number}`,
+		targetBranch: "main",
+		headSha: `sha-${number}`,
+		additions: 1,
+		deletions: 0,
+		changedFiles: 1,
+		ci: { autoInjectCI: true, state: "passing", failingChecks: [], checks: [] },
+		review: { decision: "none", hasUnresolvedHumanComments: false, unresolvedBy: [] },
+		mergeability: { state: "mergeable", reasons: [], prUrl: url, conflictFiles: [] },
+		updatedAt: "2026-06-15T12:00:00Z",
+	};
+}
+
 describe("SessionView", () => {
 	function inspectorWidthVariable() {
 		return screen
@@ -1005,6 +1033,7 @@ describe("SessionView", () => {
 		workspaceQueryState.isStale = undefined;
 		useUiStore.setState({
 			activeShellTerminalHandleId: null,
+			prView: false,
 			workspaceFileOpenRequest: null,
 			// Opening a session leaves the inspector closed (covered by the
 			// "keeps the inspector closed" test); most tests here exercise the
@@ -1097,6 +1126,95 @@ describe("SessionView", () => {
 			}
 			return { data: { reviewerHandleId: "", reviews: [], runs: [] }, error: undefined };
 		});
+	});
+
+	it("shows no PR tab while the PR view is off, even one opened before", () => {
+		const url = "https://github.com/acme/app/pull/7";
+		const worker = workspaces.flatMap((workspace) => workspace.sessions).find((candidate) => candidate.id === "sess-1")!;
+		worker.prs = [{ number: 7, state: "open", url, title: "Seven" } as unknown as WorkspaceSession["prs"][number]];
+		try {
+			openPRTab("sess-1", url);
+			render(<SessionView sessionId="sess-1" />);
+			expect(screen.queryByTestId("pr-tab-pane")).not.toBeInTheDocument();
+			expect(screen.queryByRole("tab", { name: /^#7 Seven/ })).not.toBeInTheDocument();
+
+			// Turning the PR view on brings the tab back where it was.
+			act(() => useUiStore.setState({ developerMode: true, prView: true }));
+			expect(screen.getByTestId("pr-tab-pane")).toBeInTheDocument();
+		} finally {
+			resetPRTabs();
+			worker.prs = [];
+		}
+	});
+
+	it("keeps the tab of a PR the summary found before the session's facts did", async () => {
+		useUiStore.setState({ developerMode: true, prView: true });
+		const url = "https://github.com/acme/app/pull/9";
+		const defaultGet = reviewGetMock.getMockImplementation()!;
+		reviewGetMock.mockImplementation(async (path: string, ...args: unknown[]) => path === "/api/v1/sessions/{sessionId}/pr"
+			? { data: { prs: [prSummaryFixture(9, url)], linkedPrs: [] }, error: undefined }
+			: defaultGet(path, ...args));
+		try {
+			openPRTab("sess-1", url);
+			render(<SessionView sessionId="sess-1" />);
+			await waitFor(() => expect(reviewGetMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/pr", expect.anything()));
+			// The workspace facts don't list PR #9 yet; its tab stays open.
+			await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
+			expect(screen.getByTestId("pr-tab-pane")).toBeInTheDocument();
+		} finally {
+			resetPRTabs();
+		}
+	});
+
+	it("keeps a PR's tab mounted behind the others, so coming back finds it as it was", () => {
+		// A PR's tab is part of the PR view, a Developer mode preview.
+		useUiStore.setState({ developerMode: true, prView: true });
+		const url = "https://github.com/acme/app/pull/7";
+		const worker = workspaces.flatMap((workspace) => workspace.sessions).find((candidate) => candidate.id === "sess-1")!;
+		worker.prs = [{ number: 7, state: "open", url, title: "Seven" } as unknown as WorkspaceSession["prs"][number]];
+		try {
+			openPRTab("sess-1", url);
+			render(<SessionView sessionId="sess-1" />);
+			const pane = screen.getByTestId("pr-tab-pane");
+			expect(pane.parentElement).not.toHaveClass("invisible");
+
+			act(() => deactivatePRTab("sess-1"));
+			expect(screen.getByTestId("pr-tab-pane")).toBe(pane);
+			expect(pane.parentElement).toHaveClass("invisible");
+
+			act(() => activatePRTab("sess-1", url));
+			expect(screen.getByTestId("pr-tab-pane")).toBe(pane);
+			expect(pane.parentElement).not.toHaveClass("invisible");
+		} finally {
+			resetPRTabs();
+			worker.prs = [];
+		}
+	});
+
+	it("lets go of a selected shell when a PR's tab opens, so the shell changing doesn't take the view back", () => {
+		useUiStore.setState({ developerMode: true, prView: true });
+		const url = "https://github.com/acme/app/pull/7";
+		const worker = workspaces.flatMap((workspace) => workspace.sessions).find((candidate) => candidate.id === "sess-1")!;
+		worker.prs = [{ number: 7, state: "open", url, title: "Seven" } as unknown as WorkspaceSession["prs"][number]];
+		const shell = { handleId: "sh-a", sessionId: "sess-1", title: "build", workingDir: "/p", createdAt: "2026-07-24T00:00:00Z" };
+		shellTerminalsState.data = [shell];
+		try {
+			const view = render(<SessionView sessionId="sess-1" />);
+			act(() => useUiStore.getState().setActiveShellTerminal("sh-a"));
+			act(() => openPRTab("sess-1", url));
+			const pane = screen.getByTestId("pr-tab-pane");
+			expect(pane.parentElement).not.toHaveClass("invisible");
+			expect(useUiStore.getState().activeShellTerminalHandleId).toBeNull();
+
+			// The shell's title changes, as a running command renames it.
+			shellTerminalsState.data = [{ ...shell, title: "build (watching)" }];
+			view.rerender(<SessionView sessionId="sess-1" />);
+			expect(screen.getByTestId("pr-tab-pane").parentElement).not.toHaveClass("invisible");
+		} finally {
+			resetPRTabs();
+			worker.prs = [];
+			shellTerminalsState.data = [];
+		}
 	});
 
 	it("opens the Artifacts view for an artifact and consumes its feedback request once", async () => {

@@ -120,7 +120,6 @@ vi.mock("./conversationBanners", () => ({
 	controllerStoppedBanner: () => ({ key: "stopped", title: "The agent stopped" }),
 	errorBanner: () => undefined,
 	mcpNoticeKey: () => "notice",
-	quotaBanner: () => undefined,
 	reauthBanner: () => undefined,
 	rolledBackBanner: () => undefined,
 	threadBanner: () => undefined,
@@ -149,6 +148,10 @@ vi.mock("../files/navigation", async () => {
 	return { changedPathCount: () => 0, fileRoute: vi.fn(), filesRoute: vi.fn(), FilesNavigationContext: React.createContext(null) };
 });
 vi.mock("../files/useChangeSummary", () => ({ useChangeSummary: () => undefined }));
+vi.mock("./TurnArtifacts", async () => {
+	const React = await import("react");
+	return { TurnArtifactsContext: React.createContext(null), useTurnArtifactSourceFor: () => null };
+});
 vi.mock("./automationMessages", () => ({ sessionLink: () => undefined }));
 vi.mock("./sessionLookup", () => ({ readSession: vi.fn(async () => undefined) }));
 
@@ -231,6 +234,24 @@ describe("Chat while it switches to Terminal", () => {
 		expect(card().props).toMatchObject({ title: "Terminal UI is ready", ready: true, retryable: true });
 		await act(async () => (card().props.onRetry as () => void)());
 		expect(fixtures.refreshBoard).toHaveBeenCalledTimes(1);
+	});
+
+	it("takes its header title with it when the route swaps to Terminal", async () => {
+		fixtures.navigation.setOptions.mockClear();
+		fixtures.interfaceSwitch.transition = { id: "t-1", phase: "activating", targetMode: "tui" };
+		await mount();
+		fixtures.interfaceSwitch.transition = { id: "t-1", phase: "completed", targetMode: "tui" };
+		fixtures.conversation.snapshot.controller = { state: "stopped" };
+		await rerender();
+		// The stack merges each call into the route's options, and the route keeps
+		// them when it swaps Chat for Terminal, which sets only `title`. A
+		// `headerTitle` left behind outranks that title and froze the bar on the
+		// stopped Chat controller while the board said Idle (#8283).
+		const merged = () => Object.assign({}, ...fixtures.navigation.setOptions.mock.calls.map(([options]) => options as object)) as { headerTitle?: () => { props: { state?: string } } };
+		expect(merged().headerTitle?.().props.state).toBe("stopped");
+		await act(async () => renderer!.unmount());
+		renderer = undefined;
+		expect(merged().headerTitle).toBeUndefined();
 	});
 
 	it("shows the stopped controller as before for a switch that completed before this visit", async () => {

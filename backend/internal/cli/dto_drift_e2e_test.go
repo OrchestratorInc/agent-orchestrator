@@ -167,7 +167,7 @@ func (f *fakeProjectManager) CleanupPreparedClone(context.Context, projectsvc.Cl
 }
 
 func (f *fakeProjectManager) InitializeRepository(_ context.Context, in projectsvc.InitializeRepositoryInput) (projectsvc.InitializeRepositoryResult, error) {
-	return projectsvc.InitializeRepositoryResult(in), nil
+	return projectsvc.InitializeRepositoryResult{Path: in.Path}, nil
 }
 
 func (f *fakeProjectManager) UpdateSettings(_ context.Context, id domain.ProjectID, in projectsvc.UpdateSettingsInput) (projectsvc.Project, error) {

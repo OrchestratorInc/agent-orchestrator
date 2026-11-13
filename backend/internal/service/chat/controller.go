@@ -2284,8 +2284,9 @@ func excerptDeliveryMessage(msg ports.ChatUserMessage) ports.ChatUserMessage {
 // drain sends the next queued message now that the agent is free.
 //
 // Runs on the projection goroutine, so it observes turn completion in order with
-// everything else the provider said. One message per call: the turn it starts
-// makes the controller busy again, and the next completion drains the next.
+// everything else the provider said. One turn per call (see drainRun for what it
+// takes): the turn it starts makes the controller busy again, and the next
+// completion drains the next.
 func (c *Controller) drain(ctx context.Context) error {
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
@@ -2337,6 +2338,7 @@ func (c *Controller) drainLockedWithLimit(ctx context.Context, allowDispatch boo
 		return nil
 	}
 
+	take := limit
 	for {
 		preview, err := c.store.ListQueuedBatch(ctx, c.conversation.ID, limit)
 		if errors.Is(err, domain.ErrNoQueuedTurn) {
@@ -2344,6 +2346,10 @@ func (c *Controller) drainLockedWithLimit(ctx context.Context, allowDispatch boo
 		}
 		if err != nil {
 			return err
+		}
+		if limit == 0 {
+			preview = preview[:drainRun(preview)]
+			take = len(preview)
 		}
 		if _, err := c.queuedBatchInput(ctx, preview, nil); err != nil {
 			if id, ok := invalidBatchTurn(err); ok {
@@ -2356,7 +2362,7 @@ func (c *Controller) drainLockedWithLimit(ctx context.Context, allowDispatch boo
 		}
 		break
 	}
-	batch, err := c.store.ClaimQueuedBatch(ctx, c.conversation.ID, true, limit, c.now())
+	batch, err := c.store.ClaimQueuedBatch(ctx, c.conversation.ID, true, take, c.now())
 	if errors.Is(err, domain.ErrNoQueuedTurn) {
 		return nil
 	}
@@ -3833,8 +3839,12 @@ func (c *Controller) afterProject(ctx context.Context, event ports.ChatEvent, pr
 		}
 		c.reportActivity(ctx, activityState, activityEvent, now)
 		// Only a completed turn releases queued work; a failed or recovered one holds
-		// the queue so it cannot cascade through the same outage (issue #4861).
-		_ = c.drainLocked(ctx, settledTurnState(event) == domain.TurnStateCompleted) // drain logs failures.
+		// the queue so it cannot cascade through the same outage (issue #4861). A
+		// prompt the host's watchdog failed for silence is not an outage: the
+		// provider never answered, so the queued messages get their own turns.
+		releaseQueue := settledTurnState(event) == domain.TurnStateCompleted ||
+			errors.Is(event.Err, ports.ErrChatPromptStalled)
+		_ = c.drainLocked(ctx, releaseQueue) // drain logs failures.
 	case ports.ChatEventProviderState:
 		c.reportProviderState(ctx, event.ThreadState, now)
 	case ports.ChatEventApprovalRequested:

@@ -3,8 +3,10 @@ package omp
 import (
 	"context"
 	"database/sql"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	_ "modernc.org/sqlite"
@@ -129,5 +131,18 @@ func TestOMPDiagnosticsExplainDisabledCredentials(t *testing.T) {
 	steps := evidence.Diagnostics()
 	if len(steps) != 1 || steps[0].Code != "credentials_disabled" || steps[0].NextStep == "" {
 		t.Fatalf("steps=%+v", steps)
+	}
+}
+
+func TestOMPImmutableURIKeepsWindowsPathsOutOfTheAuthority(t *testing.T) {
+	for _, path := range []string{`C:\Users\AO\.omp\agent.db`, `/home/ao/.omp/agent #1.db`} {
+		uri := ompImmutableURI(path)
+		if strings.HasPrefix(uri, "file://") {
+			t.Fatalf("path became a URI authority: %q", uri)
+		}
+		body, query, _ := strings.Cut(strings.TrimPrefix(uri, "file:"), "?")
+		if decoded, err := url.PathUnescape(body); err != nil || decoded != path || query != "mode=ro&immutable=1" {
+			t.Fatalf("%q => %q (%q, %v)", path, uri, decoded, err)
+		}
 	}
 }

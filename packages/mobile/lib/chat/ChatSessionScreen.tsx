@@ -35,9 +35,8 @@ import { useChatKeyboard } from "./useChatKeyboard";
 import { ConversationTitle } from "./ConversationTitle";
 import { chatSheetRoute, type ChatSheetEntry } from "./chatSheetRegistry";
 import { conversationMenuGroups, type CloudConversationMenuAction, type ConversationMenuAction, type ConversationMenuGroup } from "./conversationMenuModel";
-import { quotaWarning } from "./conversationChrome";
 import { shouldAutoResume } from "./autoResume";
-import { controllerStoppedBanner, errorBanner, mcpNoticeKey, quotaBanner, reauthBanner, rolledBackBanner, threadBanner, type BannerCopy } from "./conversationBanners";
+import { controllerStoppedBanner, errorBanner, mcpNoticeKey, reauthBanner, rolledBackBanner, threadBanner, type BannerCopy } from "./conversationBanners";
 import { contextReadout } from "./conversationChrome";
 import { conversationActionError, conversationActionUnsupported } from "./conversationErrors";
 import { providerCatalogLive, turnOptionsLoadFor } from "./turnOptionsCatalog";
@@ -62,6 +61,7 @@ import { backOr } from "../backNavigation";
 import { userFacingError, NOT_PAIRED_ACTION_COPY, RECONNECTING_ACTION_COPY } from "../connectionError";
 import { ARCHIVE_SESSION_CONFIRM } from "../worker-action-model";
 import { changedPathCount, fileRoute, filesRoute, FilesNavigationContext, type FilesNavigation } from "../files/navigation";
+import { TurnArtifactsContext, useTurnArtifactSourceFor } from "./TurnArtifacts";
 import { useChangeSummary } from "../files/useChangeSummary";
 import { sessionLink } from "./automationMessages";
 import { readSession } from "./sessionLookup";
@@ -240,6 +240,8 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		openChanges: () => router.push(filesRoute(session.id, currentHostId, sessionName)),
 		openFile: (path, previousPath) => router.push(fileRoute(session.id, path, currentHostId, previousPath)),
 	}), [currentHostId, router, session.id, sessionName]);
+	// The artifacts a turn made, drawn as cards under its reply.
+	const turnArtifacts = useTurnArtifactSourceFor(session.id, conversation.snapshot?.turns, currentHostId);
 	// Re-read git's totals when a turn reports edits, not on a timer.
 	const lastTurn = conversation.snapshot?.turns.at(-1);
 	const changeSignal = `${changedPathCount(conversation.snapshot?.turns)}:${lastTurn?.id ?? ""}:${lastTurn?.state ?? ""}:${lastTurn?.diff?.files.length ?? 0}`;
@@ -295,6 +297,11 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 			),
 		});
 	}, [headerHarness, headerState, navigation, projectName, title, t]);
+	// The route keeps its options when it swaps this screen for the terminal,
+	// which sets only `title`. A `headerTitle` left here outranks it, so the bar
+	// stayed on this screen's last state: the Chat controller the switch stopped,
+	// read as "Stopped" while the session sat idle (#8283).
+	useLayoutEffect(() => () => navigation.setOptions({ headerTitle: undefined }), [navigation]);
 	// The conversation scrolls up under a clear bar. iOS 27's is the system's
 	// glass, which blurs it beneath the title, as Settings and the board do; the
 	// edge effect is the system's own: setting `scrollEdgeEffects` from here
@@ -665,7 +672,6 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	// Once per run of the session, like the desktop: a restart starts its tool servers again.
 	const noticeKey = mcpNoticeKey(currentHostId, session.id, "createdAt" in session ? session.createdAt : undefined);
 	const rolledBack = snapshot.turns.filter((turn) => turn.rolledBack).length;
-	const quota = quotaWarning(snapshot.rateLimits);
 	const compactSupported = can(snapshot, "compaction") && !conversationActionUnsupported("compact", conversation.actionCodes.compact);
 	const steerUnsupported = conversationActionUnsupported("steer", conversation.actionCodes.steer);
 
@@ -717,7 +723,6 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 				onDismiss={dismissBanner}
 			/>
 			{conversation.error ? <DismissibleBanner copy={errorBanner("load", conversation.error)} dismissed={dismissedBanners} onDismiss={dismissBanner} tone="danger" icon="offline" action="Retry" onPress={() => void conversation.refresh()} /> : null}
-			{quota ? <DismissibleBanner copy={quotaBanner(quota)} dismissed={dismissedBanners} onDismiss={dismissBanner} tone={quota.severity === "critical" ? "danger" : "warning"} icon="warning" action="Details" onPress={openUsage} /> : null}
 			{conversation.actionError && conversation.actionError !== conversation.error ? <DismissibleBanner copy={errorBanner("action", conversation.actionError)} dismissed={dismissedBanners} onDismiss={dismissBanner} tone="danger" icon="error" /> : null}
 			{rolledBack ? <DismissibleBanner copy={rolledBackBanner(rolledBack)} dismissed={dismissedBanners} onDismiss={dismissBanner} tone="muted" icon={{ ios: "arrow.uturn.backward", android: "undo" }} /> : null}
 			{conversation.pendingSends.map((pendingSend) => pendingSend.state === "failed" ? <InlineBanner key={pendingSend.id} tone="danger" icon="error" title="Message delivery uncertain" body={pendingSend.error || "Delivery failed"} action="Retry" secondary="Discard" onPress={() => void conversation.retrySend(pendingSend.id).catch(() => {})} onSecondary={() => void conversation.discardSend(pendingSend.id).catch(() => {})} /> : null)}
@@ -740,6 +745,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 			<View style={styles.conversation}>
 			<ChatLinkProvider onLinkOpen={openLink} sessionName={nameOfSession} onSessionNameNeeded={wantSessionName} onAddToChat={conversation.snapshot?.supportsExcerpts ? addResponseToChat : undefined}>
 				<FilesNavigationContext.Provider value={filesNavigation}>
+				<TurnArtifactsContext.Provider value={turnArtifacts}>
 				<ChatTimeline
 					snapshot={snapshot}
 					loadingOlder={conversation.loadingOlder}
@@ -760,6 +766,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 					bottomInset={composerHeight}
 					jumpHidden={composerOpen}
 				/>
+				</TurnArtifactsContext.Provider>
 				</FilesNavigationContext.Provider>
 			</ChatLinkProvider>
 			{switchCardShown ? (
@@ -821,7 +828,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 					machine={machine}
 					snapshot={snapshot}
 					changes={changeSummary?.files ? { ...changeSummary, onOpen: filesNavigation.openChanges } : undefined}
-					quotaActive={Boolean(quota)}
+					onOpenUsage={openUsage}
 					request={request}
 					requestDismissed={requestDismissed}
 					onRequestDecide={conversation.resolveApproval}

@@ -1263,6 +1263,23 @@ describe("ChatMarkdown streaming fade", () => {
 		expect(container.textContent).toBe("already shown and more");
 	});
 
+	it("does not fade text that streamed while the window was hidden", () => {
+		const { container, rerender } = render(<ChatMarkdown text="seen" streaming />);
+		Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "hidden" });
+		try {
+			// Its fade could only play once the reader is back, replaying the whole stretch.
+			rerender(<ChatMarkdown text="seen while away" streaming />);
+		} finally {
+			Reflect.deleteProperty(document, "visibilityState");
+		}
+		const afterReturn = fading(container);
+		expect(container.textContent).toBe("seen while away");
+		// Only what arrives once the reader is back fades in.
+		rerender(<ChatMarkdown text="seen while away, back" streaming />);
+		expect(fading(container)).toBe(afterReturn + ", back".length);
+		expect(afterReturn).toBeLessThanOrEqual("seen".length);
+	});
+
 	it("fades while streaming and sheds the spans shortly after it settles", () => {
 		vi.useFakeTimers();
 		const { container, rerender } = render(<ChatMarkdown text="live text" streaming />);

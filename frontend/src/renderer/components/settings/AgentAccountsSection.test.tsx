@@ -183,3 +183,86 @@ it("shows an API-key CLI login as logged in without a subscription and keeps its
 	await user.click(within(row).getByRole("button", { name: "Log out" }));
 	expect(cliLogin.onLogout).toHaveBeenCalledTimes(1);
 });
+
+it("lists a login the CLI and a saved account share once", async () => {
+	const twin = { ...device, default: false, sameLoginAs: "acct-a" };
+	const savedA = { id: "acct-a", provider: "claude", device: false, default: true, signedIn: true, email: "a@example.com" };
+	getMock.mockImplementation((path: string) => Promise.resolve({
+		data: path === "/api/v1/agents/accounts/usage"
+			? { days: 30, usage: [{ accountId: "device-claude", inputTokens: 1000, outputTokens: 0 }, { accountId: "acct-a", inputTokens: 2000, outputTokens: 0 }] }
+			: { accounts: [twin, savedA] },
+	}));
+	renderPanel({ disabled: false, canLogout: true, onSignIn: vi.fn(), onLogout: vi.fn() });
+
+	const row = await waitFor(() => {
+		const found = document.querySelector<HTMLElement>('[data-agent-account="acct-a"]');
+		if (!found) throw new Error("no saved row");
+		return found;
+	});
+	expect(document.querySelector('[data-agent-account="device-claude"]')).not.toBeInTheDocument();
+	expect(screen.getAllByText("a@example.com")).toHaveLength(1);
+	expect(screen.queryByText("Claude Code CLI login")).not.toBeInTheDocument();
+	await waitFor(() => expect(within(row).getByText(/3K tokens in Orchestrator/)).toBeInTheDocument());
+	expect(within(row).getByRole("button", { name: "Remove account" })).toBeInTheDocument();
+	expect(within(row).queryByRole("button", { name: "Log out" })).not.toBeInTheDocument();
+});
+
+it("keeps the CLI's login as its own row while it is the default, so the saved account can be made the default", async () => {
+	const user = userEvent.setup();
+	const twin = { ...device, default: true, sameLoginAs: "acct-a" };
+	const savedA = { id: "acct-a", provider: "claude", device: false, default: false, signedIn: true, email: "a@example.com" };
+	getMock.mockImplementation((path: string) => Promise.resolve({
+		data: path === "/api/v1/agents/accounts/usage" ? { days: 30, usage: [] } : { accounts: [twin, savedA, { ...saved, signedIn: true }] },
+	}));
+	renderPanel();
+
+	const cliRow = await findCliLoginRow();
+	await waitFor(() => expect(document.querySelector('[data-agent-account="acct-a"]')).toBeInTheDocument());
+	const row = document.querySelector<HTMLElement>('[data-agent-account="acct-a"]')!;
+	expect(cliRow).toHaveTextContent("a@example.com · Claude Code CLI login");
+	expect(within(cliRow).getByText("Default for new tasks")).toBeInTheDocument();
+	expect(screen.getAllByText("Default for new tasks")).toHaveLength(1);
+	await user.click(within(row).getByRole("button", { name: "Make default" }));
+	expect(postMock).toHaveBeenCalledWith("/api/v1/agents/accounts/{accountId}/default", { params: { path: { accountId: "acct-a" } } });
+});
+
+it("names each organization when one email has accounts in several", async () => {
+	const acme = { id: "acct-a", provider: "claude", device: false, default: true, signedIn: true, email: "a@example.com", orgName: "Acme" };
+	const personal = { id: "acct-p", provider: "claude", device: false, default: false, signedIn: true, email: "a@example.com", orgName: "Personal" };
+	getMock.mockImplementation((path: string) => Promise.resolve({
+		data: path === "/api/v1/agents/accounts/usage" ? { days: 30, usage: [] } : { accounts: [{ ...device, signedIn: false, loggedIn: false, default: false, email: undefined }, acme, personal] },
+	}));
+	renderPanel();
+
+	await waitFor(() => expect(document.querySelector('[data-agent-account="acct-p"]')).toBeInTheDocument());
+	expect(document.querySelector('[data-agent-account="acct-a"]')).toHaveTextContent("a@example.com · Acme");
+	expect(document.querySelector('[data-agent-account="acct-p"]')).toHaveTextContent("a@example.com · Personal");
+});
+
+it("names the organization when signing in again lands in another one", async () => {
+	const user = userEvent.setup();
+	postMock.mockImplementation((path: string) => {
+		if (path === "/api/v1/agents/accounts/{accountId}/login") return Promise.resolve({ data: login });
+		if (path === "/api/v1/agents/accounts/login/{operationId}/verify") return Promise.resolve({ data: { status: "mismatch", account: { ...saved, orgName: "Acme" } } });
+		return Promise.resolve({ data: {} });
+	});
+	renderPanel();
+	await user.click(await screen.findByRole("button", { name: "Sign in again" }));
+	await user.click(await screen.findByRole("button", { name: "Check sign-in" }));
+	await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("This account is b@example.com · Acme. Sign in again with that login."));
+});
+
+it("says an API key is not a subscription sign-in and keeps the sign-in open", async () => {
+	const user = userEvent.setup();
+	postMock.mockImplementation((path: string) => {
+		if (path === "/api/v1/agents/accounts/{accountId}/login") return Promise.resolve({ data: login });
+		if (path === "/api/v1/agents/accounts/login/{operationId}/verify") return Promise.resolve({ data: { status: "not_subscription" } });
+		return Promise.resolve({ data: {} });
+	});
+	renderPanel();
+	await user.click(await screen.findByRole("button", { name: "Sign in again" }));
+	await user.click(await screen.findByRole("button", { name: "Check sign-in" }));
+	await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("This is an API key, not a subscription. Sign in with your subscription account."));
+	expect(screen.getByTestId("agent-account-login-terminal")).toBeInTheDocument();
+	expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+});

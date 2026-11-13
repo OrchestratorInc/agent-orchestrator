@@ -1,13 +1,16 @@
 package acp
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/persistenthost"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 // startScriptedAckConversation is startScriptedHostConversation for an agent
@@ -184,5 +187,97 @@ func TestACPSteerPromptAcknowledgedSteerOfAnAdoptedTurn(t *testing.T) {
 	done := completionsOf(t, conv, "durable-turn")
 	if len(done) != 1 || done[0].TurnState != domain.TurnStateCompleted || done[0].ProviderEventID != "acp-host:9" {
 		t.Fatalf("turn completions = %+v, want one completed with the host's receipt", done)
+	}
+}
+
+// Hermes' turn can end just before `/steer` arrives. Hermes then answers "No
+// active turn" and runs the guidance inside the `/steer` request, and the host
+// holds the turn's own answer until that request answers. The steer took, the
+// run's output belongs to the turn, and the turn ends once, with its own
+// prompt's receipt, after the run.
+func TestACPSteerPromptRunAfterNoActiveTurnStaysInTheTurn(t *testing.T) {
+	conv, host := startScriptedAckConversation(t, "")
+	conv.stragglerWait = 100 * time.Millisecond
+	_ = nextEvent(t, conv.Events()) // controller.ready
+	turn, root := startScriptedTurn(t, conv, host)
+	steer, outcome := steerAsync(t, conv, host, turn)
+
+	host.send(ackNote("ACK: no active turn, running it now"))
+	if err := steerOutcome(t, outcome); err != nil {
+		t.Fatalf("Steer = %v, want delivered", err)
+	}
+	host.send(`{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"provider-session","update":` +
+		`{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"editing staging.yaml"}}}}`)
+	var ran bool
+	deadline := time.After(2 * time.Second)
+	for !ran {
+		select {
+		case event := <-conv.Events():
+			if event.Kind == ports.ChatEventTurnCompleted {
+				t.Fatalf("the turn ended while the steer's run was still going: %+v", event)
+			}
+			ran = event.ProviderTurnID == turn && strings.Contains(event.Delta, "staging.yaml")
+		case <-deadline:
+			t.Fatal("the steer's run never reached the turn")
+		}
+	}
+	// No receipt yet, so the straggler wait never starts.
+	if early := turnCompletions(t, conv.Events(), turn, 300*time.Millisecond); len(early) != 0 {
+		t.Fatalf("the turn ended before the host gave its result: %+v", early)
+	}
+
+	host.send(plainResult(steer))
+	host.send(receiptResult(root, "acp-host:18"))
+	done := completionsOf(t, conv, turn)
+	if len(done) != 1 || done[0].TurnState != domain.TurnStateCompleted || done[0].ProviderEventID != "acp-host:18" {
+		t.Fatalf("turn completions = %+v, want one completed with the host's receipt", done)
+	}
+}
+
+// A steer command's answer that outlives its turn, and a later steered turn
+// too, is dropped. It must not end the old turn a second time or close the
+// running turn's items under the old turn's id.
+func TestACPSteerPromptLateAnswerAfterALaterSteeredTurnIsDropped(t *testing.T) {
+	conv, host := startScriptedAckConversation(t, "")
+	conv.stragglerWait = 100 * time.Millisecond
+	_ = nextEvent(t, conv.Events()) // controller.ready
+
+	first, firstRoot := startScriptedTurn(t, conv, host)
+	lateSteer, outcome := steerAsync(t, conv, host, first)
+	host.send(ackNote("ACK: queued for the active turn"))
+	if err := steerOutcome(t, outcome); err != nil {
+		t.Fatalf("first Steer = %v, want delivered", err)
+	}
+	host.send(receiptResult(firstRoot, "acp-host:19"))
+	if done := completionsOf(t, conv, first); len(done) != 1 {
+		t.Fatalf("first turn completions = %+v, want one", done)
+	}
+	if err := conv.AcknowledgeProviderEvent(context.Background(), "acp-host:19"); err != nil {
+		t.Fatalf("AcknowledgeProviderEvent: %v", err)
+	}
+
+	second, secondRoot := startScriptedTurn(t, conv, host)
+	secondSteer, outcome := steerAsync(t, conv, host, second)
+	host.send(ackNote("ACK: queued for the active turn"))
+	if err := steerOutcome(t, outcome); err != nil {
+		t.Fatalf("second Steer = %v, want delivered", err)
+	}
+	host.send(plainResult(secondSteer))
+	host.send(receiptResult(secondRoot, "acp-host:20"))
+	if done := completionsOf(t, conv, second); len(done) != 1 {
+		t.Fatalf("second turn completions = %+v, want one", done)
+	}
+
+	host.send(plainResult(lateSteer))
+	deadline := time.After(300 * time.Millisecond)
+	for {
+		select {
+		case event := <-conv.Events():
+			if event.Kind == ports.ChatEventTurnCompleted || event.Kind == ports.ChatEventControllerState {
+				t.Fatalf("a late steer answer from an earlier turn emitted %+v", event)
+			}
+		case <-deadline:
+			return
+		}
 	}
 }
