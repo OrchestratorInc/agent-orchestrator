@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -16,11 +17,10 @@ import (
 const AccountHandoffEvent = "account.limit_handoff"
 
 const (
-	accountHandoffWindow   = 10 * time.Minute
-	accountHandoffCooldown = 5 * time.Hour
-	accountHandoffGiveUp   = 10 * time.Minute
-	accountHandoffBackoff  = 15 * time.Second
-	accountHandoffWorkers  = 4
+	accountHandoffWindow  = 10 * time.Minute
+	accountHandoffGiveUp  = 10 * time.Minute
+	accountHandoffBackoff = 15 * time.Second
+	accountHandoffWorkers = 4
 
 	accountHandoffRetrySent    = "sent"
 	accountHandoffRetrySkipped = "skipped"
@@ -36,7 +36,7 @@ type accountHandoffStore interface {
 // AccountHandoffAccounts reads accounts and their native limits.
 type AccountHandoffAccounts interface {
 	SessionAccountID(context.Context, domain.SessionID, domain.AgentHarness) (string, error)
-	HandoffTarget(context.Context, domain.SessionID, domain.AgentHarness, string, map[string]bool) (string, error)
+	HandoffTarget(context.Context, domain.SessionID, domain.AgentHarness, string) (string, error)
 }
 
 // AccountHandoffMover starts Session Manager's durable account move.
@@ -54,15 +54,11 @@ type accountHandoff struct {
 	turnID         string
 	conversationID string
 	sessionID      domain.SessionID
-	sourceAccount  string
-	resetsAt       *time.Time
-	claimedAt      time.Time
 
-	busy      bool
-	done      bool
-	retryAt   time.Time
-	moved     bool
-	leftUntil time.Time
+	busy    bool
+	done    bool
+	retryAt time.Time
+	moved   atomic.Bool
 
 	targetAccount string
 	transitionID  string
@@ -113,7 +109,7 @@ func (s *Service) HandoffUsageLimitedTurns(ctx context.Context) error {
 		switch {
 		case h.busy:
 			running++
-		case h.done && now.After(h.claimedAt.Add(accountHandoffWindow)) && now.After(h.leftUntil):
+		case h.done && now.After(h.stepAt.Add(accountHandoffWindow)):
 			delete(s.handoffs, id)
 		case !h.done && !h.retryAt.After(now):
 			mine = append(mine, h)
@@ -182,16 +178,11 @@ func (s *Service) claimAccountHandoffs(ctx context.Context, store accountHandoff
 		if _, accounts := domain.AgentAccountProviderFor(record.Harness); !found || !accounts {
 			continue
 		}
-		account, err := deps.accounts.SessionAccountID(ctx, record.ID, record.Harness)
-		if err != nil || account == "" {
+		if account, err := deps.accounts.SessionAccountID(ctx, record.ID, record.Harness); err != nil || account == "" {
 			s.log.Debug("account handoff: session account unavailable", "session", record.ID, "error", err)
 			continue
 		}
-		now := s.now()
-		claimed = append(claimed, &accountHandoff{
-			turnID: turn.ID, conversationID: turn.ConversationID, sessionID: record.ID,
-			sourceAccount: account, resetsAt: turn.UsageLimit.ResetsAt, claimedAt: now, stepAt: now,
-		})
+		claimed = append(claimed, &accountHandoff{turnID: turn.ID, conversationID: turn.ConversationID, sessionID: record.ID, stepAt: s.now()})
 	}
 	return claimed, nil
 }
@@ -200,7 +191,7 @@ func (s *Service) stepAccountHandoff(ctx context.Context, store accountHandoffSt
 	switch {
 	case h.transitionID == "":
 		return s.selectAccountHandoff(ctx, store, deps, h)
-	case !s.accountHandoffMoved(h):
+	case !h.moved.Load():
 		return s.settleAccountHandoffMove(ctx, store, deps, h)
 	}
 	return s.retryAccountHandoff(ctx, store, h)
@@ -219,7 +210,7 @@ func (s *Service) selectAccountHandoff(ctx context.Context, store accountHandoff
 		err = validateUsageLimitSession(record)
 	}
 	if err == nil {
-		err = s.validateAccountHandoffSource(ctx, source)
+		err = actionableUsageLimitTurn(ctx, s.store, source)
 	}
 	if err != nil {
 		if permanentUsageLimitResumeError(err) {
@@ -234,7 +225,7 @@ func (s *Service) selectAccountHandoff(ctx context.Context, store accountHandoff
 	if conversation, err := s.store.ConversationForSession(ctx, h.sessionID); err == nil {
 		model = conversation.Settings.Model
 	}
-	target, err := deps.accounts.HandoffTarget(ctx, h.sessionID, record.Harness, model, s.accountsLeftBySession(h))
+	target, err := deps.accounts.HandoffTarget(ctx, h.sessionID, record.Harness, model)
 	if errors.Is(err, ports.ErrAgentAccountChanged) {
 		return true, nil
 	}
@@ -254,43 +245,17 @@ func (s *Service) selectAccountHandoff(ctx context.Context, store accountHandoff
 	}
 	transition, err := deps.mover.StartAccountTransition(ctx, h.sessionID, target, domain.SessionInterfaceTransitionDrain)
 	if err != nil {
-		return s.stayOnAccount(ctx, h, source, "AO could not start the move: "+err.Error())
+		return s.stayOnAccount(ctx, h, source, "could not start the move: "+err.Error())
 	}
 	h.targetAccount, h.transitionID, h.stepAt = transition.TargetAccountID, transition.ID, s.now()
-	leftUntil := s.now().Add(accountHandoffCooldown)
-	if h.resetsAt != nil {
-		leftUntil = *h.resetsAt
-	}
-	s.handoffMu.Lock()
-	h.leftUntil = leftUntil
-	s.handoffMu.Unlock()
 	return s.settleAccountHandoffMove(ctx, store, deps, h)
-}
-
-func (s *Service) accountsLeftBySession(h *accountHandoff) map[string]bool {
-	exclude := map[string]bool{h.sourceAccount: true}
-	now := s.now()
-	s.handoffMu.Lock()
-	defer s.handoffMu.Unlock()
-	for _, other := range s.handoffs {
-		if other.sessionID == h.sessionID && other.leftUntil.After(now) {
-			exclude[other.sourceAccount] = true
-		}
-	}
-	return exclude
-}
-
-func (s *Service) accountHandoffMoved(h *accountHandoff) bool {
-	s.handoffMu.Lock()
-	defer s.handoffMu.Unlock()
-	return h.moved
 }
 
 func (s *Service) accountHandoffRetried(turnID string) bool {
 	s.handoffMu.Lock()
 	defer s.handoffMu.Unlock()
 	prior, found := s.handoffs[turnID]
-	return found && prior.moved
+	return found && prior.moved.Load()
 }
 
 func (s *Service) settleAccountHandoffMove(ctx context.Context, store accountHandoffStore, deps accountHandoffDeps, h *accountHandoff) (bool, error) {
@@ -335,9 +300,7 @@ func (s *Service) settleAccountHandoffMove(ctx context.Context, store accountHan
 		return false, err
 	}
 	h.stepAt = s.now()
-	s.handoffMu.Lock()
-	h.moved = true
-	s.handoffMu.Unlock()
+	h.moved.Store(true)
 	return s.retryAccountHandoff(ctx, store, h)
 }
 
@@ -346,7 +309,7 @@ func (s *Service) noteAccountHandoff(ctx context.Context, h *accountHandoff, ret
 	if err != nil {
 		return err
 	}
-	fields := map[string]string{"event": AccountHandoffEvent, "accountId": h.targetAccount, "fromAccountId": h.sourceAccount}
+	fields := map[string]string{"event": AccountHandoffEvent, "accountId": h.targetAccount}
 	if retry != "" {
 		fields["retry"] = retry
 	}
@@ -412,15 +375,15 @@ func (s *Service) retryAccountHandoffOnController(ctx context.Context, h *accoun
 	return err
 }
 
-func (s *Service) validateAccountHandoffSource(ctx context.Context, source domain.ConversationTurn) error {
-	store, ok := s.store.(usageLimitStore)
+func actionableUsageLimitTurn(ctx context.Context, turns Store, source domain.ConversationTurn) error {
+	store, ok := turns.(usageLimitStore)
 	if !ok {
 		return ErrUsageLimitAutoResumeInvalid
 	}
 	if source.State != domain.TurnStateFailed || source.RolledBackAt != nil || source.UsageLimit == nil {
 		return fmt.Errorf("%w: this turn is not an actionable usage-limit failure", ErrUsageLimitAutoResumeInvalid)
 	}
-	return validateUsageLimitRetry(ctx, s.store, store, source)
+	return validateUsageLimitRetry(ctx, turns, store, source)
 }
 
 func (c *Controller) retryAccountHandoffTurn(ctx context.Context, turnID string) (domain.ConversationTurn, error) {
@@ -428,19 +391,14 @@ func (c *Controller) retryAccountHandoffTurn(ctx context.Context, turnID string)
 		return domain.ConversationTurn{}, ErrTurnRunning
 	}
 	defer c.sendMu.Unlock()
-	store, ok := c.store.(usageLimitStore)
-	if !ok {
-		return domain.ConversationTurn{}, ErrUsageLimitAutoResumeInvalid
-	}
 	source, err := c.store.TurnByID(ctx, turnID)
 	if err != nil {
 		return domain.ConversationTurn{}, err
 	}
-	if source.ConversationID != c.conversation.ID || source.HandledBySessionID != c.sessionID ||
-		source.State != domain.TurnStateFailed || source.RolledBackAt != nil || source.UsageLimit == nil {
+	if source.ConversationID != c.conversation.ID || source.HandledBySessionID != c.sessionID {
 		return domain.ConversationTurn{}, ErrUsageLimitAutoResumeInvalid
 	}
-	if err := validateUsageLimitRetry(ctx, c.store, store, source); err != nil {
+	if err := actionableUsageLimitTurn(ctx, c.store, source); err != nil {
 		return domain.ConversationTurn{}, err
 	}
 	return c.retryTurnLocked(ctx, turnID, false)

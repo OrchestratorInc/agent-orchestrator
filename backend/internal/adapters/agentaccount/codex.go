@@ -133,7 +133,7 @@ func (c *Codex) Limits(ctx context.Context, home string) (domain.AgentAccountLim
 		Windows: []domain.AgentAccountLimitWindow{}, FetchedAt: time.Now().UTC(),
 		AutoResumeResetsAt: capacity.AutoResumeResetsAt,
 	}
-	addBucket := func(bucket *domain.CodexCapacityBucket, prefix, scope string) {
+	addBucket := func(bucket *domain.CodexCapacityBucket, prefix string) {
 		if bucket == nil {
 			return
 		}
@@ -146,7 +146,7 @@ func (c *Codex) Limits(ctx context.Context, home string) (domain.AgentAccountLim
 				label = prefix + " · " + label
 			}
 			window := domain.AgentAccountLimitWindow{
-				ID: bucket.LimitID + ":" + label, Label: label, UsedPercent: min(max(w.UsedPercent, 0), 100), ResetsAt: w.ResetsAt, Scope: scope,
+				ID: bucket.LimitID + ":" + label, Label: label, UsedPercent: min(max(w.UsedPercent, 0), 100), ResetsAt: w.ResetsAt, Scope: prefix,
 			}
 			if w.WindowDurationMinutes != nil && *w.WindowDurationMinutes > 0 {
 				window.DurationMinutes = int(*w.WindowDurationMinutes)
@@ -154,14 +154,14 @@ func (c *Codex) Limits(ctx context.Context, home string) (domain.AgentAccountLim
 			out.Windows = append(out.Windows, window)
 		}
 	}
-	addBucket(capacity.Overall, "", "")
+	addBucket(capacity.Overall, "")
 	for i := range capacity.AdditionalBuckets {
 		bucket := capacity.AdditionalBuckets[i]
 		name := bucket.LimitID
 		if bucket.DisplayName != nil && strings.TrimSpace(*bucket.DisplayName) != "" {
 			name = *bucket.DisplayName
 		}
-		addBucket(&bucket, name, name)
+		addBucket(&bucket, name)
 	}
 	if capacity.ResetCredits != nil {
 		n := capacity.ResetCredits.AvailableCount

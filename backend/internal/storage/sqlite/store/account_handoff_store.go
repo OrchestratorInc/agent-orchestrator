@@ -9,7 +9,6 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
-	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/gen"
 )
 
 // SessionAccountPinned reports the session's "Stay on this account" choice.
@@ -22,7 +21,7 @@ func (s *Store) SessionAccountPinned(ctx context.Context, id domain.SessionID) (
 }
 
 // SetSessionAccountPinned records or clears "Stay on this account".
-func (s *Store) SetSessionAccountPinned(ctx context.Context, id domain.SessionID, pinned bool, now time.Time) error {
+func (s *Store) SetSessionAccountPinned(ctx context.Context, id domain.SessionID, pinned bool) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	if _, err := s.qw.GetSession(ctx, id); errors.Is(err, sql.ErrNoRows) {
@@ -32,7 +31,7 @@ func (s *Store) SetSessionAccountPinned(ctx context.Context, id domain.SessionID
 	}
 	var err error
 	if pinned {
-		err = s.qw.PinSessionAccount(ctx, gen.PinSessionAccountParams{SessionID: string(id), PinnedAt: now})
+		err = s.qw.PinSessionAccount(ctx, string(id))
 	} else {
 		err = s.qw.UnpinSessionAccount(ctx, string(id))
 	}

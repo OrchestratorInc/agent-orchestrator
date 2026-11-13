@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -17,7 +16,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
-	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/store"
 )
 
 const (
@@ -30,8 +28,7 @@ type fakeHandoffAccounts struct {
 	provider domain.AgentAccountProvider
 	mu       sync.Mutex
 	target   string
-	models   []string
-	excluded []map[string]bool
+	calls    int
 	onTarget func()
 }
 
@@ -40,16 +37,12 @@ func (a *fakeHandoffAccounts) SessionAccountID(ctx context.Context, id domain.Se
 	return account, err
 }
 
-func (a *fakeHandoffAccounts) HandoffTarget(_ context.Context, _ domain.SessionID, _ domain.AgentHarness, model string, exclude map[string]bool) (string, error) {
+func (a *fakeHandoffAccounts) HandoffTarget(_ context.Context, _ domain.SessionID, _ domain.AgentHarness, _ string) (string, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.models = append(a.models, model)
-	a.excluded = append(a.excluded, exclude)
+	a.calls++
 	if a.onTarget != nil {
 		a.onTarget()
-	}
-	if exclude[a.target] {
-		return "", nil
 	}
 	return a.target, nil
 }
@@ -173,29 +166,7 @@ func usageLimitMessage(agentHarness domain.AgentHarness, knownReset bool, now ti
 	return timedUsageLimit
 }
 
-func handoffNotes(t *testing.T, h *harness, turnID string) int {
-	t.Helper()
-	conversation, err := h.st.ConversationForSession(context.Background(), testSession)
-	if err != nil {
-		t.Fatal(err)
-	}
-	rows, err := h.st.LoadConversationSnapshot(context.Background(), conversation.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	notes := 0
-	for _, activity := range rows.Activities {
-		if activity.ProviderItemID == "account-handoff:"+turnID {
-			if !strings.Contains(string(activity.Detail), chatsvc.AccountHandoffEvent) || !strings.Contains(string(activity.Detail), handoffTarget) {
-				t.Fatalf("handoff note detail = %s", activity.Detail)
-			}
-			notes++
-		}
-	}
-	return notes
-}
-
-func handoffNoteRetry(t *testing.T, h *harness, turnID string) string {
+func handoffNotes(t *testing.T, h *harness, turnID string) (notes int, retry string) {
 	t.Helper()
 	conversation, err := h.st.ConversationForSession(context.Background(), testSession)
 	if err != nil {
@@ -206,18 +177,16 @@ func handoffNoteRetry(t *testing.T, h *harness, turnID string) string {
 		t.Fatal(err)
 	}
 	for _, activity := range rows.Activities {
-		if activity.ProviderItemID == "account-handoff:"+turnID {
-			var detail struct {
-				Retry string `json:"retry"`
-			}
-			if err := json.Unmarshal(activity.Detail, &detail); err != nil {
-				t.Fatal(err)
-			}
-			return detail.Retry
+		if activity.ProviderItemID != "account-handoff:"+turnID {
+			continue
 		}
+		var detail struct{ Event, AccountID, Retry string }
+		if err := json.Unmarshal(activity.Detail, &detail); err != nil || detail.Event != chatsvc.AccountHandoffEvent || detail.AccountID != handoffTarget {
+			t.Fatalf("handoff note detail = %s (%v)", activity.Detail, err)
+		}
+		notes, retry = notes+1, detail.Retry
 	}
-	t.Fatal("no handoff note")
-	return ""
+	return notes, retry
 }
 
 var bothAccountHarnesses = []domain.AgentHarness{domain.HarnessClaudeCode, domain.HarnessCodex}
@@ -232,9 +201,6 @@ func TestAccountHandoffMovesAndRetriesExactlyOnce(t *testing.T) {
 			hh.tick(t)
 			if moves := hh.mover.moves(); len(moves) != 1 || moves[0].TargetAccountID != handoffTarget || moves[0].Policy != domain.SessionInterfaceTransitionDrain {
 				t.Fatalf("moves = %+v", moves)
-			}
-			if !hh.accounts.excluded[0][handoffSource] {
-				t.Fatalf("the refused account was a candidate: %v", hh.accounts.excluded[0])
 			}
 			hh.tick(t)
 			if got := len(hh.conv.sentMessages()); got != 1 {
@@ -257,11 +223,8 @@ func TestAccountHandoffMovesAndRetriesExactlyOnce(t *testing.T) {
 			if err != nil || !found {
 				t.Fatalf("retry link: %v %v", found, err)
 			}
-			if notes := handoffNotes(t, hh.harness, source.ID); notes != 1 {
-				t.Fatalf("handoff notes = %d", notes)
-			}
-			if got := handoffNoteRetry(t, hh.harness, source.ID); got != "sent" {
-				t.Fatalf("handoff note retry = %q", got)
+			if notes, retry := handoffNotes(t, hh.harness, source.ID); notes != 1 || retry != "sent" {
+				t.Fatalf("handoff notes = %d, retry = %q", notes, retry)
 			}
 			if len(hh.mover.moves()) != 1 || hh.boundAccount(t) != handoffTarget {
 				t.Fatalf("moves=%d account=%s", len(hh.mover.moves()), hh.boundAccount(t))
@@ -320,7 +283,7 @@ func TestAccountHandoffRollbackKeepsAccount(t *testing.T) {
 				if want := phase == domain.SessionInterfaceTransitionFailed; stored.UsageLimit.AutoResume != want {
 					t.Fatalf("auto-resume = %v, want %v", stored.UsageLimit.AutoResume, want)
 				}
-				if handoffNotes(t, hh.harness, source.ID) != 0 {
+				if notes, _ := handoffNotes(t, hh.harness, source.ID); notes != 0 {
 					t.Fatal("a rolled-back move wrote a note")
 				}
 			})
@@ -330,7 +293,7 @@ func TestAccountHandoffRollbackKeepsAccount(t *testing.T) {
 
 func TestAccountHandoffRespectsStayOnAccount(t *testing.T) {
 	hh := newHandoffHarness(t, domain.HarnessClaudeCode)
-	if err := hh.st.SetSessionAccountPinned(context.Background(), testSession, true, hh.now()); err != nil {
+	if err := hh.st.SetSessionAccountPinned(context.Background(), testSession, true); err != nil {
 		t.Fatal(err)
 	}
 	source := failUsageLimitedTurn(t, hh.harness, timedUsageLimit)
@@ -346,7 +309,7 @@ func TestAccountHandoffRespectsStayOnAccount(t *testing.T) {
 
 func TestStayOnAccountRejectsUnknownSession(t *testing.T) {
 	hh := newHandoffHarness(t, domain.HarnessClaudeCode)
-	if err := hh.st.SetSessionAccountPinned(context.Background(), "missing-session", true, hh.now()); !errors.Is(err, ports.ErrSessionNotFound) {
+	if err := hh.st.SetSessionAccountPinned(context.Background(), "missing-session", true); !errors.Is(err, ports.ErrSessionNotFound) {
 		t.Fatalf("pin unknown session: %v", err)
 	}
 }
@@ -356,13 +319,13 @@ func TestAccountHandoffOffClaimsNothing(t *testing.T) {
 	hh.enabled.Store(false)
 	failUsageLimitedTurn(t, hh.harness, usageLimitMessage(domain.HarnessCodex, true, hh.now()))
 	hh.tick(t)
-	if len(hh.accounts.excluded) != 0 {
+	if hh.accounts.calls != 0 {
 		t.Fatal("claimed with the setting off")
 	}
 	hh.enabled.Store(true)
 	hh.advance(11 * time.Minute)
 	hh.tick(t)
-	if len(hh.accounts.excluded) != 0 || len(hh.mover.moves()) != 0 {
+	if hh.accounts.calls != 0 || len(hh.mover.moves()) != 0 {
 		t.Fatal("an old failure was handed off")
 	}
 }
@@ -372,7 +335,7 @@ func TestAccountHandoffTurnedOffDuringSelectionDoesNotMove(t *testing.T) {
 	hh.accounts.onTarget = func() { hh.enabled.Store(false) }
 	failUsageLimitedTurn(t, hh.harness, usageLimitMessage(domain.HarnessCodex, true, hh.now()))
 	hh.tick(t)
-	if len(hh.accounts.excluded) != 1 || len(hh.mover.moves()) != 0 {
+	if hh.accounts.calls != 1 || len(hh.mover.moves()) != 0 {
 		t.Fatal("moved after the setting was turned off")
 	}
 }
@@ -405,28 +368,6 @@ func TestAccountHandoffDoesNotPingPong(t *testing.T) {
 	}
 }
 
-func TestAccountHandoffExcludesRecentlyLeftAccount(t *testing.T) {
-	hh := newHandoffHarness(t, domain.HarnessCodex)
-	first := failUsageLimitedTurn(t, hh.harness, usageLimitMessage(domain.HarnessCodex, true, hh.now()))
-	hh.tick(t)
-	hh.mover.finish(t, domain.SessionInterfaceTransitionCompleted)
-	hh.tick(t)
-	retryID, _, _ := hh.st.RetryTurnIDForSource(context.Background(), first.ConversationID, first.ID)
-	retry, _ := hh.st.TurnByID(context.Background(), retryID)
-	hh.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: retry.ProviderTurnID, TurnState: domain.TurnStateCompleted})
-	hh.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
-		turn, ok := turnByID(s, retryID)
-		return ok && turn.State == domain.TurnStateCompleted
-	})
-	failUsageLimitedTurn(t, hh.harness, usageLimitMessage(domain.HarnessCodex, true, hh.now()))
-	hh.accounts.target = handoffSource
-	hh.tick(t)
-	last := hh.accounts.excluded[len(hh.accounts.excluded)-1]
-	if !last[handoffSource] || !last[handoffTarget] {
-		t.Fatalf("exclusions = %v, want both the current and the recently left account", last)
-	}
-}
-
 func TestAccountHandoffWithdrawsRetryForNewerPrompt(t *testing.T) {
 	hh := newHandoffHarness(t, domain.HarnessClaudeCode)
 	ctx := context.Background()
@@ -443,7 +384,7 @@ func TestAccountHandoffWithdrawsRetryForNewerPrompt(t *testing.T) {
 	if got := len(hh.conv.sentMessages()); got != 2 {
 		t.Fatalf("dispatches = %d", got)
 	}
-	if got := handoffNoteRetry(t, hh.harness, source.ID); got != "skipped" {
+	if _, got := handoffNotes(t, hh.harness, source.ID); got != "skipped" {
 		t.Fatalf("handoff note retry = %q", got)
 	}
 }
@@ -543,7 +484,7 @@ func TestAccountHandoffPendingRetrySurvivesHibernation(t *testing.T) {
 	if err := h.svc.HandoffUsageLimitedTurns(ctx); err == nil {
 		t.Fatal("a failed wake reported success")
 	}
-	if notes := handoffNotes(t, h, source.ID); notes != 1 {
+	if notes, _ := handoffNotes(t, h, source.ID); notes != 1 {
 		t.Fatalf("handoff notes = %d", notes)
 	}
 	hh.tick(t)
@@ -559,7 +500,7 @@ func TestAccountHandoffPendingRetrySurvivesHibernation(t *testing.T) {
 	if _, found, err := hh.st.RetryTurnIDForSource(ctx, source.ConversationID, source.ID); err != nil || !found {
 		t.Fatalf("retry link: %v %v", found, err)
 	}
-	if notes := handoffNotes(t, h, source.ID); notes != 1 {
+	if notes, _ := handoffNotes(t, h, source.ID); notes != 1 {
 		t.Fatalf("handoff notes after retry = %d", notes)
 	}
 }

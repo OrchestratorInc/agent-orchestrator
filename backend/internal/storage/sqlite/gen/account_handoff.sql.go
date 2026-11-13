@@ -8,7 +8,6 @@ package gen
 import (
 	"context"
 	"database/sql"
-	"time"
 )
 
 const getSessionAccountPin = `-- name: GetSessionAccountPin :one
@@ -23,17 +22,12 @@ func (q *Queries) GetSessionAccountPin(ctx context.Context, sessionID string) (i
 }
 
 const pinSessionAccount = `-- name: PinSessionAccount :exec
-INSERT INTO session_account_pins (session_id, pinned_at) VALUES (?1, ?2)
+INSERT INTO session_account_pins (session_id) VALUES (?1)
 ON CONFLICT (session_id) DO NOTHING
 `
 
-type PinSessionAccountParams struct {
-	SessionID string
-	PinnedAt  time.Time
-}
-
-func (q *Queries) PinSessionAccount(ctx context.Context, arg PinSessionAccountParams) error {
-	_, err := q.db.ExecContext(ctx, pinSessionAccount, arg.SessionID, arg.PinnedAt)
+func (q *Queries) PinSessionAccount(ctx context.Context, sessionID string) error {
+	_, err := q.db.ExecContext(ctx, pinSessionAccount, sessionID)
 	return err
 }
 

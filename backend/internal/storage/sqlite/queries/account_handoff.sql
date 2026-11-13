@@ -2,7 +2,7 @@
 SELECT COUNT(*) FROM session_account_pins WHERE session_id = sqlc.arg(session_id);
 
 -- name: PinSessionAccount :exec
-INSERT INTO session_account_pins (session_id, pinned_at) VALUES (sqlc.arg(session_id), sqlc.arg(pinned_at))
+INSERT INTO session_account_pins (session_id) VALUES (sqlc.arg(session_id))
 ON CONFLICT (session_id) DO NOTHING;
 
 -- name: UnpinSessionAccount :exec

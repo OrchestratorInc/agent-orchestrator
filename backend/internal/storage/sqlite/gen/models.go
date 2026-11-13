@@ -802,7 +802,6 @@ type Session struct {
 
 type SessionAccountPin struct {
 	SessionID string
-	PinnedAt  time.Time
 }
 
 type SessionAgentAccount struct {

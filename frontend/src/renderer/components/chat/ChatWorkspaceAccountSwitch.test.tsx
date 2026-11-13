@@ -98,7 +98,7 @@ describe("ChatWorkspace usage-limit account handoff", () => {
 		expect(screen.getAllByTestId("usage-limit-notice").length).toBeGreaterThan(0);
 	});
 
-	it("offers no usage-limit recovery once AO has retried the prompt", () => {
+	it("offers no usage-limit recovery once Orchestrator has retried the prompt", () => {
 		renderWithAccounts(handoffSnapshot(true, "sent"));
 		expect(screen.getByText("Usage limit reached. Moved to b@example.com")).toBeInTheDocument();
 		expect(screen.getByText("Prompt sent again.")).toBeInTheDocument();

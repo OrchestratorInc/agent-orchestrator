@@ -1099,7 +1099,7 @@ func (s *Service) SessionLimits(ctx context.Context, id domain.SessionID, harnes
 }
 
 // HandoffTarget picks the account with the most verified room for a usage-limited session, or "" when none has room.
-func (s *Service) HandoffTarget(ctx context.Context, id domain.SessionID, harness domain.AgentHarness, model string, exclude map[string]bool) (string, error) {
+func (s *Service) HandoffTarget(ctx context.Context, id domain.SessionID, harness domain.AgentHarness, model string) (string, error) {
 	p, ok := domain.AgentAccountProviderFor(harness)
 	if !ok || s.providers[p] == nil {
 		return "", ports.ErrAgentAccountProviderMismatch
@@ -1115,7 +1115,7 @@ func (s *Service) HandoffTarget(ctx context.Context, id domain.SessionID, harnes
 	headroom := make([]float64, len(accounts))
 	var wg sync.WaitGroup
 	for i, account := range accounts {
-		if account.Provider != p || account.ID == current.ID || exclude[account.ID] || s.beingRemoved(account.ID) {
+		if account.Provider != p || account.ID == current.ID || s.beingRemoved(account.ID) {
 			continue
 		}
 		wg.Go(func() {
@@ -1142,27 +1142,14 @@ func (s *Service) HandoffTarget(ctx context.Context, id domain.SessionID, harnes
 	return accounts[best].ID, nil
 }
 
-type sessionPinStore interface {
-	SessionAccountPinned(context.Context, domain.SessionID) (bool, error)
-	SetSessionAccountPinned(context.Context, domain.SessionID, bool, time.Time) error
-}
-
 // SessionStaysOnAccount reports the session's "Stay on this account" choice.
 func (s *Service) SessionStaysOnAccount(ctx context.Context, id domain.SessionID) (bool, error) {
-	pins, ok := s.store.(sessionPinStore)
-	if !ok {
-		return false, nil
-	}
-	return pins.SessionAccountPinned(ctx, id)
+	return s.store.SessionAccountPinned(ctx, id)
 }
 
 // SetSessionStaysOnAccount records or clears the session's "Stay on this account" choice.
 func (s *Service) SetSessionStaysOnAccount(ctx context.Context, id domain.SessionID, stay bool) error {
-	pins, ok := s.store.(sessionPinStore)
-	if !ok {
-		return ports.ErrAgentAccountProviderMismatch
-	}
-	return pins.SetSessionAccountPinned(ctx, id, stay, s.now())
+	return s.store.SetSessionAccountPinned(ctx, id, stay)
 }
 
 func (s *Service) boundAccount(ctx context.Context, id domain.SessionID, p domain.AgentAccountProvider) (domain.AgentAccount, error) {

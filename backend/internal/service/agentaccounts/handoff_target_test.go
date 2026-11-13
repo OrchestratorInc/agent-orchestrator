@@ -2,6 +2,7 @@ package agentaccounts
 
 import (
 	"context"
+	"maps"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -46,24 +47,24 @@ func TestHandoffTargetPicksMostVerifiedRoomForTheModel(t *testing.T) {
 	svc := New(store, []ports.AgentAccountProviderCLI{provider}, t.TempDir(), nil, nil)
 	ctx := context.Background()
 	for _, tc := range []struct {
-		name    string
-		model   string
-		exclude map[string]bool
-		want    string
+		name  string
+		model string
+		used  map[string]float64
+		want  string
 	}{
-		{"most room wins", "claude-sonnet-5", nil, "c"},
-		{"excluded account is skipped", "claude-sonnet-5", map[string]bool{"c": true}, "b"},
-		{"a nearly full account is picked when nothing has more room", "claude-sonnet-5", map[string]bool{"b": true, "c": true}, "full"},
-		{"the model's full meter rules every account out", "claude-opus-5", nil, ""},
+		{"most room wins", "claude-sonnet-5", map[string]float64{"/b": 50, "/c": 20, "/full": 95}, "c"},
+		{"a nearly full account is picked when nothing has more room", "claude-sonnet-5", map[string]float64{"/b": 100, "/c": 100, "/full": 95}, "full"},
+		{"the model's full meter rules every account out", "claude-opus-5", map[string]float64{}, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := svc.HandoffTarget(ctx, "session", domain.HarnessClaudeCode, tc.model, tc.exclude)
+			maps.Copy(provider.used, tc.used)
+			got, err := svc.HandoffTarget(ctx, "session", domain.HarnessClaudeCode, tc.model)
 			if err != nil || got != tc.want {
 				t.Fatalf("HandoffTarget = %q, %v; want %q", got, err, tc.want)
 			}
 		})
 	}
-	if _, err := svc.HandoffTarget(ctx, "session", domain.HarnessCodex, "", nil); err == nil {
+	if _, err := svc.HandoffTarget(ctx, "session", domain.HarnessCodex, ""); err == nil {
 		t.Fatal("a harness without this provider picked a target")
 	}
 }
