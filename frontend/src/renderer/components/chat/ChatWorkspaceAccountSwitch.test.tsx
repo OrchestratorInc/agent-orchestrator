@@ -94,22 +94,22 @@ describe("ChatWorkspace usage-limit account handoff", () => {
 	it("names the account a usage limit moved the session to", () => {
 		renderWithAccounts(handoffSnapshot(false));
 		expect(screen.getByText("Usage limit reached. Moved to b@example.com")).toBeInTheDocument();
-		expect(screen.queryByText(/refused prompt/)).toBeNull();
+		expect(screen.queryByText(/Prompt/)).toBeNull();
 		expect(screen.getAllByTestId("usage-limit-notice").length).toBeGreaterThan(0);
 	});
 
 	it("offers no usage-limit recovery once AO has retried the prompt", () => {
 		renderWithAccounts(handoffSnapshot(true, "sent"));
 		expect(screen.getByText("Usage limit reached. Moved to b@example.com")).toBeInTheDocument();
-		expect(screen.getByText("AO sent the refused prompt again on this account.")).toBeInTheDocument();
+		expect(screen.getByText("Prompt sent again.")).toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Auto-resume at reset" })).toBeNull();
 		expect(screen.queryByRole("button", { name: "Resume" })).toBeNull();
 		expect(screen.queryByRole("button", { name: "Retry this turn" })).toBeNull();
 	});
 
-	it("says when AO did not send the refused prompt again", () => {
+	it("says when the prompt was not sent again", () => {
 		renderWithAccounts(handoffSnapshot(false, "skipped"));
-		expect(screen.getByText("AO did not send the refused prompt again. Send it yourself if you still need it.")).toBeInTheDocument();
+		expect(screen.getByText("Prompt not sent again. Resend it if needed.")).toBeInTheDocument();
 	});
 });
 
