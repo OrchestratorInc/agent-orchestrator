@@ -14,7 +14,7 @@ import { useUiStore } from "../../stores/ui-store";
 import type { ChatConfigOption, ChatModel, TurnSettings } from "../../types/conversation";
 import type { AgentSwitchProps, PickerSource } from "./AgentSwitchPicker";
 import { cloudSessionsQueryKey, sharedCloudWorkspacesQueryKey } from "../../hooks/useWorkspaceQuery";
-import { QUEUED_STEER_STALE_MS, nextQueuedSteerDeadline, appendCloudEvents, CHAT_EVENTS_CACHE_MS, cloudExcerptText, cloudAnnotationContent, cloudMessageBody, cloudQueuedSteerErrors, CloudSessionChatSurface, cloudStartupChecklist, cloudWorkspaceFilePath, ownMessageTurns, toSnapshot } from "./CloudSessionChatSurface";
+import { QUEUED_STEER_STALE_MS, cloudSteeringQueuedTurns, nextQueuedSteerDeadline, appendCloudEvents, CHAT_EVENTS_CACHE_MS, cloudExcerptText, cloudAnnotationContent, cloudMessageBody, cloudQueuedSteerErrors, CloudSessionChatSurface, cloudStartupChecklist, cloudWorkspaceFilePath, ownMessageTurns, toSnapshot } from "./CloudSessionChatSurface";
 import { CLOUD_CHAT_NEWEST, cloudChatHistoryKey, mergeCloudEvents } from "../../lib/cloud-chat-history";
 import { clearPreviousAccountState } from "../../hooks/useCloudAccountSwitchReset";
 import { TurnSettingsBar } from "./TurnSettingsBar";
@@ -633,11 +633,12 @@ describe("CloudSessionChatSurface", () => {
 		snapshot.items.filter((item) => item.kind === "activity" && item.detail?.event === "steer")
 			.map((item) => item.kind === "activity" ? { turnId: item.turnId, text: item.detail?.text, origin: item.detail?.origin, from: item.detail?.senderDisplayName } : undefined);
 
-	it("shows a queued message being steered in the running turn, not the queue, on every read", () => {
+	it("keeps a queued message being steered in its place in the queue, marked steering, on every read", () => {
 		const { queued } = steerEvents();
 		const snapshot = toSnapshot(session, queued);
-		expect(queuedTurns(snapshot)).toEqual(["turn-mine"]);
-		expect(steers(snapshot)).toEqual([{ turnId: "turn-run", text: "report progress now", origin: "automation", from: "Orchestrator" }]);
+		expect(queuedTurns(snapshot)).toEqual(["turn-orch", "turn-mine"]);
+		expect(steers(snapshot)).toEqual([]);
+		expect([...cloudSteeringQueuedTurns(queued)]).toEqual(["turn-orch"]);
 		expect(cloudQueuedSteerErrors(queued)).toEqual({});
 		// A remount reads the same events, and the same chat.
 		expect(toSnapshot(session, [...queued])).toEqual(snapshot);
@@ -709,12 +710,9 @@ describe("CloudSessionChatSurface", () => {
 	it("reads a queued steer left unanswered too long as failed, with the message back in the queue", () => {
 		const { queued } = steerEvents();
 		const requestedAt = Date.parse(queued[5].createdAt);
-		const fresh = toSnapshot(session, queued, undefined, { now: requestedAt + 1_000 });
-		expect(queuedTurns(fresh)).toEqual(["turn-mine"]);
+		expect([...cloudSteeringQueuedTurns(queued, requestedAt + 1_000)]).toEqual(["turn-orch"]);
 		expect(cloudQueuedSteerErrors(queued, requestedAt + 1_000)).toEqual({});
-		const stale = toSnapshot(session, queued, undefined, { now: requestedAt + QUEUED_STEER_STALE_MS });
-		expect(queuedTurns(stale)).toEqual(["turn-orch", "turn-mine"]);
-		expect(steers(stale)).toEqual([]);
+		expect([...cloudSteeringQueuedTurns(queued, requestedAt + QUEUED_STEER_STALE_MS)]).toEqual([]);
 		expect(cloudQueuedSteerErrors(queued, requestedAt + QUEUED_STEER_STALE_MS)).toEqual({
 			"turn-orch": "Couldn't steer: the agent did not answer in time. It's back in the queue; select Steer to try again.",
 		});

@@ -512,7 +512,10 @@ export interface CloudCpClient {
 		sessionId: string,
 		turnId: string,
 		options?: CloudCpRequestOptions,
-	): Promise<CloudCpCancelTurnResponse>;
+	): Promise<CloudCpCancelTurnResponse & {
+		/** The agent is taking the message as a steer: its answer decides (deleted, or delivered). */
+		pending?: boolean;
+	}>;
 	decideChatApproval(orgId: string, sessionId: string, requestId: string, decisionId: string, options?: CloudCpRequestOptions): Promise<{ ok: boolean }>;
 	/** Takes a shared session's composer lease, or renews it when already held. */
 	acquireComposer(orgId: string, sessionId: string, options?: CloudCpRequestOptions): Promise<CloudCpComposerAnswer>;

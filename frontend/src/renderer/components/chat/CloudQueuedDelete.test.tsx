@@ -93,4 +93,98 @@ describe("Delete on a Cloud chat's queue", () => {
 		expect(within(row()!).getByText("mine, later")).toBeVisible();
 		expect(deleteButton()).toBeEnabled();
 	});
+
+	// Delete while a steer is in flight. The message being steered stays in its
+	// place in the queue, marked steering, with its Delete offered.
+	describe("while a steer is in flight", () => {
+		const requested = at(5, "chat.turn_steer_requested", { turnId: "turn-run", text: "mine, later", clientMessageId: "k", queuedTurnId: "turn-mine" });
+		// Asked just now: a steer older than QUEUED_STEER_STALE_MS reads as failed.
+		const steering = [...queued, at(5, "chat.user_message", { text: "also mine", turnId: "turn-also", authorUserId: "user-1" }),
+			{ ...requested, sequence: 6, createdAt: new Date().toISOString() }];
+		const statusOf = (turnId: string) => screen.queryByTestId(`queued-message-status-${turnId}`)?.textContent;
+		const rowOrder = () => [...document.querySelectorAll("[data-testid^=queued-message-turn-]")].map((row) => row.getAttribute("data-testid"));
+
+		it("shows the message being steered as steering, in place, with Delete and no second Steer", async () => {
+			cloudMocks.listChatEvents.mockResolvedValue(page(steering));
+			mount();
+			await waitFor(() => expect(statusOf("turn-mine")).toBe("Steering into the running turn…"));
+			expect(rowOrder()).toEqual(["queued-message-turn-mine", "queued-message-turn-also"]);
+			expect(within(row()!).queryByRole("button", { name: "Steer this queued message into the running turn" })).not.toBeInTheDocument();
+			expect(deleteButton()).toBeEnabled();
+			expect(statusOf("turn-also")).toBeUndefined();
+		});
+
+		// (a) The agent had not taken it: the delete withdraws the steer and the
+		// message is gone, after a remount too.
+		it("deletes the message being steered, and it stays gone after a remount", async () => {
+			cloudMocks.listChatEvents.mockResolvedValue(page(steering));
+			let answer: (value: unknown) => void = () => undefined;
+			cloudMocks.deleteQueuedMessage.mockImplementation(() => new Promise((resolve) => { answer = resolve; }));
+			const view = mount();
+			await waitFor(() => expect(statusOf("turn-mine")).toBe("Steering into the running turn…"));
+			await userEvent.click(deleteButton());
+			await waitFor(() => expect(statusOf("turn-mine")).toBe("Deleting…"));
+			expect(deleteButton()).toBeDisabled();
+			const ended = [...steering,
+				at(7, "chat.turn_steer_failed", { ...requested.payload, error: "The message was deleted before the agent took the steer.", deleteRequested: true }),
+				at(8, "chat.turn_interrupted", { turnId: "turn-mine", attempt: 0, reason: "deleted" })];
+			cloudMocks.listChatEvents.mockResolvedValue(page(ended));
+			answer({ ok: true });
+			await waitFor(() => expect(row()).not.toBeInTheDocument());
+			expect(rowOrder()).toEqual(["queued-message-turn-also"]);
+			view.unmount();
+			mount();
+			await waitFor(() => expect(rowOrder()).toEqual(["queued-message-turn-also"]));
+			expect(screen.queryByText(/Couldn't steer/)).not.toBeInTheDocument();
+		});
+
+		// (a) The agent was taking it: the delete waits for its answer, and when
+		// the agent took it the chat says it was delivered, after a remount too.
+		it("says the message was delivered when the agent took it before the delete could stop it", async () => {
+			cloudMocks.listChatEvents.mockResolvedValue(page(steering));
+			const delivered = [...steering,
+				at(7, "chat.turn_steered", { ...requested.payload, deleteRequested: true }),
+				at(8, "chat.turn_interrupted", { turnId: "turn-mine", attempt: 0, reason: "steered" })];
+			cloudMocks.deleteQueuedMessage.mockImplementation(async () => {
+				cloudMocks.listChatEvents.mockResolvedValue(page(delivered));
+				return { ok: true, pending: true };
+			});
+			const view = mount();
+			await waitFor(() => expect(statusOf("turn-mine")).toBe("Steering into the running turn…"));
+			await userEvent.click(deleteButton());
+			await waitFor(() => expect(row()).not.toBeInTheDocument(), { timeout: 4000 });
+			const notice = "Not deleted: the agent had already taken this message as a steer into its running turn, so it was delivered.";
+			await waitFor(() => expect(screen.getByText(notice)).toBeInTheDocument(), { timeout: 4000 });
+			expect(screen.getByText("Steered: the agent took it before your delete could stop it")).toBeInTheDocument();
+			view.unmount();
+			mount();
+			await waitFor(() => expect(screen.getByText("Steered: the agent took it before your delete could stop it")).toBeInTheDocument());
+			expect(row()).not.toBeInTheDocument();
+		});
+
+		it("says the message was delivered when the delete comes after the agent took it", async () => {
+			cloudMocks.listChatEvents.mockResolvedValue(page(steering));
+			cloudMocks.deleteQueuedMessage.mockRejectedValue(new CloudCpError("The agent already took this message.", { status: 409, code: "ALREADY_STEERED" }));
+			mount();
+			await waitFor(() => expect(row()).toBeInTheDocument());
+			await userEvent.click(deleteButton());
+			const notice = "Not deleted: the agent had already taken this message as a steer into its running turn, so it was delivered.";
+			await waitFor(() => expect(screen.getAllByText(notice).length).toBeGreaterThan(0));
+		});
+
+		// (b) Deleting another message leaves the steer and the order alone.
+		it("deletes another queued message at once, leaving the one being steered as it was", async () => {
+			cloudMocks.listChatEvents.mockResolvedValue(page(steering));
+			cloudMocks.deleteQueuedMessage.mockImplementation(async () => {
+				cloudMocks.listChatEvents.mockResolvedValue(page([...steering, at(7, "chat.turn_interrupted", { turnId: "turn-also", attempt: 0, reason: "deleted" })]));
+				return { ok: true };
+			});
+			mount();
+			await waitFor(() => expect(statusOf("turn-mine")).toBe("Steering into the running turn…"));
+			await userEvent.click(within(screen.getByTestId("queued-message-turn-also")).getByRole("button", { name: "Delete queued message" }));
+			expect(cloudMocks.deleteQueuedMessage).toHaveBeenCalledWith("org-1", session.id, "turn-also");
+			await waitFor(() => expect(rowOrder()).toEqual(["queued-message-turn-mine"]));
+			expect(statusOf("turn-mine")).toBe("Steering into the running turn…");
+		});
+	});
 });

@@ -2521,13 +2521,32 @@ paths:
         composer lease holder, the session's creator, and the organization's
         owners and admins. Deleting a message already deleted answers 202
         again. Offered when offering.features lists queued-delete.
+        A message being steered into the running turn (steerQueuedMessage)
+        deletes too: if the worker has not taken the steer yet it is
+        withdrawn (chat.turn_steer_failed with deleteRequested) and the message
+        deleted at once; if the worker is taking it, the answer is 202 with
+        pending and the steer's outcome decides: chat.turn_interrupted of
+        reason deleted when the agent did not take it, or chat.turn_steered
+        with deleteRequested when it did (the message was delivered). Deleting
+        another queued message is unaffected by a steer in flight.
       responses:
         "202":
           description: The queued message was deleted, now or before.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/WorkerOKResponse"
+                type: object
+                additionalProperties: false
+                required: [ok]
+                properties:
+                  ok:
+                    type: boolean
+                    const: true
+                  pending:
+                    type: boolean
+                    description: >-
+                      The worker is taking the message as a steer; its outcome
+                      decides whether it is deleted or was delivered.
         "403":
           description: forbidden. The caller may not stop this turn, or only watches the session.
           content:
@@ -2539,9 +2558,8 @@ paths:
             TURN_NOT_QUEUED: the agent started on the message, or it was
             stopped or ended otherwise, so it can no longer be deleted (the
             turn is left as it is). SESSION_TERMINATED: the session ended.
-            STEER_IN_PROGRESS: the message is being steered into the running
-            turn (steerQueuedMessage); it can be deleted once the steer
-            settles and it is back in the queue.
+            ALREADY_STEERED: the agent already took the message as a steer
+            into its running turn, so it was delivered and cannot be deleted.
           content:
             application/json:
               schema:
@@ -10571,6 +10589,13 @@ components:
                 Set when the steer carries a queued message (steerQueuedMessage,
                 or a message the project's orchestrator sent while the session
                 was busy): the queued turn whose message it is.
+            deleteRequested:
+              type: boolean
+              description: >-
+                With queuedTurnId: the person deleted the message while the
+                agent was taking its steer (deleteQueuedMessage). On
+                chat.turn_steered the agent took it anyway, so it was
+                delivered; on chat.turn_steer_failed it was deleted.
             origin:
               type: string
               description: >-
@@ -10664,6 +10689,13 @@ components:
                 Set when the steer carries a queued message (steerQueuedMessage,
                 or a message the project's orchestrator sent while the session
                 was busy): the queued turn whose message it is.
+            deleteRequested:
+              type: boolean
+              description: >-
+                With queuedTurnId: the person deleted the message while the
+                agent was taking its steer (deleteQueuedMessage). On
+                chat.turn_steered the agent took it anyway, so it was
+                delivered; on chat.turn_steer_failed it was deleted.
             origin:
               type: string
               description: >-

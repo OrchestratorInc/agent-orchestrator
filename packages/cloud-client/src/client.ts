@@ -777,14 +777,18 @@ export class CloudClient {
   /**
    * Take back a message whose turn is still queued (offered when
    * offering.features lists queued-delete). Unlike cancelTurn it never stops a
-   * turn that left the queue: 409 TURN_NOT_QUEUED once the agent took it.
+   * turn that left the queue: 409 TURN_NOT_QUEUED once the agent took it,
+   * 409 ALREADY_STEERED once the agent took it as a steer. While the worker is
+   * taking the message as a steer it answers pending, and the steer's outcome
+   * decides (chat.turn_interrupted deleted, or chat.turn_steered with
+   * deleteRequested).
    */
   deleteQueuedMessage(
     orgId: string,
     sessionId: string,
     turnId: string,
     options: RequestOptions = {},
-  ): Promise<WorkerOKResponse> {
+  ): Promise<WorkerOKResponse & { pending?: boolean }> {
     return this.request(
       this.orgPath(
         orgId,

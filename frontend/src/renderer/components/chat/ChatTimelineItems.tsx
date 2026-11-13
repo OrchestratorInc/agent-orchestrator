@@ -3465,7 +3465,9 @@ export function SteerMessage({
 			)}
 			<span className="flex items-center gap-1 text-xs text-muted-foreground">
 				<CornerDownRight aria-hidden="true" className="size-3" />
-				Steered
+				{activity.detail?.deliveredBeforeDelete
+					? "Steered: the agent took it before your delete could stop it"
+					: "Steered"}
 			</span>
 		</div>
 	);
