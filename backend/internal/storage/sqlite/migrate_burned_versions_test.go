@@ -240,6 +240,7 @@ var shippedMigrations = map[int64]string{
 	20261030182857119: "20261030182857119_session_cleanup_report_only.sql",
 	20261030182857237: "20261030182857237_session_retention.sql",
 	20261030182857344: "20261030182857344_session_delete_cdc.sql",
+	20261030230920365: "20261030230920365_chat_account_handoff.sql",
 	20261030234657125: "20261030234657125_app_settings_limit_history.sql",
 	20261031021251693: "20261031021251693_session_interface_transitions_degraded_kind.sql",
 	20261031173315209: "20261031173315209_usage_event_provider_message_id.sql",

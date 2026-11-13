@@ -4279,7 +4279,8 @@ type SettingsResponse struct {
 	// VersionRefresh moves idle open sessions to a harness release installed while they ran.
 	VersionRefresh bool `json:"versionRefresh" description:"After a harness update, idle open sessions restart on the new release instead of running the old one until they happen to restart."`
 	// ComputerUse gives new chat sessions the computer-use tools.
-	ComputerUse bool `json:"computerUse" description:"New chat sessions get tools to drive desktop apps through Cua Driver (Settings, Computer use agents)."`
+	ComputerUse    bool `json:"computerUse" description:"New chat sessions get tools to drive desktop apps through Cua Driver (Settings, Computer use agents)."`
+	AccountHandoff bool `json:"accountHandoff" description:"A Chat turn refused for a usage limit moves its session to another signed-in account of the same agent with room, and the prompt is retried there once (Settings, Agent accounts)."`
 	// SessionRetentionDays is how long an archived session is kept.
 	SessionRetentionDays int `json:"sessionRetentionDays" description:"Days an archived session whose worktree is released is kept before the daemon deletes it permanently; 0 keeps it."`
 	// CloudEnabled reports whether the cloud offering is available: on for
@@ -4323,6 +4324,11 @@ type UpdateSessionRetentionRequest struct {
 
 // UpdateComputerUseRequest flips whether new chat sessions get the computer-use tools.
 type UpdateComputerUseRequest struct {
+	Enabled *bool `json:"enabled"`
+}
+
+// UpdateAccountHandoffRequest turns the usage-limit account handoff on or off.
+type UpdateAccountHandoffRequest struct {
 	Enabled *bool `json:"enabled"`
 }
 
@@ -4613,8 +4619,14 @@ type AgentAccountUsageByModel struct {
 
 // SessionAgentAccountsResponse is the account a session uses per provider.
 type SessionAgentAccountsResponse struct {
-	Claude string `json:"claude,omitempty"`
-	Codex  string `json:"codex,omitempty"`
+	Claude        string `json:"claude,omitempty"`
+	Codex         string `json:"codex,omitempty"`
+	StayOnAccount bool   `json:"stayOnAccount"`
+}
+
+// SetSessionStayOnAccountRequest records or clears "Stay on this account".
+type SetSessionStayOnAccountRequest struct {
+	Stay *bool `json:"stay"`
 }
 
 // SwitchSessionAgentAccountRequest moves a session to another account.
