@@ -1339,7 +1339,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Stop a turn. Allowed for the person whose message started it, the composer lease holder, the session's creator, and the organization's owners and admins; anyone else gets 403. A running turn is stopped by its worker (chat.interrupt_requested, then chat.turn_interrupted). A turn still queued ends at once with chat.turn_interrupted of attempt 0, and stopping it again answers 202. 409 TURN_FINISHED once the turn ended otherwise. */
+        /** @description Stop a turn. Allowed for the person whose message started it, the composer lease holder, the session's creator, and the organization's owners and admins; anyone else gets 403. A running turn is stopped by its worker (chat.interrupt_requested, then chat.turn_interrupted). A turn still queued is deleted: it ends at once with chat.turn_interrupted of attempt 0 and reason deleted, and stopping it again answers 202. 409 TURN_FINISHED once the turn ended otherwise. */
         post: operations["cancelTurn"];
         delete?: never;
         options?: never;
@@ -5477,6 +5477,11 @@ export interface components {
                 turnId: string;
                 /** @description 0 for a turn stopped while still queued, before the agent started on it. */
                 attempt: number;
+                /**
+                 * @description Why a turn ended before it started. deleted: the person took the queued message back (cancelTurn), so a client drops it from the transcript. interface_switch: a stop-now switch to the terminal ended the queued message, which a client keeps, shown interrupted. Absent for a stopped running turn and for events written before reasons existed; a client reads a missing or unknown reason as a plain interruption and keeps the message.
+                 * @enum {string}
+                 */
+                reason?: "deleted" | "interface_switch";
             };
             /** Format: date-time */
             createdAt: string;
