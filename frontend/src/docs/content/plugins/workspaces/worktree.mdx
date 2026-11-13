@@ -43,3 +43,11 @@ Only archiving a session (`ao session kill`, including the archive after a merge
 After cleanup, `ao session delete <id>` permanently removes the session record and its AO history; with `--cleanup` it cleans the worktree up first, never forced. Its session ID is never reused, and its spend stays in the agent account usage totals. In the desktop app, the trash icon on an archived session card does the same, cleaning up first.
 
 To delete archived sessions automatically, choose a period under Settings → Sessions → **Delete archived sessions** (7, 30 or 90 days; Never by default). Only sessions whose worktree is already cleaned up are deleted: retention never removes a worktree, so a dirty or kept one keeps its session.
+
+## Compare
+
+<Cards>
+	<Card title="Git worktrees for AI coding agents" href="https://orchestrator.inc/compare/git-worktrees-for-ai-coding-agents/" description="A practical guide to one worktree per agent, without Orchestrator." />
+	<Card title="Orchestrator vs Claude Code's worktrees" href="https://orchestrator.inc/compare/orchestrator-vs-claude-code-worktrees/" description="When Claude Code's own worktrees are enough, and when a supervisor helps." />
+	<Card title="Run Claude Code agents in parallel" href="https://orchestrator.inc/compare/how-to-run-multiple-claude-code-agents-in-parallel/" description="Several Claude Code sessions at once, each on its own branch." />
+</Cards>
