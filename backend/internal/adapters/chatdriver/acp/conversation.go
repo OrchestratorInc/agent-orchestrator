@@ -553,7 +553,9 @@ func (c *conversation) applyTurnSettings(ctx context.Context, settings ports.Cha
 	optionsFor := c.optionsFor
 	initialPermission := c.initialPermission
 	validateSettings := c.validateSettings
-	legacyModel := c.legacyModel
+	// Prefer the modern selector when an agent (such as Grok) also advertises
+	// legacy models, matching SetConfigOption and preserving rebuilt catalogs.
+	legacyModel := c.legacyModel && !c.modelConfigOption
 	legacyMode := c.legacyMode
 	configOptions := cloneConfigOptions(c.configOptions)
 	c.mu.Unlock()

@@ -1165,7 +1165,9 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 		}
 		if mode == domain.SessionModeChat {
 			checked := BeginSpawnStep(ctx, SpawnStepModelCheck)
-			resolved, err := m.resolveAgentConfig(ctx, cfg, project.Config)
+			chatCfg := cfg
+			chatCfg.RequestedMode = mode
+			resolved, err := m.resolveAgentConfig(ctx, chatCfg, project.Config)
 			checked(err)
 			if err != nil {
 				return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w", err)
@@ -1743,13 +1745,22 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 	if cfg.EffortOverride {
 		resolved.Effort = requested.Effort
 	}
+	if cfg.Harness == domain.HarnessGrok && cfg.RequestedMode == domain.SessionModeChat {
+		// Project/role effort may be tuned for another harness or Grok model.
+		// Only an explicit request should override the live ACP model's default;
+		// its advertised reasoning_effort catalog validates that request.
+		if !cfg.EffortOverride {
+			resolved.Effort = ""
+		}
+		return resolved, nil
+	}
 	if cfg.Harness != domain.HarnessCodex && cfg.Harness != domain.HarnessClaudeCode && cfg.Harness != domain.HarnessCommandCode && cfg.Harness != domain.HarnessHermes {
 		// Only a flagged explicit override (the spawn API and delegation mark
 		// request-carried effort) fails loudly: the caller asked for something
 		// the harness cannot honor. Unflagged or inherited effort still clears
 		// silently so role/project defaults keep working for every harness.
 		if cfg.EffortOverride && strings.TrimSpace(requested.Effort) != "" {
-			return ports.AgentConfig{}, fmt.Errorf("%w for harness %q: effort is only supported for codex, claude-code, command-code, and hermes agents", ports.ErrUnsupportedEffort, cfg.Harness)
+			return ports.AgentConfig{}, fmt.Errorf("%w for harness %q: effort is only supported for codex, claude-code, command-code, and hermes agents, or Grok Chat", ports.ErrUnsupportedEffort, cfg.Harness)
 		}
 		resolved.Effort = ""
 		return resolved, nil

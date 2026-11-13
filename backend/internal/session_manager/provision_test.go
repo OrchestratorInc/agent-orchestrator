@@ -616,6 +616,27 @@ func TestResolveClaudeTUIAgentConfigRejectsUnsupportedEffort(t *testing.T) {
 	}
 }
 
+func TestResolveGrokEffortIsAvailableOnlyInChat(t *testing.T) {
+	m := &Manager{}
+	for _, mode := range []domain.SessionMode{domain.SessionModeChat, domain.SessionModeTUI} {
+		t.Run(string(mode), func(t *testing.T) {
+			resolved, err := m.resolveAgentConfig(t.Context(), ports.SpawnConfig{
+				Harness: domain.HarnessGrok, Kind: domain.KindWorker, RequestedMode: mode,
+				AgentConfig: ports.AgentConfig{Model: "grok-4.7", Effort: "xhigh"}, EffortOverride: true,
+			}, domain.ProjectConfig{})
+			if mode == domain.SessionModeTUI {
+				if !errors.Is(err, ports.ErrUnsupportedEffort) {
+					t.Fatalf("TUI effort error = %v, want unsupported", err)
+				}
+				return
+			}
+			if err != nil || resolved.Model != "grok-4.7" || resolved.Effort != "xhigh" {
+				t.Fatalf("Chat config = %#v, %v; want effort forwarded to ACP", resolved, err)
+			}
+		})
+	}
+}
+
 func TestResolveAgentConfigRejectsExplicitEffortForUnsupportedHarness(t *testing.T) {
 	m := &Manager{modelCatalog: tuningCatalog{catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{
 		{ID: "gemini-2.5-pro", IsDefault: true, Efforts: []string{"low", "high"}},
