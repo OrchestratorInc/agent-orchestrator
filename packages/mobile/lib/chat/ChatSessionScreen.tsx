@@ -2,8 +2,8 @@ import { deliverableArtifacts } from "../../../shared/artifacts/deliverables";
 import { Stack, useIsFocused, useNavigation, useRouter } from "expo-router";
 import { useHeaderHeight } from "expo-router/react-navigation";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { Alert, Keyboard, Platform, StyleSheet, View, type LayoutChangeEvent } from "react-native";
+import { useSharedValue } from "react-native-reanimated";
 import { mobileReachablePreviewURL, restoreSession, resumeSessionAgent, type DashboardSession, type OrchestratorLink } from "../api";
 import { haptics } from "../haptics";
 import { openGitHub } from "../openGitHub";
@@ -28,8 +28,10 @@ import { requestDockModel } from "./requestDockModel";
 import type { ResponseQuoteRequest } from "./responseQuotes";
 import { ChatComposer } from "./ChatComposer";
 import { KeyboardFollower } from "./KeyboardFollower";
+import { KeyboardMotionScope } from "./keyboardMotion";
 import { ChatLinkProvider } from "./ChatMarkdown";
 import { ChatTimeline } from "./ChatTimeline";
+import { useFlag } from "./flag";
 import { McpServerNotice } from "./McpServerNotice";
 import { useChatKeyboard } from "./useChatKeyboard";
 import { ConversationTitle } from "./ConversationTitle";
@@ -146,24 +148,30 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	const dismissBanner = useCallback((key: string) => setDismissedBanners((current) => new Set(current).add(key)), []);
 	// keyboard-controller's early events, corrected by React Native's when it
 	// misses a transition. See useChatKeyboard.
-	const chatKeyboard = useChatKeyboard({ underHeader: CLEAR_HEADER });
+	const chatKeyboard = useChatKeyboard({ underHeader: CLEAR_HEADER, floating: true });
 	const headerOverlap = useGlassHeaderOverlap();
 	// On iOS 26 the banners float under the header, over the list's top, and the
 	// list starts below them.
 	const [bannersHeight, setBannersHeight] = useState(0);
 	const [composerHeight, setComposerHeight] = useState(0);
 	// The jump back to the newest message steps aside while the composer is open.
-	const [composerOpen, setComposerOpen] = useState(false);
+	// The composer's open state, for the jump to the newest message alone (see Flag).
+	const composerOpen = useFlag();
 	// The composer springs open and closed, and its height changes every frame
 	// of that. The timeline takes the height once it settles, rather than
 	// re-rendering the conversation for each frame.
 	const composerSettle = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 	useEffect(() => () => clearTimeout(composerSettle.current), []);
+	// The conversation is padded for the pill fully open and one line tall;
+	// the pill opening and lines typed move it on the UI thread instead
+	// (ChatTimeline's `composerGrowth`), so neither waits on React.
+	const composerDeficit = useSharedValue(0);
+	const composerFieldGrowth = useSharedValue(0);
 	const measureComposer = useCallback((event: LayoutChangeEvent) => {
-		const height = Math.round(event.nativeEvent.layout.height);
+		const height = event.nativeEvent.layout.height;
 		clearTimeout(composerSettle.current);
-		composerSettle.current = setTimeout(() => setComposerHeight(height), COMPOSER_SETTLE_MS);
-	}, []);
+		composerSettle.current = setTimeout(() => setComposerHeight(Math.round(height + composerDeficit.value - composerFieldGrowth.value)), COMPOSER_SETTLE_MS);
+	}, [composerDeficit, composerFieldGrowth]);
 	const keyboardVisible = chatKeyboard.keyboardVisible;
 	const turnOptionsRequestedFor = useRef<string | undefined>(undefined);
 	const terminated = "projectName" in session ? Boolean(session.isTerminal) : Boolean(session.isTerminated);
@@ -729,17 +737,14 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		</>
 	);
 
+	// One keyboard handler for the composer, its follower and the conversation
+	// (see KeyboardMotionScope).
 	return (
+		<KeyboardMotionScope>
 		<View style={styles.screen}>
-		{/* keyboard-controller's avoider, not React Native's. Both do the same
-		    arithmetic; this one interpolates the padding with the keyboard's own
-		    animation. RN's re-renders once per keyboard event on the JS thread,
-		    which is the single-frame jump up when the keyboard opens. */}
-		<KeyboardAvoidingView
-			style={[styles.screen, chatKeyboard.rootStyle]}
-			behavior={chatKeyboard.behavior}
-			keyboardVerticalOffset={chatKeyboard.keyboardVerticalOffset}
-		>
+		{/* Not padded for the keyboard: the timeline moves its content with the
+		    keyboard on the UI thread (ChatTimeline's `keyboardOffset`). */}
+		<View style={[styles.screen, chatKeyboard.floatingRootStyle]}>
 			{headerItems}
 			{CLEAR_HEADER ? null : banners}
 			<View style={styles.conversation}>
@@ -764,6 +769,8 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 					underHeader={headerOverlap}
 					topInset={bannersHeight}
 					bottomInset={composerHeight}
+					keyboardOffset={chatKeyboard.listKeyboardOffset}
+					composerGrowth={composerFieldGrowth}
 					jumpHidden={composerOpen}
 				/>
 				</TurnArtifactsContext.Provider>
@@ -807,7 +814,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 			) : null}
 			</View>
 			{editingMessage ? <View style={{ height: chatKeyboard.restingInset }} /> : null}
-		</KeyboardAvoidingView>
+		</View>
 		{/* The composer floats over the conversation, which scrolls on under its
 		    glass; the timeline leaves its measured height clear at the end. It is
 		    out of the padded root above and rides the keyboard by a transform: the
@@ -822,7 +829,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 					reviewPR={reviewPromptPR}
 					reviewPRSummary={reviewPromptSummary}
 					onOpenReview={reviewPromptPR ? () => openPage(reviewRouteForPR(session.id, reviewPromptPR, currentHostId)) : undefined}
-					onExpandedChange={setComposerOpen}
+					onExpandedChange={composerOpen.set}
 					sessionId={session.id}
 					config={config}
 					machine={machine}
@@ -857,6 +864,8 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 					onSettings={conversation.chooseSettings}
 					onConfigOption={conversation.setConfigOption}
 					restingInset={chatKeyboard.restingInset}
+					openDeficit={composerDeficit}
+					fieldGrowth={composerFieldGrowth}
 					dockRiseOverride={chatKeyboard.dockRiseOverride}
 					openingTurnId={startupView?.openingTurnId}
 					startingAgentName={startupShown && !startupView?.failed ? startupView?.agentName : undefined}
@@ -864,6 +873,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 			</View>
 		</KeyboardFollower>
 		</View>
+		</KeyboardMotionScope>
 	);
 }
 

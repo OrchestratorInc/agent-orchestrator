@@ -70,7 +70,8 @@ vi.mock("expo-router", async () => {
 	return { Stack: { Toolbar }, useIsFocused: () => true, useNavigation: () => fixtures.navigation, useRouter: () => fixtures.router };
 });
 vi.mock("expo-router/react-navigation", () => ({ useHeaderHeight: () => 0 }));
-vi.mock("react-native-keyboard-controller", async () => ({ KeyboardAvoidingView: await host("KeyboardAvoidingView") }));
+vi.mock("react-native-reanimated", () => ({ useSharedValue: <T,>(value: T) => ({ value }), runOnJS: <F,>(fn: F) => fn }));
+vi.mock("react-native-keyboard-controller", async () => ({ KeyboardAvoidingView: await host("KeyboardAvoidingView"), useKeyboardHandler: () => {}, useReanimatedFocusedInput: () => ({ input: { value: null } }) }));
 vi.mock("../api", () => ({ mobileReachablePreviewURL: () => undefined, restoreSession: vi.fn(), resumeSessionAgent: vi.fn() }));
 vi.mock("../haptics", () => ({ haptics: { tap: vi.fn(), success: vi.fn(), warning: vi.fn(), error: vi.fn() } }));
 vi.mock("../openGitHub", () => ({ openGitHub: vi.fn() }));

@@ -118,3 +118,36 @@ it("lets the composer ride the keyboard, and lifts it by hand only for an open k
 	expect(latest?.composerLift).toBe(latest?.rootStyle?.paddingBottom);
 	expect(latest?.composerLift).toBeGreaterThan(0);
 });
+
+// A floating composer's conversation moves itself with the keyboard; the root
+// steps in only for an open keyboard-controller (and so the list) never saw.
+it("pads a floating composer's root only for an open keyboard-controller missed", async () => {
+	await mount();
+	// The dock's rise (resting inset less its keyboard gap), plus the end gap the conversation gives up.
+	expect(latest?.listKeyboardOffset).toBe(24 - 8 + 8);
+	await fire("controller", "keyboardWillShow", { height: 336 });
+	expect(latest?.floatingRootStyle).toBeUndefined();
+	await fire("controller", "keyboardDidHide");
+	fixture.visible = true;
+	await fire("platform", "keyboardDidShow", { endCoordinates: { height: 312 } });
+	await settle();
+	expect(latest?.floatingRootStyle).toEqual({ paddingBottom: 312 + 24 });
+	expect(latest?.composerLift).toBe(312 + 24);
+	fixture.visible = false;
+	await fire("platform", "keyboardDidHide");
+	await settle();
+	expect(latest?.floatingRootStyle).toBeUndefined();
+});
+
+// Android drives the keyboard's animation on this app's UI thread, and the
+// screen re-rendering as the close began stalled its first frames.
+it("leaves a floating composer's screen alone as the keyboard starts to close", async () => {
+	let renders = 0;
+	function Floating() { renders += 1; latest = useChatKeyboard({ floating: true }); return null; }
+	await act(async () => { renderer = create(<Floating />); });
+	await fire("controller", "keyboardWillShow", { height: 336 });
+	const before = renders;
+	await fire("controller", "keyboardWillHide");
+	expect(renders).toBe(before);
+	expect(fixture.controller.has("keyboardWillHide")).toBe(false);
+});

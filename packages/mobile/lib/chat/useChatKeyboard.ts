@@ -7,6 +7,8 @@ import {
 	CHAT_KEYBOARD_HIDDEN,
 	chatDockRiseOverride,
 	dockRestingInset,
+	KEYBOARD_DOCK_GAP,
+	KEYBOARD_END_GAP_TUCK,
 	keyboardVerticalOffset,
 	PLATFORM_KEYBOARD_SETTLE_MS,
 	reduceChatKeyboard,
@@ -36,7 +38,15 @@ function initialState(insetsBottom: number): ChatKeyboardState {
  * `underHeader`: the screen is laid out under a clear header, from the
  * window's top (iOS 26's glass bar), so the avoiding view owes it nothing.
  */
-export function useChatKeyboard({ underHeader = false }: { underHeader?: boolean } = {}) {
+export function useChatKeyboard({ underHeader = false, floating = false }: {
+	underHeader?: boolean;
+	/**
+	 * The composer floats over a conversation that moves itself with the
+	 * keyboard, so a close starting changes no state: re-rendering the screen
+	 * then stalled the keyboard's animation.
+	 */
+	floating?: boolean;
+} = {}) {
 	const headerHeight = useHeaderHeight();
 	const insets = useSafeAreaInsets();
 	const insetsBottom = useRef(insets.bottom);
@@ -68,7 +78,7 @@ export function useChatKeyboard({ underHeader = false }: { underHeader?: boolean
 				setClosing(false);
 				dispatch({ kind: "controller-show", height: event.height });
 			}),
-			KeyboardEvents.addListener("keyboardWillHide", () => setClosing(true)),
+			...(floating ? [] : [KeyboardEvents.addListener("keyboardWillHide", () => setClosing(true))]),
 			KeyboardEvents.addListener("keyboardDidHide", () => {
 				setClosing(false);
 				dispatch({ kind: "controller-hidden" });
@@ -80,7 +90,7 @@ export function useChatKeyboard({ underHeader = false }: { underHeader?: boolean
 			if (settle) clearTimeout(settle);
 			subscriptions.forEach((subscription) => subscription.remove());
 		};
-	}, []);
+	}, [floating]);
 
 	return {
 		keyboardVisible: state.visible,
@@ -93,6 +103,12 @@ export function useChatKeyboard({ underHeader = false }: { underHeader?: boolean
 		behavior: platform === "ios" ? "padding" as const : undefined,
 		keyboardVerticalOffset: platform === "ios" ? keyboardVerticalOffset(underHeader ? 0 : headerHeight) : 0,
 		restingInset: dockRestingInset(insets.bottom),
+		// A floating composer's conversation rises with the keyboard by its height
+		// less the gap the dock closes, less the end gap it gives up.
+		listKeyboardOffset: dockRestingInset(insets.bottom) - KEYBOARD_DOCK_GAP + KEYBOARD_END_GAP_TUCK,
+		// Only when keyboard-controller missed the open (see reduceChatKeyboard):
+		// the list never heard it either, so the root makes the room instead.
+		floatingRootStyle: platform === "android" && state.visible && !state.progressTrusted ? { paddingBottom: state.height } : undefined,
 		dockRiseOverride: platform === "android" ? chatDockRiseOverride(state) : undefined,
 		// How far the composer stands above the screen's bottom when the keyboard's
 		// own progress cannot be trusted; `undefined` rides it (see KeyboardFollower).

@@ -110,6 +110,18 @@ describe("sent human message actions", () => {
 	});
 });
 
+// A comfortable gap over a floating composer, of which the keyboard takes back
+// a little in step with its own animation (the list's keyboard offset).
+describe("the conversation's end over the composer", () => {
+	it("ends a comfortable gap above the composer's height", () => {
+		expect(source).toContain("paddingBottom: bottomInset ? bottomInset + CONVERSATION_END_GAP : space.xxxl");
+	});
+	it("gives up only part of that gap while the keyboard is up", async () => {
+		const inset = await import("../session/keyboardInset");
+		expect(inset.KEYBOARD_END_GAP_TUCK).toBeGreaterThan(0);
+		expect(inset.KEYBOARD_END_GAP_TUCK).toBeLessThan(inset.CONVERSATION_END_GAP);
+	});
+});
 
 // One row closes a turn, under its reply, as on the desktop: copy, roll back,
 // and the time. It must never move the conversation: the copy row that came
@@ -142,7 +154,13 @@ describe("jump to latest", () => {
 	});
 	// iOS ends the list's own scrolls with onMomentumScrollEnd; that must not stop the follow.
 	it("lets only a drag stop following the newest message", () => {
-		expect(source).toContain("if (followsTail.current && !atTail(event.nativeEvent)) requestAnimationFrame(() => scrollToLatest(false));");
+		expect(source).toContain("if (followsTail.current && !atTail(event.nativeEvent)) requestAnimationFrame(followTail);");
+	});
+	// Under a floating composer the list keeps its size and moves its content with the keyboard.
+	it("moves its own content with the keyboard under a floating composer", () => {
+		expect(source).toContain('keyboardLiftBehavior="always"');
+		expect(source).toContain("return { transform: [{ translateY: hold - growth }] };");
+		expect(source).toContain("const overflow = contentHeight.current - (viewportHeight.current - keyboardInset.current);");
 	});
 	// The keyboard shrinks the list while the composer rides up by a transform.
 	it("keeps the newest message in view when the list shrinks at its end", () => {
@@ -154,12 +172,11 @@ describe("jump to latest", () => {
 		expect(source).toContain("const jumpToLatest = () => { followsTail.current = true; setShowJump(false); scrollToLatest(true); };");
 		// Floating above what sits over the list's end, so it never moves the
 		// composer or the conversation, and fading rather than popping.
-		// It steps aside while the composer is open.
-		expect(source).toContain('{showJump && !jumpHidden ? <Animated.View entering={FadeIn.duration(JUMP_FADE_MS)} exiting={FadeOut.duration(JUMP_FADE_MS)} pointerEvents="box-none" style={[StyleSheet.absoluteFill, { bottom: bottomInset }]}>');
+		// It steps aside while the composer is open; only the jump re-renders for it.
+		expect(source).toContain("{showJump ? <JumpOverlay hidden={jumpHidden} bottom={bottomInset} onPress={jumpToLatest} /> : null}");
 		const screen = readFileSync(new URL("./ChatSessionScreen.tsx", import.meta.url), "utf8");
-		expect(screen).toContain("jumpHidden={composerOpen}");
-		expect(screen).toContain("onExpandedChange={setComposerOpen}");
-		expect(source).toContain("<JumpToLatest onPress={jumpToLatest} />");
+		expect(screen).toContain("onExpandedChange={composerOpen.set}");
+		expect(source).toContain("<JumpToLatest onPress={onPress} />");
 		expect(source).not.toContain("styles.jump");
 	});
 });
@@ -351,7 +368,21 @@ describe("following the newest message", () => {
 		// A scroll event alone never turns the follow off: rows drawn above change
 		// the content's size mid-drag without the person having left the end.
 		expect(source).not.toMatch(/followsTail\.current = contentSize\.height/);
-		expect(source).toContain("if (followsTail.current) requestAnimationFrame(() => scrollToLatest(false));");
+		expect(source).toContain("if (followsTail.current) requestAnimationFrame(followTail);");
+	});
+	// A follow from JS mid-keyboard jumped the list to the keyboard's end and back.
+	// A tap on a reply gives its selectable text focus; the list scrolled that
+	// text into view just as the keyboard began to close.
+	it("does not scroll to text a tap has focused", () => {
+		expect(source).toContain("scrollsChildToFocus={false}");
+		expect(source).toContain("onEditFocus={revealEdit}");
+	});
+
+	it("holds a follow to the end while the keyboard moves, and makes it once it stops", () => {
+		expect(source).toContain("if (keyboardOffset !== undefined && keyboardMoving.value) {");
+		expect(source).toContain("useEffect(() => onKeyboardEnd(() => latestFollow.current()), [onKeyboardEnd]);");
+		// One keyboard handler for the screen (see KeyboardMotionScope), not one of its own.
+		expect(source).not.toContain("useKeyboardHandler(");
 	});
 });
 

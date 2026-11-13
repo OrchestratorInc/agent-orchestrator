@@ -14,8 +14,10 @@ import {
 	View,
 	type NativeScrollEvent,
 	type NativeSyntheticEvent,
+	type ScrollViewProps,
 } from "react-native";
-import Animated, { FadeIn, FadeOut } from "react-native-reanimated";
+import { KeyboardChatScrollView, useReanimatedKeyboardAnimation } from "react-native-keyboard-controller";
+import Animated, { FadeIn, FadeOut, useAnimatedStyle, useSharedValue, type SharedValue } from "react-native-reanimated";
 import { usePreventRemove } from "expo-router/build/react-navigation/core";
 import { AppSymbol } from "../AppSymbol";
 import { authHeaders, httpBase } from "../config";
@@ -59,6 +61,8 @@ import { attachmentName, attachmentTileSize, editableMessageText, isImageAttachm
 import { isDrawnImageFile, MessageFileGoneError, MessageFileSourceContext } from "./messageFiles";
 import { InlineMessageEditor, type MessageEditDraft } from "./InlineMessageEditor";
 import { JumpToLatest } from "./JumpToLatest";
+import { useFlagValue, type Flag } from "./flag";
+import { KeyboardMotionScope, useKeyboardMotion } from "./keyboardMotion";
 import { atTail, openingRow } from "./timelineScroll";
 
 /** The jump back to the newest message fades in and out rather than popping. */
@@ -105,6 +109,7 @@ import { userFacingError } from "../connectionError";
 import { SentResponseQuotes } from "./SentResponseQuotes";
 import { TURN_ACTION_SIZE, TURN_ACTION_SLOP, TurnRollbackButton } from "./TurnRollbackButton";
 import { formatReplyTime } from "./replyTime";
+import { CONVERSATION_END_GAP, KEYBOARD_END_GAP_TUCK } from "../session/keyboardInset";
 import { TurnArtifacts, useTurnArtifactSource } from "./TurnArtifacts";
 import { turnResults } from "./turnArtifactsModel";
 import { ConversationHarness, LatestWorkerUpdates, OriginMessageView, WorkerSessionsProvider, WorkerUpdateRows } from "./AutomationMessage";
@@ -121,7 +126,7 @@ type TimelineRow =
 
 /** The conversation's rows; its user rows share one width (see `MenuRowWidthScope`). */
 export const ChatTimeline = memo(function ChatTimeline(props: ComponentProps<typeof Timeline>) {
-	return <MenuRowWidthScope><Timeline {...props} /></MenuRowWidthScope>;
+	return <KeyboardMotionScope><MenuRowWidthScope><Timeline {...props} /></MenuRowWidthScope></KeyboardMotionScope>;
 });
 
 function Timeline({
@@ -142,7 +147,9 @@ function Timeline({
 	underHeader = 0,
 	topInset = 0,
 	bottomInset = 0,
-	jumpHidden = false,
+	keyboardOffset,
+	composerGrowth,
+	jumpHidden,
 }: {
 	snapshot: ConversationSnapshot;
 	loadingOlder: boolean;
@@ -176,8 +183,15 @@ function Timeline({
 	topInset?: number;
 	/** What floats over the list's end (the composer), so the newest message clears it. */
 	bottomInset?: number;
-	/** Keeps the jump back to the newest message out of the way (while the composer is open). */
-	jumpHidden?: boolean;
+	/**
+	 * Set when the composer floats over the list: the list makes room for the
+	 * keyboard itself, less this much (see `listKeyboardOffset`).
+	 */
+	keyboardOffset?: number;
+	/** How much the floating composer has grown past one line; the conversation rises by it. */
+	composerGrowth?: SharedValue<number>;
+	/** Hides the jump to the newest message (while the composer is open); a flag, so only the jump re-renders. */
+	jumpHidden?: Flag;
 }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
@@ -191,6 +205,50 @@ function Timeline({
 	// The list's own height and its content's, for `scrollToLatest`.
 	const viewportHeight = useRef(0);
 	const contentHeight = useRef(0);
+	// The room the list has made below its content for the keyboard (see `keyboardOffset`).
+	const keyboardInset = useRef(0);
+	// keyboard-controller's chat scroll view moves the content with the keyboard
+	// on the UI thread; a list that shrank and chased its end from JS jittered.
+	// "always": "whenAtEnd" read a cached content size that could be stale.
+	const renderScrollComponent = useMemo(() => keyboardOffset === undefined ? undefined : (props: ScrollViewProps) => (
+		<KeyboardChatScrollView
+			{...props}
+			keyboardLiftBehavior="always"
+			offset={keyboardOffset}
+			onContentInsetChange={(insets) => { keyboardInset.current = insets.bottom; }}
+		/>
+	), [keyboardOffset]);
+	// The conversation rises with lines typed (see `composerGrowth`). On Android
+	// it is also held to the composer through the keyboard's stretch behind the
+	// navigation bar, where the composer has already come to rest (ChatComposer's
+	// `dockRise`).
+	const keyboard = useReanimatedKeyboardAnimation();
+	const keyboardRest = keyboardOffset === undefined ? 0 : keyboardOffset - KEYBOARD_END_GAP_TUCK;
+	// A conversation shorter than the list is lifted only as far as it can
+	// scroll, not on the straight line, so it is not held either.
+	const fillsList = useSharedValue(false);
+	const growthLift = useAnimatedStyle(() => {
+		const growth = composerGrowth ? composerGrowth.value : 0;
+		let hold = 0;
+		if (Platform.OS === "android" && keyboardOffset !== undefined && fillsList.value) {
+			const height = -keyboard.height.value;
+			const progress = keyboard.progress.value;
+			const full = progress > 0.01 ? height / progress : 0;
+			if (full > keyboardOffset && full > keyboardRest) {
+				const lifted = height * (full - keyboardOffset) / full;
+				const owed = Math.max(0, height - keyboardRest) * (full - keyboardOffset) / (full - keyboardRest);
+				hold = lifted - owed;
+			}
+		}
+		return { transform: [{ translateY: hold - growth }] };
+	}, [composerGrowth, keyboardOffset, keyboardRest]);
+	const measureFill = () => { fillsList.value = viewportHeight.current > 0 && contentHeight.current >= viewportHeight.current; };
+	// A follow to the end from JS while the keyboard scrolls the list jumped it;
+	// it waits for the keyboard to stop.
+	const { moving: keyboardMoving, onEnd: onKeyboardEnd } = useKeyboardMotion();
+	const followAfterKeyboard = useRef(false);
+	const latestFollow = useRef<() => void>(() => {});
+	useEffect(() => onKeyboardEnd(() => latestFollow.current()), [onKeyboardEnd]);
 	const dragging = useRef(false);
 	// Fixed when the list first draws (see `openingRow`); cleared while there is no list.
 	const openedAt = useRef<number | undefined>(undefined);
@@ -234,13 +292,12 @@ function Timeline({
 	// iOS insets the list for the clear header itself (`contentInsetAdjustmentBehavior`);
 	// Android has no such inset, so its first message sat behind the header's frost.
 	const headerPad = Platform.OS === "ios" ? 0 : underHeader;
-	// Over the composer, no gap of the list's own: every row ends in its own
-	// padding, and the dock's chips stand off it by their touch slop. The
-	// canvas's end gap on top of the composer's height left an empty band above
-	// the PR chips. Not less either: ending the list inside the composer's
-	// height hid a last activity row, which has no turn padding, under the dock.
+	// Over a floating composer, its height and then a comfortable gap: the
+	// reply's action row ended flush against the pill. Never less: ending the
+	// list inside the composer's height hid a last activity row under the dock.
+	// The keyboard takes back a little of the gap (see `keyboardOffset`).
 	const contentStyle = useMemo(() => headerPad || topInset || bottomInset
-		? [styles.content, { paddingTop: space.md + headerPad + topInset, paddingBottom: bottomInset || space.xxxl }]
+		? [styles.content, { paddingTop: space.md + headerPad + topInset, paddingBottom: bottomInset ? bottomInset + CONVERSATION_END_GAP : space.xxxl }]
 		: styles.content, [bottomInset, headerPad, styles.content, topInset]);
 	// Recomputed per snapshot but kept by identity while its contents are the
 	// same, so `extraData` changes (and every row re-renders) only when they do.
@@ -271,7 +328,7 @@ function Timeline({
 		const scroll = listRef.current?.getNativeScrollRef() as { scrollToEnd?(options: { animated: boolean }): void } | null | undefined;
 		const clampsUnderHeader = Platform.OS === "ios" && underHeader > 0;
 		if (clampsUnderHeader && !viewportHeight.current) return;
-		const overflow = contentHeight.current - viewportHeight.current;
+		const overflow = contentHeight.current - (viewportHeight.current - keyboardInset.current);
 		// `scrollToOffset` passes a negative offset through; FlatList's own
 		// scrollToEnd, the fallback below, clamps it to 0. The native scrollTo
 		// then clamps to the list's own content inset, which leaves out the one
@@ -279,6 +336,19 @@ function Timeline({
 		if (clampsUnderHeader && overflow < 0) listRef.current?.scrollToOffset({ offset: Math.max(overflow, -underHeader), animated });
 		else if (scroll?.scrollToEnd) scroll.scrollToEnd({ animated });
 		else listRef.current?.scrollToEnd({ animated });
+	};
+	// The follow to the newest message that output and measuring rows ask for.
+	const followTail = () => {
+		if (keyboardOffset !== undefined && keyboardMoving.value) {
+			followAfterKeyboard.current = true;
+			return;
+		}
+		scrollToLatest(false);
+	};
+	latestFollow.current = () => {
+		if (!followAfterKeyboard.current) return;
+		followAfterKeyboard.current = false;
+		if (followsTail.current) scrollToLatest(false);
 	};
 	const jumpToLatest = () => { followsTail.current = true; setShowJump(false); scrollToLatest(true); };
 
@@ -343,7 +413,7 @@ function Timeline({
 		// follow) as momentum ending too. Only a drag decides whether to follow;
 		// one of ours that landed short of an end still moving goes again.
 		if (!dragging.current) {
-			if (followsTail.current && !atTail(event.nativeEvent)) requestAnimationFrame(() => scrollToLatest(false));
+			if (followsTail.current && !atTail(event.nativeEvent)) requestAnimationFrame(followTail);
 			return;
 		}
 		dragging.current = false;
@@ -373,9 +443,10 @@ function Timeline({
 		<WorkerSessionsProvider>
 			<ConversationHarness.Provider value={snapshot.harness}>
 				<LatestWorkerUpdates.Provider value={latestUpdates}>
-					<View style={styles.timelineWrap}>
+					<Animated.View style={[styles.timelineWrap, growthLift]}>
 						<FlatList<ConversationGroup>
 							ref={listRef}
+							renderScrollComponent={renderScrollComponent}
 							data={groups}
 							extraData={rowState}
 							keyExtractor={(group) => group.key}
@@ -386,6 +457,10 @@ function Timeline({
 							scrollToOverflowEnabled={Platform.OS === "ios" && underHeader > 0}
 							scrollIndicatorInsets={{ bottom: bottomInset }}
 							keyboardShouldPersistTaps="handled"
+							// A tap gives Android's selectable text focus, and scrolling it into
+							// view nudged the conversation as the keyboard closed. The list's
+							// one field reveals itself (`revealEdit`).
+							scrollsChildToFocus={false}
 							initialNumToRender={OPENING_ROWS}
 							initialScrollIndex={initialScrollIndex > 0 ? initialScrollIndex : undefined}
 							maxToRenderPerBatch={4}
@@ -411,6 +486,7 @@ function Timeline({
 								const previous = viewportHeight.current;
 								const measured = !previous;
 								viewportHeight.current = event.nativeEvent.layout.height;
+								measureFill();
 								// The keyboard shrinks the list from below while the composer rides
 								// up over it, so a list at its end would leave the newest message
 								// behind the composer. Following the end, it stays at the end.
@@ -420,8 +496,9 @@ function Timeline({
 							}}
 							onContentSizeChange={(_width, height) => {
 								contentHeight.current = height;
+								measureFill();
 								notifyRenderViewport();
-								if (followsTail.current) requestAnimationFrame(() => scrollToLatest(false));
+								if (followsTail.current) requestAnimationFrame(followTail);
 								settleOpening();
 							}}
 							onScrollToIndexFailed={({ index, averageItemLength }) => {
@@ -462,10 +539,8 @@ function Timeline({
 						</View> : null}
 						{/* Floating above whatever sits over the list's end, so it never moves
 						    the composer or the conversation; it fades rather than pops. */}
-						{showJump && !jumpHidden ? <Animated.View entering={FadeIn.duration(JUMP_FADE_MS)} exiting={FadeOut.duration(JUMP_FADE_MS)} pointerEvents="box-none" style={[StyleSheet.absoluteFill, { bottom: bottomInset }]}>
-							<JumpToLatest onPress={jumpToLatest} />
-						</Animated.View> : null}
-					</View>
+						{showJump ? <JumpOverlay hidden={jumpHidden} bottom={bottomInset} onPress={jumpToLatest} /> : null}
+					</Animated.View>
 				</LatestWorkerUpdates.Provider>
 			</ConversationHarness.Provider>
 		</WorkerSessionsProvider>
@@ -539,6 +614,14 @@ function ConversationTurnGroup({ group, snapshot, approvalPending, inputPending,
 		{partition.settled ? (workedOpen ? <WorkBody style={{ gap: space.xs, paddingBottom: space.xs }}>{renderRows(partition.work)}</WorkBody> : null) : renderRows(partition.work)}
 		<BelowFold>{renderRows(partition.notices)}{renderRows(partition.final)}{actions}{summary}</BelowFold>
 	</View>;
+}
+
+/** The jump back to the newest message, stepping aside while `hidden` is set. */
+function JumpOverlay({ hidden, bottom, onPress }: { hidden?: Flag; bottom: number; onPress(): void }) {
+	const composerOpen = useFlagValue(hidden);
+	return composerOpen ? null : <Animated.View entering={FadeIn.duration(JUMP_FADE_MS)} exiting={FadeOut.duration(JUMP_FADE_MS)} pointerEvents="box-none" style={[StyleSheet.absoluteFill, { bottom }]}>
+		<JumpToLatest onPress={onPress} />
+	</Animated.View>;
 }
 
 const TimelineItem = memo(function TimelineItem({
