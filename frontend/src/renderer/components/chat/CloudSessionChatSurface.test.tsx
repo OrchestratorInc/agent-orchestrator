@@ -25,6 +25,7 @@ const cloudMocks = vi.hoisted(() => ({
 	cancelTurn: vi.fn(),
 	steerTurn: vi.fn(),
 	editQueuedMessage: vi.fn(),
+	deleteQueuedMessage: vi.fn(),
 	decideChatApproval: vi.fn(),
 	listChatModels: vi.fn(),
 	listUserAgentModels: vi.fn(),
@@ -518,8 +519,11 @@ describe("CloudSessionChatSurface", () => {
 
 		const cancel = (turnId: string) => asCreator.props.onCancelQueuedTurn(turnId) as Promise<unknown>;
 		cloudMocks.cancelTurn.mockReset().mockResolvedValue({ ok: true });
+		cloudMocks.deleteQueuedMessage.mockReset();
 		await act(async () => { await cancel("mine"); });
+		// A control plane without queued-delete only stops turns.
 		expect(cloudMocks.cancelTurn).toHaveBeenCalledWith("org-1", session.id, "mine");
+		expect(cloudMocks.deleteQueuedMessage).not.toHaveBeenCalled();
 		const outcome = async (error: Error) => {
 			cloudMocks.cancelTurn.mockReset().mockRejectedValue(error);
 			let thrown: unknown = "resolved";
@@ -534,6 +538,40 @@ describe("CloudSessionChatSurface", () => {
 			.toMatchObject({ message: "Only the person who sent this message, whoever started the session, or a workspace admin can delete it." });
 		expect(await outcome(new CloudCpError("The request could not be completed.", { status: 500, code: "internal_error" })))
 			.toMatchObject({ message: "The request could not be completed." });
+	});
+
+	// Where the control plane offers queued-delete, Delete takes the message
+	// back only while it is queued (deleteQueuedMessage) and never stops a turn
+	// the agent took meanwhile, as a local chat's Delete does: that answers 409
+	// TURN_NOT_QUEUED, which reads for a person and lets the row go.
+	it("deletes a queued message without stopping a started turn where the control plane offers it", async () => {
+		cloudSetup.features = ["queued-delete"];
+		cloudMocks.listChatEvents.mockReset().mockResolvedValue({ events: [
+			{ sessionId: session.id, sequence: 1, type: "chat.turn_started", payload: { turnId: "running" }, createdAt: session.updatedAt },
+			{ sessionId: session.id, sequence: 2, type: "chat.user_message", payload: { turnId: "mine", text: "mine", authorUserId: "user-1" }, createdAt: session.updatedAt },
+		], hasMore: false, nextAfter: 2, hasOlder: false, nextBefore: 1 });
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		cloudMocks.chatProps.mockClear();
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} /></QueryClientProvider>);
+		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].onCancelQueuedTurn).toEqual(expect.any(Function)));
+		const cancel = (turnId: string) => cloudMocks.chatProps.mock.lastCall?.[0].onCancelQueuedTurn(turnId) as Promise<unknown>;
+		cloudMocks.cancelTurn.mockReset();
+		cloudMocks.deleteQueuedMessage.mockReset().mockResolvedValue({ ok: true });
+		await act(async () => { await cancel("mine"); });
+		expect(cloudMocks.deleteQueuedMessage).toHaveBeenCalledWith("org-1", session.id, "mine");
+		expect(cloudMocks.cancelTurn).not.toHaveBeenCalled();
+		const outcome = async (error: Error) => {
+			cloudMocks.deleteQueuedMessage.mockReset().mockRejectedValue(error);
+			let thrown: unknown = "resolved";
+			await act(async () => { thrown = await cancel("mine").then(() => "resolved", (reason: unknown) => reason); });
+			return thrown;
+		};
+		expect(await outcome(new CloudCpError("This message is no longer queued: the agent started on it, or it was stopped. It can no longer be deleted.", { status: 409, code: "TURN_NOT_QUEUED" })))
+			.toMatchObject({ message: "This message is no longer queued, so it was not deleted. If the agent started on it, stop that turn instead." });
+		expect(await outcome(new CloudCpError("This session was deleted. Restore it to continue.", { status: 409, code: "SESSION_TERMINATED" })))
+			.toMatchObject({ message: "This session has ended, so this message can no longer be deleted." });
+		expect(cloudMocks.cancelTurn).not.toHaveBeenCalled();
 	});
 
 	// A message the person deleted from the queue leaves the conversation, as a

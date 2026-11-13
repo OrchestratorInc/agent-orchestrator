@@ -6,7 +6,7 @@ import { useChatModelChoices } from "../../hooks/useChatModelChoices";
 import { useCloudCp } from "../../hooks/useCloudCp";
 import { invalidateCloudModelCatalogs } from "../../hooks/useCloudModelCatalog";
 import { useCloudOffering } from "../../hooks/useCloudOffering";
-import { QUEUED_EDIT_FEATURE } from "../../lib/cloud-offering";
+import { QUEUED_DELETE_FEATURE, QUEUED_EDIT_FEATURE } from "../../lib/cloud-offering";
 import type { ShellTerminal } from "../../hooks/useShellTerminals";
 import { useChatMessageFocus, useChatNavigationRequest, type ChatMessageFocusTarget } from "../../hooks/useChatMessageFocus";
 import { useCloudPromptSuggestion } from "../../hooks/useCloudPromptSuggestion";
@@ -276,6 +276,10 @@ function queuedDeleteRefusal(error: unknown): Error | undefined {
 	switch (error.code) {
 		case "TURN_FINISHED":
 			return undefined;
+		case "TURN_NOT_QUEUED":
+			// deleteQueuedMessage left the turn as it was: the agent took it, or it
+			// was stopped or ended otherwise.
+			return new Error("This message is no longer queued, so it was not deleted. If the agent started on it, stop that turn instead.");
 		case "SESSION_TERMINATED":
 			return new Error("This session has ended, so this message can no longer be deleted.");
 		case "forbidden":
@@ -1600,15 +1604,20 @@ export function CloudSessionChatSurface({
 		(message: ConversationMessage) => Boolean(message.turnId && ownTurns.has(message.turnId) && !message.content?.length),
 		[ownTurns],
 	);
-	// A queued message is deleted by stopping its turn (cancelTurn) before the
-	// agent starts on it. The control plane lets whoever may direct the turn do
-	// that: the message's author, whoever started the session, the
-	// organization's owners and admins, and the composer lease holder.
+	// A queued message is taken back before the agent starts on it. Where the
+	// control plane offers queued-delete, that never stops a turn the agent
+	// took meanwhile (deleteQueuedMessage, 409 TURN_NOT_QUEUED), as a local
+	// chat's Delete does; an older one only stops turns (cancelTurn). It lets
+	// whoever may direct the turn do it: the message's author, whoever
+	// started the session, the organization's owners and admins, and the
+	// composer lease holder.
+	const queuedDeleteOffered = offering.features.includes(QUEUED_DELETE_FEATURE);
 	const cancelQueued = useMutation({
 		mutationFn: async (turnId: string) => {
 			if (!cloud) throw new Error("Cloud session context is unavailable.");
 			try {
-				await client.cancelTurn(cloud.orgId, session.id, turnId);
+				if (queuedDeleteOffered) await client.deleteQueuedMessage(cloud.orgId, session.id, turnId);
+				else await client.cancelTurn(cloud.orgId, session.id, turnId);
 			} catch (error) {
 				const refusal = queuedDeleteRefusal(error);
 				if (refusal) throw refusal;
