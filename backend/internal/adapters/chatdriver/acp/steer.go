@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	acpsdk "github.com/coder/acp-go-sdk"
@@ -807,12 +808,18 @@ var errSteerTurnStopping = fmt.Errorf("%w: the turn is being stopped", ports.Err
 // any later steer for the running turn. Stop calls it before taking the Chat
 // controller's dispatch lock, so a steer that already holds the lock but has
 // not reached the agent yet is turned away too. A later turn steers as usual.
-func (c *conversation) WithdrawPendingSteers() {
+//
+// The returned restore lets that turn take steers again after a Stop that did
+// not stop it. Stops can overlap: while another of them is still stopping the
+// turn, its steers stay refused. A restore that comes after the turn has
+// ended does nothing, so it cannot lift the next turn's Stop.
+func (c *conversation) WithdrawPendingSteers() func() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.activeTurn != "" {
-		if c.stoppingTurn != c.activeTurn {
-			c.stoppingTurn, c.stopAttempts = c.activeTurn, 0
+	turn := c.activeTurn
+	if turn != "" {
+		if c.stoppingTurn != turn {
+			c.stoppingTurn, c.stopAttempts = turn, 0
 		}
 		c.stopAttempts++
 	}
@@ -824,7 +831,7 @@ func (c *conversation) WithdrawPendingSteers() {
 	// cannot be taken back: its Steer returns now, so Stop does not wait out
 	// the steer's wait, and whether the agent took it is not known.
 	for _, w := range c.promptSteers {
-		if w.turn != c.activeTurn {
+		if w.turn != turn {
 			continue
 		}
 		if !w.sent {
@@ -834,17 +841,23 @@ func (c *conversation) WithdrawPendingSteers() {
 		}
 		w.settle(errSteerStopping)
 	}
+	if turn == "" {
+		return nil
+	}
+	return sync.OnceFunc(func() { c.restoreSteering(turn) })
 }
 
 // errSteerStopping settles a steer prompt still waiting when Stop begins.
 var errSteerStopping = fmt.Errorf("%w: the turn is being stopped", errSteerUnconfirmed)
 
-// RestoreSteering lets the running turn take steers again after a Stop that
-// did not stop it. See WithdrawPendingSteers. Stops can overlap: while another
-// of them is still stopping the turn, its steers stay refused.
-func (c *conversation) RestoreSteering() {
+// restoreSteering gives back one withdrawal of turn's steering. See
+// WithdrawPendingSteers.
+func (c *conversation) restoreSteering(turn string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.stoppingTurn != turn {
+		return // that turn is over, and a later Stop may own the guard now
+	}
 	if c.stopAttempts > 0 {
 		c.stopAttempts--
 	}
