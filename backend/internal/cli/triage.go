@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -128,6 +129,12 @@ func newTriageCommand(c *commandContext) *cobra.Command {
 			err = c.deps.RunInteractiveCommand(cmd.Context(), path, dir, args, cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr())
 			if err != nil {
 				return fmt.Errorf("%s failed; draft preserved at %s: %w", name, filepath.Join(dir, "bug-report.md"), err)
+			}
+			if github.Path == "" || github.Auth != "ok" {
+				// gh may have been installed or signed in while the agent ran.
+				refresh, cancel := context.WithTimeout(cmd.Context(), triageBudget)
+				github = c.triagePreflight(refresh)
+				cancel()
 			}
 			return finishTriage(cmd.Context(), cmd.InOrStdin(), cmd.OutOrStdout(), dir, github, triageTTY(cmd.InOrStdin(), cmd.OutOrStdout()))
 		},

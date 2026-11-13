@@ -114,8 +114,14 @@ func finishTriage(ctx context.Context, in io.Reader, out io.Writer, dir string, 
 	if err != nil || !yes {
 		return err
 	}
+	// Both payloads are written before the first GitHub write, so a local
+	// failure can never follow a post that already went through.
 	bodyPath := filepath.Join(dir, "post-body.md")
 	if err := os.WriteFile(bodyPath, []byte(body), 0o600); err != nil {
+		return err
+	}
+	evidencePath := filepath.Join(dir, "post-evidence.md")
+	if err := os.WriteFile(evidencePath, []byte(evidence), 0o600); err != nil {
 		return err
 	}
 	args := []string{"issue", "comment", number, "--repo", triageRepo, "--body-file", bodyPath}
@@ -139,10 +145,6 @@ func finishTriage(ctx context.Context, in io.Reader, out io.Writer, dir string, 
 	status = "commented"
 	if first == "status: ready" {
 		status = "filed"
-	}
-	evidencePath := filepath.Join(dir, "post-evidence.md")
-	if err := os.WriteFile(evidencePath, []byte(evidence), 0o600); err != nil {
-		return err
 	}
 	if _, err := triageGH(ctx, github.Path, "issue", "comment", match[1], "--repo", triageRepo, "--body-file", evidencePath); err != nil {
 		return fmt.Errorf("posted at %s; evidence comment failed: %w", url, err)
