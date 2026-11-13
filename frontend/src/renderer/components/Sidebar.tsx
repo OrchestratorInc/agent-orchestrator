@@ -508,14 +508,19 @@ type SidebarProps = {
 	onOpenRemoteProject?: (hostId: string, projectId: string) => void;
 	onOpenRemoteOrchestrator?: (hostId: string, projectId: string) => void;
 	onConfigureRemoteProject?: (hostId: string, projectId: string) => void;
-	onRemoveRemoteProject?: (hostId: string, projectId: string) => Promise<void>;
+	/** Removes the project optimistically; the shell owns feedback and rollback. */
+	onRemoveRemoteProject?: (hostId: string, projectId: string) => void;
 	onRetryRemoteHosts?: () => void;
 	remoteWorkspaces?: WorkspaceSummary[];
 	remoteFailedHostIds?: string[];
 	onCloneProject: (input: CloneProjectInput) => Promise<void>;
 	onCreateProject: (input: CreateProjectInput) => Promise<void>;
 	onInitializeProject: (path: string) => Promise<void>;
-	onRemoveProject: (projectId: string) => Promise<void>;
+	/**
+	 * Removes the project optimistically; the shell owns feedback and rollback.
+	 * `cloud` tells a local project from a cloud project with the same id.
+	 */
+	onRemoveProject: (projectId: string, cloud: boolean) => void;
 	/** Fixed shell chrome that also consumes the live sidebar width. */
 	resizeAuxiliaryTargetRef?: RefObject<HTMLElement | null>;
 };
@@ -704,7 +709,7 @@ export const Sidebar = memo(function Sidebar({
 	onOpenRemoteProject = () => undefined,
 	onOpenRemoteOrchestrator = () => undefined,
 	onConfigureRemoteProject = () => undefined,
-	onRemoveRemoteProject = async () => undefined,
+	onRemoveRemoteProject = () => undefined,
 	onRetryRemoteHosts = () => undefined,
 	remoteWorkspaces = [],
 	remoteFailedHostIds = [],
@@ -1496,7 +1501,7 @@ type ProjectItemProps = {
 	projectDragInProgress: boolean;
 	consumeDragClick: (id: string) => boolean;
 	onToggle: (projectId: string) => void;
-	onRemoveProject: (projectId: string) => Promise<void>;
+	onRemoveProject: (projectId: string, cloud: boolean) => void;
 	suppressInitialExpandAnimation: boolean;
 	onProjectDragStart: (event: ReactDragEvent<HTMLElement>, projectId: string) => void;
 	onProjectDragEnd: () => void;
@@ -1569,8 +1574,6 @@ const ProjectItem = memo(function ProjectItem({
 		);
 
 	const queryClient = useQueryClient();
-	const [removeError, setRemoveError] = useState<string | null>(null);
-	const [isRemoving, setIsRemoving] = useState(false);
 	const [confirmOpen, setConfirmOpen] = useState(false);
 	const [isSpawning, setIsSpawning] = useState(false);
 	// Skip enter animation on first mount — sessions arrive async and we don't
@@ -1801,10 +1804,7 @@ const ProjectItem = memo(function ProjectItem({
 	};
 
 
-	const removeProject = () => {
-		setRemoveError(null);
-		setConfirmOpen(true);
-	};
+	const removeProject = () => setConfirmOpen(true);
 	const copyToClipboard = useCopyToClipboard();
 	// Pins are a local list preference; remote host rows and the Scratchpad
 	// have their own sections and are not pinnable.
@@ -1825,9 +1825,10 @@ const ProjectItem = memo(function ProjectItem({
 	// The ⋮ button and right-click show these same rows. Built only while a menu
 	// is open, so the archive count costs a closed row nothing.
 	const buildMenuEntries = (): MenuEntry[] => {
-		// The project's archive: every project row has one, the Scratchpad's
-		// archive is its own section's entry. Hidden while empty, as the board's
-		// Archive button and Cmd+K's Open archive are.
+		// The project's archived sessions: every project row has the entry, the
+		// Scratchpad's is its own section's row. A noun, not "Archive", so it never
+		// reads as archiving the project. Hidden while empty, as the board's button
+		// and the Cmd+K command are.
 		const archivedCount = isStandalone ? 0 : workerSessions(workspace.sessions).filter(isArchivedSession).length;
 		return [
 			// A new task in someone else's agent is a dead end: it takes no session but its own.
@@ -1865,9 +1866,9 @@ const ProjectItem = memo(function ProjectItem({
 					kind: "item" as const,
 					id: "archive",
 					icon: <Archive aria-hidden="true" />,
-					label: t("shell.archive"),
+					label: t("shell.archivedSessions"),
 					count: archivedCount,
-					ariaLabel: t("shell.archiveSessionsAria", { count: archivedCount }),
+					ariaLabel: t("shell.archivedSessionsAria", { count: archivedCount }),
 					onSelect: openArchive,
 				}]
 				: []),
@@ -1907,7 +1908,6 @@ const ProjectItem = memo(function ProjectItem({
 						icon: <Trash2 aria-hidden="true" />,
 						label: t("shell.removeProjectTitle"),
 						destructive: true,
-						disabled: isRemoving,
 						onSelect: removeProject,
 					},
 				]
@@ -1915,24 +1915,11 @@ const ProjectItem = memo(function ProjectItem({
 		];
 	};
 
-	const handleConfirmRemove = async () => {
+	// Removal is optimistic: the row, its sessions and its pin leave at once,
+	// and the shell reports the outcome with a toast.
+	const handleConfirmRemove = () => {
 		setConfirmOpen(false);
-		setIsRemoving(true);
-		// Teardown can take a while when a project owns several sessions. Leave
-		// the confirmation immediately and move to the route that remains valid
-		// after removal while the sidebar keeps progress/error feedback visible.
-		selection.goHome();
-		try {
-			await onRemoveProject(workspace.id);
-			// Project ids come from the folder name, so a stale pin would come
-			// back if the same folder is added again.
-			if (canPin) setProjectPinned(workspace.id, false);
-		} catch (err) {
-			const message = err instanceof Error ? err.message : t("shell.couldNotRemoveProject");
-			setRemoveError(message);
-		} finally {
-			setIsRemoving(false);
-		}
+		onRemoveProject(workspace.id, workspace.kind === CLOUD_PROJECT_KIND);
 	};
 
 	return (
@@ -2187,15 +2174,6 @@ const ProjectItem = memo(function ProjectItem({
 						</div>
 						{/* end outer relative */}
 					</div>
-					{isRemoving ? (
-						<div className="sidebar-expanded-chrome px-5 py-1 text-2xs text-muted-foreground" role="status">
-							{t("shell.removingNamed", { name: workspace.name })}
-						</div>
-					) : removeError ? (
-						<div className="sidebar-expanded-chrome px-5 py-1 text-2xs text-destructive" role="alert">
-							{removeError}
-						</div>
-					) : null}
 					{/* project-sidebar__sessions: indented under the project parent so worker
           sessions read as children without adding a persistent guide rail. */}
 		<AnimatePresence initial={false}>
@@ -2490,7 +2468,7 @@ function ScratchpadSection({
 				{showArchivedRow ? (
 					<button
 						type="button"
-						aria-label={t("shell.archiveSessionsAria", { count: archivedCount })}
+						aria-label={t("shell.archivedSessionsAria", { count: archivedCount })}
 						className={cn(SECTION_ROW_CLASS, NAV_ROW_HIGHLIGHT_HOST_CLASS, "mb-1 shrink-0 rounded-lg text-left text-muted-foreground")}
 						data-scratchpad-archived-row=""
 						onClick={selection.goStandaloneBoard}

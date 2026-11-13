@@ -16,7 +16,7 @@ import { aoBridge } from "../../lib/bridge";
 import { ApprovalCard } from "./ChatTimelineItems";
 import { Timeline } from "./ChatWorkspace";
 import { sideConversationActivity, sideConversationSnapshot } from "./sideConversation";
-import { COMPOSER_SEND_INSET, ComposerEditor, type ComposerEditorHandle, type ComposerTrigger } from "./ComposerEditor";
+import { ComposerEditor, type ComposerEditorHandle, type ComposerTrigger } from "./ComposerEditor";
 import { ComposerSuggestMenu } from "./ComposerSuggestMenu";
 import { rankSkills, moveHighlight } from "./composerSuggest";
 import { ChatAnnotationSummary, type ChatAnnotationSummaryItem } from "./ChatAnnotationSummary";
@@ -332,7 +332,6 @@ export function SideComposer({
 							size="icon-sm"
 							shape="pill"
 							aria-label={running && !canSend ? t("sideChat.stopTurn") : t("sideChat.sendMessage")}
-							className={COMPOSER_SEND_INSET}
 							onClick={running && !canSend ? onInterrupt : undefined}
 							disabled={running && !canSend ? false : !canSend}
 						>

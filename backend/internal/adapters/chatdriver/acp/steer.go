@@ -67,6 +67,12 @@ func (c *conversation) Steer(
 		},
 	})
 	if err != nil {
+		if isACPSessionMissing(err) {
+			// The agent answered: it has no session to steer, so the guidance was
+			// definitively not delivered. Settle the delivery handle as rejected
+			// rather than uncertain, and stop the dead provider.
+			return ports.ChatTurnRef{}, &providerRefusal{err: c.providerSessionLost(err)}
+		}
 		wrapped := fmt.Errorf("ACP %s: %w", steeringMethod, err)
 		// -32601 means the agent answered the JSON-RPC request and does not
 		// implement this optional extension. That is a definite refusal, not a

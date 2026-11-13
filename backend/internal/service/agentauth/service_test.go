@@ -387,6 +387,7 @@ func TestStartPreparesKimiAuthWorkspaceWithSeededTrust(t *testing.T) {
 	// seed lands in a throwaway home instead of the developer's real one.
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	t.Setenv("KIMI_CODE_HOME", "")
 
 	dataDir := t.TempDir()
@@ -417,7 +418,10 @@ func TestStartPreparesKimiAuthWorkspaceWithSeededTrust(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read trust record: %v", err)
 	}
-	if !strings.Contains(string(data), `"root":"`+wantDir+`"`) {
+	var trust struct {
+		Root string `json:"root"`
+	}
+	if err := json.Unmarshal(data, &trust); err != nil || filepath.Clean(trust.Root) != filepath.Clean(wantDir) {
 		t.Fatalf("trust record = %s, want root %q", data, wantDir)
 	}
 }
@@ -427,6 +431,7 @@ func TestStartPreparesCopilotAuthWorkspaceWithSeededTrust(t *testing.T) {
 	// seed lands in a throwaway home instead of the developer's real one.
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	t.Setenv("COPILOT_HOME", "")
 
 	dataDir := t.TempDir()
@@ -456,11 +461,12 @@ func TestStartPreparesCopilotAuthWorkspaceWithSeededTrust(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read copilot config: %v", err)
 	}
-	realDir, err := filepath.EvalSymlinks(wantDir)
-	if err != nil {
-		t.Fatalf("resolve auth workspace: %v", err)
+	realDir := wantDir
+	if resolved, err := filepath.EvalSymlinks(wantDir); err == nil {
+		realDir = resolved
 	}
-	if !strings.Contains(string(data), `"`+realDir+`"`) {
+	encodedDir, err := json.Marshal(realDir)
+	if err != nil || !strings.Contains(string(data), string(encodedDir)) {
 		t.Fatalf("copilot config = %s, want trusted folder %q", data, realDir)
 	}
 }

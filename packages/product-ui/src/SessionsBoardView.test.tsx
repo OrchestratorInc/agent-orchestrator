@@ -257,6 +257,33 @@ describe("SessionsBoardView", () => {
 		expect(onOpen).toHaveBeenCalledTimes(1);
 	});
 
+	it("shows a session branch as its topic and hides it when it only repeats the title", () => {
+		const renderCard = (branch: string, title: string) =>
+			render(
+				<SessionCardView
+					externalLink={ExternalLink}
+					labels={{
+						formatTime: () => "5m ago",
+						intakeIssue: (id) => `Issue ${id}`,
+						pr: progressLabels,
+						updatedAt: (timestamp) => `Updated ${timestamp}`,
+					}}
+					onOpen={vi.fn()}
+					renderAvatar={(provider) => <span role="img" aria-label={provider}>C</span>}
+					selected={false}
+					session={{ ...baseSession, branch, title }}
+				/>,
+			);
+
+		const first = renderCard("ao/agent-orchestrator-132/archived-sessions-label", "Rename the archive");
+		const topic = screen.getByText("archived-sessions-label");
+		expect(topic).toHaveAttribute("title", "ao/agent-orchestrator-132/archived-sessions-label");
+		first.unmount();
+
+		renderCard("ao/fix-login/root", "Fix login");
+		expect(screen.queryByText("fix-login")).not.toBeInTheDocument();
+	});
+
 	it("fills a selected list card and keeps the board card's own hover otherwise", () => {
 		const labels = {
 			formatTime: () => "5m ago",

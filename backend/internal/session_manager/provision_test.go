@@ -15,6 +15,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/providerkeys"
 )
 
 type fixedBrowserCapability string
@@ -75,6 +76,55 @@ func TestSpawnEnvWindowsRemovesCaseVariantsOfProtectedVariables(t *testing.T) {
 	}
 	if env[EnvSessionID] != "mer-1" || env["buildMode"] != "production" {
 		t.Fatalf("environment = %v, want protected ID and untouched project variable spelling", env)
+	}
+}
+
+func TestRuntimeEnvIncludesSavedProviderKeysAndProjectOverride(t *testing.T) {
+	dir := t.TempDir()
+	if err := providerkeys.Save(t.Context(), dir, "OPENAI_API_KEY", "device-secret"); err != nil {
+		t.Fatal(err)
+	}
+	manager := &Manager{
+		dataDir:    dir,
+		executable: func() (string, error) { return filepath.Join(dir, "ao"), nil },
+		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	base := manager.runtimeEnv("session", "project", "", nil)
+	if base["OPENAI_API_KEY"] != "device-secret" {
+		t.Fatal("saved device provider key was not passed to the harness")
+	}
+	project := manager.runtimeEnv("session", "project", "", map[string]string{"OPENAI_API_KEY": "project-secret"})
+	if project["OPENAI_API_KEY"] != "project-secret" {
+		t.Fatal("project-specific provider key did not override the device default")
+	}
+}
+
+func TestRuntimeEnvKeepsAUserExportedKeyForAHarnessThatMustNotGetAOs(t *testing.T) {
+	dir := t.TempDir()
+	if err := providerkeys.Save(t.Context(), dir, "OPENAI_API_KEY", "ao-saved"); err != nil {
+		t.Fatal(err)
+	}
+	// The user exported their own key before starting AO; the daemon then
+	// exports AO's copy to itself for authentication probes.
+	t.Setenv("OPENAI_API_KEY", "user-exported")
+	t.Cleanup(func() { _ = providerkeys.RestoreInherited("OPENAI_API_KEY") })
+	if err := providerkeys.ExportForProbes("OPENAI_API_KEY", "ao-saved"); err != nil {
+		t.Fatal(err)
+	}
+	manager := &Manager{
+		dataDir:    dir,
+		executable: func() (string, error) { return filepath.Join(dir, "ao"), nil },
+		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	// Codex never claimed AO's key, so it gets the user's own value back.
+	codex, err := manager.runtimeEnvChecked("session", "project", "", nil, "", "codex")
+	if err != nil || codex["OPENAI_API_KEY"] != "user-exported" {
+		t.Fatalf("codex OPENAI_API_KEY=%q err=%v", codex["OPENAI_API_KEY"], err)
+	}
+	// Other harnesses still receive AO's saved key.
+	goose, err := manager.runtimeEnvChecked("session", "project", "", nil, "", "goose")
+	if err != nil || goose["OPENAI_API_KEY"] != "ao-saved" {
+		t.Fatalf("goose OPENAI_API_KEY=%q err=%v", goose["OPENAI_API_KEY"], err)
 	}
 }
 
@@ -563,6 +613,27 @@ func TestResolveClaudeTUIAgentConfigRejectsUnsupportedEffort(t *testing.T) {
 	}, domain.ProjectConfig{})
 	if !errors.Is(err, ports.ErrUnsupportedEffort) {
 		t.Fatalf("error = %v, want ErrUnsupportedEffort", err)
+	}
+}
+
+func TestResolveGrokEffortIsAvailableOnlyInChat(t *testing.T) {
+	m := &Manager{}
+	for _, mode := range []domain.SessionMode{domain.SessionModeChat, domain.SessionModeTUI} {
+		t.Run(string(mode), func(t *testing.T) {
+			resolved, err := m.resolveAgentConfig(t.Context(), ports.SpawnConfig{
+				Harness: domain.HarnessGrok, Kind: domain.KindWorker, RequestedMode: mode,
+				AgentConfig: ports.AgentConfig{Model: "grok-4.7", Effort: "xhigh"}, EffortOverride: true,
+			}, domain.ProjectConfig{})
+			if mode == domain.SessionModeTUI {
+				if !errors.Is(err, ports.ErrUnsupportedEffort) {
+					t.Fatalf("TUI effort error = %v, want unsupported", err)
+				}
+				return
+			}
+			if err != nil || resolved.Model != "grok-4.7" || resolved.Effort != "xhigh" {
+				t.Fatalf("Chat config = %#v, %v; want effort forwarded to ACP", resolved, err)
+			}
+		})
 	}
 }
 

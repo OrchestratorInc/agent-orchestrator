@@ -5933,7 +5933,7 @@ describe("SessionInspector branch summary", () => {
         </TooltipProvider>
       </QueryClientProvider>,
     );
-    expect(branch().getByText("ao/fix-login/root")).toBeInTheDocument();
+    expect(branch().getByText("fix-login")).toBeInTheDocument();
     expect(screen.queryByText(/^(Generating branch name|Naming branch|Preparing branch|Initializing branch|Resolving branch name)$/)).not.toBeInTheDocument();
   });
 

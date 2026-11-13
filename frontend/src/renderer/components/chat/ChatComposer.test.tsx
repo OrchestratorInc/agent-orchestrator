@@ -458,8 +458,8 @@ describe("send keys", () => {
 		// The placeholder reserves the same gutter, so typing starts where it began.
 		const placeholder = field.parentElement?.querySelector<HTMLElement>(".pointer-events-none.text-muted-foreground");
 		expect(placeholder).toHaveClass("px-[7px]", "overflow-hidden", "chat-composer-scrollbar", "[scrollbar-gutter:stable_both-edges]");
-		// The send circle sits as far in from the right as the + glyph's ink does from the left.
-		expect(screen.getByRole("group", { name: "Send message controls" })).toHaveClass("me-2.5");
+		// The send circle sits on the form padding like the + does, so its right and bottom insets match.
+		expect(screen.getByRole("group", { name: "Send message controls" }).className).not.toMatch(/(^|\s)(me|mr|pe|pr)-/);
 	});
 
 	it("uses a circular primary send control that enables when armed", async () => {
@@ -3074,20 +3074,71 @@ describe("unavailable states", () => {
 		expect(onInterrupt).not.toHaveBeenCalled();
 	});
 
-	it("explains when a send is blocked by the previous in-flight message", async () => {
-		const onSend = vi.fn().mockImplementation(
-			() => new Promise<void>(() => {
-				/* keep pending */
-			}),
-		);
-		render(<ChatComposer busy onSend={onSend} willQueue />);
+	it("sends a message entered while the previous one is in flight as soon as that one lands", async () => {
+		const onSend = vi.fn().mockResolvedValue(undefined);
+		const view = render(<ChatComposer busy onSend={onSend} willQueue />);
 		const field = screen.getByLabelText("Message the agent");
 
 		await typeInComposer(field, "follow up");
 		await userEvent.keyboard("{Enter}");
 
 		expect(onSend).not.toHaveBeenCalled();
-		expect(screen.getByRole("alert")).toHaveTextContent(/still sending the previous message/i);
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+		expect(field).toHaveTextContent("follow up");
+
+		view.rerender(<ChatComposer onSend={onSend} willQueue />);
+
+		await waitFor(() => expect(onSend).toHaveBeenCalledOnce());
+		expect(onSend).toHaveBeenCalledWith("follow up");
+		await waitFor(() => expect(field.textContent).toBe(""));
+	});
+
+	it("keeps a held message in the box when the previous send is parked as unsent", async () => {
+		const sessionId = "composer-held-behind-parked-send";
+		const onSend = vi.fn().mockResolvedValue(undefined);
+		const view = render(<ChatComposer busy onSend={onSend} willQueue draftSessionId={sessionId} />);
+		const field = screen.getByLabelText("Message the agent");
+
+		await typeInComposer(field, "follow up");
+		await userEvent.keyboard("{Enter}");
+		await waitFor(() => expect(field).toHaveAttribute("contenteditable", "true"));
+		expect(onSend).not.toHaveBeenCalled();
+
+		// Another surface's send gets no answer and moves to the unsent strip.
+		await act(async () => {
+			const lost = prepareChatComposerDelivery(sessionId, {
+				kind: "send",
+				optimistic: true,
+				composerText: "follow up",
+				attachments: [],
+				requestText: "the message that got no answer",
+				clientMessageId: "lost-before-held",
+			});
+			if (!lost.ok) throw new Error("Failed to prepare test delivery");
+			expect(parkChatComposerDelivery(sessionId, "lost-before-held").ok).toBe(true);
+		});
+		view.rerender(<ChatComposer onSend={onSend} willQueue draftSessionId={sessionId} />);
+		await act(async () => {});
+
+		expect(onSend).not.toHaveBeenCalled();
+		expect(field).toHaveTextContent("follow up");
+	});
+
+	it("does not send a held message that was edited before the previous one landed", async () => {
+		const onSend = vi.fn().mockResolvedValue(undefined);
+		const view = render(<ChatComposer busy onSend={onSend} willQueue />);
+		const field = screen.getByLabelText("Message the agent");
+
+		await typeInComposer(field, "follow up");
+		await userEvent.keyboard("{Enter}");
+		await waitFor(() => expect(field).toHaveAttribute("contenteditable", "true"));
+		await typeInComposer(field, " and more");
+
+		view.rerender(<ChatComposer onSend={onSend} willQueue />);
+		await act(async () => {});
+
+		expect(onSend).not.toHaveBeenCalled();
+		expect(field).toHaveTextContent("follow up and more");
 	});
 });
 

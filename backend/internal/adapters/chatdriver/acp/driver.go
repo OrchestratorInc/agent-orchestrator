@@ -1170,9 +1170,63 @@ func isACPInternalError(err error) bool {
 	return errors.As(err, &requestErr) && requestErr.Code == -32603
 }
 
+// isACPPromptStalled reports whether err is the failure the chat host's stall
+// watchdog gives a prompt whose adapter went silent. The relay wraps error data
+// from the provider, so the marker is read at either level.
+func isACPPromptStalled(err error) bool {
+	var requestErr *acpsdk.RequestError
+	if !errors.As(err, &requestErr) || requestErr.Code != -32603 {
+		return false
+	}
+	data, ok := requestErr.Data.(map[string]any)
+	if !ok {
+		return false
+	}
+	if stalled, _ := data[persistenthost.ACPPromptStalledDataKey].(bool); stalled {
+		return true
+	}
+	provider, _ := data["providerData"].(map[string]any)
+	stalled, _ := provider[persistenthost.ACPPromptStalledDataKey].(bool)
+	return stalled
+}
+
+// promptStalledError keeps the provider error's text and adds the
+// ports.ErrChatPromptStalled identity for errors.Is.
+type promptStalledError struct{ error }
+
+func (e promptStalledError) Unwrap() error { return e.error }
+
+func (e promptStalledError) Is(target error) bool { return target == ports.ErrChatPromptStalled }
+
+// acpSessionNotFoundDetail is the text claude-agent-acp throws from every
+// session-scoped handler (session/prompt, set_config_option, set_mode, close,
+// steering) once its sessions map no longer holds the id.
+const acpSessionNotFoundDetail = "session not found"
+
+// isACPSessionMissing reports the agent answering that it holds no session with
+// the id AO sent. The adapter throws a plain Error, which the ACP SDK delivers
+// as -32603 with the text in data.details; AO's persistent host wraps prompt
+// error data as data.providerData, so both shapes are checked. Nothing else is
+// inferred from a generic -32603.
+func isACPSessionMissing(err error) bool {
+	var requestErr *acpsdk.RequestError
+	if !errors.As(err, &requestErr) || requestErr.Code != -32603 {
+		return false
+	}
+	data, _ := requestErr.Data.(map[string]any)
+	if provider, ok := data["providerData"].(map[string]any); ok {
+		data = provider
+	}
+	details, _ := data["details"].(string)
+	return strings.EqualFold(strings.TrimSpace(details), acpSessionNotFoundDetail)
+}
+
 func normalizeACPError(operation string, err error) error {
 	if isACPAuthRequired(err) {
 		return fmt.Errorf("%w: %s: %w", ports.ErrChatAuthRequired, operation, err)
+	}
+	if isACPPromptStalled(err) {
+		return fmt.Errorf("%s: %w", operation, promptStalledError{err})
 	}
 	return fmt.Errorf("%s: %w", operation, err)
 }
