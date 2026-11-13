@@ -90,15 +90,24 @@ export function useDictation(target: DictationTarget) {
 		return () => window.clearTimeout(timer);
 	}, [error]);
 
+	/** Cancels a start that is still waiting for another composer's recording to finish. */
+	const cancelPendingStart = useCallback(() => {
+		if (!pendingStart.current) return false;
+		pendingStart.current = false;
+		setPhase("idle");
+		return true;
+	}, []);
+
 	/** Stops listening at once, keeping or dropping the dictated text. */
 	const halt = useCallback(
 		(keep: boolean) => {
+			if (cancelPendingStart()) return;
 			if (!owns()) return;
 			end(keep);
 			void dictationClient.cancel();
 			playDictationSound("off");
 		},
-		[end],
+		[end, cancelPendingStart],
 	);
 
 	useEffect(() => {
@@ -207,9 +216,10 @@ export function useDictation(target: DictationTarget) {
 	}, [phase, halt]);
 
 	const toggle = useCallback(() => {
+		if (cancelPendingStart()) return;
 		if (!owns()) start();
 		else if (phase !== "finishing") stop();
-	}, [phase, start, stop]);
+	}, [phase, start, stop, cancelPendingStart]);
 
 	return {
 		phase,
