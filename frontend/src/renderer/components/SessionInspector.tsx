@@ -72,7 +72,7 @@ import { latestScriptRun } from "../lib/cloud-script-runs";
 import { ResumeAgentControl } from "./ResumeAgentControl";
 import { SessionBranchSummary, useOtherPRConflictStep, type BranchWork } from "./SessionBranchSummary";
 import { SessionAccountSummary } from "./SessionAccountSummary";
-import { PRActionButton } from "./PRActions";
+import { CloudPRGitStepButton, PRActionButton } from "./PRActions";
 import { PRDescriptionPreview } from "./PRDescriptionPreview";
 import { PRPills, prFocusKey, prStateIcon, sortSessionPRs } from "./PRPills";
 import { PRChecksGroups, PRLabelsAndReviewers } from "./PRCardDetails";
@@ -473,7 +473,10 @@ const SummaryView = memo(function SummaryView({
 	};
 	const focusedIsBranchPR = Boolean(branchPR && focusedPR && prFocusKey(focusedPR) === prFocusKey(branchPR));
 	// Another PR of the session that conflicts: its card hands that to the agent.
-	const otherPRConflict = useOtherPRConflictStep(session, hostId, focusedIsBranchPR ? undefined : focusedPR);
+	// A Cloud session has no local branch rows to plan from, so its focused PR,
+	// the branch's own included, takes the same step; a guest leaves it to the owner.
+	const conflictStepPR = session.cloud ? (session.cloud.shared ? undefined : focusedPR) : focusedIsBranchPR ? undefined : focusedPR;
+	const otherPRConflict = useOtherPRConflictStep(session, hostId, conflictStepPR);
 	// CI, review, and merge policies act on a PR. Standalone sessions, local or
 	// a Cloud standalone agent, keep the row for Archive.
 	const scratchpadSession = session.workspaceId === STANDALONE_WORKSPACE_ID || standaloneAgent;
@@ -546,7 +549,7 @@ const SummaryView = memo(function SummaryView({
 										projectId={session.workspaceId}
 										sessionId={session.id}
 										showRepository={prsSpanRepositories(prSummaries)}
-										work={focusedIsBranchPR ? work : otherPRConflict ? { content: null, hasRows: false, git: otherPRConflict } : undefined}
+										work={focusedIsBranchPR && !session.cloud ? work : otherPRConflict ? { content: null, hasRows: false, git: otherPRConflict } : undefined}
 									/>
 								</div>
 							) : null}
@@ -1229,6 +1232,10 @@ function PRViewSummaryCard({
 			{!cloudOrgId && !guest && pr.state !== "merged" ? (
 				<div className={cn("pt-2 pb-2", !work?.hasRows && !elsewhere && "border-t border-(--color-border-settings-input)")}>
 					<PRActionButton canMerge={canMerge} git={work?.git} hostId={hostId} pr={pr} sessionId={sessionId} />
+				</div>
+			) : cloudOrgId && !guest && pr.state !== "merged" && work?.git ? (
+				<div className={cn("pt-2 pb-2", !work.hasRows && !elsewhere && "border-t border-(--color-border-settings-input)")}>
+					<CloudPRGitStepButton git={work.git} />
 				</div>
 			) : null}
 		</section>

@@ -19,6 +19,7 @@ import {
 } from "@/components/app-icons";
 import { sessionWorkspaceFilesQueryOptions, type WorkspaceFileSummary } from "../hooks/useSessionWorkspaceFiles";
 import { clientForSessionHost } from "../lib/host-clients";
+import { useCloudCp } from "../hooks/useCloudCp";
 import { sessionUiKey } from "../lib/hosts";
 import { sessionBranchPresentation } from "../lib/session-branch";
 import { cn } from "../lib/utils";
@@ -447,9 +448,15 @@ export function useAgentGitAction(session: WorkspaceSession, hostId: string | un
 	const startPending = useSessionGitActionStore((state) => state.start);
 	const updatePending = useSessionGitActionStore((state) => state.update);
 	const clearPending = useSessionGitActionStore((state) => state.clear);
+	const { client: cloudClient } = useCloudCp(Boolean(session.cloud));
 	const send = useMutation({
 		mutationFn: async ({ message }: { kind: SessionGitActionKind; message: string }) => {
 			if (usePreviewData) return;
+			// A Cloud session's agent takes the step as a message, through the control plane.
+			if (session.cloud) {
+				await cloudClient.sendSessionMessage(session.cloud.orgId, session.id, { text: message });
+				return;
+			}
 			const { error } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/send", {
 				params: { path: { sessionId: session.id } },
 				body: { message },
@@ -500,7 +507,7 @@ export function useOtherPRConflictStep(session: WorkspaceSession, hostId: string
 	const { t } = useTranslation();
 	const conflicting = pr?.mergeability.state === "conflicting";
 	const { pending, run, error } = useAgentGitAction(session, hostId, pr ? `pr:${pr.url}` : "pr", () => !conflicting);
-	const applies = Boolean(pr && conflicting && (pr.state === "open" || pr.state === "draft") && !session.cloud && session.kind !== "orchestrator");
+	const applies = Boolean(pr && conflicting && (pr.state === "open" || pr.state === "draft") && session.kind !== "orchestrator");
 	if (!pr || (!applies && !pending)) return undefined;
 	return {
 		primary: applies ? { kind: "resolveConflicts", label: t("inspector.git.resolveConflicts") } : undefined,
