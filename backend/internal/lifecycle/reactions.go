@@ -69,20 +69,29 @@ type pendingNudge struct {
 // and sends actionable agent nudges such as rebase, fix-CI, and
 // address-review-feedback prompts.
 func (m *Manager) ApplyPRObservation(ctx context.Context, id domain.SessionID, o ports.PRObservation) error {
+	_, err := m.applyPRObservation(ctx, id, o)
+	return err
+}
+
+func (m *Manager) applyPRObservation(ctx context.Context, id domain.SessionID, o ports.PRObservation) (bool, error) {
 	if !o.Fetched {
-		return nil
+		return false, nil
 	}
 	rec, ok, err := m.store.GetSession(ctx, id)
 	if err != nil || !ok {
-		return err
+		return false, err
 	}
 	pr, found, err := m.store.GetPR(ctx, o.URL)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if !found || !pr.AllowsAutomaticWork(rec) {
-		return nil
+		return false, nil
 	}
+	return true, m.reactToPRObservation(ctx, id, rec, o)
+}
+
+func (m *Manager) reactToPRObservation(ctx context.Context, id domain.SessionID, rec domain.SessionRecord, o ports.PRObservation) error {
 	// A PR observation is this session's earliest opportunity to durably record
 	// "this session produced a PR" — reconcile immediately rather than waiting
 	// for the artifact-output poller's next tick. A failure here must not
@@ -452,10 +461,8 @@ func (m *Manager) prBlockedByOpenParent(ctx context.Context, id domain.SessionID
 // lifecycle performs the compatibility projection internally instead of leaking
 // the old PR DTO back into the observer/provider boundary.
 func (m *Manager) ApplySCMObservation(ctx context.Context, id domain.SessionID, o ports.SCMObservation) error {
-	if !o.Fetched {
-		return nil
-	}
-	if err := m.ApplyPRObservation(ctx, id, scmToPRObservation(o)); err != nil {
+	applied, err := m.applyPRObservation(ctx, id, scmToPRObservation(o))
+	if err != nil || !applied {
 		return err
 	}
 	ready, err := m.scmObservationReadyToMerge(ctx, o)
