@@ -3,8 +3,9 @@ import userEvent from "@testing-library/user-event";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { prepareChatComposerDelivery, writeChatComposerText } from "../lib/chat-drafts";
-import type { ApprovalMode } from "../types/conversation";
+import type { ApprovalMode, ChatModel } from "../types/conversation";
 import { rememberChatSettingsTemplate } from "../lib/chat-settings-template";
+import type { PickerSource } from "./chat/AgentSwitchPicker";
 import type { ChatWorkspaceProps } from "./chat/ChatWorkspace";
 import { NewChatPage } from "./NewChatPage";
 import { rememberStandaloneAgent } from "../lib/cloud-standalone-agents";
@@ -22,6 +23,8 @@ const h = vi.hoisted(() => ({
 	replay: { agent: "codex", model: "gpt-6", effort: "high", approvalMode: undefined as string | undefined, mode: undefined as string | undefined },
 	workspace: undefined as ChatWorkspaceProps | undefined,
 	harness: "codex",
+	chatModels: [{ id: "gpt-6", displayName: "GPT-6", default: true }] as ChatModel[],
+	model: "gpt-6",
 	approvalMode: "auto" as ApprovalMode,
 	approvalModes: undefined as ApprovalMode[] | undefined,
 	modelWarning: undefined as string | undefined,
@@ -33,6 +36,15 @@ const h = vi.hoisted(() => ({
 vi.mock("@tanstack/react-router", () => ({
 	useNavigate: () => h.navigate,
 	useRouter: () => ({ preloadRoute: async () => undefined, history: { canGoBack: () => false, back: vi.fn() } }),
+}));
+// What the settings bar's agent and model picker is given; the picker is tested on its own.
+const modelPicker = vi.hoisted(() => ({ current: undefined as PickerSource | undefined }));
+vi.mock("./chat/AgentSwitchPicker", async (original) => ({
+	...await original<typeof import("./chat/AgentSwitchPicker")>(),
+	AgentModelPicker: ({ current }: { current: PickerSource }) => {
+		modelPicker.current = current;
+		return null;
+	},
 }));
 vi.mock("./settings/MobileDevicesSection", () => ({ mobileDevicesQueryKey: ["mobile-devices"], fetchDevices: async () => [] }));
 vi.mock("./chat/ChatWorkspace", () => ({
@@ -59,8 +71,8 @@ vi.mock("./TaskComposer", () => ({
 		refreshModels: async () => undefined,
 		modelWarning: h.modelWarning,
 		modelWarningRetries: h.modelWarningRetries,
-		chatModels: [{ id: "gpt-6", displayName: "GPT-6", default: true }],
-		turnSettings: { model: "gpt-6", reasoningEffort: "high", approvalMode: h.approvalMode },
+		chatModels: h.chatModels,
+		turnSettings: { model: h.model, reasoningEffort: "high", approvalMode: h.approvalMode },
 		approvalModes: h.approvalModes,
 		chooseTurnSettings: vi.fn(),
 		agent: { value: h.harness },
@@ -101,6 +113,9 @@ beforeEach(() => {
 	h.replay = { agent: "codex", model: "gpt-6", effort: "high", approvalMode: undefined, mode: undefined };
 	h.workspace = undefined;
 	h.harness = "codex";
+	h.chatModels = [{ id: "gpt-6", displayName: "GPT-6", default: true }];
+	h.model = "gpt-6";
+	modelPicker.current = undefined;
 	h.approvalMode = "auto";
 	h.approvalModes = undefined;
 	h.modelWarning = undefined;
@@ -473,5 +488,57 @@ describe("New Chat permission menu capabilities", () => {
 		render(<QueryClientProvider client={queryClient}>{h.workspace?.draftSettings}</QueryClientProvider>);
 		expect(screen.queryByRole("button", { name: "Approval policy for the next turn" })).toBeNull();
 		expect(screen.queryByText("Auto-approve")).toBeNull();
+	});
+});
+
+describe("New Chat model menu", () => {
+	// This computer's Claude Code defaults to Fable, so its saved bar describes its
+	// Default row as Fable 5.2 beside a Fable 5.2 row of its own.
+	const rememberLocalClaudeBar = () => rememberChatSettingsTemplate("claude-code", undefined, { options: [
+		{ id: "model", name: "Model", category: "model", type: "select", currentValue: "default", choices: [
+			{ value: "default", name: "Default (recommended)", description: "Fable 5.2" },
+			{ value: "sonnet", name: "Sonnet 5.5" },
+			{ value: "fable", name: "Fable 5.2" },
+			{ value: "opus", name: "Opus 5.5" },
+		] },
+	] });
+	const catalog: ChatModel[] = [
+		{ id: "sonnet", displayName: "Sonnet 5.5", default: true },
+		{ id: "fable", displayName: "Fable 5.2", default: false },
+		{ id: "opus", displayName: "Opus 5.5", default: false },
+	];
+
+	it("lists Cloud's own models for a Cloud task, not this computer's saved Claude Code bar", () => {
+		h.harness = "claude-code";
+		h.isCloudProject = true;
+		h.chatModels = catalog;
+		h.model = "sonnet";
+		rememberLocalClaudeBar();
+		const queryClient = renderPage();
+		// Drawn from Cloud's catalog, as the session's own bar is, not from this computer's agent.
+		expect(h.workspace?.draftSettings).toEqual(expect.objectContaining({ props: { children: expect.objectContaining({
+			props: expect.objectContaining({ models: catalog, configOptions: undefined }),
+		}) } }));
+		render(<QueryClientProvider client={queryClient}>{h.workspace?.draftSettings}</QueryClientProvider>);
+		expect(modelPicker.current?.models.map((model) => [model.id, model.label])).toEqual([
+			["sonnet", "Sonnet 5.5"], ["fable", "Fable 5.2"], ["opus", "Opus 5.5"],
+		]);
+		expect(modelPicker.current?.modelId).toBe("sonnet");
+	});
+
+	it("keeps the model this computer's agent defaults to in a local task's menu", () => {
+		h.harness = "claude-code";
+		h.chatModels = catalog;
+		h.model = "sonnet";
+		rememberLocalClaudeBar();
+		const queryClient = renderPage();
+		render(<QueryClientProvider client={queryClient}>{h.workspace?.draftSettings}</QueryClientProvider>);
+		// Drawn from the agent's saved controls, which a new task can start with.
+		expect(h.workspace?.draftSettings).toEqual(expect.objectContaining({ props: { children: expect.objectContaining({
+			props: expect.objectContaining({ configOptions: [expect.objectContaining({ id: "model", currentValue: "sonnet" })] }),
+		}) } }));
+		expect(modelPicker.current?.models.map((model) => [model.id, model.label])).toEqual([
+			["sonnet", "Sonnet 5.5"], ["fable", "Fable 5.2"], ["opus", "Opus 5.5"],
+		]);
 	});
 });
