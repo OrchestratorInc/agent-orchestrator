@@ -57,6 +57,7 @@ import { HarnessLoginPanel } from "./HarnessLoginPanel";
 import { closeAuthTerminal, type AuthTerminalWorkflow } from "./HarnessAuthTerminalPanel";
 import { diagnosticsText, healthText, machineText } from "./harness-diagnostics";
 import { HarnessHealthTab } from "./HarnessHealthTab";
+import { HarnessTroubleshootingPanel } from "./HarnessTroubleshootingPanel";
 import { FOCUS_HIGHLIGHT_MS, HARNESS_TAB_CLASS, HARNESS_TABS_CLASS, HarnessStatusDot, useWideLayout, type HarnessDetailTab } from "./harness-ui";
 import { HarnessModelsPanel, MULTI_PROVIDER_HARNESSES } from "./HarnessModelsPanel";
 import { HarnessSessionsDialog } from "./HarnessSessionsDialog";
@@ -951,6 +952,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 								<TabsTrigger className={HARNESS_TAB_CLASS} value="models">{t("settings.harness.tabModels")}</TabsTrigger>
 								<TabsTrigger className={HARNESS_TAB_CLASS} value="health">{t("settings.harness.tabHealth")}</TabsTrigger>
 								{importable ? <TabsTrigger className={HARNESS_TAB_CLASS} value="import">{t("settings.harness.tabImport")}</TabsTrigger> : null}
+								{!hostId ? <TabsTrigger className={HARNESS_TAB_CLASS} value="troubleshoot">{t("settings.harness.troubleshoot.title")}</TabsTrigger> : null}
 							</TabsList>
 							<TabsContent value="account" className="settings-thin-scrollbar min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain pt-4">{accountTab(selectedDetails)}</TabsContent>
 							<TabsContent value="models" className="min-h-0 min-w-0 overflow-hidden pt-4 data-[state=active]:flex data-[state=active]:flex-col">
@@ -980,6 +982,9 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 							</TabsContent>
 							{importable ? <TabsContent value="import" className="min-h-0 min-w-0 overflow-hidden pt-4 data-[state=active]:flex data-[state=active]:flex-col">
 								<SessionImportPanel harness={selectedDetails.agentId} />
+							</TabsContent> : null}
+							{!hostId ? <TabsContent value="troubleshoot" className="settings-thin-scrollbar min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain pt-4">
+								<HarnessTroubleshootingPanel key={selectedDetails.agentId} agentId={selectedDetails.agentId} agents={agents.data?.agents ?? []} installationBusy={selectedDetails.busy || selectedDetails.authBusy || Boolean(authWorkflow)} onOpenAccount={(id) => openDetail(id, "account")} />
 							</TabsContent> : null}
 						</Tabs>
 					</div>

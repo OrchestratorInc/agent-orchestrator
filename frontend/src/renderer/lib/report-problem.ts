@@ -154,12 +154,14 @@ export function reportProblemDestinationUrl(
 		return `mailto:${url.pathname}?${query}`;
 	}
 
-	const title = reportTitle(input);
-	const draft = formatReportProblemDraft(input, diagnostics, output);
+	return githubNewIssueUrl(reportTitle(input), formatReportProblemDraft(input, diagnostics, output));
+}
 
+/** A new-issue page prefilled for the user to review and submit; nothing is filed automatically. */
+export function githubNewIssueUrl(title: string, body: string): string {
 	const url = new URL(GITHUB_NEW_ISSUE_URL);
 	url.searchParams.set("title", title);
-	url.searchParams.set("body", draft);
+	url.searchParams.set("body", body);
 	return url.toString();
 }
 

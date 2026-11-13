@@ -817,6 +817,41 @@ describe("XtermTerminal", () => {
 		}
 	});
 
+	it.each(["dark", "light"] as const)("preserves the app's %s appearance while a parked terminal has a stale theme", (theme) => {
+		const root = document.documentElement;
+		const savedTheme = root.dataset.theme;
+		const savedStyle = root.dataset.styleTheme;
+		const savedColorScheme = root.style.colorScheme;
+		const savedThemeStyle = useUiStore.getState().themeStyle;
+		root.dataset.theme = theme;
+		root.dataset.styleTheme = "nord";
+		root.style.colorScheme = theme;
+		const staleTheme = theme === "dark" ? "light" : "dark";
+		const view = render(<XtermTerminal isVisible={false} theme={staleTheme} />);
+		const terminal = state.lastTerminal!;
+		try {
+			expect(root.dataset.theme).toBe(theme);
+			expect(root.style.colorScheme).toBe(theme);
+			expect(root.dataset.styleTheme).toBe("nord");
+			act(() => useUiStore.setState({ themeStyle: "github" }));
+			expect(root.dataset.theme).toBe(theme);
+			expect(root.dataset.styleTheme).toBe("nord");
+			view.rerender(<XtermTerminal isVisible theme={theme} />);
+			expect(root.dataset.theme).toBe(theme);
+			expect(root.dataset.styleTheme).toBe("github");
+			expect(state.lastTerminal).toBe(terminal);
+			expect(terminal.dispose).not.toHaveBeenCalled();
+		} finally {
+			view.unmount();
+			useUiStore.setState({ themeStyle: savedThemeStyle });
+			if (savedTheme === undefined) delete root.dataset.theme;
+			else root.dataset.theme = savedTheme;
+			if (savedStyle === undefined) delete root.dataset.styleTheme;
+			else root.dataset.styleTheme = savedStyle;
+			root.style.colorScheme = savedColorScheme;
+		}
+	});
+
 	it("updates the live terminal palette when the named color theme changes", () => {
 		const style = document.createElement("style");
 		style.textContent = `
