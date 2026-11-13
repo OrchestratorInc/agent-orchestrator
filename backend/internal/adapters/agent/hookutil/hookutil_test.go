@@ -156,7 +156,7 @@ func TestBugTriageSkillInstallsCleanlyAndUninstalls(t *testing.T) {
 }
 
 func TestBugTriageSkillRepairsAnInterruptedInstall(t *testing.T) {
-	for name, marker := range map[string]bool{"marker without skill": true, "empty folder": false} {
+	for name, marker := range map[string]bool{"marker without skill": true, "empty folder": false, "temp file only": false} {
 		t.Run(name, func(t *testing.T) {
 			skillsDir := t.TempDir()
 			skillDir := filepath.Join(skillsDir, "bug-triage")
@@ -165,6 +165,11 @@ func TestBugTriageSkillRepairsAnInterruptedInstall(t *testing.T) {
 			}
 			if marker {
 				if err := os.WriteFile(filepath.Join(skillDir, bugTriageMarkerFile), []byte(bugTriageSentinel+"\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if name == "temp file only" {
+				if err := os.WriteFile(filepath.Join(skillDir, ".ao-tmp-123"), nil, 0o600); err != nil {
 					t.Fatal(err)
 				}
 			}

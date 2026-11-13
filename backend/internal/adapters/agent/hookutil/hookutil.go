@@ -33,7 +33,8 @@ const (
 // InstallBugTriageSkill writes AO's bug-triage skill into a harness's skills
 // folder. Unlike using-ao, the name is generic: a project may have its own
 // bug-triage, so a folder AO does not own stays and the session still starts.
-// An empty folder (an install that stopped before its marker) is nobody's.
+// An empty folder (an install that stopped before its marker) is nobody's,
+// even if that install left one of AtomicWriteFile's temp files.
 func InstallBugTriageSkill(skillsDir string) error {
 	skillDir := filepath.Join(skillsDir, skillassets.BugTriageSkillName)
 	if _, err := os.Lstat(skillDir); err == nil {
@@ -43,8 +44,15 @@ func InstallBugTriageSkill(skillsDir string) error {
 		}
 		if !managed {
 			entries, err := os.ReadDir(skillDir)
-			if err != nil || len(entries) > 0 {
+			if err != nil {
 				return nil
+			}
+			// A temp file left by a write killed before the marker landed does
+			// not make the folder the project's.
+			for _, entry := range entries {
+				if !strings.HasPrefix(entry.Name(), ".ao-tmp-") {
+					return nil
+				}
 			}
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {

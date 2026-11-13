@@ -17,7 +17,9 @@ func BugTriageDir(dataDir string) string {
 }
 
 // MaterializeBugTriage writes the skill into destDir, replacing any existing
-// copy. Callers that need AO-ownership guards must apply them first.
+// copy. The daemon uses it for its own copy under the data dir; workspace
+// installs go through hookutil.InstallBugTriageSkill, which never clears a
+// folder it may not own.
 func MaterializeBugTriage(destDir string) error {
 	return materialize(BugTriageSkillName, destDir)
 }
