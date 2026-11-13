@@ -31,7 +31,9 @@ func claudeBackgroundTasks(ctx context.Context, conn *acpsdk.ClientSideConnectio
 			Kind        string     `json:"kind"`
 			Description string     `json:"description"`
 			State       string     `json:"state"`
+			StartedAt   *time.Time `json:"startedAt"`
 			EndedAt     *time.Time `json:"endedAt"`
+			Stoppable   bool       `json:"stoppable"`
 		} `json:"tasks"`
 	}
 	if err := json.Unmarshal(raw, &result); err != nil {
@@ -58,7 +60,26 @@ func claudeBackgroundTasks(ctx context.Context, conn *acpsdk.ClientSideConnectio
 			return nil, fmt.Errorf("background task response has invalid state %q", task.State)
 		}
 		description := domain.SanitizeControlChars(task.Description)
-		out = append(out, ports.ChatBackgroundTask{ID: task.ID, RunID: task.RunID, Kind: task.Kind, Description: description, State: task.State, EndedAt: task.EndedAt})
+		out = append(out, ports.ChatBackgroundTask{
+			ID: task.ID, RunID: task.RunID, Kind: task.Kind, Description: description, State: task.State,
+			StartedAt: task.StartedAt, EndedAt: task.EndedAt,
+			// Only AO's patched runtime reports this, and only for a live task.
+			Stoppable: task.Stoppable && task.State == "running",
+		})
 	}
 	return out, nil
+}
+
+// claudeStopBackgroundTask stops one live task through AO's runtime extension,
+// which calls the Claude SDK's stopTask. A missing method or a task that is no
+// longer live is not stoppable rather than a provider failure.
+func claudeStopBackgroundTask(ctx context.Context, conn *acpsdk.ClientSideConnection, id acpsdk.SessionId, taskID string) error {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	_, err := conn.CallExtension(ctx, "_ao/session/stop_background_task", map[string]any{"sessionId": id, "taskId": taskID})
+	var rpcErr *acpsdk.RequestError
+	if errors.As(err, &rpcErr) && (rpcErr.Code == -32601 || rpcErr.Code == -32602) {
+		return ports.ErrBackgroundTaskNotStoppable
+	}
+	return err
 }

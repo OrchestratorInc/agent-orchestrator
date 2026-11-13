@@ -113,3 +113,55 @@ func TestBackgroundTasksPartialReadingIsNotCompleteOrUnavailable(t *testing.T) {
 		t.Fatal("partial reading bypassed controller cache")
 	}
 }
+
+type stoppableConversation struct {
+	*backgroundConversation
+	stopped []string
+	stopErr error
+}
+
+func (c *stoppableConversation) StopBackgroundTask(_ context.Context, id string) error {
+	c.stopped = append(c.stopped, id)
+	return c.stopErr
+}
+
+func TestStopBackgroundTaskStopsThroughTheProviderAndRereadsAtOnce(t *testing.T) {
+	conv := &stoppableConversation{backgroundConversation: &backgroundConversation{fakeConversation: newFakeConversation(), tasks: []ports.ChatBackgroundTask{{ID: "shell", Kind: "shell", State: "running", Stoppable: true}}}}
+	h := newHarnessWithConversation(t, conv)
+	if _, err := h.svc.BackgroundTasks(context.Background(), testSession); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.svc.StopBackgroundTask(context.Background(), testSession, "shell"); err != nil {
+		t.Fatal(err)
+	}
+	if len(conv.stopped) != 1 || conv.stopped[0] != "shell" {
+		t.Fatalf("stopped=%v", conv.stopped)
+	}
+	// Within the one-second sample window, a stop still forces a fresh read.
+	conv.tasks = nil
+	reading, err := h.svc.BackgroundTasks(context.Background(), testSession)
+	if err != nil || len(reading.Tasks) != 0 || conv.calls != 2 {
+		t.Fatalf("reading=%+v calls=%d err=%v", reading, conv.calls, err)
+	}
+	conv.stopErr = ports.ErrBackgroundTaskNotStoppable
+	if err := h.svc.StopBackgroundTask(context.Background(), testSession, "shell"); !errors.Is(err, ports.ErrBackgroundTaskNotStoppable) {
+		t.Fatalf("settled task err=%v", err)
+	}
+}
+
+func TestStopBackgroundTaskRefusesProvidersWithoutStopAndNeverWakesASession(t *testing.T) {
+	conv := &backgroundConversation{fakeConversation: newFakeConversation(), tasks: []ports.ChatBackgroundTask{{ID: "shell", Kind: "shell", State: "running"}}}
+	h := newHarnessWithConversation(t, conv)
+	if err := h.svc.StopBackgroundTask(context.Background(), testSession, "shell"); !errors.Is(err, ports.ErrBackgroundTaskNotStoppable) {
+		t.Fatalf("no stop control err=%v", err)
+	}
+	if err := h.svc.StopBackgroundTask(context.Background(), "missing-session", "shell"); !errors.Is(err, ports.ErrSessionNotFound) {
+		t.Fatalf("missing session err=%v", err)
+	}
+	if err := h.svc.Stop(context.Background(), testSession); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.svc.StopBackgroundTask(context.Background(), testSession, "shell"); !errors.Is(err, ports.ErrBackgroundTaskNotStoppable) {
+		t.Fatalf("stopped controller err=%v", err)
+	}
+}

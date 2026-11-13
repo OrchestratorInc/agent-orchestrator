@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { components } from "../../api/schema";
 import { apiClient } from "../lib/api-client";
 
@@ -52,5 +52,22 @@ export function useBackgroundTasks(sessionId: string, enabled: boolean, fast = f
 		refetchInterval: fast ? 2_000 : 5_000,
 		staleTime: 1_000,
 		retry: false,
+	});
+}
+
+/**
+ * Stops one provider-owned task. A 409 means it already settled or this
+ * provider cannot stop it: the next reading tells the truth, so it is not an error.
+ */
+export function useStopBackgroundTask(sessionId: string) {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: async (taskId: string) => {
+			const { error, response } = await apiClient.POST("/api/v1/sessions/{sessionId}/background-tasks/{taskId}/stop", {
+				params: { path: { sessionId, taskId } },
+			});
+			if (error && response.status !== 409) throw error;
+		},
+		onSettled: () => queryClient.invalidateQueries({ queryKey: backgroundTasksQueryRoot }),
 	});
 }

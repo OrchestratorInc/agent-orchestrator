@@ -1,102 +1,155 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorkspaceSession } from "../types/workspace";
-import type { BackgroundTaskReading } from "../hooks/useBackgroundTasks";
-import { BackgroundTasksButton, SessionBackgroundTasks } from "./BackgroundTasks";
+import type { BackgroundTask, BackgroundTaskReading } from "../hooks/useBackgroundTasks";
+import { BackgroundTasksBadge, ComposerBackgroundTasks, SessionBackgroundTasks, formatElapsed } from "./BackgroundTasks";
 
-const { queryMock, memoryMock } = vi.hoisted(() => ({ queryMock: vi.fn(), memoryMock: vi.fn() }));
-vi.mock("../hooks/useBackgroundTasks", () => ({ useBackgroundTasks: queryMock }));
-vi.mock("../hooks/useSessionMemory", () => ({ useDiagnosticsEnabled: () => false, useSessionMemory: memoryMock, formatMemory: String }));
+const { queryMock, mutateMock } = vi.hoisted(() => ({ queryMock: vi.fn(), mutateMock: vi.fn() }));
+vi.mock("../hooks/useBackgroundTasks", () => ({
+	useBackgroundTasks: queryMock,
+	useStopBackgroundTask: () => ({ mutate: mutateMock }),
+}));
 
 const session = { id: "s", title: "Settings", mode: "chat", provider: "claude-code", status: "idle" } as WorkspaceSession;
-const reading: BackgroundTaskReading = { sessionId: "s", controllerGeneration: "g", availability: "ready", tasks: [{ id: "shell", kind: "shell", state: "running", description: "Dev server" }] };
+const ago = (ms: number) => new Date(Date.now() - ms).toISOString();
+const shell = (id: string, description: string, extra: Partial<BackgroundTask> = {}): BackgroundTask => ({
+	id, kind: "shell", state: "running", description, startedAt: ago(12 * 60_000), stoppable: true, ...extra,
+});
+const readingOf = (tasks: BackgroundTask[], availability: BackgroundTaskReading["availability"] = "ready"): BackgroundTaskReading => ({
+	sessionId: "s", controllerGeneration: "g", availability, tasks,
+});
+const reading = readingOf([shell("shell", "Dev server")]);
 
-describe("background tasks", () => {
-	beforeEach(() => { vi.clearAllMocks(); queryMock.mockReturnValue({ data: reading, refetch: vi.fn(), isPending: false, isError: false }); });
+beforeEach(() => {
+	vi.clearAllMocks();
+	queryMock.mockReturnValue({ data: reading, isError: false });
+});
 
-	it("shows a native shell after the turn settles, independently of process diagnostics", async () => {
-		render(<BackgroundTasksButton session={session} reading={reading} />);
-		await userEvent.click(screen.getByRole("button", { name: "1 shell still running" }));
-		expect(screen.getByRole("dialog")).toBeVisible();
-		expect(screen.getByText("Dev server")).toBeVisible();
-		expect(memoryMock).not.toHaveBeenCalled();
-	});
-
-	it("counts mixed tasks and excludes completed work from the badge", () => {
+describe("board badge", () => {
+	it("is plain text: the count shows, nothing opens", () => {
 		const tasks = [...reading.tasks, { id: "agent", kind: "agent" as const, state: "running" as const, description: "Review" }, { id: "done", kind: "agent" as const, state: "completed" as const, description: "Done" }];
-		render(<BackgroundTasksButton session={session} reading={{ ...reading, tasks }} />);
-		expect(screen.getByRole("button", { name: "2 background tasks running" })).toBeVisible();
-	});
-
-	it("returns keyboard focus to the trigger when the dialog closes", async () => {
-		render(<BackgroundTasksButton session={session} reading={reading} />);
-		const trigger = screen.getByRole("button", { name: "1 shell still running" });
-		await userEvent.click(trigger);
-		await userEvent.keyboard("{Escape}");
-		await waitFor(() => expect(trigger).toHaveFocus());
-	});
-
-	it("does not turn unsupported or empty readings into a process count", () => {
-		const { rerender } = render(<BackgroundTasksButton session={session} reading={{ ...reading, availability: "unavailable" }} />);
-		expect(screen.queryByRole("button")).toBeNull();
-		rerender(<BackgroundTasksButton session={session} reading={{ ...reading, tasks: [] }} />);
+		render(<BackgroundTasksBadge session={session} reading={readingOf(tasks)} />);
+		expect(screen.getByText("2 background tasks running")).toBeVisible();
 		expect(screen.queryByRole("button")).toBeNull();
 	});
 
-	it("keeps selected task details open after completion", async () => {
-		const { rerender } = render(<BackgroundTasksButton session={session} reading={reading} />);
-		await userEvent.click(screen.getByRole("button", { name: "1 shell still running" }));
-		await userEvent.click(screen.getByRole("button", { name: /Dev server/ }));
-		queryMock.mockReturnValue({ data: { ...reading, tasks: [{ ...reading.tasks[0], state: "completed" }] }, refetch: vi.fn() });
-		rerender(<BackgroundTasksButton session={session} reading={{ ...reading, tasks: [] }} />);
-		expect(screen.getByRole("dialog")).toBeVisible();
-		expect(screen.getByText("Recently finished")).toBeVisible();
-		expect(screen.getAllByText("Completed")).toHaveLength(2);
-	});
-
-	it("labels cached data stale and hides local readings on remote or terminated sessions", () => {
-		const { rerender } = render(<BackgroundTasksButton session={session} reading={reading} stale />);
-		expect(screen.getByRole("button", { name: /stale/ })).toBeVisible();
-		rerender(<BackgroundTasksButton session={{ ...session, hostId: "another-host" }} reading={reading} />);
-		expect(screen.queryByRole("button")).toBeNull();
-		rerender(<BackgroundTasksButton session={{ ...session, isTerminated: true }} reading={reading} />);
-		expect(screen.queryByRole("button")).toBeNull();
+	it("labels cached data stale and hides unsupported, empty, remote and terminated readings", () => {
+		const { rerender, container } = render(<BackgroundTasksBadge session={session} reading={reading} stale />);
+		expect(screen.getByText("1 shell still running · stale")).toBeVisible();
+		for (const [next, data] of [
+			[session, readingOf(reading.tasks, "unavailable")],
+			[session, readingOf([])],
+			[{ ...session, hostId: "another-host" }, reading],
+			[{ ...session, isTerminated: true }, reading],
+		] as const) {
+			rerender(<BackgroundTasksBadge session={next} reading={data} />);
+			expect(container).toBeEmptyDOMElement();
+		}
 	});
 });
 
-it.each(["codex", "claude-code", "opencode", "opencode-v2", "droid", "kimi", "kimchi", "pi", "cursor", "omp", "qwen", "unreal-agent", "copilot", "agy", "deepseek-harness", "command-code"])("shows reported background tasks for Chat harness %s", async (provider) => {
- const partial = { ...reading, availability: "partial" as const };
- queryMock.mockReturnValue({ data: partial, refetch: vi.fn(), isPending: false, isError: false });
- render(<BackgroundTasksButton session={{ ...session, provider } as WorkspaceSession} reading={partial} />);
- await userEvent.click(screen.getByRole("button", { name: "1 shell still running" }));
- expect(screen.getByText(/Only background jobs explicitly reported/)).toBeVisible();
- expect(screen.getByText("Dev server")).toBeVisible();
+describe("composer tab", () => {
+	it("shows one task on one line with its time and a stop square", async () => {
+		render(<SessionBackgroundTasks session={session} />);
+		const tab = screen.getByRole("region", { name: "Background tasks" });
+		expect(within(tab).getByText("Dev server")).toBeVisible();
+		expect(within(tab).getByText("12m")).toBeVisible();
+		expect(within(tab).getByRole("img", { name: "Running" })).toBeVisible();
+		await userEvent.click(within(tab).getByRole("button", { name: "Stop Dev server" }));
+		expect(mutateMock).toHaveBeenCalledWith("shell", expect.anything());
+		// One request at a time: the square waits for the task to leave.
+		expect(within(tab).getByRole("button", { name: "Stop Dev server" })).toBeDisabled();
+	});
+
+	it("offers no stop where the provider cannot stop the task", () => {
+		queryMock.mockReturnValue({ data: readingOf([shell("shell", "Dev server", { stoppable: false })]) });
+		render(<SessionBackgroundTasks session={session} />);
+		expect(screen.getByText("Dev server")).toBeVisible();
+		expect(screen.queryByRole("button")).toBeNull();
+	});
+
+	it("leaves agents to Subagents and finished work out", () => {
+		queryMock.mockReturnValue({ data: readingOf([
+			{ id: "agent", kind: "agent", state: "running", description: "Audit the catalogs" },
+			shell("done", "Install", { state: "completed", endedAt: ago(1_000) }),
+			shell("stopped", "Old server", { state: "stopped", endedAt: ago(1_000) }),
+		]) });
+		const { container } = render(<SessionBackgroundTasks session={session} />);
+		expect(container).toBeEmptyDOMElement();
+	});
+
+	it("renders nothing for unsupported readings or sessions", () => {
+		queryMock.mockReturnValue({ data: readingOf(reading.tasks, "unavailable") });
+		const { container, rerender } = render(<SessionBackgroundTasks session={session} />);
+		expect(container).toBeEmptyDOMElement();
+		queryMock.mockReturnValue({ data: reading });
+		rerender(<SessionBackgroundTasks session={{ ...session, hostId: "another-host" }} />);
+		expect(container).toBeEmptyDOMElement();
+	});
+
+	it("folds several tasks into a count and opens them as rows", async () => {
+		const tasks = [
+			shell("lint", "Run the Go linter", { state: "failed", startedAt: ago(5 * 60_000), endedAt: ago(3 * 60_000) }),
+			shell("dev", "Start the renderer dev server"),
+			shell("watch", "Watch the composer tests", { startedAt: ago(9 * 60_000) }),
+		];
+		render(<ComposerBackgroundTasks sessionId="s" reading={readingOf(tasks)} />);
+		const toggle = screen.getByRole("button", { name: /2 running/ });
+		expect(toggle).toHaveAttribute("aria-expanded", "false");
+		expect(screen.getByText("1 failed")).toBeVisible();
+		// Closed, no task names and no stop: stop belongs to a single task.
+		expect(screen.queryByText("Start the renderer dev server")).toBeNull();
+		expect(screen.queryByRole("button", { name: /^Stop/ })).toBeNull();
+
+		await userEvent.click(toggle);
+		expect(toggle).toHaveAttribute("aria-expanded", "true");
+		const rows = within(screen.getByRole("list")).getAllByRole("listitem");
+		// Live work leads; the failure ends the list without a stop.
+		expect(rows.map((row) => row.textContent)).toEqual(["Start the renderer dev server12m", "Watch the composer tests9m", "Run the Go linter2m"]);
+		expect(within(rows[2]).getByRole("img", { name: "Failed" })).toBeVisible();
+		expect(within(rows[2]).queryByRole("button")).toBeNull();
+		await userEvent.click(within(rows[1]).getByRole("button", { name: "Stop Watch the composer tests" }));
+		expect(mutateMock).toHaveBeenCalledWith("watch", expect.anything());
+	});
+
+	it("closes the list when work drops to one line and stays closed when it grows again", async () => {
+		const two = readingOf([shell("a", "Dev server"), shell("b", "Watcher")]);
+		const { rerender } = render(<ComposerBackgroundTasks sessionId="s" reading={two} />);
+		await userEvent.click(screen.getByRole("button", { name: /2 running/ }));
+		expect(screen.getByRole("list")).toBeVisible();
+		rerender(<ComposerBackgroundTasks sessionId="s" reading={readingOf([shell("a", "Dev server")])} />);
+		expect(screen.queryByRole("list")).toBeNull();
+		rerender(<ComposerBackgroundTasks sessionId="s" reading={two} />);
+		expect(screen.getByRole("button", { name: /2 running/ })).toHaveAttribute("aria-expanded", "false");
+	});
+
+	it("says when a stop fails and gives the square back", async () => {
+		mutateMock.mockImplementationOnce((_id: string, options: { onError: () => void }) => options.onError());
+		render(<ComposerBackgroundTasks sessionId="s" reading={reading} />);
+		await userEvent.click(screen.getByRole("button", { name: "Stop Dev server" }));
+		expect(screen.getByRole("status")).toHaveTextContent("Couldn't stop");
+		expect(screen.getByRole("button", { name: "Stop Dev server" })).toBeEnabled();
+	});
+
+	it("gives the square back when the task outlives its stop", async () => {
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		try {
+			render(<ComposerBackgroundTasks sessionId="s" reading={reading} />);
+			await userEvent.click(screen.getByRole("button", { name: "Stop Dev server" }));
+			expect(screen.getByRole("button", { name: "Stop Dev server" })).toBeDisabled();
+			act(() => { vi.advanceTimersByTime(10_000); });
+			expect(screen.getByRole("button", { name: "Stop Dev server" })).toBeEnabled();
+		} finally { vi.useRealTimers(); }
+	});
 });
 
-
-it("hides the Chat entry when no background task is running", () => {
- queryMock.mockReturnValue({ data: { ...reading, tasks: [] }, isError: false });
- const { rerender } = render(<SessionBackgroundTasks session={session} />);
- expect(screen.queryByRole("button")).toBeNull();
- queryMock.mockReturnValue({ data: reading, isError: false });
- rerender(<SessionBackgroundTasks session={session} />);
- expect(screen.getByRole("button", { name: "1 shell still running" })).toBeVisible();
- queryMock.mockReturnValue({ data: { ...reading, tasks: [{ ...reading.tasks[0], state: "completed" }] }, isError: false });
- rerender(<SessionBackgroundTasks session={session} />);
- expect(screen.queryByRole("button")).toBeNull();
+it("formats elapsed time compactly", () => {
+	expect([0, 38_000, 12 * 60_000 + 59_000, 65 * 60_000, -5_000].map(formatElapsed)).toEqual(["0s", "38s", "12m", "1h 5m", "0s"]);
 });
 
-it("removes the trigger when the last task finishes while keeping its open panel", async () => {
- queryMock.mockReturnValue({ data: reading, refetch: vi.fn(), isError: false });
- const { rerender } = render(<><textarea aria-label="Message the agent" /><BackgroundTasksButton session={session} reading={reading} /></>);
- await userEvent.click(screen.getByRole("button", { name: "1 shell still running" }));
- const finished = { ...reading, tasks: [{ ...reading.tasks[0], state: "completed" as const }] };
- queryMock.mockReturnValue({ data: finished, refetch: vi.fn(), isError: false });
- rerender(<><textarea aria-label="Message the agent" /><BackgroundTasksButton session={session} reading={finished} /></>);
- expect(screen.queryByRole("button", { name: "1 shell still running" })).toBeNull();
- expect(screen.queryByRole("button", { name: "Background tasks" })).toBeNull();
- expect(screen.getByRole("dialog")).toBeVisible();
- await userEvent.keyboard("{Escape}");
- await waitFor(() => expect(screen.getByRole("textbox", { name: "Message the agent" })).toHaveFocus());
+it.each(["codex", "claude-code", "opencode", "opencode-v2", "droid", "kimi", "kimchi", "pi", "cursor", "omp", "qwen", "unreal-agent", "copilot", "agy", "deepseek-harness", "command-code"])("shows reported background tasks for Chat harness %s", (provider) => {
+	queryMock.mockReturnValue({ data: readingOf([shell("shell", "Dev server", { stoppable: false })], "partial") });
+	render(<SessionBackgroundTasks session={{ ...session, provider } as WorkspaceSession} />);
+	expect(screen.getByRole("region", { name: "Background tasks" })).toHaveTextContent("Dev server");
 });
