@@ -1320,7 +1320,8 @@ func TestSpawnOrchestratorPrefersAsyncChat(t *testing.T) {
 
 func TestSpawnOrchestratorFallsBackToTerminalWhenChatUnsupported(t *testing.T) {
 	launcher := &recordingLauncher{preflightErr: ports.ErrChatUnsupported}
-	m, _, rt := newChatManager(launcher)
+	m, st, rt := newChatManager(launcher)
+	deferred := deferredBackground(m)
 	cfg := asyncChatSpawnConfig("")
 	cfg.Kind = domain.KindOrchestrator
 	cfg.RequestedMode = ""
@@ -1328,8 +1329,13 @@ func TestSpawnOrchestratorFallsBackToTerminalWhenChatUnsupported(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rec.Mode != domain.SessionModeTUI || rt.created != 1 {
-		t.Fatalf("mode/runtime = %s/%d", rec.Mode, rt.created)
+	// The orchestrator still answers early; its Terminal starts in the background.
+	if rec.Mode != domain.SessionModeTUI || rec.ProvisionState != domain.SessionProvisionProvisioning || len(*deferred) != 1 {
+		t.Fatalf("mode/state/background = %s/%s/%d", rec.Mode, rec.ProvisionState, len(*deferred))
+	}
+	(*deferred)[0]()
+	if rt.created != 1 || st.sessions[rec.ID].ProvisionState != domain.SessionProvisionReady {
+		t.Fatalf("runtime/state = %d/%s", rt.created, st.sessions[rec.ID].ProvisionState)
 	}
 	if len(launcher.started) != 0 {
 		t.Fatal("unsupported Chat launched a controller")

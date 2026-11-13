@@ -1190,12 +1190,6 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 	cfg.RequestedMode = mode
 	NoteSpawnLaunch(ctx, mode, false)
 
-	// Adapters whose model picker is an agent-owned mode list (e.g. Amp) keep
-	// their selectable values in AgentConfig.Mode. Normalize a copy for the
-	// adapter so `ao spawn --agent amp --model high` launches Amp with `--mode
-	// high`, while metadata keeps the original resolved Model for the API view.
-	adapterConfig := normalizeAgentConfigForHarness(cfg.Harness, agentConfig)
-
 	// A chat session runs no agent inside a terminal runtime, so the terminal
 	// prerequisites are not its concern.
 	if mode == domain.SessionModeTUI {
@@ -1204,7 +1198,13 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 		}
 	}
 
-	asyncChat := cfg.Async && mode == domain.SessionModeChat && m.chat != nil && (cfg.Kind == domain.KindOrchestrator || cfg.Kind == domain.KindWorker)
+	// A caller with a UI to return to gets the session as soon as it is
+	// addressable, in either mode; the worktree and the agent start in the
+	// background (chat_spawn_async.go). An automation's Terminal launch stays
+	// synchronous: its run is marked launched only once the prompt is delivered.
+	asyncStart := cfg.Async && (cfg.Kind == domain.KindOrchestrator || cfg.Kind == domain.KindWorker) &&
+		((mode == domain.SessionModeChat && m.chat != nil) || (mode == domain.SessionModeTUI && cfg.AutomationRunID == nil))
+	NoteSpawnLaunch(ctx, mode, asyncStart)
 
 	var prep *taskPreparation
 	if cfg.AutomationRunID == nil && cfg.Branch == "" {
@@ -1221,7 +1221,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 		}
 		// Visible from its first row: without this, a view that opens the session
 		// before beginAsyncChatSpawn reads a ready session with no controller.
-		if asyncChat {
+		if asyncStart {
 			seed.ProvisionState = domain.SessionProvisionProvisioning
 		}
 		if cfg.ClientRequestID != "" {
@@ -1307,7 +1307,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 		// A synchronous spawn can be promoted as ready only after the hidden
 		// preparation has finished publishing its worktree. Otherwise its late
 		// publication loses the provisioning-state fence and deletes the worktree.
-		if !asyncChat {
+		if !asyncStart {
 			if _, _, err := m.awaitTaskPreparation(ctx, prep); err != nil && ctx.Err() != nil {
 				cleanupCtx, cancel := spawnRollbackContext(ctx)
 				m.discardClaimedTaskPreparation(cleanupCtx, prep)
@@ -1323,7 +1323,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 			seed.Metadata.Model = cfg.AgentConfig.Model
 			seed.Metadata.Effort = cfg.AgentConfig.Effort
 		}
-		if asyncChat {
+		if asyncStart {
 			seed.ProvisionState = domain.SessionProvisionProvisioning
 		}
 		rec, err = m.promoteTaskPreparation(ctx, prep, seed)
@@ -1361,7 +1361,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 			cancelNaming()
 		}
 	}()
-	if !asyncChat {
+	if !asyncStart {
 		taskName, cancelNaming = m.startTaskNaming(cfg, rec, project.Config)
 		releaseWorkspaceGate := sync.OnceFunc(m.acquireWorkspaceGate(cfg.ProjectID))
 		ctx = context.WithValue(ctx, spawnWorkspaceGateKey{}, releaseWorkspaceGate)
@@ -1376,12 +1376,12 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 		branch = DefaultSpawnBranch(id, cfg.Kind, sessionPrefix(project), projectKind, m.dataDir)
 	}
 
-	// An asynchronous Chat spawn stops here and answers the caller. Everything
-	// below — the remote refresh, the worktree, the controller — is the same
-	// work, run in the background while the user already has the session open.
+	// An asynchronous spawn stops here and answers the caller. Everything
+	// below (the remote refresh, the worktree, the agent) is the same work, run
+	// in the background while the user already has the session open.
 	// The attachments are named now (spawnAttachmentRefs is derived, not read
 	// from disk) so the opening prompt is complete before the files land.
-	if asyncChat {
+	if asyncStart {
 		started, promptBytes, systemPromptBytes, err := m.beginAsyncChatSpawn(ctx, asyncChatSpawn{
 			cfg:               cfg,
 			project:           project,
@@ -1395,6 +1395,8 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 			systemPromptBytes: systemPromptBytes,
 			preparation:       prep,
 			releaseHarness:    releaseHarness,
+			agentConfig:       agentConfig,
+			explicitModel:     explicitModel,
 		})
 		if err == nil {
 			releaseHarness = nil // background start now owns the installer guard
@@ -1509,170 +1511,21 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 		return rec, promptBytes, systemPromptBytes, nil
 	}
 
-	agent, ok := m.agents.Agent(cfg.Harness)
-	if !ok {
-		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, false, false)
-		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn %s: %w: no agent adapter for harness %q", id, ErrUnknownHarness, cfg.Harness)
-	}
-	var env map[string]string
-	rec, env, err = m.prepareWorkerLaunchEnv(ctx, rec, project.Config.Env)
-	if err != nil {
-		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, true, false)
-		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnBrowser, err)
-	}
-	if cfg.Harness == domain.HarnessMemcode && agentConfig.Model != "" {
-		// The workspace may introduce a native endpoint, so resolve this after
-		// provisioning but before hooks or launch validation see the model.
-		customEndpoint, modelErr := memcode.UsesCustomEndpoint(ctx, ws.Path, env)
-		if modelErr == nil && customEndpoint {
-			if explicitModel {
-				modelErr = fmt.Errorf("%w: memcode custom endpoints require native model selection", ErrUnsupportedModel)
-			} else {
-				agentConfig.Model = ""
-				adapterConfig.Model = ""
-			}
-		}
-		if modelErr != nil {
-			m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, true, false)
-			return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnPrepare, modelErr)
-		}
-	}
-	m.augmentAgentRuntimeEnv(agent, env)
-	pinRuntimePermissionEnv(env, adapterConfig.Permissions)
-	if validator, ok := agent.(ports.AgentLaunchAuthValidator); ok {
-		status, authErr := validator.ValidateLaunchAuth(ctx, ws.Path, env)
-		if authErr != nil {
-			m.logger.Debug("spawn: launch authentication probe inconclusive; continuing",
-				"sessionID", id, "harness", cfg.Harness, "error", agentlaunch.RedactValues(authErr.Error(), project.Config.Env))
-		} else if status == ports.AgentAuthStatusUnauthorized {
-			m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, true, false)
-			return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn %s: %w", id, ports.ErrAgentAuthRequired)
-		}
-	}
-	if err := m.prepareWorkspace(ctx, agent, id, ws.Path, systemPrompt, systemPromptFile, adapterConfig, env); err != nil {
-		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, false, false)
-		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnPrepare, err)
-	}
-	launchCfg := ports.LaunchConfig{
-		DataDir:          m.dataDir,
-		SessionID:        string(id),
-		WorkspacePath:    ws.Path,
-		Kind:             cfg.Kind,
-		Prompt:           prompt,
-		SystemPrompt:     systemPrompt,
-		SystemPromptFile: systemPromptFile,
-		IssueID:          string(cfg.IssueID),
-		Config:           adapterConfig,
-		Permissions:      adapterConfig.Permissions,
-		Env:              env,
-	}
-	delivery, err := agent.GetPromptDeliveryStrategy(ctx, launchCfg)
-	if err != nil {
-		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, true, false)
-		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnPromptDelivery, err)
-	}
-	afterStartPrompt := prompt
-	if delivery == ports.PromptDeliveryAfterStart {
-		afterStartPrompt, err = buildAfterStartPrompt(ctx, agent, launchCfg)
-		if err != nil {
-			m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, true, false)
-			return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnPromptDelivery, err)
-		}
-		launchCfg.Prompt = ""
-	}
-	argv, err := agent.GetLaunchCommand(ctx, launchCfg)
-	if err != nil {
-		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, true, false)
-		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnLaunchCommand, err)
-	}
-	// Pre-flight: confirm argv[0] actually exists on PATH (or as an absolute
-	// path the adapter returned) BEFORE handing the launch to the runtime.
-	// tmux happily creates a session+pane around a missing command, so an
-	// unresolved binary would leak through as a "live" session that never ran.
-	if err := m.validateAgentBinary(argv); err != nil {
-		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, true, false)
-		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn %s: %w", id, err)
-	}
-	m.augmentRuntimePATHForLaunchBinary(ctx, env, argv)
-	argv, launchID, err := m.superviseAgentProcess(agent, id, env, argv)
-	if err != nil {
-		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, true, false)
-		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnSupervisor, err)
-	}
-	if err := m.prepareRuntimeLaunch(ctx, agent, id, ws.Path, systemPrompt, systemPromptFile, adapterConfig, env, workspaceRestoreContext{}); err != nil {
-		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, true, false)
-		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnPrepare, err)
-	}
-	if err := m.lcm.PrepareLaunch(id, launchID); err != nil {
-		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, true, false)
-		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnPrepareLaunch, err)
-	}
-	defer m.lcm.CancelLaunch(id, launchID)
-	releaseCodexAdmission, err := m.acquireCodexControllerAdmission(ctx, cfg.Harness)
-	if err != nil {
-		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, true, false)
-		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn %s: %w", id, err)
-	}
-	defer releaseCodexAdmission()
-	started := BeginSpawnStep(ctx, SpawnStepAgentStart)
-	handle, err := m.runtime.Create(ctx, ports.RuntimeConfig{
-		SessionID:     id,
-		WorkspacePath: ws.Path,
-		Argv:          argv,
-		Env:           env,
+	rec, launchFailure, err := m.launchTerminalAgent(ctx, terminalSpawn{
+		cfg:              cfg,
+		project:          project,
+		projectKind:      projectKind,
+		record:           rec,
+		workspace:        ws,
+		prompt:           prompt,
+		systemPrompt:     systemPrompt,
+		systemPromptFile: systemPromptFile,
+		agentConfig:      agentConfig,
+		explicitModel:    explicitModel,
 	})
-	started(err)
 	if err != nil {
-		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, true, false)
-		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrRuntimeCreate, agentlaunch.RedactError(err, project.Config.Env))
-	}
-
-	metadata := domain.SessionMetadata{
-		Permissions:               rec.Metadata.Permissions,
-		Branch:                    ws.Branch,
-		WorkspacePath:             ws.Path,
-		WorkspaceRepoPath:         ws.RepoPath,
-		RuntimeHandleID:           handle.ID,
-		RuntimeLaunchID:           launchID,
-		Prompt:                    prompt,
-		LatestUserPrompt:          prompt,
-		BrowserCapabilityVerifier: rec.Metadata.BrowserCapabilityVerifier,
-		ArtifactDir:               rec.Metadata.ArtifactDir,
-		// The user-visible resolved selection is Model for regular harnesses and
-		// Mode for adapters whose catalog is a mode list (e.g. Amp). If an explicit
-		// Model override exists it wins; otherwise fall back to the resolved Mode.
-		Model:  resolvedModelForMetadata(cfg.Harness, agentConfig, adapterConfig),
-		Effort: agentConfig.Effort,
-	}
-	if prompt != "" {
-		metadata.LatestUserPromptAt = m.clock()
-	}
-	if projectKind == domain.ProjectKindSingleRepo {
-		metadata.DiffBaseSHA, metadata.DiffBaseRef = resolveSpawnDiffBase(ctx, ws.Path, ws.BaseRef)
-	}
-	if cfg.AutomationRunID != nil {
-		rec.Metadata = metadata
-		rec.UpdatedAt = m.clock()
-		if err := m.store.UpdateSession(ctx, rec); err != nil {
-			runtimeDestroyed := m.destroySpawnRuntimeAfterFailure(ctx, handle)
-			workspaceDestroyed := m.rollbackPreparedSpawnWorkspaceAfterFailure(ctx, rec, ws, workspaceProject, runtimeDestroyed)
-			m.markSpawnFailedTerminatedAfterFailure(ctx, id, runtimeDestroyed && workspaceDestroyed)
-			return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnCommit, err)
-		}
-	}
-	if err := m.lcm.MarkSpawned(ctx, id, metadata); err != nil {
-		runtimeDestroyed := m.destroySpawnRuntimeAfterFailure(ctx, handle)
-		m.rollbackPreparedSpawnWorkspaceAfterFailure(ctx, rec, ws, workspaceProject, runtimeDestroyed)
-		m.markSpawnFailedTerminatedAfterFailure(ctx, id, false)
-		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnCommit, err)
-	}
-	if delivery == ports.PromptDeliveryAfterStart {
-		if err := m.deliverAfterStartPrompt(ctx, agent, launchCfg, handle, id, afterStartPrompt); err != nil {
-			runtimeDestroyed := m.destroySpawnRuntimeAfterFailure(ctx, handle)
-			workspaceDestroyed := m.rollbackPreparedSpawnWorkspaceAfterFailure(ctx, rec, ws, workspaceProject, runtimeDestroyed)
-			m.markSpawnFailedTerminatedAfterFailure(ctx, id, runtimeDestroyed && workspaceDestroyed)
-			return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnDeliverPrompt, err)
-		}
+		m.rollbackTerminalLaunch(ctx, rec, ws, workspaceProject, launchFailure)
+		return domain.SessionRecord{}, 0, 0, err
 	}
 	if cfg.AutomationRunID != nil {
 		if err := m.markAutomationLaunchCompleted(ctx, id); err != nil {

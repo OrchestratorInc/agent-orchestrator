@@ -703,6 +703,43 @@ describe("TerminalPane empty states", () => {
 		}
 	});
 
+	it("waits on a background Terminal start, then attaches once the daemon offers its terminal", async () => {
+		const starting = { ...worker, provisionState: "provisioning" } satisfies WorkspaceSession;
+		const view = renderCachedPane({ session: starting, sessions: [starting] });
+		try {
+			expect(screen.getByRole("status")).toHaveTextContent("Preparing the agent");
+			expect(attachMock).not.toHaveBeenCalled();
+			const ready = { ...worker, provisionState: "ready", terminalHandleId: "term-1" } satisfies WorkspaceSession;
+			act(() => {
+				view.queryClient.setQueryData(workspaceQueryKey, workspaceWithSessions([ready]));
+			});
+			view.show(ready);
+			await waitFor(() => expect(attachMock).toHaveBeenCalledTimes(1));
+			expect(screen.queryByText("Session failed to start")).not.toBeInTheDocument();
+		} finally {
+			view.restore();
+		}
+	});
+
+	it("replaces the startup status with the failure when a background Terminal start fails", () => {
+		const starting = { ...worker, provisionState: "provisioning" } satisfies WorkspaceSession;
+		const view = renderCachedPane({ session: starting, sessions: [starting] });
+		try {
+			expect(screen.getByRole("status")).toHaveTextContent("Preparing the agent");
+			const failed = { ...starting, provisionState: "failed", provisionError: "Setup step 1 failed: exit status 2" } satisfies WorkspaceSession;
+			act(() => {
+				view.queryClient.setQueryData(workspaceQueryKey, workspaceWithSessions([failed]));
+			});
+			view.show(failed);
+			expect(screen.getByText("Session failed to start")).toBeInTheDocument();
+			expect(screen.getByText("Setup step 1 failed: exit status 2")).toBeInTheDocument();
+			expect(screen.queryByText("Preparing the agent")).not.toBeInTheDocument();
+			expect(attachMock).not.toHaveBeenCalled();
+		} finally {
+			view.restore();
+		}
+	});
+
 	it("shows orchestrator-specific startup copy for a pending orchestrator terminal", () => {
 		const view = renderPane(orchestrator);
 		try {

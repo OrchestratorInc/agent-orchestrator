@@ -27,6 +27,19 @@ describe("canResumeAgent", () => {
 	});
 });
 
+describe("canResumeAgent for a failed start", () => {
+	const failedStart: WorkspaceSession = { ...exitedSession, status: "working", activity: undefined, provisionState: "failed", mode: "tui" };
+
+	it("offers a retry for a Terminal session whose start failed", () => {
+		expect(canResumeAgent(failedStart)).toBe(true);
+	});
+
+	it("leaves a failed Chat start to the chat view and a terminated row to restore", () => {
+		expect(canResumeAgent({ ...failedStart, mode: "chat" })).toBe(false);
+		expect(canResumeAgent({ ...failedStart, isTerminated: true, status: "terminated" })).toBe(false);
+	});
+});
+
 describe("resumeAgentErrorMessage", () => {
 	it.each([
 		["AGENT_NOT_EXITED", "already running"],

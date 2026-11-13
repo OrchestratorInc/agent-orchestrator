@@ -92,12 +92,12 @@ type SpawnConfig struct {
 	// explicitly blocked types (e.g., SVG for security reasons).
 	Attachments []SpawnAttachment
 
-	// Async asks for a Chat spawn that answers as soon as the session row and
-	// its conversation exist, leaving the worktree and the agent controller to
-	// finish in the background. Only a caller with a UI to return to should set
-	// it: `ao spawn` and the tests rely on a returned session being fully live.
-	// Ignored for TUI mode. Orchestrator callers serialize project-scoped
-	// starts and reuse the published session while its controller is starting.
+	// Async asks for a spawn that answers as soon as the session row exists,
+	// leaving the worktree and the agent (Chat controller or Terminal runtime,
+	// with its opening prompt) to finish in the background. Only a caller that
+	// follows provisionState should set it (the desktop, `ao spawn`, which waits
+	// for the start). Orchestrator callers serialize project-scoped starts and
+	// reuse the published session while its agent is starting.
 	Async bool
 	// TaskPreparation is the opaque speculative-worktree token returned while
 	// the desktop's New Task dialog is open. It is a hint: an absent or expired

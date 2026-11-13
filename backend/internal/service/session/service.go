@@ -1891,10 +1891,20 @@ func (s *Service) toSessionWithFacts(ctx context.Context, rec domain.SessionReco
 		SCMStatus:        deriveSCMStatus(prs),
 		KanbanColumn:     presentation.Column,
 		DisplayStatus:    presentation.DisplayStatus,
-		TerminalHandleID: rec.Metadata.RuntimeHandleID,
+		TerminalHandleID: terminalHandleID(rec),
 		ArtifactFiles:    artifactFiles,
 		PRs:              prs,
 	}, nil
+}
+
+// terminalHandleID is the terminal a client may attach to. A Terminal session
+// starting in the background has its runtime before its opening prompt; it is
+// not offered until the start is ready, so typing cannot race the prompt.
+func terminalHandleID(rec domain.SessionRecord) string {
+	if rec.ProvisionState.WithDefault() != domain.SessionProvisionReady {
+		return ""
+	}
+	return rec.Metadata.RuntimeHandleID
 }
 
 // toAPIError maps the session engine's sentinel errors to their REST API

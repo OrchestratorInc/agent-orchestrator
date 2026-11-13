@@ -60,10 +60,15 @@ export function canResumeAgent(
 ): boolean {
 	return Boolean(
 		session &&
-			(session.needsResume && sessionIsActive(session) || sessionAgentExited(session)) &&
+			(session.needsResume && sessionIsActive(session) || sessionAgentExited(session) || terminalStartFailed(session)) &&
 			!session.cloud &&
 			!interfaceTransitionIsActive(transition),
 	);
+}
+
+/** A Terminal session whose background start failed retries through resume. */
+function terminalStartFailed(session: WorkspaceSession): boolean {
+	return session.provisionState === "failed" && session.mode !== "chat" && sessionIsActive(session);
 }
 
 export function useCanResumeAgent(session: WorkspaceSession | undefined, hostId?: string): boolean {
