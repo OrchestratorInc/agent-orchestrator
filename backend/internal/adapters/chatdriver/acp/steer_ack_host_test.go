@@ -281,3 +281,32 @@ func TestACPSteerPromptLateAnswerAfterALaterSteeredTurnIsDropped(t *testing.T) {
 		}
 	}
 }
+
+// The acknowledgement starts the reply's next segment as it settles the steer,
+// so text Hermes streams without a message id right after the note renders
+// below the steer, not inside the reply above it.
+func TestACPSteerPromptAcknowledgementStartsTheNextSegmentAtOnce(t *testing.T) {
+	conv, host := startScriptedAckConversation(t, "")
+	_ = nextEvent(t, conv.Events()) // controller.ready
+	turn, _ := startScriptedTurn(t, conv, host)
+	waiter := &promptSteer{turn: turn, seq: 1, result: make(chan error, 1), ackSeen: make(chan struct{}), sent: true}
+	conv.mu.Lock()
+	conv.promptSeq = 1
+	conv.outstanding[1] = true
+	conv.promptSteers = append(conv.promptSteers, waiter)
+	before := conv.steerSegment
+	conv.mu.Unlock()
+
+	if !conv.steerAcknowledgement(turn, "ACK: queued for the active turn") {
+		t.Fatal("the acknowledgement was not recognised")
+	}
+	conv.mu.Lock()
+	after := conv.steerSegment
+	conv.mu.Unlock()
+	if err := <-waiter.result; err != nil {
+		t.Fatalf("acknowledgement settled the steer with %v, want taken", err)
+	}
+	if after != before+1 {
+		t.Fatalf("steer segment = %d after the acknowledgement, want %d", after, before+1)
+	}
+}
