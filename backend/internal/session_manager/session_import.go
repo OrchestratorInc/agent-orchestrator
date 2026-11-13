@@ -396,7 +396,7 @@ func claudeProcessLive(ctx context.Context, pid int, registeredAtMillis int64, v
 	}
 	name, started, ok := processStart(ctx, pid)
 	name = strings.ToLower(name)
-	if !ok || !strings.Contains(name, "claude") && !strings.Contains(name, "node") && (version == "" || name != strings.ToLower(version)) {
+	if !ok || !strings.Contains(name, "claude") && !strings.Contains(name, "node") && (version == "" || !strings.EqualFold(name, version)) {
 		return false
 	}
 	return registeredAtMillis <= 0 || !started.After(time.UnixMilli(registeredAtMillis))
