@@ -12284,6 +12284,56 @@ func TestResumeAgent_RuntimeFailureNamesRelaunchStep(t *testing.T) {
 	}
 }
 
+func TestSpawn_BaseBranchOverridesTheProjectDefaultForThisSessionOnly(t *testing.T) {
+	m, st, _, ws := newManager()
+	config := testRoleAgents()
+	config.DefaultBranch = "develop"
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Config: config}
+	if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, BaseBranch: "feat/parent"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := ws.lastCfg.BaseBranch; got != "feat/parent" {
+		t.Fatalf("workspace base branch = %q", got)
+	}
+	if got := ws.resolves[0].configuredBranch; got != "feat/parent" {
+		t.Fatalf("resolved branch = %q", got)
+	}
+	if got := st.projects["mer"].Config.DefaultBranch; got != "develop" {
+		t.Fatalf("project default changed to %q", got)
+	}
+}
+
+// An existing branch keeps its own history and would not start from the base,
+// so a branch named with a base must be new.
+func TestSpawn_BaseBranchWithANamedBranchRequiresItToBeNew(t *testing.T) {
+	m, st, _, ws := newManager()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Config: testRoleAgents()}
+	if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, BaseBranch: "feat/parent", Branch: "feat/child"}); err != nil {
+		t.Fatal(err)
+	}
+	if !ws.lastCfg.RequireNewBranch || ws.lastCfg.Branch != "feat/child" {
+		t.Fatalf("workspace branch = %q, require new = %v", ws.lastCfg.Branch, ws.lastCfg.RequireNewBranch)
+	}
+	// Without a base, a named branch may be an existing one to continue.
+	if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Branch: "feat/other"}); err != nil {
+		t.Fatal(err)
+	}
+	if ws.lastCfg.RequireNewBranch {
+		t.Fatal("a named branch without a base must not be required to be new")
+	}
+}
+
+func TestSpawn_BaseBranchNeedsARepositoryProject(t *testing.T) {
+	for _, kind := range []domain.ProjectKind{domain.ProjectKindScratch, domain.ProjectKindWorkspace} {
+		m, st, _, _ := newManager()
+		st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Kind: kind}
+		_, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, BaseBranch: "feat/parent"})
+		if !errors.Is(err, ErrBaseBranchUnsupported) {
+			t.Fatalf("%s: err = %v", kind, err)
+		}
+	}
+}
+
 func (f *fakeStore) SetPreparedImportIdentity(ctx context.Context, id domain.SessionID, expected, next *domain.SessionImportSource, workspace domain.SessionMetadata, now time.Time) (bool, error) {
 	return f.SetSessionImportWorkspace(ctx, id, expected, next, workspace, now)
 }

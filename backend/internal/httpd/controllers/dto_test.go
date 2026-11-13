@@ -9,6 +9,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
 	sessionsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/session"
+	"github.com/aoagents/agent-orchestrator/backend/pkg/contract"
 )
 
 func TestNewSessionPRSummaryMapsProviderReviewEntries(t *testing.T) {
@@ -117,5 +118,66 @@ func TestNewSessionPRSummaryExposesCIFailureInjectionPolicy(t *testing.T) {
 	}
 	if !strings.Contains(string(payload), `"autoInjectCI":false`) {
 		t.Fatalf("CI summary payload = %s, want explicit disabled injection policy", payload)
+	}
+}
+
+func TestNewSessionPRSummaryMapsPRDetailsAndKeepsListsAsArrays(t *testing.T) {
+	committed := time.Date(2026, 10, 22, 9, 0, 0, 0, time.UTC)
+	observed := committed.Add(time.Hour)
+	got := controllers.NewSessionPRSummary(sessionsvc.PRSummary{
+		Description:          "## Summary",
+		DescriptionTruncated: true,
+		Labels:               []contract.PullRequestLabel{{Name: "bug", Color: "d73a4a"}},
+		RequestedReviewers:   []contract.PullRequestRequestedReviewer{{Login: "core", IsTeam: true}},
+		Commits:              []contract.PullRequestCommit{{SHA: "aaa111", Headline: "fix", Author: "devone", CommittedAt: committed}},
+		CommitCount:          120,
+		DetailsObservedAt:    observed,
+	})
+	if got.Description != "## Summary" || !got.DescriptionTruncated || got.CommitCount != 120 {
+		t.Fatalf("details = %+v", got)
+	}
+	if got.DetailsObservedAt == nil || !got.DetailsObservedAt.Equal(observed) {
+		t.Fatalf("detailsObservedAt = %v, want %v", got.DetailsObservedAt, observed)
+	}
+	if len(got.Labels) != 1 || got.Labels[0].Name != "bug" || len(got.RequestedReviewers) != 1 || !got.RequestedReviewers[0].IsTeam {
+		t.Fatalf("labels/reviewers = %+v / %+v", got.Labels, got.RequestedReviewers)
+	}
+	if len(got.Commits) != 1 || got.Commits[0].CommittedAt == nil || !got.Commits[0].CommittedAt.Equal(committed) {
+		t.Fatalf("commits = %+v", got.Commits)
+	}
+
+	// Never observed: the lists stay [] on the wire (clients map over them) and
+	// detailsObservedAt is absent, so "not loaded" is distinguishable from "none".
+	raw, err := json.Marshal(controllers.NewSessionPRSummary(sessionsvc.PRSummary{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"labels":[]`, `"requestedReviewers":[]`, `"commits":[]`, `"commitCount":0`} {
+		if !strings.Contains(string(raw), want) {
+			t.Errorf("empty summary is missing %s: %s", want, raw)
+		}
+	}
+	if strings.Contains(string(raw), "detailsObservedAt") {
+		t.Errorf("unobserved details serialized detailsObservedAt: %s", raw)
+	}
+}
+
+func TestNewSessionPRSummaryMapsEveryCheckAndKeepsTheListAnArray(t *testing.T) {
+	got := controllers.NewSessionPRSummary(sessionsvc.PRSummary{CI: sessionsvc.PRCISummary{
+		State: domain.CIFailing,
+		Checks: []contract.PullRequestCheckEntry{
+			{Name: "unit", Status: domain.PRCheckFailed, URL: "https://ci/unit"},
+			{Name: "lint", Status: domain.PRCheckPassed},
+		},
+	}})
+	if len(got.CI.Checks) != 2 || got.CI.Checks[0].Name != "unit" || got.CI.Checks[0].Status != domain.PRCheckFailed || got.CI.Checks[0].URL != "https://ci/unit" {
+		t.Fatalf("checks = %+v", got.CI.Checks)
+	}
+	raw, err := json.Marshal(controllers.NewSessionPRSummary(sessionsvc.PRSummary{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"checks":[]`) {
+		t.Fatalf("an unobserved PR must serialize checks as [], got %s", raw)
 	}
 }

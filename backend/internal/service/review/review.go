@@ -122,7 +122,9 @@ type Store interface {
 	ListPRsBySession(ctx context.Context, id domain.SessionID) ([]domain.PullRequest, error)
 	ListPRReviews(ctx context.Context, prURL string) ([]domain.PullRequestReview, error)
 	ListPRComments(ctx context.Context, prURL string) ([]domain.PullRequestComment, error)
-	MarkPRCommentResolved(ctx context.Context, prURL, commentID string) (bool, error)
+	// MarkPRReviewThreadResolved records a thread resolved along with all its
+	// comments; the PR summary reads a thread's state from the thread row.
+	MarkPRReviewThreadResolved(ctx context.Context, prURL, threadID string) error
 }
 
 // PRRefresher fetches one pull request fresh from its provider and records it
@@ -430,7 +432,8 @@ func (s *Service) ResolveReviewComment(ctx context.Context, workerID domain.Sess
 		return fmt.Errorf("%w: review comment is not tracked for this PR", ErrNotFound)
 	}
 	if target.Resolved {
-		return nil
+		// Already resolved on the provider; make sure the thread row agrees.
+		return s.store.MarkPRReviewThreadResolved(ctx, pr.URL, target.ThreadID)
 	}
 	ref, err := reviewRequestRef(pr)
 	if err != nil {
@@ -445,10 +448,10 @@ func (s *Service) ResolveReviewComment(ctx context.Context, workerID domain.Sess
 		}
 		return err
 	}
-	if updated, err := s.store.MarkPRCommentResolved(ctx, pr.URL, target.ID); err != nil {
+	// Mark the whole thread, not just this comment: the summary takes a thread's
+	// state from its row, so a comment-only mark left the card open until the next poll.
+	if err := s.store.MarkPRReviewThreadResolved(ctx, pr.URL, target.ThreadID); err != nil {
 		return err
-	} else if !updated {
-		return fmt.Errorf("%w: review comment is not tracked for this PR", ErrNotFound)
 	}
 	s.emit(ctx, "ao.review.comment_resolved", workerID, map[string]any{"provider": pr.Provider})
 	return nil

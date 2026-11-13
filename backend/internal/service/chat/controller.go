@@ -3820,8 +3820,12 @@ func (c *Controller) afterProject(ctx context.Context, event ports.ChatEvent, pr
 		}
 		c.reportActivity(ctx, activityState, activityEvent, now)
 		// Only a completed turn releases queued work; a failed or recovered one holds
-		// the queue so it cannot cascade through the same outage (issue #4861).
-		_ = c.drainLocked(ctx, settledTurnState(event) == domain.TurnStateCompleted) // drain logs failures.
+		// the queue so it cannot cascade through the same outage (issue #4861). A
+		// prompt the host's watchdog failed for silence is not an outage: the
+		// provider never answered, so the queued messages get their own turns.
+		releaseQueue := settledTurnState(event) == domain.TurnStateCompleted ||
+			errors.Is(event.Err, ports.ErrChatPromptStalled)
+		_ = c.drainLocked(ctx, releaseQueue) // drain logs failures.
 	case ports.ChatEventProviderState:
 		c.reportProviderState(ctx, event.ThreadState, now)
 	case ports.ChatEventApprovalRequested:

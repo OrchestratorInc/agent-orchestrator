@@ -57,6 +57,8 @@ const SHEET_ROUTES: readonly { name: string; detents: readonly number[] | "fitTo
 const PICKER_SHEETS = [
 	{ name: "sheets/agent", title: "Agent" },
 	{ name: "sheets/model", title: "Model" },
+	{ name: "sheets/files-branch", title: "Branch" },
+	{ name: "sheets/files-changes", title: "Changes" },
 ] as const;
 
 // iOS's machine-name sheet, the one sheet with a text input: a native bar
@@ -324,11 +326,11 @@ function Shell() {
 				<Stack.Screen
 					name="cloud/new-project"
 					options={Platform.OS === "android" ? {
-						title: "New cloud project",
+						title: "New project",
 						contentStyle: { backgroundColor: t.bgBase },
 					} : {
 						...NAME_SHEET_OPTIONS,
-						title: "New cloud project",
+						title: "New project",
 						headerStyle: { backgroundColor: t.bgBase },
 						contentStyle: { backgroundColor: t.bgBase },
 					}}

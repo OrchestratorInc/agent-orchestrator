@@ -249,6 +249,8 @@ type Service struct {
 	// each session's last reconciled branch, remote, and base tips.
 	branchStateMu sync.Mutex
 	branchTips    map[domain.SessionID]string
+	// conflicts remembers the conflicting files of a PR's head against its base.
+	conflicts conflictCache
 	// signalCapable reports whether a harness has a hook pipeline that can
 	// deliver activity signals at all. Only capable harnesses are eligible for
 	// the no_signal downgrade: a hook-less harness staying silent forever is
@@ -2021,6 +2023,8 @@ func mapSessionError(err error) error {
 	case errors.Is(err, sessionmanager.ErrDeliveryUnconfirmed):
 		return apierr.Conflict("SESSION_DELIVERY_UNCONFIRMED",
 			"Message was written to the terminal but the agent did not start a turn; prompt may be unsubmitted", nil)
+	case errors.Is(err, sessionmanager.ErrBaseBranchUnsupported):
+		return apierr.Invalid("BASE_BRANCH_UNSUPPORTED", "Base branches need a repository project", nil)
 	case errors.Is(err, sessionmanager.ErrScratchBranchUnsupported):
 		return apierr.Invalid("SCRATCH_BRANCH_UNSUPPORTED", err.Error(), nil)
 	case errors.Is(err, ports.ErrWorkspaceBranchCheckedOutElsewhere):

@@ -89,6 +89,12 @@ var (
 	// re-sending the same load and report the failure instead of spending the
 	// rest of the budget on it.
 	ErrChatHistoryLoadFailed = errors.New("chat conversation history load failed")
+
+	// ErrChatPromptStalled means the chat host's watchdog failed a prompt
+	// because the adapter sent nothing for the whole stall window. The provider
+	// did not answer with an error, so the failure says nothing about whether
+	// the next prompt would fail too.
+	ErrChatPromptStalled = errors.New("chat provider stopped responding")
 )
 
 // ChatHistoryMismatchDimension identifies the exact durable checkpoint fact a

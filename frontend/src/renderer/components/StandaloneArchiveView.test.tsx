@@ -178,6 +178,37 @@ describe("StandaloneArchiveView", () => {
 	});
 });
 
+describe("StandaloneArchiveView with Cloud standalone agents", () => {
+	it("lists the person's archived Cloud agent and restores it on its project's route", async () => {
+		workspaceQueryMock.mockReturnValue({
+			data: [{
+				id: "agent-1",
+				name: "Fix the flake",
+				kind: "cloud",
+				cloudOrgId: "org-1",
+				standaloneAgent: true,
+				path: "",
+				sessions: [terminatedSession({
+					id: "cloud-agent", title: "Fix the flake", workspaceId: "agent-1", workspaceName: "Fix the flake",
+					branch: undefined, cloud: { orgId: "org-1" },
+				})],
+			}],
+			isError: false,
+			isSuccess: true,
+		});
+
+		renderArchive();
+		const list = screen.getByRole("list", { name: "Archived sessions" });
+		expect(within(list).getByText("Fix the flake")).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "Restore Fix the flake" }));
+
+		await waitFor(() => expect(navigateMock).toHaveBeenCalledWith({
+			to: "/projects/$projectId/sessions/$sessionId",
+			params: { projectId: "agent-1", sessionId: "cloud-agent" },
+		}));
+	});
+});
+
 describe("archived session card accessible labels", () => {
 	const branchSession = () =>
 		standaloneWorkspaceWithSessions([

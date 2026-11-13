@@ -25,6 +25,7 @@ import { FormTextField } from "../formFields";
 import { chipColorFor } from "../harnessLogo";
 import { logoFor } from "../harnessLogoAssets";
 import { InlineBanner } from "../InlineBanner";
+import { PlacementPicker } from "../localProject/PlacementPicker";
 import type { Theme } from "../theme";
 import { useTheme, useThemedStyles, useThemeState } from "../ThemeProvider";
 import { Spinner } from "../Spinner";
@@ -85,7 +86,7 @@ export function NewProjectBar({ canCreate, busy, onCreate }: NewProjectBarProps)
  * The keyboard controller keeps the window from resizing for the IME, so the
  * page pads itself above the keyboard, as the manual connection form does.
  */
-export function NewProjectForm({ project, onConnectAgent }: NewProjectFormProps) {
+export function NewProjectForm({ project, onConnectAgent, placement }: NewProjectFormProps) {
 	const styles = useThemedStyles(makeStyles);
 	const { scheme } = useThemeState();
 	const insets = useSafeAreaInsets();
@@ -103,12 +104,14 @@ export function NewProjectForm({ project, onConnectAgent }: NewProjectFormProps)
 				contentContainerStyle={[styles.content, { paddingBottom: space.xxl + insets.bottom }]}
 				keyboardShouldPersistTaps="handled"
 			>
+				{placement ? <PlacementPicker placement={placement} /> : null}
 				{project.githubUnavailable ? null : (
 					<SegmentedChoice
 						value={project.source}
 						options={SOURCE_OPTIONS}
 						onChange={project.chooseSource}
 						accessibilityLabel="Project source"
+						style={placement ? styles.block : undefined}
 						testID="new-project-source"
 					/>
 				)}

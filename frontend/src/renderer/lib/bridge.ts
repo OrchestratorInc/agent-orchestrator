@@ -136,6 +136,18 @@ export const aoBridge: AoBridge =
 				throw new Error("Sharing needs the Orchestrator desktop app.");
 			},
 			cancel: async () => undefined,
+			setAccess: async () => {
+				throw new Error("Sharing needs the Orchestrator desktop app.");
+			},
+			grants: async () => {
+				throw new Error("Sharing needs the Orchestrator desktop app.");
+			},
+			invite: async () => {
+				throw new Error("Sharing needs the Orchestrator desktop app.");
+			},
+			removeGrant: async () => {
+				throw new Error("Sharing needs the Orchestrator desktop app.");
+			},
 			unpublish: async () => {
 				throw new Error("Sharing needs the Orchestrator desktop app.");
 			},

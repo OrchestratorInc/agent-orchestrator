@@ -96,27 +96,33 @@ type Service struct {
 	// hasn't run yet.
 	onSessionGateWait func(domain.SessionID)
 
-	agents AgentTracker // set once at boot; nil without agent detection
+	trackers []TerminalTracker // set once at boot
 }
 
-// AgentTracker follows the agent, if any, running in a user shell.
-type AgentTracker interface {
+// TerminalTracker follows user shells as they open and close: the agent
+// running in one, or the title its program sets.
+type TerminalTracker interface {
 	TrackShellTerminal(handleID string)
 	UntrackShellTerminal(handleID string)
 }
 
-// SetAgentTracker registers every open shell for agent detection. Watches start
-// only while a client subscribes. Call once at boot, before serving requests.
-func (s *Service) SetAgentTracker(ctx context.Context, tracker AgentTracker) {
-	s.agents = tracker
+// SetTerminalTrackers registers every open user shell with each tracker, and
+// later ones as they open. Call once at boot, before serving requests.
+func (s *Service) SetTerminalTrackers(ctx context.Context, trackers ...TerminalTracker) {
+	s.trackers = trackers
+	if len(trackers) == 0 {
+		return
+	}
 	recs, err := s.store.SelectRestorableShellTerminals(ctx, s.appRunID)
 	if err != nil {
-		s.log.Warn("shell terminal agent tracking: list terminals failed", "err", err)
+		s.log.Warn("shell terminal tracking: list terminals failed", "err", err)
 		return
 	}
 	for _, rec := range recs {
 		if !rec.Transient {
-			tracker.TrackShellTerminal(rec.HandleID)
+			for _, tracker := range trackers {
+				tracker.TrackShellTerminal(rec.HandleID)
+			}
 		}
 	}
 }
@@ -762,8 +768,10 @@ func (s *Service) openTerminal(ctx context.Context, cfg openTerminalConfig) (She
 	}
 	s.log.Info("shell terminal opened", "handleId", handle.ID, "workingDir", cfg.workingDir)
 	// Login terminals run an agent CLI on purpose; only user shells are tracked.
-	if s.agents != nil && !cfg.transient {
-		s.agents.TrackShellTerminal(handle.ID)
+	if !cfg.transient {
+		for _, tracker := range s.trackers {
+			tracker.TrackShellTerminal(handle.ID)
+		}
 	}
 	return shellTerminalFromRecord(rec), nil
 }
@@ -999,8 +1007,8 @@ func (s *Service) destroyConfirmed(ctx context.Context, rec ShellTerminalRecord)
 	if stillAlive {
 		return true, destroyErr
 	}
-	if s.agents != nil {
-		s.agents.UntrackShellTerminal(handleID)
+	for _, tracker := range s.trackers {
+		tracker.UntrackShellTerminal(handleID)
 	}
 	if deleted, err := s.store.DeleteShellTerminalByHandleID(ctx, handleID); err != nil {
 		s.log.Warn("shell terminal: delete row after destroy failed", "handleId", handleID, "error", err)

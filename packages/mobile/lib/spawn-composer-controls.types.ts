@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import type { ComposerImageAsset, PasteOverflow } from "./chat/composerImages";
 import type { EffortChoice } from "./modelEffort";
 import type { VoiceState } from "./voice/types";
 
@@ -74,6 +75,8 @@ export type SpawnComposerControlsProps = {
 	/** The attach button offers both the photo library and the file picker. */
 	onChoosePhoto: () => void;
 	onChooseFile: () => void;
+	/** Takes images pasted into the prompt field; null while they can't be attached. */
+	onPasteImages?: ((assets: ComposerImageAsset[], overflow?: PasteOverflow) => void) | null;
 	/** Dictation into the prompt: tap to start, tap again to finish. */
 	voice: SpawnComposerVoice;
 	/** The task's prompt, written in the composer's field. */
