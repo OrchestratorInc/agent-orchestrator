@@ -46,7 +46,14 @@ import { NOT_PAIRED_ACTION_COPY, RECONNECTING_ACTION_COPY } from "../connectionE
 import { excerptDraftText } from "./responseQuotes";
 import { clearPendingSend, needsAttachmentRecovery, pendingSendKey, readPendingSend, reservePendingSend } from "./pendingSend";
 
-const REFRESH_DEBOUNCE_MS = 120;
+/**
+ * The most often a changing chat is re-read. The daemon reports a change
+ * about every 100 ms while an agent writes; the first one is read at once and
+ * the rest at this pace, so a steady reply shows a few times a second rather
+ * than waiting for a pause that never comes (a debounce that restarted on
+ * every change held a streaming reply back until it stopped).
+ */
+export const REFRESH_INTERVAL_MS = 250;
 const conversationPageCache = createMobileConversationPageCache();
 const turnOptionsCache = createAsyncValueCache<string, TurnOptions>(16, 30_000);
 const skillsCache = createAsyncValueCache<string, ChatSkill[]>(16, 30_000);
@@ -177,6 +184,7 @@ export function useMobileConversation(
 	const turnOptionsRequest = useRef(0);
 	const turnOptionsInFlight = useRef<Promise<unknown> | undefined>(undefined);
 	const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const lastRefreshAt = useRef(0);
 	const refreshQueue = useRef(createRefreshQueue()).current;
 
 	const snapshot = useMemo(() => mergeConversationPages(pages), [pages]);
@@ -242,9 +250,16 @@ export function useMobileConversation(
 		if (mounted.current && !refreshQueue.busy()) setRefreshing(false);
 	}, [cacheKey, cfg, options?.reviewId, refreshQueue, sessionId]);
 
+	// The first change is read at once; changes after it at most every
+	// REFRESH_INTERVAL_MS. One timer covers every change made while it waits.
 	const scheduleRefresh = useCallback(() => {
-		if (refreshTimer.current) clearTimeout(refreshTimer.current);
-		refreshTimer.current = setTimeout(() => void refresh(), REFRESH_DEBOUNCE_MS);
+		if (refreshTimer.current) return;
+		const wait = Math.max(0, lastRefreshAt.current + REFRESH_INTERVAL_MS - Date.now());
+		refreshTimer.current = setTimeout(() => {
+			refreshTimer.current = null;
+			lastRefreshAt.current = Date.now();
+			void refresh();
+		}, wait);
 	}, [refresh]);
 
 	const loadOlder = useCallback(async () => {
@@ -282,6 +297,7 @@ export function useMobileConversation(
 			mounted.current = false;
 			refreshQueue.invalidate();
 			if (refreshTimer.current) clearTimeout(refreshTimer.current);
+			refreshTimer.current = null;
 		};
 	}, [refresh, refreshQueue]);
 
