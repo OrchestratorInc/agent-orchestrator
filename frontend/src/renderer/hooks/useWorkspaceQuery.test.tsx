@@ -522,13 +522,13 @@ describe("useWorkspaceQuery", () => {
 		expect(result.current.data?.map((workspace) => workspace.id)).toEqual(["proj-1", "__standalone__"]);
 		expect(result.current.data?.[1]).toMatchObject({
 			id: "__standalone__",
-			name: "Scratchpad",
+			name: "Sessions",
 			kind: "standalone",
 		});
 		expect(result.current.data?.[1].sessions[0]).toMatchObject({
 			id: "standalone-1",
 			workspaceId: "__standalone__",
-			workspaceName: "Scratchpad",
+			workspaceName: "Sessions",
 			title: "Research",
 			branch: undefined,
 			provisionState: "failed",

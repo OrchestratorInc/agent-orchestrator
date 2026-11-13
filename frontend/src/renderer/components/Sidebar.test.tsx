@@ -893,7 +893,8 @@ describe("Sidebar", () => {
 		const content = document.querySelector('[data-sidebar="content"]');
 		expect(content).toHaveClass("overflow-y-auto", "scrollbar-none");
 		expect(content).not.toHaveClass("project-sidebar-scrollbar");
-		expect(content).not.toContainElement(screen.getByText("Projects"));
+		// Section headers stay put: only each section's own list scrolls.
+		expect(screen.getByTestId("sidebar-projects-scroller")).not.toContainElement(screen.getByText("Projects"));
 	});
 
 	it("opens project settings instead of spawning when no orchestrator agent is configured", async () => {
