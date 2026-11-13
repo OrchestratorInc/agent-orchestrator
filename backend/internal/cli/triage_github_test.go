@@ -213,6 +213,7 @@ func TestTriageKeywords(t *testing.T) {
 		{"recent distinct", "ERROR old connection refused\nWARN terminal launch failed\nWARN terminal launch failed", []string{"terminal launch failed", "old connection refused"}},
 		{"limit", "ERROR first signal failed\nERROR second signal failed\nERROR third signal failed\nERROR fourth signal failed", []string{"fourth signal failed", "third signal failed", "second signal failed"}},
 		{"redacted before search", redactTriage("ERROR API_TOKEN=private path /home/person/file connection refused 123", "/home/person"), []string{"path connection refused"}},
+		{"escaped space redacted before search", redactTriage(`ERROR PASSWORD=alpha\ bravo connection refused by peer`, ""), []string{"connection refused peer"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := triageKeywords(tc.logs); !reflect.DeepEqual(got, tc.want) {

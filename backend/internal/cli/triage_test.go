@@ -269,6 +269,7 @@ func TestTriageRedactionEscapedQuotedValues(t *testing.T) {
 		`err="token=\"private\" status=ok"`: `err="token=\"[redacted-secret]\" status=ok"`,
 		`token=\\ next`:                     `token=[redacted-secret] next`,
 		`password=\\`:                       `password=[redacted-secret]`,
+		`ERROR PASSWORD=alpha\ bravo connection refused`: `ERROR PASSWORD=[redacted-secret] connection refused`,
 	} {
 		if got := redactTriage(input, ""); got != want {
 			t.Errorf("%q => %q, want %q", input, got, want)
