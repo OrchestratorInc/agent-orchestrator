@@ -153,6 +153,32 @@ type SCMCommenter interface {
 	PostComment(ctx context.Context, request SCMCommentRequest) (SCMCommentResult, error)
 }
 
+// SCMPRContent is a pull request's title and description as the provider
+// holds them now. CanEdit reports whether the signed-in account may change
+// them; a provider that cannot tell reports true and refuses the edit itself.
+type SCMPRContent struct {
+	Title     string
+	Body      string
+	UpdatedAt time.Time
+	CanEdit   bool
+}
+
+// SCMPREditRequest changes PR's title, description, or both. A nil field is
+// left as it is; an empty Body clears the description.
+type SCMPREditRequest struct {
+	PR    SCMPRRef
+	Title *string
+	Body  *string
+}
+
+// SCMPREditor reads and edits a pull request's title and description through
+// an SCM provider. Providers return ErrSCMForbidden when the signed-in account
+// may not edit the pull request.
+type SCMPREditor interface {
+	PullRequestContent(ctx context.Context, pr SCMPRRef) (SCMPRContent, error)
+	EditPullRequest(ctx context.Context, request SCMPREditRequest) (SCMPRContent, error)
+}
+
 // SCMAttachmentFile is one file attached to a pull-request comment. Name is
 // already a safe file name, ContentType the validated media type, and Data the
 // decoded file bytes.

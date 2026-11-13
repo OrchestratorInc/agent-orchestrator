@@ -159,6 +159,7 @@ const ROUTE_TEMPLATES = [
 	"/api/v1/prs/{id}/state",
 	"/api/v1/prs/{id}/comments",
 	"/api/v1/prs/{id}/attachment-access",
+	"/api/v1/prs/{id}/edit",
 	"/api/v1/sessions",
 	"/api/v1/sessions/{sessionId}",
 	"/api/v1/sessions/{sessionId}/activity",

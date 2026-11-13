@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -168,5 +170,60 @@ func TestUpsertPRReviewCommentStoresOneReply(t *testing.T) {
 	got, err := s.ListPRComments(ctx, pr.URL)
 	if err != nil || len(got) != 2 || got[1].ID != "c2" || got[1].Body != "done" || got[1].ThreadID != "T1" || !got[1].CreatedAt.Equal(reply.CreatedAt) {
 		t.Fatalf("comments = %+v, err %v", got, err)
+	}
+}
+
+func TestSetPRContentStoresAnEditedTitleAndDescription(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "mer")
+	r, _ := s.CreateSession(ctx, sampleRecord("mer"))
+	now := time.Now().UTC().Truncate(time.Second)
+	pr := domain.PullRequest{URL: "https://github.com/o/r/pull/3", SessionID: r.ID, Number: 3, Title: "Old title", CI: domain.CIPassing, UpdatedAt: now}
+	if err := s.WriteSCMObservation(ctx, pr, nil, nil, nil, nil, ports.ReviewWritePreserve); err != nil {
+		t.Fatal(err)
+	}
+	title, body := "New title", "New body"
+
+	// No details row yet: the title is stored, the description waits for the observation.
+	if err := s.SetPRContent(ctx, pr.URL, &title, &body, now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	got, _, err := s.GetPR(ctx, pr.URL)
+	if err != nil || got.Title != "New title" || got.CI != domain.CIPassing {
+		t.Fatalf("pr = %+v, err %v", got, err)
+	}
+	if _, stored, _ := s.GetPRDetails(ctx, pr.URL); stored {
+		t.Fatal("an edit fabricated a details row")
+	}
+
+	details := detailsFixture(now)
+	pr.Details = details
+	if err := s.WriteSCMObservation(ctx, pr, nil, nil, nil, nil, ports.ReviewWritePreserve); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetPRContent(ctx, pr.URL, nil, &body, now.Add(2*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	stored, _, err := s.GetPRDetails(ctx, pr.URL)
+	if err != nil || stored.Description != "New body" || stored.DescriptionTruncated || len(stored.Labels) != len(details.Labels) || stored.CommitCount != details.CommitCount {
+		t.Fatalf("details = %+v, err %v", stored, err)
+	}
+	if got, _, _ := s.GetPR(ctx, pr.URL); got.Title != "Old title" {
+		// The observation above rewrote the title; a description-only edit leaves it.
+		t.Fatalf("title = %q after a description-only edit", got.Title)
+	}
+
+	long := strings.Repeat("é", domain.MaxPullRequestDescriptionBytes)
+	if err := s.SetPRContent(ctx, pr.URL, nil, &long, now.Add(3*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	stored, _, _ = s.GetPRDetails(ctx, pr.URL)
+	if !stored.DescriptionTruncated || len(stored.Description) != domain.MaxPullRequestDescriptionBytes || !utf8.ValidString(stored.Description) {
+		t.Fatalf("truncated=%v len=%d", stored.DescriptionTruncated, len(stored.Description))
+	}
+
+	if err := s.SetPRContent(ctx, "https://github.com/o/r/pull/404", &title, nil, now); err == nil {
+		t.Fatal("a title edit of an unknown PR succeeded")
 	}
 }

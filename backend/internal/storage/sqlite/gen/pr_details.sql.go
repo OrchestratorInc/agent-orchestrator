@@ -73,6 +73,24 @@ func (q *Queries) SetPRDetailsConversation(ctx context.Context, arg SetPRDetails
 	return result.RowsAffected()
 }
 
+const setPRDetailsDescription = `-- name: SetPRDetailsDescription :execrows
+UPDATE pr_details SET description = ?, description_truncated = ? WHERE pr_url = ?
+`
+
+type SetPRDetailsDescriptionParams struct {
+	Description          string
+	DescriptionTruncated int64
+	PRURL                string
+}
+
+func (q *Queries) SetPRDetailsDescription(ctx context.Context, arg SetPRDetailsDescriptionParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setPRDetailsDescription, arg.Description, arg.DescriptionTruncated, arg.PRURL)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const upsertPRDetails = `-- name: UpsertPRDetails :exec
 INSERT INTO pr_details (pr_url, description, description_truncated, labels, requested_reviewers, commits, commit_count, conversation, observed_at, provider_updated_at)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)

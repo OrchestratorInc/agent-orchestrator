@@ -4527,3 +4527,47 @@ type SessionImportRequest struct {
 type SessionImportResponse struct {
 	Results []sessionimport.Result `json:"results"`
 }
+
+// PREditContentQuery is the query of GET /api/v1/prs/{id}/edit.
+type PREditContentQuery struct {
+	PRURL string `query:"prUrl" required:"true" description:"The pull request's URL."`
+}
+
+// PREditContentResponse is the body of GET /api/v1/prs/{id}/edit (200): the
+// PR's title and whole description as its provider holds them now, for an
+// editor to start from. Reason says why not when canEdit is false:
+// "no_permission" (neither the PR's author nor able to write to its
+// repository), "not_open" (merged or closed), or "unsupported".
+type PREditContentResponse struct {
+	Title   string `json:"title"`
+	Body    string `json:"body"`
+	CanEdit bool   `json:"canEdit"`
+	Reason  string `json:"reason,omitempty" enum:"no_permission,not_open,unsupported"`
+}
+
+// EditPRRequest is the body of POST /api/v1/prs/{id}/edit. It changes the
+// title, the description (body), or both; an omitted field is left as it is,
+// and an empty body clears the description.
+//
+// baseTitle and baseBody are the text the editor started from, as GET
+// /api/v1/prs/{id}/edit returned it, and are required for the field being
+// changed. The edit is refused with 409 PR_EDIT_CONFLICT when the provider no
+// longer holds that text, so an edit made elsewhere is never overwritten
+// unseen.
+type EditPRRequest struct {
+	PRURL     string  `json:"prUrl" minLength:"1"`
+	Title     *string `json:"title,omitempty"`
+	Body      *string `json:"body,omitempty"`
+	BaseTitle *string `json:"baseTitle,omitempty"`
+	BaseBody  *string `json:"baseBody,omitempty"`
+}
+
+// EditPRResponse is the body of POST /api/v1/prs/{id}/edit (200): the title
+// and description as the provider stored them.
+type EditPRResponse struct {
+	OK        bool      `json:"ok"`
+	PRNumber  int       `json:"prNumber"`
+	Title     string    `json:"title"`
+	Body      string    `json:"body"`
+	UpdatedAt time.Time `json:"updatedAt"`
+}

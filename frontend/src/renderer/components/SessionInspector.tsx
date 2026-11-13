@@ -61,6 +61,7 @@ import { OrchestratorChildrenSection } from "./OrchestratorChildrenSection";
 import { ProductExternalLink } from "./ProductExternalLink";
 import { openPRTab, usePRTabs, type PRTabSection } from "../lib/pr-tabs";
 import { usePRViewEnabled } from "../lib/pr-view";
+import type { RailCommit } from "../lib/activity-rail";
 import { ClassicSessionBranchSummary } from "./ClassicSessionBranchSummary";
 import { CopyButton } from "./chat/CopyButton";
 import { ScriptRunPanel } from "./ScriptRunPanel";
@@ -69,6 +70,7 @@ import { latestScriptRun } from "../lib/cloud-script-runs";
 import { ResumeAgentControl } from "./ResumeAgentControl";
 import { SessionBranchSummary, useOtherPRConflictStep, type BranchWork } from "./SessionBranchSummary";
 import { SessionAccountSummary } from "./SessionAccountSummary";
+import { ActivityRail } from "./ActivityRail";
 import { PRActionButton } from "./PRActions";
 import { PRDescriptionPreview } from "./PRDescriptionPreview";
 import { PRPills, prFocusKey, prStateIcon, sortSessionPRs } from "./PRPills";
@@ -1513,8 +1515,10 @@ type SortableTimelineEvent = InspectorTimelineEvent & { sortTime: number };
 
 // ponytail: newest 5 commits only; a "show all" control when long sessions need it.
 const TIMELINE_COMMIT_LIMIT = 5;
+const NO_COMMITS: RailCommit[] = [];
 
 function ActivityTimeline({ hostId, prs, session }: { hostId?: string; prs: SessionPRSummary[]; session: WorkspaceSession }) {
+	const prView = usePRViewEnabled();
 	// Keyed on the daemon's commit count, not the shared history query that every
 	// file edit invalidates, so only a new commit refetches.
 	const commitCount = session.branchState?.commits ?? 0;
@@ -1622,26 +1626,40 @@ function ActivityTimeline({ hostId, prs, session }: { hostId?: string; prs: Sess
 		? { ...getAgentActivityView({ state: "active", lastActivityAt: transition?.updatedAt ?? "" }), label: appI18n.t("settings.agentAccounts.switchingAccount") }
 		: getAgentActivityView(session.activity);
 	const activityAt = (accountMoving ? transition?.createdAt : undefined) ?? session.activity?.lastActivityAt ?? session.updatedAt ?? session.createdAt;
+	const status = (
+		<span className="inline-flex flex-wrap items-center gap-1.5">
+			<span className="inline-flex align-middle">
+				{accountMoving ? <TimelinePill {...activityView} /> : <InspectorActivityPill activity={session.activity} />}
+			</span>
+			{session.status === "no_signal" ? (
+				<span className="inline-flex align-middle">
+					<TimelinePill {...getSessionTimelinePillView("no_signal")} />
+				</span>
+			) : null}
+			{scmTimelineStates(session).map((state) => (
+				<span key={state} className="inline-flex align-middle">
+					<InspectorScmPill state={state} />
+				</span>
+			))}
+		</span>
+	);
+	// The PR view's rail puts the people on the line and what they said on the PRs.
+	if (prView) {
+		return (
+			<ActivityRail
+				commits={commits ?? NO_COMMITS}
+				hostId={hostId}
+				prs={prs}
+				session={session}
+				status={status}
+				statusAt={activityAt}
+			/>
+		);
+	}
 	pushEvent(
 		{
 			tone: "now",
-			content: (
-				<span className="inline-flex flex-wrap items-center gap-1.5">
-					<span className="inline-flex align-middle">
-						{accountMoving ? <TimelinePill {...activityView} /> : <InspectorActivityPill activity={session.activity} />}
-					</span>
-					{session.status === "no_signal" ? (
-						<span className="inline-flex align-middle">
-							<TimelinePill {...getSessionTimelinePillView("no_signal")} />
-						</span>
-					) : null}
-					{scmTimelineStates(session).map((state) => (
-						<span key={state} className="inline-flex align-middle">
-							<InspectorScmPill state={state} />
-						</span>
-					))}
-				</span>
-			),
+			content: status,
 			timestamp: activityAt ? formatTimeCompact(activityAt) : null,
 			markerTone: activityView.tone,
 			markerBreathe: activityView.breathe,

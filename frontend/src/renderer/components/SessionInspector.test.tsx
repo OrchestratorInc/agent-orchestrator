@@ -6507,6 +6507,23 @@ describe("SessionInspector without the PR view", () => {
     expect(screen.queryByTestId("pr-focus")).not.toBeInTheDocument();
     expect(screen.queryByText("Open tab")).not.toBeInTheDocument();
     expect(screen.queryByText(/^Comments \(/)).not.toBeInTheDocument();
+    expect(screen.queryByTestId("activity-rail")).not.toBeInTheDocument();
+  });
+
+  it("shows the activity as a rail only while the PR view is on", () => {
+    useUiStore.setState({ developerMode: true, prView: true });
+    const prs = [readyPR()];
+    const respond = commonGetsResponder();
+    getMock.mockImplementation(async (path: string) => path === "/api/v1/sessions/{sessionId}/pr"
+      ? { data: { prs, linkedPrs: [] } }
+      : respond(path));
+    renderWithQuery(
+      <SessionInspector session={session([pr(7, "open")])} />,
+      undefined,
+      (client) => seedPRSummaries(client, prs),
+    );
+
+    expect(screen.getByTestId("activity-rail")).toBeInTheDocument();
   });
 
   it("merges from the card through the daemon, as before the PR view", async () => {
