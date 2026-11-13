@@ -1550,6 +1550,8 @@ function steerRefusal(error: unknown): string | undefined {
 			return undefined;
 		case "CHAT_STEER_TEXT_REQUIRED":
 			return "Type something to steer with.";
+		case "CHAT_OPEN_ELSEWHERE":
+			return "chat.draft.openElsewhere";
 		default:
 			return apiErrorMessage(error);
 	}
@@ -1931,7 +1933,6 @@ export function toSnapshot(wire: WireSnapshot): ConversationSnapshot {
 		harness: wire.harness ?? "",
 		mode: wire.mode as SessionMode,
 		controller: { state: wire.controller as ControllerState },
-		openElsewhere: wire.openElsewhere,
 		latestSequence: wire.latestSequence,
 		oldestSequence: wire.oldestSequence ?? wire.latestSequence + 1,
 		hasMoreBefore: wire.hasMoreBefore ?? false,

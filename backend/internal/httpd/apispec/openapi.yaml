@@ -18945,8 +18945,6 @@ components:
         oldestSequence:
           format: int64
           type: integer
-        openElsewhere:
-          type: boolean
         rateLimits:
           $ref: '#/components/schemas/ConversationRateLimitsPayload'
         sessionId:

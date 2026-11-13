@@ -926,7 +926,6 @@ export interface ConversationSnapshot {
 	harness: string;
 	mode: SessionMode;
 	controller: { state: ControllerState; error?: string };
-	openElsewhere?: boolean;
 	turns: ConversationTurn[];
 	/** Already ordered by sequence. The renderer does not re-sort. */
 	items: ConversationItem[];

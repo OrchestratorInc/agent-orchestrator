@@ -308,14 +308,17 @@ func adoptedOwnedElsewhere(ctx context.Context, rec domain.SessionRecord) bool {
 
 const claudeTranscriptTail = 1 << 20
 
-// ImportedChatWrittenElsewhere reports whether another Claude Code process holds
-// an imported chat, or wrote turns to its transcript after since.
-func (m *Manager) ImportedChatWrittenElsewhere(ctx context.Context, rec domain.SessionRecord, since time.Time) bool {
+// ImportedChatWrittenElsewhere reports whether another Claude Code process has
+// an imported chat open, and otherwise whether one wrote turns to its
+// transcript after since.
+func (m *Manager) ImportedChatWrittenElsewhere(ctx context.Context, rec domain.SessionRecord, since time.Time) (open, wrote bool) {
 	if rec.Metadata.ImportSource == nil || rec.Harness != domain.HarnessClaudeCode {
-		return false
+		return false, false
 	}
-	return adoptedOwnedElsewhere(ctx, rec) ||
-		!since.IsZero() && claudeTurnsWrittenElsewhere(rec.Metadata.NativeTranscriptPath, rec.Metadata.WorkspacePath, since)
+	if adoptedOwnedElsewhere(ctx, rec) {
+		return true, false
+	}
+	return false, !since.IsZero() && claudeTurnsWrittenElsewhere(rec.Metadata.NativeTranscriptPath, rec.Metadata.WorkspacePath, since)
 }
 
 func claudeTurnsWrittenElsewhere(path, workspace string, since time.Time) bool {

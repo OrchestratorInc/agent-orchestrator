@@ -75,7 +75,7 @@
 	"chat.archived.body": "L'historique est conservé. Restaurez la session pour continuer.",
 	"chat.controller.openElsewhere": "Ouverte ailleurs",
 	"chat.controller.couldNotConnect": "Impossible de se connecter à l’agent",
-	"chat.controller.heldElsewhereBody": "Fermez-la là-bas. Orchestrator enverra ensuite votre message.",
+	"chat.draft.openElsewhere": "Cette conversation est ouverte dans une autre session Claude Code, par exemple un terminal ou un IDE. Quittez-la là-bas, puis renvoyez votre message.",
 	"chat.controller.openElsewhereBody": "Fermez-la là-bas pour continuer ici.",
 	"chat.controller.openElsewhereRecheck": "Orchestrator revérifie toutes les {{seconds}} secondes.",
 	"chat.controller.openElsewhereCodex": "Codex peut conserver une discussion fermée un moment.",

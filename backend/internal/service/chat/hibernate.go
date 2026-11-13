@@ -7,7 +7,6 @@ import (
 	"path"
 	"runtime"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -60,9 +59,9 @@ func (s *Service) SetWakeCallback(wake func(context.Context, domain.SessionID) e
 	s.wakeChat = wake
 }
 
-// SetOtherWriterCheck reports whether another process holds a chat, or wrote
-// to it after the given time when that time is set.
-func (s *Service) SetOtherWriterCheck(check func(context.Context, domain.SessionRecord, time.Time) bool) {
+// SetOtherWriterCheck reports whether another process has a chat open, and
+// otherwise whether one wrote to it after the given time when that time is set.
+func (s *Service) SetOtherWriterCheck(check func(context.Context, domain.SessionRecord, time.Time) (bool, bool)) {
 	s.otherWriter = check
 }
 
@@ -570,7 +569,7 @@ func (s *Service) admitController(ctx context.Context, id domain.SessionID, wake
 }
 
 func (s *Service) wakeHibernated(ctx context.Context, id domain.SessionID) error {
-	if s.wakeChat == nil || s.isHeldElsewhere(id) {
+	if s.wakeChat == nil {
 		return ErrNoController
 	}
 	if controller, err := s.Controller(id); err == nil {
@@ -691,7 +690,6 @@ func (s *Service) startBackgroundWake(id domain.SessionID) {
 			s.wakeMu.Unlock()
 		}()
 		ctx := context.Background()
-		s.waitForOtherWriter(ctx, id)
 		if err := s.wakeHibernated(ctx, id); err != nil {
 			if s.stoppedForUpdate(id) {
 				s.log.Warn("chat session could not wake during a harness update; queued messages kept for its resume", "session", id, "err", err)
@@ -715,110 +713,50 @@ func (s *Service) startBackgroundWake(id domain.SessionID) {
 	}()
 }
 
-var otherWriterPoll atomic.Int64
+// ErrChatOpenElsewhere reports a message refused because another Claude Code
+// process has the chat open.
+var ErrChatOpenElsewhere = apierr.Conflict("CHAT_OPEN_ELSEWHERE", "This chat is open in another Claude Code session, such as a terminal or an IDE. Quit it there, then send your message again.", nil)
 
-func otherWriterPollInterval() time.Duration {
-	if interval := otherWriterPoll.Load(); interval > 0 {
-		return time.Duration(interval)
-	}
-	return 2 * time.Second
-}
-
-// ErrChatOpenElsewhere reports a send refused because another process writes
-// the chat and its provider could not be stopped yet.
-var ErrChatOpenElsewhere = apierr.Conflict("CHAT_OPEN_ELSEWHERE", "this chat is open in another Claude Code process; close it there, then send again", nil)
-
-func (s *Service) stopForOtherWriter(ctx context.Context, rec domain.SessionRecord) (bool, error) {
-	if s.otherWriter == nil || rec.HibernatedAt != nil {
+// checkOtherWriter refuses a delivery while another process has the chat open.
+// When one wrote turns and left, it stops the idle provider so its next start
+// reads them, and reports the stop.
+func (s *Service) checkOtherWriter(ctx context.Context, rec domain.SessionRecord) (bool, error) {
+	if s.otherWriter == nil || rec.IsTerminated {
 		return false, nil
 	}
-	controller, err := s.Controller(rec.ID)
+	var controller *Controller
 	var state ports.ChatControllerState
-	if err == nil {
-		state = controller.State()
+	if rec.HibernatedAt == nil {
+		if live, err := s.Controller(rec.ID); err == nil {
+			controller, state = live, live.State()
+		}
 	}
-	if state != ports.ChatControllerReady && state != ports.ChatControllerBusy {
-		return false, nil
+	var since time.Time
+	if state == ports.ChatControllerReady || state == ports.ChatControllerBusy {
+		since = controller.started
+		if since.IsZero() {
+			since = rec.CreatedAt
+		}
 	}
-	since := controller.started
-	if since.IsZero() {
-		since = rec.CreatedAt
+	open, wrote := s.otherWriter(ctx, rec, since)
+	if open {
+		return false, ErrChatOpenElsewhere
 	}
-	if !s.otherWriter(ctx, rec, since) {
+	if !wrote {
 		return false, nil
 	}
 	if state == ports.ChatControllerBusy {
 		return false, ErrChatOpenElsewhere
 	}
-	s.holdElsewhere(rec.ID)
 	stopped, err := s.hibernateChat(ctx, rec.ID, hibernateOptions{otherWriter: true, ignoreViews: true})
 	if !stopped {
-		s.releaseElsewhere(rec.ID, false)
 		if err != nil {
-			s.log.Warn("could not stop a chat another process writes", "session", rec.ID, "err", err)
+			s.log.Warn("could not stop a chat another process wrote", "session", rec.ID, "err", err)
 		}
 		return false, ErrChatOpenElsewhere
 	}
-	s.log.Info("chat session stopped because another process writes it", "session", rec.ID)
+	s.log.Info("chat session stopped to read turns another process wrote", "session", rec.ID)
 	return true, nil
-}
-
-func (s *Service) waitForOtherWriter(ctx context.Context, id domain.SessionID) {
-	if s.otherWriter == nil {
-		return
-	}
-	held := s.isHeldElsewhere(id)
-	defer func() {
-		if held {
-			s.releaseElsewhere(id, true)
-		}
-	}()
-	for {
-		rec, err := s.requireChatSession(ctx, id)
-		switch {
-		case err == nil:
-			if rec.IsTerminated || rec.HibernatedAt == nil || !s.otherWriter(ctx, rec, time.Time{}) {
-				return
-			}
-			if !held {
-				held = true
-				s.holdElsewhere(id)
-			}
-		case !held || errors.Is(err, ports.ErrSessionNotFound) || errors.Is(err, ErrNotChatMode):
-			return
-		default:
-			s.log.Warn("could not read a chat another process holds; retrying", "session", id, "err", err)
-		}
-		time.Sleep(otherWriterPollInterval())
-	}
-}
-
-// holdElsewhere adds one hold. Each stop attempt and the waiter own their own,
-// so an attempt that fails cannot release the hold of one that stopped.
-func (s *Service) holdElsewhere(id domain.SessionID) {
-	s.wakeMu.Lock()
-	defer s.wakeMu.Unlock()
-	if s.heldElsewhere == nil {
-		s.heldElsewhere = make(map[domain.SessionID]int)
-	}
-	s.heldElsewhere[id]++
-}
-
-// releaseElsewhere drops one hold, or every hold once the other process left.
-func (s *Service) releaseElsewhere(id domain.SessionID, all bool) {
-	s.wakeMu.Lock()
-	defer s.wakeMu.Unlock()
-	if all || s.heldElsewhere[id] <= 1 {
-		delete(s.heldElsewhere, id)
-		return
-	}
-	s.heldElsewhere[id]--
-}
-
-func (s *Service) isHeldElsewhere(id domain.SessionID) bool {
-	s.wakeMu.Lock()
-	defer s.wakeMu.Unlock()
-	return s.heldElsewhere[id] > 0
 }
 
 func (s *Service) failQueuedTurns(ctx context.Context, id domain.SessionID, message string) {

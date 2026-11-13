@@ -74,7 +74,7 @@
 	"chat.archived.body": "Der Verlauf bleibt erhalten. Stellen Sie die Sitzung wieder her, um fortzufahren.",
 	"chat.controller.openElsewhere": "Dieser Chat ist woanders geöffnet",
 	"chat.controller.couldNotConnect": "Verbindung zum Agenten fehlgeschlagen",
-	"chat.controller.heldElsewhereBody": "Schließe ihn dort. Danach sendet Orchestrator deine Nachricht.",
+	"chat.draft.openElsewhere": "Dieser Chat ist in einer anderen Claude Code-Sitzung geöffnet, etwa in einem Terminal oder einer IDE. Beende sie dort und sende deine Nachricht dann erneut.",
 	"chat.controller.openElsewhereBody": "Schließe ihn dort, um hier weiterzumachen.",
 	"chat.controller.openElsewhereRecheck": "Orchestrator prüft alle {{seconds}} Sekunden erneut.",
 	"chat.controller.openElsewhereCodex": "Codex kann einen geschlossenen Chat eine Weile behalten.",

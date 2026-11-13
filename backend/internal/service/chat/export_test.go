@@ -32,8 +32,3 @@ func SetDeltaFlushInterval(interval time.Duration) (restore func()) {
 
 // DeltaRunMaxBytes is the most delta text one batched write carries.
 const DeltaRunMaxBytes = deltaRunMaxBytes
-
-func SetOtherWriterPoll(interval time.Duration) (restore func()) {
-	previous := otherWriterPoll.Swap(int64(interval))
-	return func() { otherWriterPoll.Store(previous) }
-}

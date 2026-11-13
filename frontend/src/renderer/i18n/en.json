@@ -74,7 +74,7 @@
 	"chat.archived.body": "History is kept. Restore the session to continue.",
 	"chat.controller.openElsewhere": "This is open elsewhere",
 	"chat.controller.couldNotConnect": "Could not connect to the agent",
-	"chat.controller.heldElsewhereBody": "Close it there. Orchestrator then sends your message.",
+	"chat.draft.openElsewhere": "This chat is open in another Claude Code session, such as a terminal or an IDE. Quit it there, then send your message again.",
 	"chat.controller.openElsewhereBody": "Close it there to continue here.",
 	"chat.controller.openElsewhereRecheck": "Orchestrator checks again every {{seconds}} seconds.",
 	"chat.controller.openElsewhereCodex": "Codex can keep a closed chat for a while.",

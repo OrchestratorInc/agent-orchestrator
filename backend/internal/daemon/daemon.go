@@ -769,7 +769,7 @@ func Run(buildVersion string) (retErr error) {
 		})
 	}
 	if check, ok := sessMgr.(interface {
-		ImportedChatWrittenElsewhere(context.Context, domain.SessionRecord, time.Time) bool
+		ImportedChatWrittenElsewhere(context.Context, domain.SessionRecord, time.Time) (bool, bool)
 	}); ok {
 		chatSvc.SetOtherWriterCheck(check.ImportedChatWrittenElsewhere)
 	}

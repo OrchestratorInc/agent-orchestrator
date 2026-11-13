@@ -74,7 +74,7 @@
 	"chat.archived.body": "履歴は保持されています。続行するにはセッションを復元してください。",
 	"chat.controller.openElsewhere": "別の場所で開かれています",
 	"chat.controller.couldNotConnect": "エージェントに接続できませんでした",
-	"chat.controller.heldElsewhereBody": "そちらで閉じてください。閉じた後、Orchestrator がメッセージを送信します。",
+	"chat.draft.openElsewhere": "このチャットは別の Claude Code セッション（ターミナルや IDE など）で開かれています。そちらで終了してから、もう一度メッセージを送信してください。",
 	"chat.controller.openElsewhereBody": "続けるには、そちらで閉じてください。",
 	"chat.controller.openElsewhereRecheck": "Orchestrator は {{seconds}} 秒ごとに再確認します。",
 	"chat.controller.openElsewhereCodex": "Codex は閉じたチャットをしばらく保持することがあります。",

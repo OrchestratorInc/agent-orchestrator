@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 	"unicode/utf8"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -132,15 +131,11 @@ func (s *Service) Steer(
 	if err != nil {
 		return SteerResult{}, err
 	}
-	_, writerErr := s.stopForOtherWriter(ctx, record)
-	if held := s.heldByAnotherWriter(ctx, record); held || writerErr != nil {
-		if held {
-			defer s.startBackgroundWake(id)
-		}
+	if _, writerErr := s.checkOtherWriter(ctx, record); writerErr != nil {
 		if result, found, err := s.steerReceipt(ctx, id, msg); found || err != nil {
 			return result, err
 		}
-		return SteerResult{}, ErrChatOpenElsewhere
+		return SteerResult{}, writerErr
 	}
 	controller, release, err := s.workingController(ctx, id)
 	if err != nil {
@@ -148,14 +143,6 @@ func (s *Service) Steer(
 	}
 	defer release()
 	return controller.Steer(ctx, msg)
-}
-
-func (s *Service) heldByAnotherWriter(ctx context.Context, record domain.SessionRecord) bool {
-	if s.isHeldElsewhere(record.ID) {
-		return true
-	}
-	return s.otherWriter != nil && record.HibernatedAt != nil && !record.IsTerminated &&
-		s.otherWriter(ctx, record, time.Time{})
 }
 
 func (s *Service) steerReceipt(ctx context.Context, id domain.SessionID, msg ports.ChatUserMessage) (SteerResult, bool, error) {
@@ -227,11 +214,7 @@ func (s *Service) SteerOrSend(
 		if err != nil {
 			return SteerOrSendResult{}, err
 		}
-		_, writerErr := s.stopForOtherWriter(ctx, record)
-		if held := s.heldByAnotherWriter(ctx, record); held || writerErr != nil {
-			if held {
-				defer s.startBackgroundWake(id)
-			}
+		if _, writerErr := s.checkOtherWriter(ctx, record); writerErr != nil {
 			conversation, err := s.store.ConversationForSession(ctx, id)
 			if err != nil {
 				return SteerOrSendResult{}, fmt.Errorf("%w: load conversation: %w", ErrSteerDeliveryUncertain, err)
@@ -239,11 +222,7 @@ func (s *Service) SteerOrSend(
 			if result, done, err := steerOrSendReceipt(ctx, s.store, conversation.ID, msg, false); done {
 				return result, err
 			}
-			if writerErr != nil {
-				return SteerOrSendResult{}, writerErr
-			}
-			turn, err := s.Send(ctx, id, msg)
-			return SteerOrSendResult{Turn: turn}, err
+			return SteerOrSendResult{}, writerErr
 		}
 	}
 	controller, release, err := s.workingController(ctx, id)

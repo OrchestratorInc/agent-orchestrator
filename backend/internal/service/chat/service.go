@@ -106,9 +106,8 @@ type Service struct {
 	usageLimitAccounts    usageLimitAccountReader
 	// updateStops are sessions stopped so an update could replace their
 	// executable; the update starts them again, so their queue is kept.
-	updateStops   map[domain.SessionID]bool
-	heldElsewhere map[domain.SessionID]int
-	otherWriter   func(context.Context, domain.SessionRecord, time.Time) bool
+	updateStops map[domain.SessionID]bool
+	otherWriter func(context.Context, domain.SessionRecord, time.Time) (bool, bool)
 
 	runPromptSuggestion   func(context.Context, domain.SessionID, string, string, string) (string, error)
 	promptSuggestionSlots chan struct{}
@@ -1381,18 +1380,14 @@ func (s *Service) Send(
 	if err := validateFileReferenceContent(msg, string(id)); err != nil {
 		return domain.ConversationTurn{}, err
 	}
-	stopped := s.switchBeforeSend(ctx, record)
-	if !stopped {
-		held, holdErr := s.stopForOtherWriter(ctx, record)
-		if holdErr != nil {
-			return domain.ConversationTurn{}, holdErr
-		}
-		if held {
-			stopped = true
-			defer s.startBackgroundWake(id)
-		}
+	restarting, writerErr := s.checkOtherWriter(ctx, record)
+	if writerErr != nil {
+		return domain.ConversationTurn{}, writerErr
 	}
-	if stopped {
+	if restarting {
+		defer s.startBackgroundWake(id)
+	}
+	if restarting || s.switchBeforeSend(ctx, record) {
 		// The provider stopped. The hibernated path below queues this message
 		// and wakes the session.
 		if record, err = s.requireChatSession(ctx, id); err != nil {
@@ -2030,8 +2025,7 @@ type Snapshot struct {
 	// driver lands, and the abilities already differ per install today. Nil when no
 	// controller is live, because an unstarted session's abilities are not yet known
 	// and guessing them is how a control appears and then vanishes.
-	Capabilities  ports.ChatCapabilities
-	OpenElsewhere bool
+	Capabilities ports.ChatCapabilities
 }
 
 // SnapshotReader is the durable read the service serves snapshots from. Kept
@@ -2168,7 +2162,6 @@ func (s *Service) Snapshot(ctx context.Context, id domain.SessionID) (Snapshot, 
 		Harness:                          record.Harness,
 		Mode:                             domain.NormalizeSessionMode(record.Mode),
 		Controller:                       state,
-		OpenElsewhere:                    s.isHeldElsewhere(id),
 		Turns:                            withDispatchingTurnRunning(rows.Turns, dispatching...),
 		Messages:                         rows.Messages,
 		Activities:                       rows.Activities,
@@ -2289,7 +2282,6 @@ func (s *Service) SnapshotPage(ctx context.Context, id domain.SessionID, beforeS
 		Harness:                          record.Harness,
 		Mode:                             domain.NormalizeSessionMode(record.Mode),
 		Controller:                       state,
-		OpenElsewhere:                    s.isHeldElsewhere(id),
 		Turns:                            withDispatchingTurnRunning(rows.Turns, dispatching...),
 		Messages:                         rows.Messages,
 		Activities:                       rows.Activities,
@@ -2990,11 +2982,11 @@ func (s *Service) relayChatTurn(
 		if err != nil {
 			return "", err
 		}
-		held, err := s.stopForOtherWriter(ctx, record)
+		restarting, err := s.checkOtherWriter(ctx, record)
 		if err != nil {
 			return "", err
 		}
-		if held {
+		if restarting {
 			stoppedForOtherWriter = true
 			continue
 		}
