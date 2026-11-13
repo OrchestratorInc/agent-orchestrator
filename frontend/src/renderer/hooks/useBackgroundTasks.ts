@@ -8,6 +8,7 @@ export const backgroundTasksQueryRoot = ["background-tasks"] as const;
 
 function isTaskReading(data: BackgroundTaskReading | undefined): data is BackgroundTaskReading {
 	return !!data && typeof data.sessionId === "string" && Array.isArray(data.tasks)
+		&& data.tasks.every((task) => !!task && typeof task === "object")
 		&& ["ready", "partial", "unavailable"].includes(data.availability);
 }
 

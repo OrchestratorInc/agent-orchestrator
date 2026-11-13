@@ -122,11 +122,9 @@ function useTaskStops(sessionId: string, liveIds: string) {
 		setFailed(null);
 		setStopping((previous) => new Set(previous).add(id));
 		timers.current.set(id, window.setTimeout(() => release(id), STOP_SETTLE_MS));
-		mutation.mutate(id, {
-			onError: () => {
-				release(id);
-				setFailed(id);
-			},
+		void mutation.mutateAsync(id).catch(() => {
+			release(id);
+			setFailed(id);
 		});
 	};
 	return { stopping, failed, stop };

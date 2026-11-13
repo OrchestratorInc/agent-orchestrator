@@ -116,3 +116,19 @@ func TestBackgroundTasksCodexSubagentCanRunAgainAfterCompletion(t *testing.T) {
 		})
 	}
 }
+
+func TestBackgroundTasksPreservesObservedAgentsWhenShellInventoryUnsupported(t *testing.T) {
+	d, srv := newTestDriver(t)
+	srv.replyError("thread/backgroundTerminals/list", -32601, "method not found")
+	conv, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: "/tmp/ws"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conv.Close() }()
+	c := conv.(*conversation)
+	c.backgroundObserved.Update(ports.ChatBackgroundTask{ID: "agent:child", Kind: "agent", State: "running"}, time.Now())
+	tasks, err := c.BackgroundTasks(context.Background())
+	if !errors.Is(err, ports.ErrBackgroundTasksPartial) || len(tasks) != 1 || tasks[0].ID != "agent:child" {
+		t.Fatalf("tasks=%+v err=%v", tasks, err)
+	}
+}

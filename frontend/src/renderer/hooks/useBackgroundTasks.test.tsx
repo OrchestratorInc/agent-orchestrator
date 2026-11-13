@@ -54,6 +54,10 @@ describe("background task queries", () => {
 	it.each([
 		["session", { status: "ok" }],
 		["session", { sessionId: "s", availability: "ready", tasks: null }],
+		["session", { sessionId: "s", availability: "ready", tasks: [null] }],
+		["session", { sessionId: "s", availability: "ready", tasks: ["bad"] }],
+		["board", { sessions: [{ sessionId: "s", availability: "ready", tasks: [null] }] }],
+		["board", { sessions: [{ sessionId: "s", availability: "ready", tasks: [7] }] }],
 		["board", { status: "ok" }],
 		["board", { sessions: [{ sessionId: "s", availability: "ready" }] }],
 	])("treats a malformed %s response as a query error without breaking Chat", async (scope, data) => {

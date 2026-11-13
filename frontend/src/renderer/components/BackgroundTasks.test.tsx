@@ -8,7 +8,7 @@ import { BackgroundTasksBadge, ComposerBackgroundTasks, SessionBackgroundTasks, 
 const { queryMock, mutateMock } = vi.hoisted(() => ({ queryMock: vi.fn(), mutateMock: vi.fn() }));
 vi.mock("../hooks/useBackgroundTasks", () => ({
 	useBackgroundTasks: queryMock,
-	useStopBackgroundTask: () => ({ mutate: mutateMock }),
+	useStopBackgroundTask: () => ({ mutateAsync: mutateMock }),
 }));
 
 const session = { id: "s", title: "Settings", mode: "chat", provider: "claude-code", status: "idle" } as WorkspaceSession;
@@ -23,6 +23,7 @@ const reading = readingOf([shell("shell", "Dev server")]);
 
 beforeEach(() => {
 	vi.clearAllMocks();
+	mutateMock.mockResolvedValue(undefined);
 	queryMock.mockReturnValue({ data: reading, isError: false });
 });
 
@@ -57,7 +58,7 @@ describe("composer tab", () => {
 		expect(within(tab).getByText("12m")).toBeVisible();
 		expect(within(tab).getByRole("img", { name: "Running" })).toBeVisible();
 		await userEvent.click(within(tab).getByRole("button", { name: "Stop Dev server" }));
-		expect(mutateMock).toHaveBeenCalledWith("shell", expect.anything());
+		expect(mutateMock).toHaveBeenCalledWith("shell");
 		// One request at a time: the square waits for the task to leave.
 		expect(within(tab).getByRole("button", { name: "Stop Dev server" })).toBeDisabled();
 	});
@@ -110,7 +111,7 @@ describe("composer tab", () => {
 		expect(within(rows[2]).getByRole("img", { name: "Failed" })).toBeVisible();
 		expect(within(rows[2]).queryByRole("button")).toBeNull();
 		await userEvent.click(within(rows[1]).getByRole("button", { name: "Stop Watch the composer tests" }));
-		expect(mutateMock).toHaveBeenCalledWith("watch", expect.anything());
+		expect(mutateMock).toHaveBeenCalledWith("watch");
 	});
 
 	it("closes the list when work drops to one line and stays closed when it grows again", async () => {
@@ -125,11 +126,26 @@ describe("composer tab", () => {
 	});
 
 	it("says when a stop fails and gives the square back", async () => {
-		mutateMock.mockImplementationOnce((_id: string, options: { onError: () => void }) => options.onError());
+		mutateMock.mockRejectedValueOnce(new Error("stop failed"));
 		render(<ComposerBackgroundTasks sessionId="s" reading={reading} />);
 		await userEvent.click(screen.getByRole("button", { name: "Stop Dev server" }));
 		expect(screen.getByRole("status")).toHaveTextContent("Couldn't stop");
 		expect(screen.getByRole("button", { name: "Stop Dev server" })).toBeEnabled();
+	});
+
+	it("handles an earlier stop failure after another task is stopped", async () => {
+		let rejectFirst!: (error: Error) => void;
+		let resolveSecond!: () => void;
+		mutateMock.mockImplementationOnce(() => new Promise<void>((_resolve, reject) => { rejectFirst = reject; }))
+			.mockImplementationOnce(() => new Promise<void>((resolve) => { resolveSecond = resolve; }));
+		render(<ComposerBackgroundTasks sessionId="s" reading={readingOf([shell("a", "Server"), shell("b", "Watcher")])} />);
+		await userEvent.click(screen.getByRole("button", { name: /2 running/ }));
+		await userEvent.click(screen.getByRole("button", { name: "Stop Server" }));
+		await userEvent.click(screen.getByRole("button", { name: "Stop Watcher" }));
+		await act(async () => { resolveSecond(); rejectFirst(new Error("first failed")); });
+		expect(screen.getByRole("status")).toHaveTextContent("Couldn't stop");
+		expect(screen.getByRole("button", { name: "Stop Server" })).toBeEnabled();
+		expect(screen.getByRole("button", { name: "Stop Watcher" })).toBeDisabled();
 	});
 
 	it("gives the square back when the task outlives its stop", async () => {
