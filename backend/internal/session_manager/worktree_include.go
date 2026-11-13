@@ -102,7 +102,7 @@ func copyNewRegularFile(source, target string) (err error) {
 	if err != nil {
 		return err
 	}
-	defer src.Close()
+	defer func() { _ = src.Close() }()
 	_, err = io.Copy(dst, src)
 	return err
 }
