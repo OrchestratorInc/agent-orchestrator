@@ -234,8 +234,11 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 
 	deps.ipcMain.handle("cloudShare:list", async (_event, value: unknown): Promise<CloudShareLinks> => {
 		const baseUrl = baseUrlArgument(value);
+		// A link published, changed or unpublished here while the list was in
+		// flight keeps what that write recorded: the list predates it.
+		const since = deps.records.generation();
 		const links = await listShareLinks(deps, baseUrl);
-		await deps.records.syncLinks(baseUrl, links.shares);
+		await deps.records.syncLinks(baseUrl, links.shares, since);
 		return links;
 	});
 

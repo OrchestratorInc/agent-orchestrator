@@ -32,7 +32,7 @@ afterEach(async () => {
 	await fs.rm(dataDir, { recursive: true, force: true });
 });
 
-function setup(options: { token?: string | null; finalizeStatus?: number; finalizeCode?: string; shareStatus?: number; shareCode?: string; listStatus?: number; unreachable?: boolean; shares?: unknown[] } = {}) {
+function setup(options: { token?: string | null; finalizeStatus?: number; finalizeCode?: string; shareStatus?: number; shareCode?: string; listStatus?: number; unreachable?: boolean; shares?: unknown[]; listGate?: Promise<void> } = {}) {
 	const handlers = new Map<string, (event: unknown, ...args: unknown[]) => unknown>();
 	const requests: string[] = [];
 	const bodies = new Map<string, unknown>();
@@ -55,7 +55,10 @@ function setup(options: { token?: string | null; finalizeStatus?: number; finali
 				if (options.unreachable) throw new TypeError("fetch failed");
 				authorizations.push(new Headers(init.headers).get("authorization"));
 				if (options.listStatus) return json({ code: "not_found" }, options.listStatus);
-				return json({ shares: options.shares ?? [], limit: 3, used: 1 });
+				// A list read the test holds back: it answers with the links as they were when requested.
+				const shares = options.shares ?? [];
+				if (options.listGate) await options.listGate;
+				return json({ shares, limit: 3, used: 1 });
 			}
 			if (pathname.endsWith("/uploads")) return json({ uploadToken: "tok", partSize: 1024, partCount: 1 }, 201);
 			if (pathname.endsWith("/uploads/parts")) return json({ parts: [{ partNumber: 1, method: "PUT", url: "https://s3.test/p", headers: {}, size: 20 }] });
@@ -410,6 +413,29 @@ describe("cloudShare IPC", () => {
 		await invoke("cloudShare:setAccess", { baseUrl: "https://cp.test", shareId: SHARE_ID, access: "anyone" });
 		const stored = JSON.parse(await fs.readFile(path.join(dataDir, "share-links.json"), "utf8"))[key];
 		expect(stored).toEqual({ shareId: SHARE_ID, url: "https://share.test/abc", access: "anyone" });
+	});
+
+	it("never lets a list read that was in flight undo an access change made meanwhile", async () => {
+		const key = shareRecordKey("https://cp.test", "sess-1", "docs/report.html");
+		const recordsFile = path.join(dataDir, "share-links.json");
+		await fs.writeFile(recordsFile, JSON.stringify({ [key]: { shareId: SHARE_ID, url: "https://share.test/abc", access: "restricted" } }));
+		let release: () => void = () => undefined;
+		const gate = new Promise<void>((resolve) => { release = resolve; });
+		// The list is requested while the link is still private.
+		const { invoke } = setup({ shares: [{ id: SHARE_ID, slug: "abc", name: "report.html", contentUrl: "https://abc.share.test/", viewerUrl: "https://share.test/abc", access: "restricted" }], listGate: gate });
+		const listing = invoke("cloudShare:list", { baseUrl: "https://cp.test" });
+		// Meanwhile the person makes it public, and that is recorded.
+		await invoke("cloudShare:setAccess", { baseUrl: "https://cp.test", shareId: SHARE_ID, access: "anyone" });
+		const stored = async () => JSON.parse(await fs.readFile(recordsFile, "utf8"))[key];
+		expect(await stored()).toMatchObject({ access: "anyone" });
+		// The older list answers last: the newer access stands.
+		release();
+		await listing;
+		expect(await stored()).toMatchObject({ access: "anyone" });
+		// A list requested after the change still corrects the record as usual.
+		const later = setup({ shares: [{ id: SHARE_ID, slug: "abc", name: "report.html", contentUrl: "https://abc.share.test/", viewerUrl: "https://share.test/abc", access: "restricted" }] });
+		await later.invoke("cloudShare:list", { baseUrl: "https://cp.test" });
+		expect(await stored()).toMatchObject({ access: "restricted" });
 	});
 
 	it("changes a live link's access and who it is shared with", async () => {

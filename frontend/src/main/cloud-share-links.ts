@@ -48,7 +48,17 @@ export interface ShareLinkRecordStore {
 	adopt(to: string, from: string): Promise<void>;
 	/** Drops every record of a link, after it is unpublished. */
 	forgetShare(shareId: string): Promise<void>;
-	syncLinks(baseUrl: string, shares: CloudShareLink[]): Promise<void>;
+	/**
+	 * The current write generation. Taken before a link list is requested and
+	 * passed to syncLinks, so a list that was in flight while a link was
+	 * published, changed or unpublished here does not undo that write.
+	 */
+	generation(): number;
+	/**
+	 * Brings records up to date with a link list. With `since`, a link written
+	 * here after that generation is left as written: the list predates it.
+	 */
+	syncLinks(baseUrl: string, shares: CloudShareLink[], since?: number): Promise<void>;
 }
 
 /**
@@ -58,8 +68,20 @@ export interface ShareLinkRecordStore {
 export class ShareLinkRecords implements ShareLinkRecordStore {
 	private records: Record<string, string | ShareLinkRecord> | undefined;
 	private writing: Promise<void> = Promise.resolve();
+	/** Bumped by every write of a link's record, here; each link keeps the one it was last written at. */
+	private writes = 0;
+	private writtenAt = new Map<string, number>();
 
 	constructor(private readonly file: string) {}
+
+	generation(): number {
+		return this.writes;
+	}
+
+	private written(shareId: string): void {
+		this.writes += 1;
+		this.writtenAt.set(shareId, this.writes);
+	}
 
 	async get(key: string): Promise<string | undefined> {
 		return asRecord((await this.load())[key])?.shareId;
@@ -71,12 +93,14 @@ export class ShareLinkRecords implements ShareLinkRecordStore {
 
 	async set(key: string, shareId: string, fingerprint?: string, url?: string, access?: CloudShareAccess): Promise<void> {
 		const records = await this.load();
+		this.written(shareId);
 		records[key] = encodeRecord({ shareId, fingerprint, url, access });
 		await this.save();
 	}
 
 	async setAccess(shareId: string, access: CloudShareAccess): Promise<void> {
 		const records = await this.load();
+		this.written(shareId);
 		let changed = false;
 		for (const [key, value] of Object.entries(records)) {
 			const record = asRecord(value);
@@ -95,13 +119,15 @@ export class ShareLinkRecords implements ShareLinkRecordStore {
 		await this.save();
 	}
 
-	async syncLinks(baseUrl: string, shares: CloudShareLink[]): Promise<void> {
+	async syncLinks(baseUrl: string, shares: CloudShareLink[], since?: number): Promise<void> {
 		const byId = new Map(shares.map((share) => [share.id, share]));
 		const records = await this.load();
 		let changed = false;
 		for (const [key, value] of Object.entries(records)) {
 			const record = asRecord(value);
 			if (!record || recordBaseUrl(key) !== baseUrl) continue;
+			// Written here after the list was requested: the list is older than the record.
+			if (since !== undefined && (this.writtenAt.get(record.shareId) ?? 0) > since) continue;
 			const share = byId.get(record.shareId);
 			const active = share && !share.revokedAt ? share : undefined;
 			const url = active ? artifactShareUrl(active) : undefined;
@@ -115,6 +141,7 @@ export class ShareLinkRecords implements ShareLinkRecordStore {
 
 	async forgetShare(shareId: string): Promise<void> {
 		const records = await this.load();
+		this.written(shareId);
 		let changed = false;
 		for (const [key, record] of Object.entries(records)) {
 			if (asRecord(record)?.shareId === shareId) {
