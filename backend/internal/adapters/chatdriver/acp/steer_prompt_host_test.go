@@ -59,6 +59,17 @@ func (h *scriptedHost) nextPrompt() string {
 // set, the host is mid-turn and the conversation adopts it as that turn.
 func startScriptedHostConversation(t *testing.T, adoptTurn string) (*conversation, *scriptedHost) {
 	t.Helper()
+	return startScriptedHostConversationWith(t, adoptTurn, nil)
+}
+
+// startScriptedHostConversationWith is startScriptedHostConversation with the
+// host's reported state adjusted by edit.
+func startScriptedHostConversationWith(
+	t *testing.T,
+	adoptTurn string,
+	edit func(*persistenthost.ACPState),
+) (*conversation, *scriptedHost) {
+	t.Helper()
 	initialize, err := json.Marshal(acpsdk.InitializeResponse{
 		ProtocolVersion: acpsdk.ProtocolVersionNumber,
 		AgentInfo:       &acpsdk.Implementation{Name: "prompt-steerer", Version: "1.0.0"},
@@ -96,14 +107,15 @@ func startScriptedHostConversation(t *testing.T, adoptTurn string) (*conversatio
 		Launch:      func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
 		SteerPrompt: testSteerPrompt(2 * time.Second),
 	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	state := &persistenthost.ACPState{
+		InitializeResult: initialize, SessionResult: session,
+		SessionID: "provider-session", ActivePrompt: adoptTurn != "",
+	}
+	if edit != nil {
+		edit(state)
+	}
 	driver.connectHost = func(context.Context, persistenthost.Config) (*persistenthost.Transport, error) {
-		return &persistenthost.Transport{
-			Stdin: daemon, Stdout: daemon, Reconnected: true,
-			ACPState: &persistenthost.ACPState{
-				InitializeResult: initialize, SessionResult: session,
-				SessionID: "provider-session", ActivePrompt: adoptTurn != "",
-			},
-		}, nil
+		return &persistenthost.Transport{Stdin: daemon, Stdout: daemon, Reconnected: true, ACPState: state}, nil
 	}
 	opened, err := driver.Resume(context.Background(), ports.ChatResumeConfig{
 		SessionID: "ao-session", DataDir: t.TempDir(), WorkspacePath: t.TempDir(),
@@ -559,5 +571,53 @@ func TestACPSteerPromptOvertakenByStopIsNeverSent(t *testing.T) {
 			default:
 			}
 		})
+	}
+}
+
+// A steer prompt answered "Session not found" was not delivered, and the
+// provider can never serve the conversation again, so it is stopped.
+func TestACPSteerPromptIntoALostSessionIsARefusalAndStopsTheProvider(t *testing.T) {
+	conv, host := startScriptedHostConversation(t, "")
+	_ = nextEvent(t, conv.Events()) // controller.ready
+	turn, _ := startScriptedTurn(t, conv, host)
+	steer, outcome := steerAsync(t, conv, host, turn)
+
+	host.send(`{"jsonrpc":"2.0","id":` + steer + `,"error":{"code":-32603,"message":"Internal error","data":{"details":"Session not found"}}}`)
+	err := steerOutcome(t, outcome)
+	var refusal interface{ ChatRefusal() bool }
+	if !errors.Is(err, ports.ErrChatProviderSessionLost) || !errors.As(err, &refusal) || !refusal.ChatRefusal() {
+		t.Fatalf("Steer into a lost session = %v, want a refusal carrying ErrChatProviderSessionLost", err)
+	}
+	conv.mu.Lock()
+	lost, closed := conv.sessionLost, conv.closed
+	conv.mu.Unlock()
+	if !lost || !closed {
+		t.Fatalf("after a lost session: sessionLost=%v closed=%v, want the provider stopped", lost, closed)
+	}
+}
+
+// A compaction the host was running when the daemon restarted takes no steer,
+// as a local Compact does not, and it still ends with the host's result.
+func TestACPSteerPromptAdoptedCompactionIsNotSteerable(t *testing.T) {
+	conv, host := startScriptedHostConversationWith(t, "durable-turn", func(state *persistenthost.ACPState) {
+		state.ActiveCompaction = true
+	})
+	_ = nextEvent(t, conv.Events()) // controller.ready
+	if _, err := conv.Steer(context.Background(), "durable-turn", ports.ChatUserMessage{Text: "keep the tests"}); !errors.Is(err, ports.ErrChatNoSteerableTurn) {
+		t.Fatalf("Steer into an adopted compaction = %v, want ErrChatNoSteerableTurn", err)
+	}
+	host.send(`{"jsonrpc":"2.0","method":"_ao/persistent_prompt_result","params":{"eventId":"acp-host:17","result":{"stopReason":"end_turn"}}}`)
+	done := completionsOf(t, conv, "durable-turn")
+	if len(done) != 1 || done[0].ProviderEventID != "acp-host:17" {
+		t.Fatalf("turn completions = %+v, want one with the host's receipt", done)
+	}
+	select {
+	case frame := <-host.frames:
+		var method string
+		_ = json.Unmarshal(frame["method"], &method)
+		if method == "session/prompt" {
+			t.Fatalf("a steer prompt reached the host during a compaction: %v", frame)
+		}
+	default:
 	}
 }

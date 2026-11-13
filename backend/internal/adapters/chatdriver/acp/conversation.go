@@ -528,9 +528,10 @@ func (c *conversation) ActivateLiveReconnect(ctx context.Context, providerTurnID
 	c.mu.Lock()
 	if durableBusy {
 		c.activeTurn = providerTurnID
-		if c.liveState.ActivePrompt && c.liveState.PendingResultEventID == "" {
+		if c.liveState.ActivePrompt && c.liveState.PendingResultEventID == "" && !c.liveState.ActiveCompaction {
 			// The host still runs the turn's prompt, so a steer prompt can join
 			// it. Its answers reach this attachment as the host's notifications.
+			// A compaction takes no steers, as a local Compact does not.
 			turnCtx, cancel := context.WithCancel(context.Background())
 			c.turnCtx, c.turnCancel = turnCtx, cancel
 			c.settlingTurn = ""

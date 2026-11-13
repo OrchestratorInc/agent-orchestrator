@@ -521,6 +521,11 @@ func (c *conversation) steerByPrompt(
 	timer := time.NewTimer(wait)
 	defer timer.Stop()
 	settled := func(err error) (ports.ChatTurnRef, error) {
+		if err != nil && isACPSessionMissing(err) {
+			// The agent has no session to steer, so the guidance was not
+			// delivered and the provider cannot serve this conversation again.
+			return ports.ChatTurnRef{}, &providerRefusal{err: c.providerSessionLost(err)}
+		}
 		if err != nil {
 			return ports.ChatTurnRef{}, steerPromptError(err)
 		}
