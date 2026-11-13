@@ -1336,7 +1336,7 @@ export interface paths {
             };
             cookie?: never;
         };
-        /** @description The session's asides, as the caller sees them, in the order their messages were sent. A message or steer that mentions people or teams starts an aside: a thread between people about that message, which its chat.user_message or chat.turn_steered event names by asideId. Only mentions start one. The message still goes to the agent like any other, but the agent never reads the aside: its replies never reach a worker, a prompt, a prompt suggestion or the agent's context. Anyone who can open the session (read or write) may list them; a client draws each message's aside icon, and its unread dot, from this list. */
+        /** @description The session's asides, as the caller sees them, in the order their messages were sent: at most the newest 1000. A message or steer that mentions people or teams starts an aside: a thread between people about that message, which its event names by asideId (its chat.user_message event, or for a steer the event the steer request returned, chat.turn_steer_requested). Only mentions start one. The message still goes to the agent like any other, but the agent never reads the aside: its replies never reach a worker, a prompt, a prompt suggestion or the agent's context. Anyone who can open the session (read or write) may list them; a client draws each message's aside icon, and its unread dot, from this list. */
         get: operations["listSessionAsides"];
         put?: never;
         post?: never;
@@ -1353,7 +1353,7 @@ export interface paths {
             path: {
                 orgId: components["parameters"]["OrgId"];
                 sessionId: components["parameters"]["SessionId"];
-                /** @description The asideId on the chat.user_message or chat.turn_steered event of the message that started the aside. */
+                /** @description The asideId on the event of the message that started the aside: its chat.user_message event, or for a steer the event the steer request returned (chat.turn_steer_requested). */
                 asideId: components["parameters"]["AsideId"];
             };
             cookie?: never;
@@ -1375,14 +1375,14 @@ export interface paths {
             path: {
                 orgId: components["parameters"]["OrgId"];
                 sessionId: components["parameters"]["SessionId"];
-                /** @description The asideId on the chat.user_message or chat.turn_steered event of the message that started the aside. */
+                /** @description The asideId on the event of the message that started the aside: its chat.user_message event, or for a steer the event the steer request returned (chat.turn_steer_requested). */
                 asideId: components["parameters"]["AsideId"];
             };
             cookie?: never;
         };
         get?: never;
         put?: never;
-        /** @description Replies in an aside. Anyone who can open the session may reply, a viewer too, and it needs no composer lease. The reply never reaches the agent. Everyone watching the session receives it as a chat.aside_reply event. Everyone in the aside except the author, and unless they muted it, gets an aside_reply notification; each person or team member the reply mentions joins the aside and gets a mentioned notification instead (mentions are checked as on sendMessage). Replying marks the aside read for the author. A retry with the same clientMessageId returns the reply the first try created. */
+        /** @description Replies in an aside. Anyone who can open the session may reply, a viewer too, and it needs no composer lease. The reply never reaches the agent. Everyone watching the session receives it as a chat.aside_reply event. Everyone in the aside except the author, and unless they muted it, gets an aside_reply notification; each person or team member the reply mentions joins the aside and gets a mentioned notification instead (mentions are checked as on sendMessage). Replying marks the aside read for the author and resolves the author's mentioned and aside_reply notifications for it. A retry with the same clientMessageId returns the reply the first try created. */
         post: operations["replyToSessionAside"];
         delete?: never;
         options?: never;
@@ -1397,7 +1397,7 @@ export interface paths {
             path: {
                 orgId: components["parameters"]["OrgId"];
                 sessionId: components["parameters"]["SessionId"];
-                /** @description The asideId on the chat.user_message or chat.turn_steered event of the message that started the aside. */
+                /** @description The asideId on the event of the message that started the aside: its chat.user_message event, or for a steer the event the steer request returned (chat.turn_steer_requested). */
                 asideId: components["parameters"]["AsideId"];
             };
             cookie?: never;
@@ -1419,7 +1419,7 @@ export interface paths {
             path: {
                 orgId: components["parameters"]["OrgId"];
                 sessionId: components["parameters"]["SessionId"];
-                /** @description The asideId on the chat.user_message or chat.turn_steered event of the message that started the aside. */
+                /** @description The asideId on the event of the message that started the aside: its chat.user_message event, or for a steer the event the steer request returned (chat.turn_steer_requested). */
                 asideId: components["parameters"]["AsideId"];
             };
             cookie?: never;
@@ -3214,7 +3214,7 @@ export interface components {
             items: components["schemas"]["CloudNotificationEvent"][];
             hasMore: boolean;
         };
-        /** @description The metadata of a `mentioned` notification. The recipient has one active mention notification per session: a newer mention there replaces it (same id, new title, body and metadata, unread again, and a notification_created event so it alerts again). If they were named both directly and through a team, the notification is the personal one. Their own message in the session resolves it. title is "{author} mentioned you", or "{author} mentioned {team}" when only the team named them; body is the message's first line, about 200 characters, with each mention as @Name. */
+        /** @description The metadata of a `mentioned` notification. The recipient has one active mention notification per aside (per session on a control plane without asides), so a session can hold one per aside: a newer mention in the same aside replaces it (same id, new title, body and metadata, unread again, and a notification_created event so it alerts again). If they were named both directly and through a team, the notification is the personal one. Their own message in the session resolves it, and so does their reply in the aside. title is "{author} mentioned you", or "{author} mentioned {team}" when only the team named them; body is the message's first line, about 200 characters, with each mention as @Name. */
         MentionNotificationMetadata: {
             /** Format: uuid */
             authorUserId: string;
@@ -3248,7 +3248,7 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
-        /** @description The metadata of an `aside_reply` notification. A reply notifies everyone in the aside except its author and anyone who muted it. In the aside are the author of the message that started it, everyone it named (a team's members as they were when it was sent), everyone who replied, and everyone a reply named. Someone a reply names gets a mentioned notification for it instead. The recipient has one aside_reply notification per aside: a newer reply replaces it (same id, new title, body and metadata, unread again, and a notification_created event so it alerts again). Opening the aside (markSessionAsideRead) or replying in it marks it read. title is "{author} replied in an aside"; body is the reply's first line, about 200 characters, with each mention as @Name. */
+        /** @description The metadata of an `aside_reply` notification. A reply notifies everyone in the aside except its author and anyone who muted it. In the aside are the author of the message that started it, everyone it named (a team's members as they were when it was sent), everyone who replied, and everyone a reply named. Someone a reply names gets a mentioned notification for it instead. The recipient has one aside_reply notification per aside: a newer reply replaces it (same id, new title, body and metadata, unread again, and a notification_created event so it alerts again). Opening the aside (markSessionAsideRead) marks it read, and replying in it resolves it. title is "{author} replied in an aside"; body is the reply's first line, about 200 characters, with each mention as @Name. */
         AsideReplyNotificationMetadata: {
             /** Format: uuid */
             asideId: string;
@@ -4631,7 +4631,7 @@ export interface components {
         AsideAnchor: {
             /**
              * Format: int64
-             * @description Its chat.user_message or chat.turn_steered event.
+             * @description Its chat.user_message event, or for a steer the event the steer request returned (chat.turn_steer_requested). A client finds a steer's chat.turn_steered by clientMessageId.
              */
             sequence: number;
             /** Format: uuid */
@@ -5984,7 +5984,7 @@ export interface components {
                 mentions?: components["schemas"]["EventMention"][];
                 /**
                  * Format: uuid
-                 * @description The aside the guidance started, as on chat.user_message: set exactly when it carries mentions, so the event the steer request returns has it too.
+                 * @description The aside the guidance started, set exactly when it carries mentions. The aside is anchored on the event the steer request returns (chat.turn_steer_requested), which carries asideId and clientMessageId; a client matches chat.turn_steered to it by clientMessageId.
                  */
                 asideId?: string;
             };
@@ -6256,7 +6256,7 @@ export interface components {
         /** @description Which of the session's repository checkouts the request is about, by folder name or GitHub owner/name (see listWorkspaceRepositories). Absent means the main repository. Ignored when checking out a branch. */
         WorkspaceRepository: string;
         TurnId: string;
-        /** @description The asideId on the chat.user_message or chat.turn_steered event of the message that started the aside. */
+        /** @description The asideId on the event of the message that started the aside: its chat.user_message event, or for a steer the event the steer request returned (chat.turn_steer_requested). */
         AsideId: string;
         WorkerRequestId: string;
         TerminalId: string;
@@ -8685,7 +8685,7 @@ export interface operations {
             path: {
                 orgId: components["parameters"]["OrgId"];
                 sessionId: components["parameters"]["SessionId"];
-                /** @description The asideId on the chat.user_message or chat.turn_steered event of the message that started the aside. */
+                /** @description The asideId on the event of the message that started the aside: its chat.user_message event, or for a steer the event the steer request returned (chat.turn_steer_requested). */
                 asideId: components["parameters"]["AsideId"];
             };
             cookie?: never;
@@ -8713,7 +8713,7 @@ export interface operations {
             path: {
                 orgId: components["parameters"]["OrgId"];
                 sessionId: components["parameters"]["SessionId"];
-                /** @description The asideId on the chat.user_message or chat.turn_steered event of the message that started the aside. */
+                /** @description The asideId on the event of the message that started the aside: its chat.user_message event, or for a steer the event the steer request returned (chat.turn_steer_requested). */
                 asideId: components["parameters"]["AsideId"];
             };
             cookie?: never;
@@ -8751,7 +8751,7 @@ export interface operations {
             path: {
                 orgId: components["parameters"]["OrgId"];
                 sessionId: components["parameters"]["SessionId"];
-                /** @description The asideId on the chat.user_message or chat.turn_steered event of the message that started the aside. */
+                /** @description The asideId on the event of the message that started the aside: its chat.user_message event, or for a steer the event the steer request returned (chat.turn_steer_requested). */
                 asideId: components["parameters"]["AsideId"];
             };
             cookie?: never;
@@ -8779,7 +8779,7 @@ export interface operations {
             path: {
                 orgId: components["parameters"]["OrgId"];
                 sessionId: components["parameters"]["SessionId"];
-                /** @description The asideId on the chat.user_message or chat.turn_steered event of the message that started the aside. */
+                /** @description The asideId on the event of the message that started the aside: its chat.user_message event, or for a steer the event the steer request returned (chat.turn_steer_requested). */
                 asideId: components["parameters"]["AsideId"];
             };
             cookie?: never;

@@ -2133,10 +2133,11 @@ paths:
       tags: [Sessions]
       description: >-
         The session's asides, as the caller sees them, in the order their
-        messages were sent. A message or steer that mentions people or teams
-        starts an aside: a thread between people about that message, which
-        its chat.user_message or chat.turn_steered event names by asideId.
-        Only mentions start one. The message still goes to the agent like any
+        messages were sent: at most the newest 1000. A message or steer that
+        mentions people or teams starts an aside: a thread between people
+        about that message, which its event names by asideId (its
+        chat.user_message event, or for a steer the event the steer request
+        returned, chat.turn_steer_requested). Only mentions start one. The message still goes to the agent like any
         other, but the agent never reads the aside: its replies never reach a
         worker, a prompt, a prompt suggestion or the agent's context. Anyone
         who can open the session (read or write) may list them; a client draws
@@ -2215,8 +2216,9 @@ paths:
         unless they muted it, gets an aside_reply notification; each person or
         team member the reply mentions joins the aside and gets a mentioned
         notification instead (mentions are checked as on sendMessage).
-        Replying marks the aside read for the author. A retry with the same
-        clientMessageId returns the reply the first try created.
+        Replying marks the aside read for the author and resolves the
+        author's mentioned and aside_reply notifications for it. A retry with
+        the same clientMessageId returns the reply the first try created.
       requestBody:
         required: true
         content:
@@ -4983,7 +4985,10 @@ components:
       name: asideId
       in: path
       required: true
-      description: The asideId on the chat.user_message or chat.turn_steered event of the message that started the aside.
+      description: >-
+        The asideId on the event of the message that started the aside: its
+        chat.user_message event, or for a steer the event the steer request
+        returned (chat.turn_steer_requested).
       schema:
         type: string
         format: uuid
@@ -5507,11 +5512,13 @@ components:
       required: [authorUserId, authorName, sequence]
       description: >-
         The metadata of a `mentioned` notification. The recipient has one
-        active mention notification per session: a newer mention there
-        replaces it (same id, new title, body and metadata, unread again, and
-        a notification_created event so it alerts again). If they were named
+        active mention notification per aside (per session on a control plane
+        without asides), so a session can hold one per aside: a newer mention
+        in the same aside replaces it (same id, new title, body and metadata,
+        unread again, and a notification_created event so it alerts again). If they were named
         both directly and through a team, the notification is the personal
-        one. Their own message in the session resolves it. title is "{author}
+        one. Their own message in the session resolves it, and so does their
+        reply in the aside. title is "{author}
         mentioned you", or "{author} mentioned {team}" when only the team
         named them; body is the message's first line, about 200 characters,
         with each mention as @Name.
@@ -5566,7 +5573,8 @@ components:
         aside_reply notification per aside: a newer reply replaces it (same
         id, new title, body and metadata, unread again, and a
         notification_created event so it alerts again). Opening the aside
-        (markSessionAsideRead) or replying in it marks it read. title is
+        (markSessionAsideRead) marks it read, and replying in it resolves it.
+        title is
         "{author} replied in an aside"; body is the reply's first line, about
         200 characters, with each mention as @Name.
       properties:
@@ -8481,7 +8489,10 @@ components:
           format: int64
           minimum: 0
           maximum: 9007199254740991
-          description: Its chat.user_message or chat.turn_steered event.
+          description: >-
+            Its chat.user_message event, or for a steer the event the steer
+            request returned (chat.turn_steer_requested). A client finds a
+            steer's chat.turn_steered by clientMessageId.
         turnId:
           type: string
           format: uuid
@@ -11331,9 +11342,11 @@ components:
               type: string
               format: uuid
               description: >-
-                The aside the guidance started, as on chat.user_message: set
-                exactly when it carries mentions, so the event the steer
-                request returns has it too.
+                The aside the guidance started, set exactly when it carries
+                mentions. The aside is anchored on the event the steer request
+                returns (chat.turn_steer_requested), which carries asideId and
+                clientMessageId; a client matches chat.turn_steered to it by
+                clientMessageId.
         createdAt:
           type: string
           format: date-time
