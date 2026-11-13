@@ -1710,7 +1710,7 @@ function ChatWorkspaceContent({
 			? {
 				key: `${nearQuota.kind}:${nearQuota.percent >= 100 ? "full" : "warn"}`,
 				label: <QuotaReadout quota={nearQuota} />,
-				title: quotaTitle(nearQuota, t),
+				...quotaTitle(nearQuota, t),
 			}
 			: undefined),
 		[nearQuota, quotaFlash, t],

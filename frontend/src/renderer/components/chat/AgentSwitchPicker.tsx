@@ -116,8 +116,10 @@ export interface PickerOverride {
 	/** Changes when the label means something else, so the picker crossfades to it. */
 	key: string;
 	label: ReactNode;
-	/** Leads the hover title, ahead of the model the picker still opens to. */
+	/** The hover tooltip's first line. */
 	title: string;
+	/** Its second line, ahead of the model the picker still opens to. */
+	detail?: string;
 }
 
 export interface PickerModel {
@@ -463,7 +465,7 @@ export function AgentModelPicker({
 			</TooltipTrigger>{override && !terminal ? (
 				<TooltipContent>
 					<p>{override.title}</p>
-					<p className="text-muted-foreground">{[shownModel, shownEffort].filter(Boolean).join(" ")}</p>
+					<p className="text-muted-foreground">{[override.detail, [shownModel, shownEffort].filter(Boolean).join(" ")].filter(Boolean).join(" · ")}</p>
 				</TooltipContent>
 			) : null}</Tooltip></TooltipProvider>
 			{/* Pinned to the trigger's left edge, which stays put while its label changes width. */}

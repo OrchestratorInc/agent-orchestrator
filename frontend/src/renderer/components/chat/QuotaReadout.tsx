@@ -78,13 +78,18 @@ export function QuotaStatus({ quota }: { quota: QuotaWindow | undefined }) {
 	);
 }
 
+/** A two-line tooltip body: the usage, then a muted line under it. */
+export function QuotaTip({ title, detail }: { title: string; detail?: string }) {
+	return <><p>{title}</p>{detail ? <p className="text-muted-foreground">{detail}</p> : null}</>;
+}
+
 /** The pill on its own, for composers whose model controls are not the agent picker. */
 export function QuotaPill({ quota }: { quota: QuotaWindow }) {
 	const { t } = useTranslation();
 	return (
 		<TooltipProvider><Tooltip>
 			<TooltipTrigger asChild><span tabIndex={0} className="inline-flex rounded-full focus-visible:outline-2 focus-visible:outline-ring"><QuotaReadout quota={quota} /></span></TooltipTrigger>
-			<TooltipContent>{quotaTitle(quota, t)}</TooltipContent>
+			<TooltipContent><QuotaTip {...quotaTitle(quota, t)} /></TooltipContent>
 		</Tooltip></TooltipProvider>
 	);
 }
@@ -120,8 +125,8 @@ export function useQuotaFlash(quota: QuotaWindow | undefined, scope: string): bo
 	return full || (key !== undefined && key !== dismissed);
 }
 
-/** The picker's hover title: the exact share used, and when it resets. */
-export function quotaTitle(quota: QuotaWindow, t: TFunction): string {
-	const used = t(quota.kind === "session" ? "chat.quota.usedSession" : "chat.quota.usedWeekly", { percent: Math.min(100, Math.round(quota.percent)) });
-	return quota.resetsIn && quota.resetsIn > 0 ? `${used} ${t("chat.quota.resetsIn", { time: formatQuotaReset(quota.resetsIn) })}.` : used;
+/** The hover tooltip's two lines: the exact share used, then when it resets. */
+export function quotaTitle(quota: QuotaWindow, t: TFunction): { title: string; detail?: string } {
+	const title = t(quota.kind === "session" ? "chat.quota.usedSession" : "chat.quota.usedWeekly", { percent: Math.min(100, Math.round(quota.percent)) });
+	return { title, detail: quota.resetsIn && quota.resetsIn > 0 ? t("chat.quota.resetsIn", { time: formatQuotaReset(quota.resetsIn) }) : undefined };
 }
