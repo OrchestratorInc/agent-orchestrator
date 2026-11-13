@@ -56,11 +56,21 @@ describe("composer tab", () => {
 		const tab = screen.getByRole("region", { name: "Background tasks" });
 		expect(within(tab).getByText("Dev server")).toBeVisible();
 		expect(within(tab).getByText("12m")).toBeVisible();
-		expect(within(tab).getByRole("img", { name: "Running" })).toBeVisible();
+		// A dev server is meant to keep running: no spinner.
+		expect(within(tab).queryByRole("img")).toBeNull();
 		await userEvent.click(within(tab).getByRole("button", { name: "Stop Dev server" }));
 		expect(mutateMock).toHaveBeenCalledWith("shell");
 		// One request at a time: the square waits for the task to leave.
 		expect(within(tab).getByRole("button", { name: "Stop Dev server" })).toBeDisabled();
+	});
+
+	it("names a raw shell command by what it does", async () => {
+		queryMock.mockReturnValue({ data: readingOf([shell("dev", "PORT=3000 npm run dev > /tmp/ronish-dev.log 2>&1")]) });
+		render(<SessionBackgroundTasks session={session} />);
+		const tab = screen.getByRole("region", { name: "Background tasks" });
+		expect(within(tab).getByText("Dev server on port 3000")).toBeVisible();
+		expect(tab).not.toHaveTextContent("/tmp/ronish-dev.log");
+		expect(within(tab).getByRole("button", { name: "Stop Dev server on port 3000" })).toBeVisible();
 	});
 
 	it("offers no stop where the provider cannot stop the task", () => {

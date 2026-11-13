@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
-import { ChevronRight, ListTodo, Loader2, SquareTerminal } from "@/components/app-icons";
+import { ChevronRight, ListTodo, SquareTerminal } from "@/components/app-icons";
 import {
 	useBackgroundTasks,
 	useStopBackgroundTask,
 	type BackgroundTask,
 	type BackgroundTaskReading,
 } from "../hooks/useBackgroundTasks";
+import { shellTaskLabel } from "../lib/shell-task-label";
 import { cn } from "../lib/utils";
 import type { WorkspaceSession } from "../types/workspace";
 import { Button } from "./ui/button";
@@ -40,6 +41,21 @@ export function BackgroundTasksBadge({ session, reading, stale = false }: {
 			<span className="truncate">{summary}{stale ? ` · ${t("backgroundTasks.stale")}` : ""}</span>
 		</span>
 	);
+}
+
+/** A shell task by what it does ("Dev server on port 3000"), not the command line its provider ran. */
+export function backgroundTaskName(task: BackgroundTask, t: TFunction): string {
+	if (!task.description) return t(task.kind === "shell" ? "backgroundTasks.kind.shell" : "backgroundTasks.kind.other");
+	if (task.kind !== "shell") return task.description;
+	const label = shellTaskLabel(task.description);
+	switch (label.kind) {
+		case "devServer": return label.port ? t("backgroundTasks.label.devServerPort", { port: label.port }) : t("backgroundTasks.label.devServer");
+		case "tests": return t("backgroundTasks.label.tests");
+		case "build": return t("backgroundTasks.label.build");
+		case "lint": return t("backgroundTasks.label.lint");
+		case "install": return t("backgroundTasks.label.install");
+		case "command": return label.text;
+	}
 }
 
 const isLive = (task: BackgroundTask) => task.state === "running" || task.state === "paused";
@@ -156,12 +172,10 @@ export function ComposerBackgroundTasks({ sessionId, reading }: { sessionId: str
 	}
 	if (!tasks.length) return null;
 
-	const name = (task: BackgroundTask) => task.description || t(task.kind === "shell" ? "backgroundTasks.kind.shell" : "backgroundTasks.kind.other");
-	const status = (task: BackgroundTask) => isLive(task) ? (
-		<span role="img" aria-label={t("backgroundTasks.state.running")} className="grid size-3 shrink-0 place-items-center">
-			<Loader2 aria-hidden="true" className="size-3 animate-spin text-muted-foreground/60 motion-reduce:animate-none" />
-		</span>
-	) : (
+	const name = (task: BackgroundTask) => backgroundTaskName(task, t);
+	// Background work is meant to keep running (a dev server never finishes), so a
+	// live task shows no spinner; only a failure needs a mark.
+	const status = (task: BackgroundTask) => isLive(task) ? null : (
 		<span role="img" aria-label={t("backgroundTasks.state.failed")} className="size-1.5 shrink-0 rounded-full bg-destructive" />
 	);
 	const time = (task: BackgroundTask) => {
