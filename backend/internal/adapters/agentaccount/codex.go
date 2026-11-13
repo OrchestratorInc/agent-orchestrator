@@ -147,6 +147,7 @@ func (c *Codex) Limits(ctx context.Context, home string) (domain.AgentAccountLim
 			}
 			window := domain.AgentAccountLimitWindow{
 				ID: bucket.LimitID + ":" + label, Label: label, UsedPercent: min(max(w.UsedPercent, 0), 100), ResetsAt: w.ResetsAt, Scope: prefix,
+				Reached: bucket.Reached == domain.CodexCapacityReached,
 			}
 			if w.WindowDurationMinutes != nil && *w.WindowDurationMinutes > 0 {
 				window.DurationMinutes = int(*w.WindowDurationMinutes)

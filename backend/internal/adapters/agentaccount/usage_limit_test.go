@@ -105,6 +105,19 @@ func TestCodexLimitsPreservesPrivateSafeReset(t *testing.T) {
 	}
 }
 
+func TestCodexLimitsReachedBucketLeavesNoHandoffRoom(t *testing.T) {
+	cli := &Codex{Accounts: &limitsAccountFactory{client: &limitsAccountClient{capacity: ports.CodexCapacityObservation{
+		Overall: &domain.CodexCapacityBucket{LimitID: "codex", Reached: domain.CodexCapacityReached, Primary: &domain.CodexCapacityWindow{UsedPercent: 12}},
+	}}}}
+	limits, err := cli.Limits(context.Background(), "/codex")
+	if err != nil || len(limits.Windows) != 1 || limits.Windows[0].UsedPercent != 12 {
+		t.Fatalf("limits = %+v, %v", limits, err)
+	}
+	if room, ok := limits.HandoffHeadroom(domain.AgentAccountProviderCodex, ""); ok {
+		t.Fatalf("a reached bucket at 12%% left %v%% room", room)
+	}
+}
+
 func TestClaudeLimitsReportsUnavailableUsageAsError(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell stub")

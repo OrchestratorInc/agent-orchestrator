@@ -58,6 +58,7 @@ type AgentAccountLimitWindow struct {
 	ResetsAt        *time.Time `json:"resetsAt,omitempty"`
 	DurationMinutes int        `json:"durationMinutes,omitempty" minimum:"0"`
 	Scope           string     `json:"-"`
+	Reached         bool       `json:"-"`
 }
 
 // AgentLimitReading is one limit window's value as read at one moment.
@@ -106,6 +107,9 @@ func (l AgentAccountLimits) HandoffHeadroom(p AgentAccountProvider, model string
 		}
 		relevant = true
 		fullest = max(fullest, w.UsedPercent)
+		if w.Reached {
+			fullest = 100
+		}
 	}
 	if !relevant || fullest >= 100 {
 		return 0, false
