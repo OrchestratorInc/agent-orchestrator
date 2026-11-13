@@ -73,7 +73,10 @@ export const QrCanvas = memo(function QrCanvas({
 			const dpr = Math.max(1, window.devicePixelRatio || 1);
 			const pixels = Math.round(size * dpr);
 			// Resizing the backing store clears it; either way the draw below covers it.
-			if (canvas.width !== pixels) {
+			// Check both sides: a new canvas is 300×150, so where `pixels` is 300
+			// (240 px at 125% scaling) the width already matches and a width-only
+			// check would leave the code drawn into half its height.
+			if (canvas.width !== pixels || canvas.height !== pixels) {
 				canvas.width = pixels;
 				canvas.height = pixels;
 			}

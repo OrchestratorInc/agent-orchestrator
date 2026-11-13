@@ -9,7 +9,7 @@ vi.mock("./cloud-auth", () => ({ getCloudAccessToken: vi.fn(async () => "token-1
 
 import { CLOUD_SHARE_PROGRESS_CHANNEL } from "../shared/cloud-share";
 import { registerCloudShareIpc } from "./cloud-share-ipc";
-import { ShareLinkRecords, shareRecordKey } from "./cloud-share-links";
+import { ShareLinkRecords, artifactRecordKey, shareRecordKey } from "./cloud-share-links";
 
 // Built at runtime so the repository's secret scanner does not flag the fixture.
 const FAKE_AWS_KEY = ["AKIA", "ABCDEFGHIJKLMNOP"].join("");
@@ -18,6 +18,7 @@ const ORG_ID = "a1a1a1a1-0000-4000-8000-000000000001";
 const CLOUD_SESSION_ID = "a1a1a1a1-0000-4000-8000-0000000000a1";
 const CLOUD_SESSION_PATH = `/api/cloud/v1/orgs/${ORG_ID}/sessions/${CLOUD_SESSION_ID}`;
 const CLOUD_SHA256 = "0".repeat(64);
+const GRANT_ID = "6f1c3a1e-2b4d-4c5e-8f7a-9b0c1d2e3f40";
 
 let dataDir: string;
 
@@ -32,7 +33,7 @@ afterEach(async () => {
 	await fs.rm(dataDir, { recursive: true, force: true });
 });
 
-function setup(options: { token?: string | null; finalizeStatus?: number; finalizeCode?: string; shareStatus?: number; shareCode?: string; listStatus?: number; unreachable?: boolean } = {}) {
+function setup(options: { token?: string | null; finalizeStatus?: number; finalizeCode?: string; shareStatus?: number; shareCode?: string; listStatus?: number; unreachable?: boolean; shares?: unknown[] } = {}) {
 	const handlers = new Map<string, (event: unknown, ...args: unknown[]) => unknown>();
 	const requests: string[] = [];
 	const bodies = new Map<string, unknown>();
@@ -56,7 +57,7 @@ function setup(options: { token?: string | null; finalizeStatus?: number; finali
 				if (options.unreachable) throw new TypeError("fetch failed");
 				authorizations.push(new Headers(init.headers).get("authorization"));
 				if (options.listStatus) return json({ code: "not_found" }, options.listStatus);
-				return json({ shares: [], limit: 3, used: 1 });
+				return json({ shares: options.shares ?? [], limit: 3, used: 1 });
 			}
 			if (pathname.endsWith("/uploads")) return json({ uploadToken: "tok", partSize: 1024, partCount: 1 }, 201);
 			if (pathname.endsWith("/uploads/parts")) return json({ parts: [{ partNumber: 1, method: "PUT", url: "https://s3.test/p", headers: {}, size: 20 }] });
@@ -77,6 +78,13 @@ function setup(options: { token?: string | null; finalizeStatus?: number; finali
 			if (pathname === `${CLOUD_SESSION_PATH}/artifacts/share`) {
 				if (options.shareStatus) return json({ code: options.shareCode, message: "Refused." }, options.shareStatus);
 				return json({ share: { id: SHARE_ID, slug: "abc", contentUrl: "https://abc.share.test/" }, replaced: false }, 201);
+			}
+			if (pathname === `/api/cloud/v1/me/artifact-shares/${SHARE_ID}/grants`) {
+				const emails = init.method === "POST" ? (JSON.parse(String(init.body)) as { emails: string[] }).emails : ["maya@acme.co"];
+				return json({ grants: emails.map((email, index) => ({ id: `${GRANT_ID.slice(0, -1)}${index}`, email: email.toLowerCase(), createdAt: "" })) });
+			}
+			if (init.method === "PATCH" && pathname === `/api/cloud/v1/me/artifact-shares/${SHARE_ID}`) {
+				return json({ id: SHARE_ID, slug: "abc", contentUrl: "https://abc.share.test/", ...(JSON.parse(String(init.body)) as object) });
 			}
 			if (init.method === "DELETE" && pathname.includes("/me/artifact-shares/")) return new Response(null, { status: 204 });
 			return new Response("", { status: 404 });
@@ -135,6 +143,37 @@ describe("cloudShare IPC", () => {
 		await expect(records.get(shareRecordKey("https://cp.test", "sess-1", "docs/report.html"))).resolves.toBeUndefined();
 	});
 
+	it("keeps an active link's URL in its record, which the daemon shows agents", async () => {
+		const key = shareRecordKey("https://cp.test", "sess-1", "docs/report.html");
+		const stored = async () => JSON.parse(await fs.readFile(path.join(dataDir, "share-links.json"), "utf8"))[key];
+		await setup().publish();
+		expect(await stored()).toMatchObject({ shareId: SHARE_ID, url: "https://abc.share.test/" });
+
+		await fs.writeFile(path.join(dataDir, "share-links.json"), JSON.stringify({ [key]: SHARE_ID }));
+		const share = { id: SHARE_ID, slug: "abc", name: "report.html", contentUrl: "https://abc.share.test/", viewerUrl: "https://share.test/abc" };
+		await setup({ shares: [share] }).invoke("cloudShare:list", { baseUrl: "https://cp.test" });
+		expect(await stored()).toEqual({ shareId: SHARE_ID, url: "https://share.test/abc" });
+
+		const { invoke, file } = setup({ shares: [{ ...share, revokedAt: "2026-11-01T00:00:00Z" }] });
+		await invoke("cloudShare:list", { baseUrl: "https://cp.test" });
+		expect(await stored()).toBe(SHARE_ID);
+		await expect(invoke("cloudShare:inspect", file)).resolves.toMatchObject({ shareId: SHARE_ID });
+	});
+
+	it("drops a link's URL once the control plane no longer lists it, and keeps other control planes' links", async () => {
+		const key = shareRecordKey("https://cp.test", "sess-1", "docs/report.html");
+		const other = shareRecordKey("https://other.test", "sess-1", "docs/report.html");
+		const recordsFile = path.join(dataDir, "share-links.json");
+		await fs.writeFile(recordsFile, JSON.stringify({
+			[key]: { shareId: SHARE_ID, url: "https://share.test/abc" },
+			[other]: { shareId: "other-share", url: "https://other.share.test/" },
+		}));
+		await setup({ shares: [] }).invoke("cloudShare:list", { baseUrl: "https://cp.test" });
+		const records = JSON.parse(await fs.readFile(recordsFile, "utf8"));
+		expect(records[key]).toBe(SHARE_ID);
+		expect(records[other]).toEqual({ shareId: "other-share", url: "https://other.share.test/" });
+	});
+
 	it("remembers what a file held when it was published, so a later change shows", async () => {
 		const { invoke, publish, file } = setup();
 		await expect(invoke("cloudShare:inspect", file)).resolves.not.toHaveProperty("publishedFingerprint");
@@ -147,6 +186,25 @@ describe("cloudShare IPC", () => {
 		expect(changed.fingerprint).not.toBe(published.fingerprint);
 	});
 
+	it("remembers what the published copy looked like it held, after the file no longer does", async () => {
+		const { invoke, publish, file } = setup();
+		await publish();
+		await fs.writeFile(path.join(dataDir, "artifacts", "sess-1", "docs", "report.html"), "no credentials in here any more");
+		// The link still serves the copy with the key, until it is republished.
+		await expect(invoke("cloudShare:inspect", file)).resolves.toMatchObject({ secretFindings: [], publishedSecretFindings: ["AWS access key"] });
+		const clean = await invoke("cloudShare:inspect", file) as { fingerprint: string };
+		await invoke("cloudShare:publish", { ...file, fingerprint: clean.fingerprint, shareId: SHARE_ID });
+		const republished = await invoke("cloudShare:inspect", file) as Record<string, unknown>;
+		expect(republished).not.toHaveProperty("publishedSecretFindings");
+	});
+
+	it("remembers what a published cloud file version looked like it held", async () => {
+		const { invoke, cloudFile } = setup();
+		await invoke("cloudShare:inspect", cloudFile);
+		await invoke("cloudShare:publish", { ...cloudFile, fingerprint: CLOUD_SHA256 });
+		await expect(invoke("cloudShare:inspect", cloudFile)).resolves.toMatchObject({ publishedSecretFindings: ["AWS access key"] });
+	});
+
 	it("republishes a changed file to its link, which clears the change", async () => {
 		const { invoke, publish, file, bodies } = setup();
 		await publish();
@@ -154,10 +212,35 @@ describe("cloudShare IPC", () => {
 		const changed = await invoke("cloudShare:inspect", file) as { fingerprint: string };
 		const result = await invoke("cloudShare:publish", { ...file, fingerprint: changed.fingerprint, shareId: SHARE_ID });
 		expect(result).toMatchObject({ status: "published", share: { id: SHARE_ID } });
-		// An update names the link alone, not a document.
-		expect(bodies.get("/api/cloud/v1/me/artifact-shares/uploads")).toMatchObject({ shareId: SHARE_ID });
-		expect(bodies.get("/api/cloud/v1/me/artifact-shares/uploads")).not.toHaveProperty("project");
+		// An update names the link, and where the file is now, so the link
+		// follows a file moved to another folder.
+		expect(bodies.get("/api/cloud/v1/me/artifact-shares/uploads")).toMatchObject({ shareId: SHARE_ID, project: "proj-1", feature: "sess-1/docs" });
 		await expect(invoke("cloudShare:inspect", file)).resolves.toMatchObject({ shareId: SHARE_ID, publishedFingerprint: changed.fingerprint, fingerprint: changed.fingerprint });
+	});
+
+	it("follows a renamed file to the link it was published to, by its artifact ID", async () => {
+		const { invoke, publish, file, bodies } = setup();
+		const artifact = { ...file, artifactId: "art-1" };
+		const before = await invoke("cloudShare:inspect", artifact) as { fingerprint: string };
+		await publish({ ...artifact, fingerprint: before.fingerprint });
+		await fs.mkdir(path.join(dataDir, "artifacts", "sess-1", "final"), { recursive: true });
+		await fs.rename(path.join(dataDir, "artifacts", "sess-1", "docs", "report.html"), path.join(dataDir, "artifacts", "sess-1", "final", "summary.html"));
+		const renamed = { ...artifact, path: "final/summary.html" };
+		const inspection = await invoke("cloudShare:inspect", renamed) as { fingerprint: string };
+		expect(inspection).toMatchObject({ name: "summary.html", shareId: SHARE_ID, publishedFingerprint: before.fingerprint });
+		// Republish updates that link under the file's new name.
+		const result = await invoke("cloudShare:publish", { ...renamed, fingerprint: inspection.fingerprint, shareId: SHARE_ID });
+		expect(result).toMatchObject({ status: "published", share: { id: SHARE_ID } });
+		expect(bodies.get("/api/cloud/v1/me/artifact-shares/uploads")).toMatchObject({ name: "summary.html", shareId: SHARE_ID });
+	});
+
+	it("moves a record kept by path to the file's artifact ID", async () => {
+		const recordsFile = path.join(dataDir, "share-links.json");
+		await fs.writeFile(recordsFile, JSON.stringify({ [shareRecordKey("https://cp.test", "sess-1", "docs/report.html")]: SHARE_ID }));
+		const { invoke, file } = setup();
+		await expect(invoke("cloudShare:inspect", { ...file, artifactId: "art-1" })).resolves.toMatchObject({ shareId: SHARE_ID });
+		const records = JSON.parse(await fs.readFile(recordsFile, "utf8"));
+		expect(records).toEqual({ [artifactRecordKey("https://cp.test", "sess-1", "art-1")]: SHARE_ID });
 	});
 
 	it("reads a record kept before fingerprints were, as a link with nothing to compare", async () => {
@@ -273,6 +356,56 @@ describe("cloudShare IPC", () => {
 		// A publish with no inspection at all is refused the same way.
 		await expect(invoke("cloudShare:publish", file)).resolves.toMatchObject({ status: "changed" });
 		expect(requests).toEqual([]);
+	});
+
+	it("sends who a new link opens for only when asked, so an older control plane is not refused", async () => {
+		const plain = setup();
+		await expect(plain.publish()).resolves.toMatchObject({ status: "published" });
+		expect(plain.bodies.get("/api/cloud/v1/me/artifact-shares/finalize")).not.toHaveProperty("access");
+		expect(plain.bodies.get("/api/cloud/v1/me/artifact-shares/finalize")).not.toHaveProperty("emails");
+
+		const restricted = setup();
+		await expect(restricted.publish({ ...restricted.file, access: "restricted", emails: ["dev@acme.co"] })).resolves.toMatchObject({ status: "published" });
+		expect(restricted.bodies.get("/api/cloud/v1/me/artifact-shares/finalize")).toMatchObject({ access: "restricted", emails: ["dev@acme.co"] });
+
+		const cloud = setup();
+		await expect(cloud.invoke("cloudShare:publish", { ...cloud.cloudFile, fingerprint: CLOUD_SHA256, access: "restricted" })).resolves.toMatchObject({ status: "published" });
+		expect(cloud.bodies.get(`${CLOUD_SESSION_PATH}/artifacts/share`)).toEqual({ path: "reports/q3 plan.md", sha256: CLOUD_SHA256, access: "restricted" });
+
+		await expect(plain.invoke("cloudShare:publish", { ...plain.file, access: "everyone" })).rejects.toThrow("Not who a link opens for");
+		await expect(plain.invoke("cloudShare:publish", { ...plain.file, emails: "dev@acme.co" })).rejects.toThrow("Not a list of emails");
+	});
+
+	it("changes a live link's access and who it is shared with", async () => {
+		const { invoke, requests, bodies } = setup();
+		await expect(invoke("cloudShare:setAccess", { baseUrl: "https://cp.test", shareId: SHARE_ID, access: "anyone" })).resolves.toMatchObject({ id: SHARE_ID, access: "anyone" });
+		expect(bodies.get(`/api/cloud/v1/me/artifact-shares/${SHARE_ID}`)).toEqual({ access: "anyone" });
+		await expect(invoke("cloudShare:grants", { baseUrl: "https://cp.test", shareId: SHARE_ID })).resolves.toEqual([{ id: `${GRANT_ID.slice(0, -1)}0`, email: "maya@acme.co", createdAt: "" }]);
+		await expect(invoke("cloudShare:invite", { baseUrl: "https://cp.test", shareId: SHARE_ID, emails: ["Dev@acme.co"] })).resolves.toEqual([{ id: `${GRANT_ID.slice(0, -1)}0`, email: "dev@acme.co", createdAt: "" }]);
+		expect(bodies.get(`/api/cloud/v1/me/artifact-shares/${SHARE_ID}/grants`)).toEqual({ emails: ["Dev@acme.co"] });
+		await expect(invoke("cloudShare:removeGrant", { baseUrl: "https://cp.test", shareId: SHARE_ID, grantId: GRANT_ID })).resolves.toBeUndefined();
+		expect(requests).toEqual([
+			`PATCH /api/cloud/v1/me/artifact-shares/${SHARE_ID}`,
+			`GET /api/cloud/v1/me/artifact-shares/${SHARE_ID}/grants`,
+			`POST /api/cloud/v1/me/artifact-shares/${SHARE_ID}/grants`,
+			`DELETE /api/cloud/v1/me/artifact-shares/${SHARE_ID}/grants/${GRANT_ID}`,
+		]);
+		await expect(invoke("cloudShare:setAccess", { baseUrl: "https://cp.test", shareId: SHARE_ID, access: "public" })).rejects.toThrow("Not who a link opens for");
+		await expect(invoke("cloudShare:setAccess", { baseUrl: "https://cp.test", shareId: "../x", access: "anyone" })).rejects.toThrow("Not a share link");
+		await expect(invoke("cloudShare:invite", { baseUrl: "https://cp.test", shareId: SHARE_ID, emails: [] })).rejects.toThrow("Not a list of emails");
+		await expect(invoke("cloudShare:removeGrant", { baseUrl: "https://cp.test", shareId: SHARE_ID, grantId: "../x" })).rejects.toThrow("Not someone the link is shared with");
+	});
+
+	it("changes access, invites and removes people only from the app's main frame", async () => {
+		const { handlers } = setup();
+		const subframe = { sender: { id: 7 }, senderFrame: { parent: {} } };
+		for (const [channel, value] of [
+			["cloudShare:setAccess", { baseUrl: "https://cp.test", shareId: SHARE_ID, access: "anyone" }],
+			["cloudShare:invite", { baseUrl: "https://cp.test", shareId: SHARE_ID, emails: ["a@b.co"] }],
+			["cloudShare:removeGrant", { baseUrl: "https://cp.test", shareId: SHARE_ID, grantId: GRANT_ID }],
+		] as const) {
+			await expect(Promise.resolve().then(() => handlers.get(channel)!(subframe, value))).rejects.toThrow("only available from the app window");
+		}
 	});
 
 	it("refuses a second publish from the same window at once", async () => {

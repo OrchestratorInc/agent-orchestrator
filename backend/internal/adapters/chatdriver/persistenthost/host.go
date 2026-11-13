@@ -130,6 +130,10 @@ type ACPState struct {
 	ActivePrompt         bool            `json:"activePrompt,omitempty"`
 	ActiveCompaction     bool            `json:"activeCompaction,omitempty"`
 	PendingResultEventID string          `json:"pendingResultEventId,omitempty"`
+	// AvailableCommands is the latest available_commands_update catalog for
+	// SessionID. Adapters announce it once, as a notification after session
+	// setup, so a controller that reattaches later would otherwise never see it.
+	AvailableCommands json.RawMessage `json:"availableCommands,omitempty"`
 }
 
 // Transport is one authenticated attachment to a persistent provider host.
@@ -659,13 +663,20 @@ func Run(ctx context.Context, cfg Config) error {
 	if err != nil {
 		return err
 	}
-	child.Stderr = io.Discard
+	// The adapter's stderr is the only record of why a turn went silent. Keep it
+	// beside the descriptor instead of discarding it.
+	if dir, dirErr := hostDir(cfg.DataDir, cfg.SessionID); dirErr == nil {
+		adapterLog := openAdapterLog(dir, adapterLogMaxBytes)
+		defer func() { _ = adapterLog.Close() }()
+		child.Stderr = adapterLog
+	}
 	closeProviderTree, err := startProviderProcess(child)
 	if err != nil {
 		return err
 	}
 	// The job owns descendants even if the direct provider exits first. Close
-	// it before releasing the host lock so Shutdown follows the kill request.
+	// it before waiting for inherited pipes and before releasing the host lock.
+	closeProviderTree = sync.OnceFunc(closeProviderTree)
 	defer closeProviderTree()
 
 	d := Descriptor{
@@ -772,6 +783,9 @@ func Run(ctx context.Context, cfg Config) error {
 		}
 	}
 	_ = listener.Close()
+	// A surviving descendant can keep child.Wait blocked on the stderr-copy
+	// goroutine after the provider exits. Reap the job before that final wait.
+	closeProviderTree()
 	_ = wait()
 	return runErr
 }

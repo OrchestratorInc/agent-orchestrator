@@ -16,6 +16,11 @@ const (
 	// value to every durable event derived from that frame.
 	ACPEventIDMetaKey = "ao.persistentEventId"
 
+	// ACPPromptStalledDataKey marks the error data of a prompt the stall
+	// watchdog failed. The daemon reads it to tell a silent adapter from a
+	// provider that answered with an error.
+	ACPPromptStalledDataKey = "ao.promptStalled"
+
 	// promptStallTimeout is how long an in-flight session/prompt may hear
 	// nothing from the adapter, while the adapter is not waiting on the client,
 	// before the relay settles it synthetically. A live turn streams tool
@@ -27,6 +32,11 @@ const (
 	// promptStallCheckInterval is how often the host re-checks for a stalled
 	// prompt.
 	promptStallCheckInterval = 30 * time.Second
+
+	// promptStallCancelGrace is how long the relay waits, after cancelling a
+	// stalled prompt, for the adapter to answer it before giving up on the
+	// adapter and settling the prompt itself.
+	promptStallCancelGrace = 30 * time.Second
 )
 
 type acpClientRequest struct {
@@ -85,11 +95,20 @@ type acpRelay struct {
 	state             ACPState
 	promptJournal     *acpPromptJournal
 	promptResult      []byte
-	cancelRequested   bool
+	// availableCommands holds the latest command catalog the adapter announced
+	// and availableCommandsSession the session it belongs to; see
+	// ACPState.AvailableCommands.
+	availableCommands        json.RawMessage
+	availableCommandsSession string
+	cancelRequested          bool
 	// lastActivityAt stamps the last adapter output, prompt registration, or
 	// client answer to an adapter request, so the stall watchdog can tell a
 	// live turn from a lost one.
 	lastActivityAt time.Time
+	// stallCancelledAt is when the watchdog cancelled the active prompt for
+	// silence. The prompt stays active until the adapter answers it, so output
+	// the cancelled turn still emits is not attributed to the next prompt.
+	stallCancelledAt time.Time
 	// abandonedPrompts holds provider ids of prompts the watchdog failed. The
 	// adapter's own late answer to one is dropped, not forwarded.
 	abandonedPrompts map[string]struct{}
@@ -117,7 +136,32 @@ func (r *acpRelay) snapshot() *ACPState {
 	state := r.state
 	state.InitializeResult = append(json.RawMessage(nil), state.InitializeResult...)
 	state.SessionResult = append(json.RawMessage(nil), state.SessionResult...)
+	if r.availableCommandsSession != "" && r.availableCommandsSession == state.SessionID {
+		state.AvailableCommands = append(json.RawMessage(nil), r.availableCommands...)
+	}
 	return &state
+}
+
+// captureAvailableCommands keeps the latest available_commands_update. ACP
+// updates replace the whole catalog, so only the last one matters.
+func (r *acpRelay) captureAvailableCommands(method string, params json.RawMessage) {
+	if method != "session/update" {
+		return
+	}
+	var notification struct {
+		SessionID string `json:"sessionId"`
+		Update    struct {
+			SessionUpdate     string          `json:"sessionUpdate"`
+			AvailableCommands json.RawMessage `json:"availableCommands"`
+		} `json:"update"`
+	}
+	if json.Unmarshal(params, &notification) != nil ||
+		notification.Update.SessionUpdate != "available_commands_update" ||
+		notification.SessionID == "" {
+		return
+	}
+	r.availableCommands = append(json.RawMessage(nil), notification.Update.AvailableCommands...)
+	r.availableCommandsSession = notification.SessionID
 }
 
 func (r *acpRelay) replayTo(ctx context.Context, dst io.Writer) error {
@@ -240,7 +284,7 @@ func (r *acpRelay) clientFrame(ctx context.Context, frame []byte, generation uin
 	}
 
 	if method == "session/prompt" && (r.state.ActivePrompt || r.state.PendingResultEventID != "") {
-		return acpClientFrames{client: rpcErrorFrame(id, -32602, "previous ACP prompt is active or not acknowledged")}, nil
+		return acpClientFrames{client: rpcErrorFrame(id, -32602, "previous ACP prompt is active or not acknowledged", nil)}, nil
 	}
 	r.nextRequestID++
 	providerID, _ := json.Marshal(r.nextRequestID)
@@ -276,21 +320,21 @@ func (r *acpRelay) acceptInteractionCommand(
 	}
 	params := envelope["params"]
 	if len(id) == 0 || string(id) == "null" || json.Unmarshal(params, &identity) != nil || identity.RequestID == "" {
-		return acpClientFrames{client: rpcErrorFrame(id, -32602, "invalid persistent interaction command")}, nil //nolint:nilerr // protocol validation errors are returned in-band
+		return acpClientFrames{client: rpcErrorFrame(id, -32602, "invalid persistent interaction command", nil)}, nil //nolint:nilerr // protocol validation errors are returned in-band
 	}
 	canonical, err := canonicalJSON(params)
 	if err != nil {
-		return acpClientFrames{client: rpcErrorFrame(id, -32602, "invalid persistent interaction command")}, nil //nolint:nilerr // protocol validation errors are returned in-band
+		return acpClientFrames{client: rpcErrorFrame(id, -32602, "invalid persistent interaction command", nil)}, nil //nolint:nilerr // protocol validation errors are returned in-band
 	}
 	if existing, ok := r.commands[identity.RequestID]; ok {
 		if existing.canonical != canonical {
-			return acpClientFrames{client: rpcErrorFrame(id, -32602, "persistent interaction command changed")}, nil
+			return acpClientFrames{client: rpcErrorFrame(id, -32602, "persistent interaction command changed", nil)}, nil
 		}
 		return acpClientFrames{client: rpcResultFrame(id, map[string]string{"eventId": existing.eventID})}, nil
 	}
 	request, pending := r.serverRequest(identity.RequestID)
 	if !pending {
-		return acpClientFrames{client: rpcErrorFrame(id, -32602, "persistent interaction is not pending")}, nil
+		return acpClientFrames{client: rpcErrorFrame(id, -32602, "persistent interaction is not pending", nil)}, nil
 	}
 	if err := ctx.Err(); err != nil {
 		return acpClientFrames{}, err
@@ -356,6 +400,7 @@ func (r *acpRelay) providerFrame(
 			}
 			return rewritten, true, nil
 		}
+		r.captureAvailableCommands(method, envelope["params"])
 		if r.state.ActivePrompt {
 			eventID := r.newEventID()
 			injectMeta(envelope, ACPEventIDMetaKey, eventID)
@@ -388,6 +433,14 @@ func (r *acpRelay) providerFrame(
 	r.captureResponse(request, envelope)
 
 	if request.method == "session/prompt" {
+		if !r.stallCancelledAt.IsZero() {
+			// The adapter has answered the prompt the watchdog cancelled. Whatever
+			// it says, the turn ended because the adapter went silent.
+			r.stallCancelledAt = time.Time{}
+			failure := map[string]json.RawMessage{}
+			_ = json.Unmarshal(stalledPromptFailure(id), &failure)
+			envelope = failure
+		}
 		r.state.ActivePrompt = false
 		r.state.ActiveCompaction = false
 		r.cancelRequested = false
@@ -414,46 +467,79 @@ func (r *acpRelay) providerFrame(
 // from the adapter for promptStallTimeout. It gives the turn a terminal state
 // instead of leaving the session's Working indicator hanging until the next
 // controller restart. A turn waiting on the client (a permission prompt or an
-// elicitation) is not silent; the daemon owns that wait. The prompt may
-// belong to an earlier controller generation: providerFrame then turns the
-// failure into the private prompt result, which the reattached controller
-// finishes against the turn it adopted.
+// elicitation) is not silent; the daemon owns that wait.
 //
-// It returns the controller-facing failure (nil while detached; replay
-// delivers it on attach) and a session/cancel for the adapter, which still
-// owns the turn. The adapter's late answer to that prompt is dropped. Callers
-// must hold the host mutex.
+// It works in two steps. The first sends the adapter a session/cancel and keeps
+// the prompt active: the adapter still owns the turn, and anything it emits
+// until it answers belongs to that turn, not to the prompt the controller sends
+// next. When the adapter answers, providerFrame turns its answer into the stall
+// failure, which marks the adapter quiet and lets the controller release its
+// queue. If it has not answered after promptStallCancelGrace it is wedged, and
+// the second step settles the prompt without it and without the marker, so the
+// queue stays held: the adapter may still emit from the old turn. Its late
+// answer is dropped.
+//
+// The prompt may belong to an earlier controller generation: providerFrame then
+// turns the failure into the private prompt result, which the reattached
+// controller finishes against the turn it adopted. The returned client frame is
+// nil while detached; replay delivers it on attach. Callers must hold the host
+// mutex.
 func (r *acpRelay) failStalledPrompt(
 	ctx context.Context,
 	generation uint64,
 	attached bool,
 	now time.Time,
 ) (acpClientFrames, error) {
-	if !r.state.ActivePrompt || len(r.serverRequests) > 0 || now.Sub(r.lastActivityAt) < promptStallTimeout {
+	if !r.state.ActivePrompt {
+		return acpClientFrames{}, nil
+	}
+	cancelling := !r.stallCancelledAt.IsZero()
+	if !cancelling && (len(r.serverRequests) > 0 || now.Sub(r.lastActivityAt) < promptStallTimeout) {
+		return acpClientFrames{}, nil
+	}
+	if cancelling && now.Sub(r.stallCancelledAt) < promptStallCancelGrace {
 		return acpClientFrames{}, nil
 	}
 	for providerID, request := range r.pending {
 		if request.method != "session/prompt" {
 			continue
 		}
+		if !cancelling {
+			r.stallCancelledAt = now
+			var prompt struct {
+				SessionID string `json:"sessionId"`
+			}
+			_ = json.Unmarshal(request.params, &prompt)
+			params, _ := json.Marshal(prompt)
+			cancel := marshalFrame(map[string]json.RawMessage{
+				"jsonrpc": json.RawMessage(`"2.0"`), "method": json.RawMessage(`"session/cancel"`), "params": params,
+			}, nil)
+			return acpClientFrames{provider: cancel}, nil
+		}
+		// The adapter ignored the cancel. Settle without the stall marker: the
+		// adapter may still emit from the old turn, so the controller must hold
+		// its queue like any other failure rather than start a prompt on it.
+		r.stallCancelledAt = time.Time{}
 		failure := rpcErrorFrame(json.RawMessage(providerID), -32603, fmt.Sprintf(
-			"provider stopped responding: no ACP output for %s; failing the stalled prompt", promptStallTimeout))
+			"provider stopped responding: no ACP output for %s and no answer to the cancel; failing the stalled prompt",
+			promptStallTimeout), nil)
 		completion, _, err := r.providerFrame(ctx, failure, generation, attached)
 		if err != nil {
 			return acpClientFrames{}, err
 		}
 		r.abandonedPrompts[providerID] = struct{}{}
-		var prompt struct {
-			SessionID string `json:"sessionId"`
-		}
-		_ = json.Unmarshal(request.params, &prompt)
-		params, _ := json.Marshal(prompt)
-		cancel := marshalFrame(map[string]json.RawMessage{
-			"jsonrpc": json.RawMessage(`"2.0"`), "method": json.RawMessage(`"session/cancel"`), "params": params,
-		}, nil)
-		return acpClientFrames{provider: cancel, client: completion}, nil
+		return acpClientFrames{client: completion}, nil
 	}
 	return acpClientFrames{}, nil
+}
+
+// stalledPromptFailure is the error a prompt ends with when the watchdog
+// cancelled it for silence. The data marker lets the daemon tell it from a
+// provider that answered with an error.
+func stalledPromptFailure(id json.RawMessage) []byte {
+	return rpcErrorFrame(id, -32603, fmt.Sprintf(
+		"provider stopped responding: no ACP output for %s; failing the stalled prompt", promptStallTimeout),
+		map[string]any{ACPPromptStalledDataKey: true})
 }
 
 func (r *acpRelay) providerRequest(
@@ -519,8 +605,12 @@ func rpcResultFrame(id json.RawMessage, result any) []byte {
 	}, nil)
 }
 
-func rpcErrorFrame(id json.RawMessage, code int, message string) []byte {
-	encoded, _ := json.Marshal(map[string]any{"code": code, "message": message})
+func rpcErrorFrame(id json.RawMessage, code int, message string, data map[string]any) []byte {
+	body := map[string]any{"code": code, "message": message}
+	if data != nil {
+		body["data"] = data
+	}
+	encoded, _ := json.Marshal(body)
 	return marshalFrame(map[string]json.RawMessage{
 		"jsonrpc": json.RawMessage(`"2.0"`), "id": id, "error": encoded,
 	}, nil)

@@ -18,6 +18,8 @@ import {
 	SecretScanner,
 	snapshotShareFile,
 	listShareLinks,
+	SHARE_TIMEOUTS,
+	shareLinksAvailable,
 	uploadShare,
 	type CloudShareApi,
 } from "./cloud-share";
@@ -206,6 +208,63 @@ async function snapshotOf(content: string) {
 	return snapshotShareFile(file, path.join(dataDir, "snapshots"));
 }
 
+// A connection that dropped answers nothing: the request only ends when its
+// signal aborts.
+function silentControlPlane(): CloudShareApi {
+	return {
+		getToken: async () => "token-1",
+		fetch: vi.fn((_url: string, init: RequestInit) => new Promise<Response>((_resolve, reject) => {
+			const fail = () => reject(init.signal?.reason ?? new DOMException("Aborted", "AbortError"));
+			// Like fetch, a request cancelled before it starts fails at once.
+			if (init.signal?.aborted) return fail();
+			init.signal?.addEventListener("abort", fail, { once: true });
+		})),
+	};
+}
+
+describe("share request time limits", () => {
+	const saved = { ...SHARE_TIMEOUTS };
+	beforeEach(() => Object.assign(SHARE_TIMEOUTS, { api: 30, probe: 30, transfer: 30, publish: 30 }));
+	afterEach(() => Object.assign(SHARE_TIMEOUTS, saved));
+
+	it("fails a request that never answers instead of waiting for good", async () => {
+		await expect(listShareLinks(silentControlPlane(), "https://cp.test")).rejects.toMatchObject({
+			code: "timeout",
+			message: "Orchestrator Cloud didn't answer in time. Check your connection and try again.",
+		});
+		await expect(shareLinksAvailable(silentControlPlane(), "https://cp.test")).resolves.toBeNull();
+	});
+
+	it("counts a token refresh that stalls against the request's limit", async () => {
+		const fetch = vi.fn();
+		const stalledToken: CloudShareApi = { getToken: () => new Promise<string | null>(() => undefined), fetch };
+		await expect(listShareLinks(stalledToken, "https://cp.test")).rejects.toMatchObject({ code: "timeout" });
+		await expect(shareLinksAvailable(stalledToken, "https://cp.test")).resolves.toBeNull();
+		expect(fetch).not.toHaveBeenCalled();
+	});
+
+	it("keeps a cancel a cancel, not a timeout", async () => {
+		const snapshot = await snapshotOf("0123456789");
+		Object.assign(SHARE_TIMEOUTS, { api: 60_000 });
+		const controller = new AbortController();
+		const upload = uploadShare(silentControlPlane(), { baseUrl: "https://cp.test", snapshot, name: "upload.txt", project: "p", feature: "sess-1" }, () => undefined, controller.signal);
+		controller.abort();
+		const error = await upload.catch((caught: unknown) => caught);
+		expect(error).not.toBeInstanceOf(CloudShareError);
+	});
+
+	it("times out an upload part that stops answering", async () => {
+		const snapshot = await snapshotOf("0123456789");
+		const { api } = fakeControlPlane(4);
+		const answer = api.fetch;
+		api.fetch = vi.fn((url: string, init: RequestInit) => new URL(url).pathname.startsWith("/part/")
+			? silentControlPlane().fetch(url, init)
+			: answer(url, init));
+		await expect(uploadShare(api, { baseUrl: "https://cp.test", snapshot, name: "upload.txt", project: "p", feature: "sess-1" }, () => undefined))
+			.rejects.toMatchObject({ code: "timeout" });
+	});
+});
+
 describe("uploadShare", () => {
 	it("uploads the snapshot in signed parts and finalizes it", async () => {
 		const snapshot = await snapshotOf("0123456789");
@@ -236,11 +295,11 @@ describe("uploadShare", () => {
 		}
 	});
 
-	it("updates a link by its ID", async () => {
+	it("updates a link by its ID, naming where the file is now", async () => {
 		const snapshot = await snapshotOf("x");
 		const { api, calls } = fakeControlPlane(4);
 		await uploadShare(api, { baseUrl: "https://cp.test", snapshot, name: "upload.txt", project: "p", feature: "f", shareId: "share-9" }, () => undefined);
-		expect(JSON.parse(calls[0].body as string)).toEqual({ name: "upload.txt", size: 1, sha256: sha("x"), shareId: "share-9" });
+		expect(JSON.parse(calls[0].body as string)).toEqual({ name: "upload.txt", size: 1, sha256: sha("x"), project: "p", feature: "f", shareId: "share-9" });
 	});
 
 	it("aborts the upload when a part fails or finalize refuses", async () => {

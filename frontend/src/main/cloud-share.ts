@@ -13,7 +13,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { constants as fsConstants, promises as fs } from "node:fs";
 import path from "node:path";
-import type { CloudShareLink, CloudShareLinks } from "../shared/cloud-share";
+import type { CloudShareAccess, CloudShareGrant, CloudShareLink, CloudShareLinks } from "../shared/cloud-share";
 import { parseCloudBaseUrl } from "./cloud-cp-proxy";
 
 const API_PREFIX = "/api/cloud/v1";
@@ -281,22 +281,83 @@ function apiUrl(baseUrl: string, apiPath: string): string {
 	return base.origin + base.pathname.replace(/\/+$/, "") + API_PREFIX + apiPath;
 }
 
-async function callApi<T>(api: CloudShareApi, baseUrl: string, method: string, apiPath: string, body?: unknown, signal?: AbortSignal): Promise<T> {
-	const token = await api.getToken();
-	if (!token) throw new CloudShareError("signed_out", "Sign in to share.");
-	const response = await api.fetch(apiUrl(baseUrl, apiPath), {
-		method,
-		headers: { Authorization: `Bearer ${token}`, ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
-		body: body === undefined ? undefined : JSON.stringify(body),
-		signal,
-	});
-	if (response.status === 401) throw new CloudShareError("signed_out", "Sign in to share.", 401);
-	if (!response.ok) {
-		const envelope = (await response.json().catch(() => ({}))) as { code?: string; message?: string };
-		throw new CloudShareError(envelope.code || `http_${response.status}`, envelope.message || `Request failed (${response.status})`, response.status);
+/**
+ * How long a request may take before it fails. A connection that dropped
+ * (Wi-Fi off and on) can otherwise leave a request that never answers, and
+ * the popover waiting on it for good.
+ */
+export const SHARE_TIMEOUTS: Record<"api" | "probe" | "transfer" | "publish", number> = {
+	/** An ordinary control-plane request. */
+	api: 30_000,
+	/** Whether the control plane serves share links at all. */
+	probe: 10_000,
+	/** Reading a file's start to scan it, and each upload part. */
+	transfer: 5 * 60_000,
+	/** Finalizing an upload or copying a cloud session's file: the control plane may be moving a large file. */
+	publish: 15 * 60_000,
+};
+
+/**
+ * fetch with a time limit. A request that takes longer is refused with
+ * CloudShareError "timeout"; one the caller's signal stopped still throws as
+ * an abort, so a cancel stays a cancel. The limit covers reading the body too.
+ */
+async function fetchWithin<T>(
+	timeoutMs: number,
+	signal: AbortSignal | undefined,
+	request: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+	const timeout = AbortSignal.timeout(timeoutMs);
+	try {
+		return await request(signal ? AbortSignal.any([signal, timeout]) : timeout);
+	} catch (error) {
+		if (timeout.aborted && !signal?.aborted) {
+			throw new CloudShareError("timeout", "Orchestrator Cloud didn't answer in time. Check your connection and try again.");
+		}
+		throw error;
 	}
-	if (response.status === 204) return undefined as T;
-	return (await response.json()) as T;
+}
+
+/**
+ * `promise`, or the signal's abort as soon as it comes. For a step that takes
+ * no signal, such as reading the session token, which may refresh it over
+ * the network, so it counts against the request's own time limit.
+ */
+function untilAborted<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+	return new Promise<T>((resolve, reject) => {
+		const stop = () => reject(signal.reason);
+		promise.then(resolve, reject).finally(() => signal.removeEventListener("abort", stop));
+		if (signal.aborted) return stop();
+		signal.addEventListener("abort", stop, { once: true });
+	});
+}
+
+async function callApi<T>(
+	api: CloudShareApi,
+	baseUrl: string,
+	method: string,
+	apiPath: string,
+	body?: unknown,
+	signal?: AbortSignal,
+	timeoutMs: number = SHARE_TIMEOUTS.api,
+): Promise<T> {
+	return fetchWithin(timeoutMs, signal, async (limited) => {
+		const token = await untilAborted(api.getToken(), limited);
+		if (!token) throw new CloudShareError("signed_out", "Sign in to share.");
+		const response = await api.fetch(apiUrl(baseUrl, apiPath), {
+			method,
+			headers: { Authorization: `Bearer ${token}`, ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
+			body: body === undefined ? undefined : JSON.stringify(body),
+			signal: limited,
+		});
+		if (response.status === 401) throw new CloudShareError("signed_out", "Sign in to share.", 401);
+		if (!response.ok) {
+			const envelope = (await response.json().catch(() => ({}))) as { code?: string; message?: string };
+			throw new CloudShareError(envelope.code || `http_${response.status}`, envelope.message || `Request failed (${response.status})`, response.status);
+		}
+		if (response.status === 204) return undefined as T;
+		return (await response.json()) as T;
+	});
 }
 
 /**
@@ -306,11 +367,14 @@ async function callApi<T>(api: CloudShareApi, baseUrl: string, method: string, a
  * when the control plane could not be reached.
  */
 export async function shareLinksAvailable(api: CloudShareApi, baseUrl: string): Promise<boolean | null> {
-	const token = await api.getToken();
+	// The token read (which may refresh it) and the request share one limit.
+	const limited = AbortSignal.timeout(SHARE_TIMEOUTS.probe);
 	try {
+		const token = await untilAborted(api.getToken(), limited);
 		const response = await api.fetch(apiUrl(baseUrl, "/me/artifact-shares"), {
 			method: "GET",
 			headers: token ? { Authorization: `Bearer ${token}` } : {},
+			signal: limited,
 		});
 		await response.body?.cancel().catch(() => undefined);
 		return response.status !== 404;
@@ -323,12 +387,53 @@ export function listShareLinks(api: CloudShareApi, baseUrl: string): Promise<Clo
 	return callApi<CloudShareLinks>(api, baseUrl, "GET", "/me/artifact-shares").then((links) => ({
 		...links,
 		unlimited: Boolean(links.unlimited),
+		privateLinks: Boolean(links.privateLinks),
 	}));
 }
 
+function shareLinkPath(shareId: string): string {
+	if (!UUID_PATTERN.test(shareId)) throw new CloudShareError("invalid_request", "Not a share link.");
+	return `/me/artifact-shares/${shareId}`;
+}
+
 export async function unpublishShareLink(api: CloudShareApi, baseUrl: string, shareId: string): Promise<void> {
-	if (!/^[0-9a-f-]{36}$/i.test(shareId)) throw new CloudShareError("invalid_request", "Not a share link.");
-	await callApi<void>(api, baseUrl, "DELETE", `/me/artifact-shares/${shareId}`);
+	await callApi<void>(api, baseUrl, "DELETE", shareLinkPath(shareId));
+}
+
+/** Makes a link private or public. Its URL stays the same. */
+export function setShareLinkAccess(api: CloudShareApi, baseUrl: string, shareId: string, access: CloudShareAccess): Promise<CloudShareLink> {
+	return callApi<CloudShareLink>(api, baseUrl, "PATCH", shareLinkPath(shareId), { access });
+}
+
+/** The emails a link is shared with. */
+export async function listShareGrants(api: CloudShareApi, baseUrl: string, shareId: string): Promise<CloudShareGrant[]> {
+	return (await callApi<{ grants: CloudShareGrant[] }>(api, baseUrl, "GET", `${shareLinkPath(shareId)}/grants`)).grants;
+}
+
+/** Shares a link with emails at once, and returns everyone it is shared with now. */
+export async function inviteShareGrants(api: CloudShareApi, baseUrl: string, shareId: string, emails: string[]): Promise<CloudShareGrant[]> {
+	return (await callApi<{ grants: CloudShareGrant[] }>(api, baseUrl, "POST", `${shareLinkPath(shareId)}/grants`, { emails })).grants;
+}
+
+export async function removeShareGrant(api: CloudShareApi, baseUrl: string, shareId: string, grantId: string): Promise<void> {
+	if (!UUID_PATTERN.test(grantId)) throw new CloudShareError("invalid_request", "Not someone the link is shared with.");
+	await callApi<void>(api, baseUrl, "DELETE", `${shareLinkPath(shareId)}/grants/${grantId}`);
+}
+
+/**
+ * What a publish asks a new link to start with. Neither is sent when unset:
+ * a control plane that predates private links refuses fields it does not know.
+ */
+export interface ShareAccessInput {
+	access?: CloudShareAccess;
+	emails?: string[];
+}
+
+function accessFields(input: ShareAccessInput): ShareAccessInput {
+	return {
+		...(input.access ? { access: input.access } : {}),
+		...(input.emails && input.emails.length > 0 ? { emails: input.emails } : {}),
+	};
 }
 
 /** One committed file of a cloud session, named by its organization, session and path. */
@@ -367,13 +472,20 @@ export async function inspectCloudSessionArtifact(
 	if (!access.filesPrefix.startsWith(`${API_PREFIX}/artifact-files/`)) throw new CloudShareError("invalid_response", "The control plane gave no file access.");
 	const base = parseCloudBaseUrl(baseUrl);
 	const fileUrl = base.origin + base.pathname.replace(/\/+$/, "") + access.filesPrefix + artifact.path.split("/").map(encodeURIComponent).join("/");
-	const controller = new AbortController();
-	const response = await api.fetch(fileUrl, { method: "GET", headers: { Range: `bytes=0-${MAX_SCANNED_BYTES - 1}` }, signal: controller.signal });
-	// An empty file has no range to read: 416.
-	if (!response.ok && response.status !== 416) {
-		throw new CloudShareError(`http_${response.status}`, `Reading the file failed (${response.status}).`, response.status);
-	}
-	if (response.ok && response.body) {
+	// The time limit covers reading the file's start too; stopping early, once
+	// enough is scanned, is no failure.
+	const stop = new AbortController();
+	await fetchWithin(SHARE_TIMEOUTS.transfer, undefined, async (limited) => {
+		const response = await api.fetch(fileUrl, {
+			method: "GET",
+			headers: { Range: `bytes=0-${MAX_SCANNED_BYTES - 1}` },
+			signal: AbortSignal.any([limited, stop.signal]),
+		});
+		// An empty file has no range to read: 416.
+		if (!response.ok && response.status !== 416) {
+			throw new CloudShareError(`http_${response.status}`, `Reading the file failed (${response.status}).`, response.status);
+		}
+		if (!response.ok || !response.body) return;
 		const reader = response.body.getReader();
 		let read = 0;
 		try {
@@ -384,9 +496,9 @@ export async function inspectCloudSessionArtifact(
 				read += value.byteLength;
 			}
 		} finally {
-			controller.abort();
+			stop.abort();
 		}
-	}
+	});
 	return { name, size: artifact.size, sha256: artifact.sha256, secretFindings: scanner.list() };
 }
 
@@ -399,14 +511,14 @@ export async function inspectCloudSessionArtifact(
 export function shareCloudSessionArtifact(
 	api: CloudShareApi,
 	baseUrl: string,
-	ref: CloudSessionArtifactRef & { sha256: string; shareId?: string },
+	ref: CloudSessionArtifactRef & ShareAccessInput & { sha256: string; shareId?: string },
 	signal?: AbortSignal,
 ): Promise<{ share: CloudShareLink; replaced: boolean }> {
 	return callApi<{ share: CloudShareLink; replaced: boolean }>(api, baseUrl, "POST", `${sessionApiPath(ref)}/artifacts/share`,
-		{ path: ref.path, sha256: ref.sha256, ...(ref.shareId ? { shareId: ref.shareId } : {}) }, signal);
+		{ path: ref.path, sha256: ref.sha256, ...(ref.shareId ? { shareId: ref.shareId } : {}), ...accessFields(ref) }, signal, SHARE_TIMEOUTS.publish);
 }
 
-export interface ShareUploadInput {
+export interface ShareUploadInput extends ShareAccessInput {
 	baseUrl: string;
 	snapshot: ShareSnapshot;
 	name: string;
@@ -460,9 +572,12 @@ export async function uploadShare(
 	signal?: AbortSignal,
 ): Promise<{ share: CloudShareLink; replaced: boolean }> {
 	const { baseUrl, snapshot } = input;
-	const start = await callApi<UploadStart>(api, baseUrl, "POST", "/me/artifact-shares/uploads", input.shareId
-		? { name: input.name, size: snapshot.size, sha256: snapshot.sha256, shareId: input.shareId }
-		: { name: input.name, size: snapshot.size, sha256: snapshot.sha256, project: input.project, feature: input.feature }, signal);
+	// An update names where the file is now too, so its link follows a file
+	// moved to another folder.
+	const start = await callApi<UploadStart>(api, baseUrl, "POST", "/me/artifact-shares/uploads", {
+		name: input.name, size: snapshot.size, sha256: snapshot.sha256, project: input.project, feature: input.feature,
+		...(input.shareId ? { shareId: input.shareId } : {}),
+	}, signal);
 	const handle = await fs.open(snapshot.path, "r");
 	// One failed part stops the others before the upload is aborted and the
 	// snapshot closed.
@@ -491,7 +606,8 @@ export async function uploadShare(
 					const range = partRange(start, snapshot.size, part.partNumber);
 					const body = Buffer.alloc(range.length);
 					await handle.read(body, 0, range.length, range.offset);
-					const response = await api.fetch(part.url, { method: part.method, headers: partHeaders(part.headers), body, signal: batch.signal });
+					const response = await fetchWithin(SHARE_TIMEOUTS.transfer, batch.signal, (signal) =>
+						api.fetch(part.url, { method: part.method, headers: partHeaders(part.headers), body, signal }));
 					const etag = response.headers.get("etag");
 					if (!response.ok || !etag) throw new CloudShareError("upload_failed", `Uploading part ${part.partNumber} failed (${response.status}).`, response.status);
 					completed.push({ partNumber: part.partNumber, sha256: signed.sha256, etag });
@@ -505,7 +621,7 @@ export async function uploadShare(
 		}
 		completed.sort((a, b) => a.partNumber - b.partNumber);
 		return await callApi<{ share: CloudShareLink; replaced: boolean }>(api, baseUrl, "POST", "/me/artifact-shares/finalize",
-			{ uploadToken: start.uploadToken, parts: completed }, signal);
+			{ uploadToken: start.uploadToken, parts: completed, ...accessFields(input) }, signal, SHARE_TIMEOUTS.publish);
 	} catch (error) {
 		batch.abort();
 		await Promise.allSettled(running);

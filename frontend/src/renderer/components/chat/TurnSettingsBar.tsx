@@ -18,7 +18,7 @@
  */
 
 import { Fragment, useMemo, useState, type FocusEvent, type ReactNode } from "react";
-import { Check, ChevronDown, Hand, ListTodo, PencilLine, ShieldAlert, ShieldCheck, SlidersHorizontal, TriangleAlert, Zap, type LucideIcon } from "lucide-react";
+import { Check, ChevronDown, Hand, ListTodo, PencilLine, ShieldAlert, ShieldCheck, SlidersHorizontal, TriangleAlert, Zap, type AppIcon } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
 import {
 	OptionMenu,
@@ -368,7 +368,7 @@ export function TurnSettingsBar({
 	const current: PickerSource = nativeModelMenu && onChange
 		? {
 			models: (harness === "claude-code" ? displayModels.filter((model) => model.id !== "default") : displayModels)
-				.map((model) => ({ id: model.id, label: model.displayName, unavailableReason: model.unavailableReason })),
+				.map((model) => ({ id: model.id, label: model.displayName, unavailableReason: model.unavailableReason, hint: model.hint })),
 			modelId: settings.model ?? fallback?.id,
 			modelLabel,
 			// Fast mode is kept only where the newly picked model offers it.
@@ -401,6 +401,7 @@ export function TurnSettingsBar({
 					id: choice.value, label: choice.name, group: choice.groupName || choice.group,
 					aliases: (choice as ChatConfigOption["choices"][number] & { aliases?: string[] }).aliases,
 					unavailableReason: choice.unavailableReason,
+					hint: choice.hint,
 				})),
 			modelId: primaryModelOption?.currentValue,
 			modelLabel: primaryModelOption ? optionCurrentLabel(primaryModelOption) : agentLabel(harness ?? ""),
@@ -790,7 +791,7 @@ function ModelEffortPicker({
 
 	return (
 		<OptionMenu>
-				<OptionMenuTrigger
+				<OptionMenuTrigger variant="ghost"
 					showCaret={false}
 					disabled={disabled}
 					aria-label="Model and reasoning effort for the next turn"
@@ -899,6 +900,7 @@ function ClubbedConfigPicker({
 				<EffortPicker
 					{...acpEffortMenuProps(primaryEffort)}
 					disabled={disabled}
+					triggerVariant="ghost"
 					triggerClassName={TRIGGER_CLASS}
 					onChange={(value) => onChange(primaryEffort.id, { value })}
 				/>
@@ -928,7 +930,7 @@ function ClubbedConfigPicker({
 
 	return (
 		<OptionMenu>
-				<OptionMenuTrigger
+				<OptionMenuTrigger variant="ghost"
 					showCaret={false}
 					disabled={disabled}
 					aria-label="Model and reasoning effort for the next turn"
@@ -1110,7 +1112,7 @@ function ExecutionModePicker({
 }) {
 	return (
 		<OptionMenu>
-			<OptionMenuTrigger
+			<OptionMenuTrigger variant="ghost"
 				showCaret={false}
 				disabled={disabled}
 				aria-label="Model mode for the next turn"
@@ -1206,7 +1208,7 @@ function ConfigOptionPicker({
 	onChange: (value: ChatConfigOptionValue) => void;
 	disabled?: boolean;
 	footer?: ReactNode;
-	leadIcon?: LucideIcon;
+	leadIcon?: AppIcon;
 	/** Set on the permission control only. */
 	showCaret?: boolean;
 	groupClaude?: boolean;
@@ -1419,7 +1421,7 @@ function permissionLook(harness: string | undefined, mode: ApprovalMode): Approv
 	return mode === "default" ? "bypass-permissions" : mode === "accept-edits" ? "default" : mode;
 }
 
-function permissionIcon(mode: ApprovalMode | undefined): LucideIcon {
+function permissionIcon(mode: ApprovalMode | undefined): AppIcon {
 	if (mode === "bypass-permissions") return ShieldAlert;
 	if (mode === "accept-edits") return PencilLine;
 	if (mode === "auto") return ShieldCheck;
@@ -1470,7 +1472,7 @@ export function ComposerMenuRow({
 	disabled,
 	onSelect,
 }: {
-	icon: LucideIcon;
+	icon: AppIcon;
 	title: string;
 	description?: string;
 	checked?: boolean;
@@ -1583,7 +1585,7 @@ function Picker({
 	/** The current choice will not hold for the next message: marked red. */
 	alert?: boolean;
 	/** Set on the permission control: marked with this. */
-	leadIcon?: LucideIcon;
+	leadIcon?: AppIcon;
 	/** Show the menu caret. Only the permission control does: it reads as a select. */
 	showCaret?: boolean;
 	/** A note that belongs on the trigger, e.g. the model that was overridden. */
@@ -1595,7 +1597,7 @@ function Picker({
 }) {
 	return (
 		<OptionMenu>
-				<OptionMenuTrigger
+				<OptionMenuTrigger variant="ghost"
 					showCaret={showCaret}
 					aria-label={title}
 					title={title}

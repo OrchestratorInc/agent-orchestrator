@@ -1,6 +1,6 @@
 import { create } from "zustand";
 
-export type SessionGitActionKind = "createPR" | "createDraftPR" | "commit" | "commitPush" | "push";
+export type SessionGitActionKind = "createPR" | "createDraftPR" | "commit" | "commitPush" | "push" | "updateBase" | "resolveConflicts";
 
 export type PendingSessionGitAction = {
 	kind: SessionGitActionKind;

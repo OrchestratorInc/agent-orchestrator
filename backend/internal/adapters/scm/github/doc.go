@@ -39,11 +39,16 @@
 //
 //   - CI: derived from the latest commit's statusCheckRollup contexts
 //     (CheckRun + StatusContext). Failed if ANY context concluded in a
-//     failure class (failure / cancelled / timed_out / action_required /
-//     error). Pending if any context is still running / queued.
+//     failure class (failure / timed_out / action_required / error).
+//     Pending if any context is still running / queued. Cancelled is not
+//     a failure: with nothing running (a run cancelled by hand, no
+//     replacement) it settles as Unknown, even beside passing checks,
+//     because the cancelled check proved nothing.
 //     Passing if all non-skipped contexts concluded SUCCESS / NEUTRAL.
 //     Unknown otherwise. Empty rollup falls back to the rollup-level
-//     "state" field.
+//     "state" field. Only the newest CheckRun per workflow, event and job
+//     counts: a run superseded on the same commit (cancelled by a re-run,
+//     an earlier failed attempt) is dropped, as GitHub's checks list does.
 //
 //   - Review: from GraphQL pullRequest.reviewDecision:
 //

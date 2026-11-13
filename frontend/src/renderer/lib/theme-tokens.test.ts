@@ -7,6 +7,21 @@ import { buildThemeStylesheet, deriveThemeTokens } from "./theme-tokens";
 const tokensCss = readFileSync(resolve(__dirname, "../../styles/tokens.css"), "utf8");
 
 describe("theme tokens", () => {
+	it.each([
+		["#0078d4", "#ffffff"],
+		["#4493f8", "#ffffff"],
+		["#cba6f7", "#000000"],
+		["#ffdf60", "#000000"],
+		["#000000", "#ffffff"],
+		["#ffffff", "#000000"],
+	])("uses the selected lighter label preference on %s", (fill, label) => {
+		for (const mode of ["dark", "light"] as const) {
+			const tokens = deriveThemeTokens({ ...THEMES[0][mode], primary: fill, accent: fill }, mode);
+			expect(tokens["--primary-foreground"]).toBe(label);
+			expect(tokens["--color-brand-logo-foreground"]).toBe(label);
+		}
+	});
+
 	it("only derives tokens that tokens.css defines", () => {
 		const unknown = Object.keys(deriveThemeTokens(THEMES[1].dark, "dark")).filter(
 			(name) => !tokensCss.includes(`${name}:`),
@@ -27,7 +42,7 @@ describe("theme tokens", () => {
 		for (const theme of THEMES.slice(1)) {
 			for (const mode of ["dark", "light"] as const) {
 				const tokens = deriveThemeTokens(theme[mode], mode);
-				const validating = tokens["--color-status-validating-new"];
+				const validating = tokens["--color-status-validating"];
 				expect(validating, `${theme.id}/${mode}`).not.toBe(theme[mode].yellow);
 				expect(validating, `${theme.id}/${mode}`).not.toBe(tokens["--color-status-in-review"]);
 				expect(validating, `${theme.id}/${mode}`).not.toBe(tokens["--color-status-working"]);

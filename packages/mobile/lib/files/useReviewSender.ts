@@ -1,8 +1,7 @@
 import { useCallback, useMemo, useState } from "react";
-import type { ServerConfig } from "../config";
 import { userFacingError } from "../connectionError";
 import { haptics } from "../haptics";
-import { sendFileFeedback } from "./api";
+import type { FilesBackend } from "./backend";
 import { markReviewCommentsSent, queuedComments, removeReviewComments, reviewComments, useReviewComments } from "./reviewStore";
 
 /**
@@ -10,21 +9,21 @@ import { markReviewCommentsSent, queuedComments, removeReviewComments, reviewCom
  * comments it carried as sent — they stay on their lines — so a failure part-way
  * leaves only the unsent ones queued.
  */
-export function useReviewSender(config: ServerConfig | null, key: string, sessionId: string) {
+export function useReviewSender(backend: FilesBackend | null, key: string, sessionId: string) {
 	const all = useReviewComments(key);
 	const queued = useMemo(() => queuedComments(all), [all]);
 	const [sending, setSending] = useState(false);
 	const [error, setError] = useState<string>();
 
 	const send = useCallback(async () => {
-		if (!config || sending) return;
+		if (!backend || sending) return;
 		const pending = queuedComments(reviewComments(key));
 		if (!pending.length) return;
 		setSending(true);
 		setError(undefined);
 		let delivered = 0;
 		try {
-			await sendFileFeedback(config, sessionId, pending.map(({ target, feedback }) => ({ target, feedback })), (count) => {
+			await backend.sendFeedback(sessionId, pending.map(({ target, feedback }) => ({ target, feedback })), (count) => {
 				markReviewCommentsSent(key, pending.slice(delivered, delivered + count).map((comment) => comment.id));
 				delivered += count;
 			});
@@ -35,7 +34,7 @@ export function useReviewSender(config: ServerConfig | null, key: string, sessio
 		} finally {
 			setSending(false);
 		}
-	}, [config, key, sending, sessionId]);
+	}, [backend, key, sending, sessionId]);
 
 	const remove = useCallback((id: string) => removeReviewComments(key, [id]), [key]);
 

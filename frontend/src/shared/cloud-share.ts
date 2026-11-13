@@ -1,5 +1,5 @@
 // Types the cloudShare IPC carries between the renderer and the main process.
-// Publishing an artifact as a public share link runs only in the main
+// Publishing an artifact as a share link runs only in the main
 // process, which holds the sign-in token. A local file is read inside the
 // session's artifacts folder only and uploaded straight to storage; a cloud
 // session's file is copied by the control plane inside its bucket. The
@@ -34,10 +34,36 @@ export interface CloudShareFile {
 	 * organization, session and path instead.
 	 */
 	projectId: string;
+	/**
+	 * The artifact's identity, which a rename keeps: the link record follows
+	 * it, so a renamed file is offered Republish on its own link.
+	 */
+	artifactId?: string;
 	/** Update this active link instead of publishing a new document. */
 	shareId?: string;
 	/** The fingerprint of the inspection the person saw; publishing refuses a file that changed since. */
 	fingerprint?: string;
+	/**
+	 * Who a new link opens for. Sent only where the control plane offers
+	 * private links (CloudShareLinks.privateLinks); an active link keeps its own.
+	 */
+	access?: CloudShareAccess;
+	/** Emails a new link is shared with as it is published. */
+	emails?: string[];
+}
+
+/**
+ * Who a link opens for: restricted, only its owner and the emails it is shared
+ * with, signed in; anyone, everyone with the link. A control plane that
+ * predates private links names none, and every link there is anyone.
+ */
+export type CloudShareAccess = "restricted" | "anyone";
+
+/** One email a private link is shared with. */
+export interface CloudShareGrant {
+	id: string;
+	email: string;
+	createdAt: string;
 }
 
 /** One committed file of a cloud session. */
@@ -46,7 +72,7 @@ export interface CloudSessionShareFile extends CloudShareFile {
 	orgId: string;
 }
 
-/** A public share link, as the control plane lists it. */
+/** A share link, as the control plane lists it. */
 export interface CloudShareLink {
 	id: string;
 	/** The link's ID, the first label of its contentUrl host. */
@@ -60,6 +86,22 @@ export interface CloudShareLink {
 	createdAt: string;
 	updatedAt: string;
 	revokedAt?: string;
+	access?: CloudShareAccess;
+	/** How many emails the link is shared with. */
+	grantCount?: number;
+}
+
+/** Whether a link opens only for the people it is shared with. */
+export function isPrivateShare(share: Pick<CloudShareLink, "access">): boolean {
+	return share.access === "restricted";
+}
+
+/**
+ * The URL to give people: the viewer page. A private link's contentUrl opens
+ * only with a view token the viewer gets after sign-in, so it is never shared.
+ */
+export function artifactShareUrl(share: Pick<CloudShareLink, "viewerUrl" | "contentUrl">): string {
+	return share.viewerUrl ?? share.contentUrl;
 }
 
 /** The signed-in user's links and what their plan allows. */
@@ -70,6 +112,12 @@ export interface CloudShareLinks {
 	used: number;
 	/** The user's plan has no link limit. Files have no size limit on any plan. */
 	unlimited: boolean;
+	/**
+	 * Links may be private here: the viewer has sign-in. False on a control
+	 * plane that predates private links, or whose viewer has none; links
+	 * are public only there.
+	 */
+	privateLinks: boolean;
 }
 
 /** What the share popover shows before the person publishes. */
@@ -90,6 +138,13 @@ export interface CloudShareInspection {
 	 * not checked: a different value means the file changed since publishing.
 	 */
 	publishedFingerprint?: string;
+	/**
+	 * Kinds of credential the copy last published to shareId looked like it
+	 * held, when this computer recorded it. The link serves that copy until it
+	 * is republished, so making the link public is warned about for these too,
+	 * even once the file no longer holds them.
+	 */
+	publishedSecretFindings?: string[];
 }
 
 export type CloudSharePublishResult =

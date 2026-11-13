@@ -39,7 +39,7 @@ describe("cloud control-plane binary requests", () => {
 		expect(JSON.parse(new TextDecoder().decode(tooLarge.body))).toEqual({
 			error: "attachment_too_large",
 			code: "attachment_too_large",
-			message: "The file is larger than 32 MiB, the most the app sends to AO Cloud at once.",
+			message: "The file is larger than 32 MiB, the most the app sends to Orchestrator Cloud at once.",
 		});
 		expect(fetchImpl).not.toHaveBeenCalled();
 	});
@@ -55,7 +55,7 @@ describe("cloud control-plane binary requests", () => {
 		expect(response.status).toBe(504);
 		expect(JSON.parse(new TextDecoder().decode(response.body))).toMatchObject({
 			code: "request_timeout",
-			message: "AO Cloud did not answer within 0 seconds. Try again.",
+			message: "Orchestrator Cloud did not answer within 0 seconds. Try again.",
 		});
 	});
 
@@ -111,9 +111,9 @@ describe("cloud control-plane URL pinning", () => {
 		const fetchImpl = vi.fn();
 		const proxy = createCloudCpProxy(() => "/data", { controlPlaneUrl, fetchImpl: fetchImpl as unknown as typeof fetch });
 		for (const baseUrl of elsewhere) {
-			await expect(proxy.request({ ...base, baseUrl, method: "GET" })).rejects.toThrow(/configured AO Cloud control plane/);
-			await expect(proxy.requestBinary({ ...base, baseUrl })).rejects.toThrow(/configured AO Cloud control plane/);
-			await expect(proxy.openStream(sender, { ...base, baseUrl, method: "GET" })).rejects.toThrow(/configured AO Cloud control plane/);
+			await expect(proxy.request({ ...base, baseUrl, method: "GET" })).rejects.toThrow(/configured Orchestrator Cloud control plane/);
+			await expect(proxy.requestBinary({ ...base, baseUrl })).rejects.toThrow(/configured Orchestrator Cloud control plane/);
+			await expect(proxy.openStream(sender, { ...base, baseUrl, method: "GET" })).rejects.toThrow(/configured Orchestrator Cloud control plane/);
 		}
 		expect(fetchImpl).not.toHaveBeenCalled();
 		expect(tokenMock).not.toHaveBeenCalled();
@@ -122,8 +122,8 @@ describe("cloud control-plane URL pinning", () => {
 	it("refuses every request while no control plane is configured", async () => {
 		const fetchImpl = vi.fn();
 		const proxy = createCloudCpProxy(() => "/data", { controlPlaneUrl: async () => null, fetchImpl: fetchImpl as unknown as typeof fetch });
-		await expect(proxy.request({ ...base, method: "GET" })).rejects.toThrow(/no AO Cloud control plane/);
-		await expect(proxy.requestBinary(base)).rejects.toThrow(/no AO Cloud control plane/);
+		await expect(proxy.request({ ...base, method: "GET" })).rejects.toThrow(/no Orchestrator Cloud control plane/);
+		await expect(proxy.requestBinary(base)).rejects.toThrow(/no Orchestrator Cloud control plane/);
 		expect(fetchImpl).not.toHaveBeenCalled();
 	});
 
@@ -139,5 +139,37 @@ describe("cloud control-plane URL pinning", () => {
 		for (const [, init] of fetchImpl.mock.calls) {
 			expect(new Headers(init?.headers).get("authorization")).toBe("Bearer token-1");
 		}
+	});
+});
+
+// Host tokens open a shell on the account's machines; only the main process reads them.
+describe("the account's machine directory", () => {
+	const listing = JSON.stringify({ hosts: [{ hostId: "h1", label: "VM", url: "https://h1.example", token: "a".repeat(64) }], fixedAddresses: true });
+	const hosts = { baseUrl: "https://cp.example.com", path: "/api/cloud/v1/me/hosts", method: "GET" };
+	const fetchListing = () => vi.fn(async (_url: RequestInfo | URL, _init?: RequestInit) => new Response(listing, { status: 200 }));
+
+	it("strips host tokens from renderer requests, including an encoded path", async () => {
+		const proxy = createCloudCpProxy(() => "/data", { controlPlaneUrl, fetchImpl: fetchListing() as unknown as typeof fetch });
+		for (const path of [hosts.path, "/api/cloud/v1/me/ho%73ts"]) {
+			const response = await proxy.request({ ...hosts, path });
+			expect(JSON.parse(response.body)).toEqual({ hosts: [{ hostId: "h1", label: "VM", url: "https://h1.example" }], fixedAddresses: true });
+		}
+	});
+
+	it("keeps host tokens for the main process and passes its signal to the request", async () => {
+		const fetchImpl = fetchListing();
+		const proxy = createCloudCpProxy(() => "/data", { controlPlaneUrl, fetchImpl: fetchImpl as unknown as typeof fetch });
+		const { signal } = new AbortController();
+		expect((await proxy.request(hosts, { hostTokens: true, signal })).body).toBe(listing);
+		expect(fetchImpl.mock.calls[0][1]?.signal).toBe(signal);
+	});
+
+	it("refuses the directory on the binary and stream channels", async () => {
+		const fetchImpl = fetchListing();
+		const proxy = createCloudCpProxy(() => "/data", { controlPlaneUrl, fetchImpl: fetchImpl as unknown as typeof fetch });
+		await expect(proxy.requestBinary(hosts)).rejects.toThrow(/cloudCp:request/);
+		const sender = { id: 1, isDestroyed: () => false, send: vi.fn(), once: vi.fn() };
+		await expect(proxy.openStream(sender, hosts)).rejects.toThrow(/cloudCp:request/);
+		expect(fetchImpl).not.toHaveBeenCalled();
 	});
 });

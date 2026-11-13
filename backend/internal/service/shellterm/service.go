@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/terminalui"
 	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
+	"github.com/aoagents/agent-orchestrator/backend/internal/caller"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -93,6 +95,36 @@ type Service struct {
 	// there, rather than inferring "still blocked" from a goroutine that simply
 	// hasn't run yet.
 	onSessionGateWait func(domain.SessionID)
+
+	trackers []TerminalTracker // set once at boot
+}
+
+// TerminalTracker follows user shells as they open and close: the agent
+// running in one, or the title its program sets.
+type TerminalTracker interface {
+	TrackShellTerminal(handleID string)
+	UntrackShellTerminal(handleID string)
+}
+
+// SetTerminalTrackers registers every open user shell with each tracker, and
+// later ones as they open. Call once at boot, before serving requests.
+func (s *Service) SetTerminalTrackers(ctx context.Context, trackers ...TerminalTracker) {
+	s.trackers = trackers
+	if len(trackers) == 0 {
+		return
+	}
+	recs, err := s.store.SelectRestorableShellTerminals(ctx, s.appRunID)
+	if err != nil {
+		s.log.Warn("shell terminal tracking: list terminals failed", "err", err)
+		return
+	}
+	for _, rec := range recs {
+		if !rec.Transient {
+			for _, tracker := range trackers {
+				tracker.TrackShellTerminal(rec.HandleID)
+			}
+		}
+	}
 }
 
 // IsShellTerminalChildAlive reports whether the command inside a shell
@@ -101,6 +133,24 @@ type Service struct {
 // this instead of treating host liveness as command liveness.
 func (s *Service) IsShellTerminalChildAlive(ctx context.Context, handleID string) (bool, error) {
 	return s.runtime.IsChildAlive(ctx, ports.RuntimeHandle{ID: strings.TrimSpace(handleID)})
+}
+
+// CommandTerminalHandles returns this app launch's commands for a trusted
+// workflow. Commands predating ownership metadata are included conservatively:
+// their editable title cannot establish which credential store they use.
+// Child liveness must still be checked; retained scrollback is not a live command.
+func (s *Service) CommandTerminalHandles(ctx context.Context, owner string) ([]string, error) {
+	records, err := s.store.SelectShellTerminalsByAppRunID(ctx, s.appRunID)
+	if err != nil {
+		return nil, fmt.Errorf("list command terminals: %w", err)
+	}
+	var handles []string
+	for _, rec := range records {
+		if rec.Transient && (rec.CommandOwner == owner || rec.CommandOwner == "") {
+			handles = append(handles, rec.HandleID)
+		}
+	}
+	return handles, nil
 }
 
 // sessionGate is the admission/teardown barrier for one session's scoped
@@ -273,6 +323,8 @@ func (s *Service) OpenShellTerminal(ctx context.Context, in OpenShellTerminalInp
 		return ShellTerminal{}, apierr.Invalid("SHELL_TERMINAL_TITLE_TOO_LONG",
 			fmt.Sprintf("A shell terminal title must be at most %d characters", maxShellTerminalTitleLen), nil)
 	}
+	// Clients that already show a tab pass its numbered default here.
+	titleExplicit := title != "" && !defaultShellTerminalTitle.MatchString(title)
 	if in.SessionID != "" {
 		if s.sessions == nil {
 			return ShellTerminal{}, apierr.Internal("SHELL_TERMINAL_NO_SESSION_LOOKUP", "Session lookup is unavailable")
@@ -328,6 +380,8 @@ func (s *Service) OpenShellTerminal(ctx context.Context, in OpenShellTerminalInp
 	// from an unusual daemon launch environment.
 	env["AO_BROWSER_CAPABILITY"] = ""
 	env["AO_PREVIEW_CAPABILITY"] = ""
+	// What the user types here is theirs, not the agent's turn's (see cli caller header).
+	env[caller.ShellTerminalEnv] = "1"
 	var verifier string
 	if in.SessionID != "" {
 		env["AO_SESSION_ID"] = string(in.SessionID)
@@ -350,7 +404,7 @@ func (s *Service) OpenShellTerminal(ctx context.Context, in OpenShellTerminalInp
 	}
 	return s.openTerminal(ctx, openTerminalConfig{
 		argv: argv, env: env, projectEnv: projectEnv, projectID: projectID, sessionID: in.SessionID,
-		workingDir: workingDir, title: title,
+		workingDir: workingDir, title: title, titleExplicit: titleExplicit,
 		previewVerifier: verifier,
 		startOnAttach:   in.StartOnAttach,
 		cols:            in.Cols,
@@ -392,7 +446,9 @@ func (s *Service) OpenCommandTerminal(ctx context.Context, in OpenCommandTermina
 		env:                      in.Env,
 		workingDir:               workingDir,
 		title:                    in.Title,
+		titleExplicit:            true,
 		transient:                true,
+		commandOwner:             in.Owner,
 		cleanupWorkingDirOnError: cleanupWorkingDirOnError,
 	})
 	if err != nil {
@@ -634,7 +690,9 @@ type openTerminalConfig struct {
 	sessionID                domain.SessionID
 	workingDir               string
 	title                    string
+	titleExplicit            bool
 	transient                bool
+	commandOwner             string
 	cleanupWorkingDirOnError bool
 	previewVerifier          string
 	startOnAttach            bool
@@ -690,8 +748,10 @@ func (s *Service) openTerminal(ctx context.Context, cfg openTerminalConfig) (She
 		SessionID:                 cfg.sessionID,
 		WorkingDir:                cfg.workingDir,
 		Title:                     cfg.title,
+		TitleExplicit:             cfg.titleExplicit,
 		AppRunID:                  s.appRunID,
 		Transient:                 cfg.transient,
+		CommandOwner:              cfg.commandOwner,
 		CreatedAt:                 createdAt,
 		PreviewCapabilityVerifier: cfg.previewVerifier,
 	}
@@ -707,8 +767,16 @@ func (s *Service) openTerminal(ctx context.Context, cfg openTerminalConfig) (She
 		return ShellTerminal{}, fmt.Errorf("open shell terminal %s: persist: %w", handle.ID, err)
 	}
 	s.log.Info("shell terminal opened", "handleId", handle.ID, "workingDir", cfg.workingDir)
+	// Login terminals run an agent CLI on purpose; only user shells are tracked.
+	if !cfg.transient {
+		for _, tracker := range s.trackers {
+			tracker.TrackShellTerminal(handle.ID)
+		}
+	}
 	return shellTerminalFromRecord(rec), nil
 }
+
+var defaultShellTerminalTitle = regexp.MustCompile(`^Terminal( \d+)?$`)
 
 // nextShellTerminalTitle assigns a name at creation time. It never depends on
 // a tab's current UI position, so closing or reordering another tab cannot
@@ -864,6 +932,24 @@ func (s *Service) ListShellTerminalsForCurrentAppRun(ctx context.Context) ([]She
 	return out, nil
 }
 
+// ListCommandTerminalsForCurrentAppRun returns the trusted command terminals
+// (native login and setup flows) owned by this app launch, including those a
+// previous daemon in the same launch opened: they deliberately survive a daemon
+// restart. Liveness is not checked; callers probe the ones they own.
+func (s *Service) ListCommandTerminalsForCurrentAppRun(ctx context.Context) ([]ShellTerminal, error) {
+	recs, err := s.store.SelectShellTerminalsByAppRunID(ctx, s.appRunID)
+	if err != nil {
+		return nil, fmt.Errorf("list command terminals: %w", err)
+	}
+	out := make([]ShellTerminal, 0, len(recs))
+	for _, rec := range recs {
+		if rec.Transient {
+			out = append(out, shellTerminalFromRecord(rec))
+		}
+	}
+	return out, nil
+}
+
 // ReapShellTerminalsFromPreviousAppRuns prunes confirmed-dead user shells and
 // destroys abandoned trusted auth terminals. Live or unknown session shells
 // are preserved with their original associations and attach handles. A user
@@ -920,6 +1006,9 @@ func (s *Service) destroyConfirmed(ctx context.Context, rec ShellTerminalRecord)
 	stillAlive, destroyErr = s.destroyRuntimeConfirmed(ctx, ports.RuntimeHandle{ID: handleID})
 	if stillAlive {
 		return true, destroyErr
+	}
+	for _, tracker := range s.trackers {
+		tracker.UntrackShellTerminal(handleID)
 	}
 	if deleted, err := s.store.DeleteShellTerminalByHandleID(ctx, handleID); err != nil {
 		s.log.Warn("shell terminal: delete row after destroy failed", "handleId", handleID, "error", err)
@@ -1084,13 +1173,18 @@ func newShellTerminalHandleID() (string, error) {
 }
 
 func shellTerminalFromRecord(rec ShellTerminalRecord) ShellTerminal {
+	terminalTitle := ""
+	if !rec.TitleExplicit {
+		terminalTitle = domain.MeaningfulTerminalTitle(rec.AppTitle, rec.WorkingDir)
+	}
 	return ShellTerminal{
-		HandleID:   rec.HandleID,
-		ProjectID:  rec.ProjectID,
-		SessionID:  rec.SessionID,
-		WorkingDir: rec.WorkingDir,
-		Title:      rec.Title,
-		CreatedAt:  rec.CreatedAt,
+		TerminalTitle: terminalTitle,
+		HandleID:      rec.HandleID,
+		ProjectID:     rec.ProjectID,
+		SessionID:     rec.SessionID,
+		WorkingDir:    rec.WorkingDir,
+		Title:         rec.Title,
+		CreatedAt:     rec.CreatedAt,
 	}
 }
 
