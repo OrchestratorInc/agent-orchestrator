@@ -201,7 +201,7 @@ describe("NewChatPage", () => {
 		await waitFor(() => expect(h.navigate).toHaveBeenCalledWith(expect.objectContaining({ params: { projectId: "proj-1", sessionId: "cloud-sess-1" } })));
 	});
 
-	it("offers a Cloud scratchpad beside the local one where Cloud starts standalone agents", async () => {
+	it("offers Cloud sessions beside the local one where Cloud starts standalone agents", async () => {
 		const user = userEvent.setup();
 		// The project picker sits in the composer's tray.
 		const openPicker = async () => {
@@ -210,15 +210,15 @@ describe("NewChatPage", () => {
 			const tray = h.workspace?.composerTray;
 			cleanup();
 			render(<QueryClientProvider client={new QueryClient()}>{tray}</QueryClientProvider>);
-			await user.click(screen.getByRole("button", { name: "Project: Scratchpad" }));
+			await user.click(screen.getByRole("button", { name: "Project: Sessions" }));
 		};
 		await openPicker();
-		expect(await screen.findByRole("menuitem", { name: "Scratchpad" })).toBeInTheDocument();
-		expect(screen.queryByRole("menuitem", { name: "Cloud scratchpad" })).toBeNull();
+		expect(await screen.findByRole("menuitem", { name: "Sessions" })).toBeInTheDocument();
+		expect(screen.queryByRole("menuitem", { name: "Cloud sessions" })).toBeNull();
 
 		h.offering = { ready: true, org: { id: "org-1" }, features: ["share", "standalone_agents"] };
 		await openPicker();
-		await user.click(await screen.findByRole("menuitem", { name: "Cloud scratchpad" }));
+		await user.click(await screen.findByRole("menuitem", { name: "Cloud sessions" }));
 		expect(h.navigate).toHaveBeenCalledWith(expect.objectContaining({ to: "/new", search: expect.objectContaining({ project: CLOUD_STANDALONE_WORKSPACE_ID }) }));
 	});
 

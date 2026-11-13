@@ -244,7 +244,7 @@ describe("ArtifactsView", () => {
 		]);
 		expect(gallery.getByText("agent-orchestrator · Design the Artifacts entry point")).toBeInTheDocument();
 		expect(gallery.getByText("agent-orchestrator · Review pricing")).toBeInTheDocument();
-		expect(gallery.getByText("Scratchpad · Compare caching options")).toBeInTheDocument();
+		expect(gallery.getByText("Sessions · Compare caching options")).toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: /team/i })).not.toBeInTheDocument();
 	});
 
@@ -252,13 +252,13 @@ describe("ArtifactsView", () => {
 		const user = userEvent.setup();
 		renderView();
 		await user.click(screen.getByRole("button", { name: "Filter" }));
-		await user.click(screen.getByRole("menuitemcheckbox", { name: "Scratchpad" }));
+		await user.click(screen.getByRole("menuitemcheckbox", { name: "Sessions" }));
 		await user.keyboard("{Escape}");
 		expect(within(artifactList()).getAllByRole("listitem")).toHaveLength(1);
-		expect(within(artifactList()).getByText("Scratchpad · Compare caching options")).toBeInTheDocument();
+		expect(within(artifactList()).getByText("Sessions · Compare caching options")).toBeInTheDocument();
 		expect(screen.queryByRole("heading", { level: 2 })).not.toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Filter" })).toHaveAttribute("data-active", "true");
-		expect(screen.getByRole("button", { name: "Remove filter Project: Scratchpad" })).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Remove filter Project: Sessions" })).toBeInTheDocument();
 		await user.type(await openSearch(user), "no such thing");
 		await user.click(screen.getByRole("button", { name: "Clear filters" }));
 		expect(screen.queryByRole("searchbox", { name: "Search artifacts" })).not.toBeInTheDocument();
@@ -354,7 +354,7 @@ describe("ArtifactsView", () => {
 		await user.type(await openSearch(user), "pricing");
 		expect(screen.getAllByText("pricing.md")).toHaveLength(1);
 		expect(screen.queryByText("artifacts-user-flow.html")).not.toBeInTheDocument();
-		expect(screen.queryByText("Scratchpad")).not.toBeInTheDocument();
+		expect(screen.queryByText("Sessions")).not.toBeInTheDocument();
 
 		await user.clear(screen.getByRole("searchbox", { name: "Search artifacts" }));
 		await user.type(screen.getByRole("searchbox", { name: "Search artifacts" }), "no such thing");
@@ -374,7 +374,7 @@ describe("ArtifactsView", () => {
 		expect(within(artifactList()).getAllByRole("listitem")).toHaveLength(2);
 		expect(screen.queryByText("caching-options.md")).not.toBeInTheDocument();
 		await user.clear(search);
-		await user.type(search, "Scratchpad");
+		await user.type(search, "Sessions");
 
 		expect(screen.getAllByRole("listitem")).toHaveLength(1);
 		expect(screen.getAllByText("caching-options.md")).toHaveLength(1);
@@ -737,13 +737,13 @@ describe("ArtifactsView", () => {
 		await user.click(screen.getByRole("menuitemcheckbox", { name: "Not shared" }));
 		expect(rows()).toEqual([expect.stringContaining("artifacts-user-flow.html"), expect.stringContaining("caching-options.md")]);
 		// Filters narrow together: unshared artifacts of the Scratchpad.
-		await user.click(screen.getByRole("menuitemcheckbox", { name: "Scratchpad" }));
+		await user.click(screen.getByRole("menuitemcheckbox", { name: "Sessions" }));
 		expect(rows()).toEqual([expect.stringContaining("caching-options.md")]);
 		await user.keyboard("{Escape}");
-		expect(screen.getByRole("button", { name: "Remove filter Project: Scratchpad" })).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Remove filter Project: Sessions" })).toBeInTheDocument();
 
 		await user.click(screen.getByRole("button", { name: "Remove filter Sharing: Not shared" }));
-		await user.click(screen.getByRole("button", { name: "Remove filter Project: Scratchpad" }));
+		await user.click(screen.getByRole("button", { name: "Remove filter Project: Sessions" }));
 		expect(rows()).toHaveLength(3);
 		expect(screen.getByRole("button", { name: "Filter" })).not.toHaveAttribute("data-active");
 	});
@@ -1160,8 +1160,8 @@ describe("ArtifactsView", () => {
 		renderView();
 
 		await user.click(screen.getByRole("button", { name: "New artifact" }));
-		expectMenuItems(["Scratchpad", "agent-orchestrator"]);
-		await user.click(screen.getByRole("menuitem", { name: "Scratchpad" }));
+		expectMenuItems(["Sessions", "agent-orchestrator"]);
+		await user.click(screen.getByRole("menuitem", { name: "Sessions" }));
 
 		await waitFor(() => expect(mocks.navigate).toHaveBeenCalledWith({ to: "/sessions/$sessionId", params: { sessionId: "standalone-7" } }));
 		expect(mocks.post).toHaveBeenCalledWith("/api/v1/sessions", {
@@ -1186,7 +1186,7 @@ describe("ArtifactsView", () => {
 		expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
 
 		await user.click(screen.getByRole("button", { name: "Create artifact" }));
-		expectMenuItems(["Scratchpad", "agent-orchestrator", "px0"]);
+		expectMenuItems(["Sessions", "agent-orchestrator", "px0"]);
 	});
 
 	it("gives each project the sidebar's icon in the New artifact menu", async () => {
@@ -1197,7 +1197,7 @@ describe("ArtifactsView", () => {
 		const item = screen.getByRole("menuitem", { name: "agent-orchestrator" });
 		expect(item.querySelector('[aria-hidden="true"]')?.textContent).toBe("A");
 		// Scratchpad keeps its file icon: it is not a project.
-		expect(screen.getByRole("menuitem", { name: "Scratchpad" }).textContent).toBe("Scratchpad");
+		expect(screen.getByRole("menuitem", { name: "Sessions" }).textContent).toBe("Sessions");
 	});
 
 	it("starts a Scratchpad artifact session without a project id and opens it", async () => {
@@ -1207,7 +1207,7 @@ describe("ArtifactsView", () => {
 		renderView();
 
 		await user.click(screen.getByRole("button", { name: "Create artifact" }));
-		await user.click(screen.getByRole("menuitem", { name: "Scratchpad" }));
+		await user.click(screen.getByRole("menuitem", { name: "Sessions" }));
 
 		await waitFor(() => expect(mocks.navigate).toHaveBeenCalledWith({ to: "/sessions/$sessionId", params: { sessionId: "standalone-9" } }));
 		expect(mocks.post).toHaveBeenCalledWith("/api/v1/sessions", {
@@ -1241,7 +1241,7 @@ describe("ArtifactsView", () => {
 		renderView();
 
 		await user.click(screen.getByRole("button", { name: "Create artifact" }));
-		await user.click(screen.getByRole("menuitem", { name: "Scratchpad" }));
+		await user.click(screen.getByRole("menuitem", { name: "Sessions" }));
 
 		await waitFor(() => expect(useUiStore.getState().globalToast).toMatchObject({ title: "Agent is not ready" }));
 		expect(mocks.navigate).not.toHaveBeenCalled();

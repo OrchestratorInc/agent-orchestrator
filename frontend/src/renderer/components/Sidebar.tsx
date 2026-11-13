@@ -911,7 +911,7 @@ export const Sidebar = memo(function Sidebar({
 	);
 
 	// The ad hoc group is a bucket for projectless sessions, not a project: it
-	// gets its own Scratchpad section below the project list rather than a
+	// gets its own Sessions section above the project list rather than a
 	// project row appended to the end of it. The person's own Cloud standalone
 	// agents join it there; each keeps its project, which routes it.
 	const projectWorkspaces = useMemo(() => {
@@ -1215,28 +1215,6 @@ export const Sidebar = memo(function Sidebar({
 						</AnimatedSectionBody>
 					</div>
 				)}
-
-				{/* Projects — collapsible; the "+" stays mounted through the empty
-				    state so it keeps owning the ⌘N create flow. */}
-				<div className="sidebar-expanded-chrome flex shrink-0 pb-0.5 group-data-[collapsible=icon]:hidden">
-					<SectionDisclosure
-						label={t("shell.projects")}
-						open={projectsOpen}
-						onToggle={() => toggleSection("projects", projectsOpen, setProjectsOpen)}
-						trailing={
-							<CreateProjectButton
-								existingProjectPaths={existingProjectPaths}
-								remoteHosts={remoteHosts}
-								onCreateRemoteProject={onCreateRemoteProject}
-								onInitializeRemoteProject={onInitializeRemoteProject}
-								onCloneProject={onCloneProject}
-								onCreateProject={onCreateProject}
-								onInitializeProject={onInitializeProject}
-								onOpenExistingProject={openExistingProject}
-							/>
-						}
-					/>
-				</div>
 			</div>
 
 			<SidebarContent className="scrollbar-none gap-0 px-2 group-data-[collapsible=icon]:items-center group-data-[collapsible=icon]:px-1.5">
@@ -1245,6 +1223,38 @@ export const Sidebar = memo(function Sidebar({
 					<SidebarGroupContent
 						className="sidebar-sections-container grid min-h-0 flex-1 auto-rows-[minmax(0,auto)] content-start group-data-[collapsible=icon]:flex group-data-[collapsible=icon]:flex-col"
 					>
+						{/* Sessions (projectless agents) sit above Projects so standalone
+						    agents are easy to find and start. */}
+						{!workspaceError && standaloneWorkspace ? (
+							<ScratchpadSection
+								workspace={standaloneWorkspace}
+								selection={selection}
+								isCollapsed={isIconRail}
+								open={scratchpadOpen}
+								onToggle={() => toggleSection("scratchpad", scratchpadOpen, setScratchpadOpen)}
+							/>
+						) : null}
+						{/* Projects — collapsible; the "+" stays mounted through the empty
+						    state so it keeps owning the ⌘N create flow. */}
+						<div className="sidebar-expanded-chrome flex shrink-0 pb-0.5 group-data-[collapsible=icon]:hidden">
+							<SectionDisclosure
+								label={t("shell.projects")}
+								open={projectsOpen}
+								onToggle={() => toggleSection("projects", projectsOpen, setProjectsOpen)}
+								trailing={
+									<CreateProjectButton
+										existingProjectPaths={existingProjectPaths}
+										remoteHosts={remoteHosts}
+										onCreateRemoteProject={onCreateRemoteProject}
+										onInitializeRemoteProject={onInitializeRemoteProject}
+										onCloneProject={onCloneProject}
+										onCreateProject={onCreateProject}
+										onInitializeProject={onInitializeProject}
+										onOpenExistingProject={openExistingProject}
+									/>
+								}
+							/>
+						</div>
 						{workspaceError ? (
 							<div className="sidebar-expanded-chrome px-2.5 py-3 group-data-[collapsible=icon]:hidden">
 								<p className="text-sm text-foreground">{t("shell.couldNotLoadProjects")}</p>
@@ -1341,15 +1351,6 @@ export const Sidebar = memo(function Sidebar({
 									/>
 								) : null}
 							</AnimatedSectionBody>
-						) : null}
-						{!workspaceError && standaloneWorkspace ? (
-							<ScratchpadSection
-								workspace={standaloneWorkspace}
-								selection={selection}
-								isCollapsed={isIconRail}
-								open={scratchpadOpen}
-								onToggle={() => toggleSection("scratchpad", scratchpadOpen, setScratchpadOpen)}
-							/>
 						) : null}
 					</SidebarGroupContent>
 				</SidebarGroup>
@@ -2283,9 +2284,9 @@ function scratchpadSummary(name: string): Pick<WorkspaceSummary, "id" | "name" |
 	return { id: STANDALONE_WORKSPACE_ID, name, kind: STANDALONE_PROJECT_KIND, path: "" };
 }
 
-/** Projectless ("ad hoc") agents. Their own section under Projects — same
- *  header chrome, own capped scroller, own Show more — instead of a project row
- *  appended to the project list. */
+/** Projectless ("ad hoc") agents, shown as "Sessions". Their own section above
+ *  Projects — same header chrome, own capped scroller, own Show more — instead
+ *  of a project row appended to the project list. */
 function ScratchpadSection({
 	workspace,
 	selection,
@@ -2372,7 +2373,7 @@ function ScratchpadSection({
 							label={workspace.name}
 							open={open}
 							onToggle={onToggle}
-							className="group/scratchpad mt-1"
+							className="group/scratchpad"
 							trailing={
 								<div className="relative inline-flex items-center">
 									<span

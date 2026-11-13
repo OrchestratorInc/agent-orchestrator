@@ -775,7 +775,7 @@ describe("useWorkspaceQuery", () => {
 			path: "",
 			sessions: [],
 		});
-		expect(result.current.data?.[2]).toMatchObject({ id: "__standalone__", name: "Scratchpad" });
+		expect(result.current.data?.[2]).toMatchObject({ id: "__standalone__", name: "Sessions" });
 		expect(listProjectsMock).toHaveBeenCalledWith("org-1", { limit: 100, standaloneAgents: "exclude" });
 		expect(listStandaloneAgentsMock).toHaveBeenCalledWith("org-1", { limit: 100, standaloneAgents: "only" });
 	});
