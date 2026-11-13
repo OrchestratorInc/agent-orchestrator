@@ -120,6 +120,13 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 	const cloudFiles = useMemo(() => cloudTaskTakesFiles && cloudOffering.maxAttachmentBytes !== undefined
 		? { maxBytes: Math.min(cloudOffering.maxAttachmentBytes, MAX_CLOUD_CP_BINARY_BYTES) } : undefined,
 	[cloudOffering.maxAttachmentBytes, cloudTaskTakesFiles]);
+	// A draft keeps the files it brought from a target that takes them; here
+	// they stay with why this target takes none, until they are removed.
+	const attachmentsRefusal = projectId === CLOUD_STANDALONE_WORKSPACE_ID && task.isCloudProject
+		? t("newTask.cloudStandaloneNoFiles", { defaultValue: "Files can't start a standalone agent. Remove them to continue." })
+		: task.isCloudProject && cloudOffering.loaded && !cloudFiles
+			? t("newTask.cloudProjectNoFiles", { defaultValue: "Files can't start a task in this Cloud project yet. Remove them to continue." })
+			: undefined;
 	const workspaceReady = Boolean(preparedId && workspaceFiles.data);
 	// Files staged into one project's worktree do not exist in another's.
 	const attachmentsProject = useRef(projectId);
@@ -421,6 +428,7 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 				// A Cloud task whose control plane takes no files offers none.
 				holdAttachments={!task.isCloudProject || Boolean(cloudFiles)}
 				cloudAttachments={cloudFiles}
+				attachmentsRefusal={attachmentsRefusal}
 				onHeldAttachmentsChange={onHeldAttachmentsChange}
 				onStageAttachments={workspaceReady ? stagePrepared : undefined}
 				filePaths={workspaceFiles.data?.paths}

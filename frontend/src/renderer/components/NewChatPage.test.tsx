@@ -230,10 +230,13 @@ describe("NewChatPage", () => {
 		renderPage();
 		expect(h.workspace?.holdAttachments).toBe(true);
 		expect(h.workspace?.cloudAttachments).toEqual({ maxBytes: 25 * 1024 * 1024 });
+		expect(h.workspace?.attachmentsRefusal).toBeUndefined();
 		cleanup();
 		render(<QueryClientProvider client={new QueryClient()}><NewChatPage projectId={CLOUD_STANDALONE_WORKSPACE_ID} /></QueryClientProvider>);
 		expect(h.workspace?.holdAttachments).toBe(false);
 		expect(h.workspace?.cloudAttachments).toBeUndefined();
+		// A draft that brought files from another target keeps them, with why this one takes none.
+		expect(h.workspace?.attachmentsRefusal).toBe("Files can't start a standalone agent. Remove them to continue.");
 	});
 
 	it("opens a new Cloud standalone agent on the project the control plane made for it", async () => {

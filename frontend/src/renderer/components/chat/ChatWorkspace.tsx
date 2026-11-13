@@ -663,6 +663,8 @@ export interface ChatWorkspaceProps {
 	/** Keep files the workspace cannot take yet in the composer, sent with the message. */
 	holdAttachments?: boolean;
 	onHeldAttachmentsChange?: ComponentProps<typeof ChatComposer>["onHeldAttachmentsChange"];
+	/** Why this chat takes no files, for a draft that brought some (ChatComposer). */
+	attachmentsRefusal?: string;
 }
 
 type ChatWorkspaceActivation =
@@ -888,6 +890,7 @@ function ChatWorkspaceContent({
 	showSetupStep = true,
 	holdAttachments,
 	onHeldAttachmentsChange,
+	attachmentsRefusal,
 	draftScope,
 	draftPersistenceAvailable,
 	onRetryDraftPersistence,
@@ -2341,6 +2344,7 @@ function ChatWorkspaceContent({
 										cloudAttachments={cloudAttachments}
 										holdAttachments={newWorkDisabled ? undefined : holdAttachments}
 										onHeldAttachmentsChange={onHeldAttachmentsChange}
+										attachmentsRefusal={attachmentsRefusal}
 										nativeImages={queueEdit?.clientMessageId ? queueEdit.nativeImages ?? nativeImages : nativeImages}
 										autoFocus={!reviewerActive}
 										autoFocusKey={draftScope.sessionId}

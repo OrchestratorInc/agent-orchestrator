@@ -2,7 +2,7 @@ import { upgradeExcerpt } from "../../lib/chat-excerpt-snapshot";
 import { CLOUD_CHAT_MESSAGE_BYTES } from "../../../shared/chat-excerpt";
 import { appI18n } from "../../i18n/instance";
 import { purgeFileAttachmentsForSession } from "../../hooks/useFileAttachments";
-import { act, fireEvent, render as rtlRender, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render as rtlRender, screen, waitFor, within } from "@testing-library/react";
 import type { ReactElement } from "react";
 import userEvent from "@testing-library/user-event";
 import { Activity, Profiler } from "react";
@@ -2342,6 +2342,31 @@ describe("attachments", () => {
 			{ mimeType: "image/png", data: expect.any(String), name: "a.png" },
 			{ mimeType: "text/plain", data: btoa("hello"), name: "notes.txt" },
 		]);
+	});
+
+	// A draft keeps its files when it moves to a chat that cannot take them (a
+	// new task's Cloud standalone agent): they stay as chips with that chat's
+	// reason, and nothing is sent until they are removed.
+	it("keeps files a chat cannot take as chips with its reason, sending nothing until they are removed", async () => {
+		const reason = "Files can't start a standalone agent. Remove them to continue.";
+		const held = renderComposer({ draftSessionId: "composer-files-refused", holdAttachments: true });
+		fireEvent.paste(held.field, { clipboardData: clipboardData([textFile()]) });
+		await screen.findByLabelText("Remove notes.txt");
+		cleanup();
+		const { onSend, field } = renderComposer({ draftSessionId: "composer-files-refused", attachmentsRefusal: reason });
+		await screen.findByLabelText("Remove notes.txt");
+		expect(screen.getByText(reason)).toBeTruthy();
+		await typeInComposer(field, "start without the file");
+		await userEvent.click(field);
+		await userEvent.keyboard("{Enter}");
+		expect(onSend).not.toHaveBeenCalled();
+		expect(screen.queryByText("The files are not durably available. Nothing was sent.")).toBeNull();
+		await userEvent.click(screen.getByLabelText("Remove notes.txt"));
+		await waitFor(() => expect(screen.queryByText(reason)).toBeNull());
+		await userEvent.click(field);
+		await userEvent.keyboard("{Enter}");
+		await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+		expect(onSend.mock.calls[0]?.[0]).toBe("start without the file");
 	});
 
 	it("keeps held file bytes available after a definitive send rejection", async () => {
