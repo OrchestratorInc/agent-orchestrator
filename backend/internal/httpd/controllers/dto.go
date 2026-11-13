@@ -4763,6 +4763,16 @@ type MoveImportRequest struct {
 	MoveID      string                  `json:"moveId" minLength:"1" maxLength:"64" pattern:"^[A-Za-z0-9._-]+$"`
 	Manifest    sessionsvc.MoveManifest `json:"manifest"`
 	HandoffNote string                  `json:"handoffNote,omitempty"`
+	// Transcript is the Claude Code conversation from Orchestrator Cloud's
+	// move/export; the session resumes it instead of the note.
+	Transcript *MoveImportTranscript `json:"transcript,omitempty"`
+}
+
+// MoveImportTranscript is a Claude Code conversation an Orchestrator Cloud sandbox kept.
+type MoveImportTranscript struct {
+	AgentSessionID string `json:"agentSessionId" minLength:"1" pattern:"^[0-9a-fA-F-]{36}$"`
+	ProjectDir     string `json:"projectDir" minLength:"1" description:"The Claude project folder the transcript was in on Orchestrator Cloud; its paths and the sandbox's working directory become this machine's."`
+	TranscriptGzip []byte `json:"transcriptGzip" description:"The transcript, gzipped and base64-encoded."`
 }
 
 // MoveImportResponse is the new session. Warnings list what did not carry

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -80,6 +81,19 @@ type MoveImportInput struct {
 	MoveID      string
 	Manifest    MoveManifest
 	HandoffNote string
+	// Transcript is the agent's conversation in AO Cloud. The session resumes
+	// it, and starts from HandoffNote only when it cannot be placed.
+	Transcript *MoveImportTranscript
+}
+
+// MoveImportTranscript is a Claude Code conversation an AO Cloud sandbox kept.
+type MoveImportTranscript struct {
+	// ProjectDir is the Claude project folder it was in, whose paths, and the
+	// sandbox's working directory, become this machine's.
+	ProjectDir string
+	// AgentSessionID names the conversation; Gzip is its transcript.
+	AgentSessionID string
+	Gzip           []byte
 }
 
 // MoveImportOutcome is the new session and anything that did not carry over.
@@ -257,7 +271,7 @@ func (s *Service) ImportMove(ctx context.Context, in MoveImportInput) (MoveImpor
 	if prompt == "" {
 		prompt = "This Orchestrator-managed session moved here from " + m.SourceLabel + ". Check the branch's files and git log, then wait for the user."
 	}
-	sess, _, _, err := s.Spawn(ctx, ports.SpawnConfig{
+	cfg := ports.SpawnConfig{
 		ProjectID: in.ProjectID, IssueID: m.IssueID, ClientRequestID: in.MoveID, ClientRequestHash: hash,
 		Kind: domain.KindWorker, Harness: m.Harness, Branch: m.Branch, Prompt: prompt,
 		AgentConfig:     domain.AgentConfig{Model: m.Model, Effort: m.Effort, Permissions: m.Permissions},
@@ -265,11 +279,27 @@ func (s *Service) ImportMove(ctx context.Context, in MoveImportInput) (MoveImpor
 		RequestedMode:   m.Mode,
 		RequestedOutput: m.RequestedOutput,
 		DisplayName:     m.DisplayName, KeepDisplayName: m.DisplayName != "",
-	})
+	}
+	var warnings []string
+	if t := in.Transcript; t != nil && m.Harness == domain.HarnessClaudeCode {
+		dir, err := os.MkdirTemp("", "ao-move-import-*")
+		if err != nil {
+			return MoveImportOutcome{}, err
+		}
+		defer func() { _ = os.RemoveAll(dir) }()
+		if archive, err := writeImportArchive(ctx, dir, *t); err != nil {
+			warnings = append(warnings, "The conversation could not be read, so the session starts from the handoff note: "+err.Error())
+		} else {
+			// The resumed conversation holds the task; the note is only its fallback.
+			cfg.Transfer = &ports.SpawnTransfer{NativeArchive: archive, FallbackPrompt: prompt}
+			cfg.Prompt = ""
+		}
+	}
+	sess, _, _, err := s.Spawn(ctx, cfg)
 	if err != nil {
 		return MoveImportOutcome{}, err
 	}
-	out := MoveImportOutcome{Session: sess}
+	out := MoveImportOutcome{Session: sess, Warnings: warnings}
 	for _, url := range m.PullRequests {
 		if _, err := s.ClaimPR(ctx, sess.ID, url, ClaimPROptions{AllowTakeover: true}); err != nil {
 			out.Warnings = append(out.Warnings, fmt.Sprintf("Could not claim %s: %v", url, err))
@@ -450,4 +480,41 @@ func (s *Service) MoveTranscript(ctx context.Context, id domain.SessionID) (Move
 		return MoveTranscript{}, apierr.Conflict("MOVE_TRANSCRIPT_UNAVAILABLE", "The agent's conversation could not be read.", map[string]any{"detail": err.Error()})
 	}
 	return MoveTranscript{AgentSessionID: nativeID, Gzip: buf.Bytes()}, nil
+}
+
+// writeImportArchive unzips a transcript from AO Cloud into dir and writes the
+// archive the spawn places it from.
+func writeImportArchive(ctx context.Context, dir string, t MoveImportTranscript) (string, error) {
+	zr, err := gzip.NewReader(bytes.NewReader(t.Gzip))
+	if err != nil {
+		return "", err
+	}
+	transcript := filepath.Join(dir, t.AgentSessionID+".jsonl")
+	if filepath.Base(transcript) != t.AgentSessionID+".jsonl" {
+		return "", fmt.Errorf("invalid conversation id %q", t.AgentSessionID)
+	}
+	f, err := os.OpenFile(transcript, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return "", err
+	}
+	n, err := io.Copy(f, io.LimitReader(zr, CloudTranscriptMaxBytes+1))
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return "", err
+	}
+	if n > CloudTranscriptMaxBytes {
+		return "", nativetransfer.ErrTooLarge
+	}
+	archive := filepath.Join(dir, "conversation.tgz")
+	out, err := os.OpenFile(archive, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return "", err
+	}
+	_, err = nativetransfer.WriteClaudeArchiveFromCloud(ctx, out, transcript, t.ProjectDir)
+	if cerr := out.Close(); err == nil {
+		err = cerr
+	}
+	return archive, err
 }

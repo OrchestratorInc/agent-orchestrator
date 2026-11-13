@@ -55,3 +55,41 @@ func TestWriteClaudeTranscriptForCloudRefusesOversize(t *testing.T) {
 		t.Fatalf("err = %v, want ErrTooLarge", err)
 	}
 }
+
+func TestWriteClaudeArchiveFromCloudPlacesTheConversationHere(t *testing.T) {
+	// cfgA and cwdA stand for the sandbox; the transcript arrives as one file.
+	f := newClaudeFixture(t)
+	inbox := filepath.Join(t.TempDir(), testID+".jsonl")
+	data, err := os.ReadFile(filepath.Join(f.projA, testID+".jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, inbox, string(data))
+	var archive bytes.Buffer
+	if _, err := WriteClaudeArchiveFromCloud(context.Background(), &archive, inbox, f.projA); err != nil {
+		t.Fatal(err)
+	}
+	res, err := ImportClaude(context.Background(), &archive, ClaudeImportOptions{ConfigDir: f.cfgB, LaunchCwd: f.cwdB})
+	if err != nil {
+		t.Fatal(err)
+	}
+	nameB, _ := ClaudeProjectDirName(f.cwdB)
+	projB := filepath.Join(f.cfgB, "projects", nameB)
+	if res.NativeID != testID || res.TranscriptPath != filepath.Join(projB, testID+".jsonl") {
+		t.Fatalf("import = %+v", res)
+	}
+	placed, _ := os.ReadFile(res.TranscriptPath)
+	got := string(placed)
+	for _, want := range []string{
+		`"cwd":"` + f.cwdB + `"`,
+		`Output saved to ` + projB + `/` + testID + `/tool-results/x.txt`,
+		`"thinking":"the user works in ` + f.cwdA + `"`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("placed transcript lacks %s", want)
+		}
+	}
+	if strings.Contains(got, `"cwd":"`+f.cwdA) || strings.Contains(got, f.projA) {
+		t.Errorf("placed transcript still names the sandbox's paths:\n%s", got)
+	}
+}

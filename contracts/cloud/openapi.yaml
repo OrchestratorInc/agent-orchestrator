@@ -1535,6 +1535,19 @@ paths:
                       model: { type: string }
                       displayName: { type: string }
                   handoffNote: { type: string }
+                  transcript:
+                    type: object
+                    description: >-
+                      The Claude Code conversation, checkpointed after the
+                      push, for the daemon to resume. Absent for another
+                      agent or when none was captured.
+                    required: [agentSessionId, projectDir, transcriptGzip]
+                    properties:
+                      agentSessionId: { type: string }
+                      projectDir:
+                        type: string
+                        description: The sandbox's Claude project folder the conversation was in.
+                      transcriptGzip: { type: string, format: byte }
         default:
           $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/transcript-imports/{importId}:

@@ -7593,6 +7593,14 @@ export interface operations {
                             displayName?: string;
                         };
                         handoffNote: string;
+                        /** @description The Claude Code conversation, checkpointed after the push, for the daemon to resume. Absent for another agent or when none was captured. */
+                        transcript?: {
+                            agentSessionId: string;
+                            /** @description The sandbox's Claude project folder the conversation was in. */
+                            projectDir: string;
+                            /** Format: byte */
+                            transcriptGzip: string;
+                        };
                     };
                 };
             };
