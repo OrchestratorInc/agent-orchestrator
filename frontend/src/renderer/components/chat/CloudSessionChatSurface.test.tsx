@@ -632,6 +632,20 @@ describe("CloudSessionChatSurface", () => {
 		expect(snapshot.turns[0]).toMatchObject({ id: "turn-refused", state: "failed", notRun: true, errorMessage: "The person who sent this message can no longer write to this session." });
 	});
 
+	// The control plane marks a message it did not run (reason
+	// author_cannot_write), so a page holding only that end, without the
+	// message or its start, still reads it as not run; one without a reason
+	// there is a normal failure.
+	it("shows a refused message as not run on a page holding only its end", () => {
+		const aborted = (reason?: string) => toSnapshot(session, [
+			{ sessionId: session.id, sequence: 9, type: "chat.turn_aborted", payload: { turnId: "turn-refused", attempt: 1, error: "Not run: the person who sent this message can no longer write to this session.", ...(reason ? { reason } : {}) }, createdAt: "2026-11-13T09:01:00Z" },
+		], undefined, { partial: true }).turns[0];
+		const refused = aborted("author_cannot_write");
+		expect(refused).toMatchObject({ id: "turn-refused", state: "failed", notRun: true, errorMessage: "The person who sent this message can no longer write to this session." });
+		expect(refused).not.toHaveProperty("startedAt");
+		expect(aborted()).not.toHaveProperty("notRun");
+	});
+
 	// A turn the agent ran and the person stopped reads as it always did.
 	it("keeps a running turn the person stopped as interrupted", () => {
 		const snapshot = toSnapshot(session, [

@@ -48,7 +48,11 @@ import { artifactAtPath } from "../../../../../packages/shared/artifacts/deliver
 
 type EventPayload = {
 	attempt?: unknown;
-	/** chat.turn_interrupted: why a turn ended before it started (deleted, interface_switch). */
+	/**
+	 * chat.turn_interrupted: why a turn ended before it started (deleted,
+	 * interface_switch); chat.turn_aborted: author_cannot_write for a message
+	 * the control plane did not run.
+	 */
 	reason?: unknown;
 	/** chat.user_message: the files the message carries. */
 	attachments?: unknown;
@@ -787,7 +791,10 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 			// No agent started on it: its prompt is loaded with no start after it
 			// (a turn starts after its prompt), or it ended at attempt 0, never
 			// claimed, which holds on a page without its prompt too.
-			const neverStarted = !startedTurns.has(turnID) && (promptedTurns.has(turnID) || eventPayload(event).attempt === 0);
+			// The control plane marks a message it did not run (reason
+			// author_cannot_write), which holds on a page holding only its end.
+			const notRun = event.type === "chat.turn_aborted" && eventPayload(event).reason === "author_cannot_write";
+			const neverStarted = notRun || (!startedTurns.has(turnID) && (promptedTurns.has(turnID) || eventPayload(event).attempt === 0));
 			if (event.type === "chat.turn_interrupted" && eventPayload(event).reason === "deleted") {
 				// The person took the queued message back: it leaves the
 				// conversation, as a local chat drops a queued message deleted from
