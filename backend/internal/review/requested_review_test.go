@@ -49,7 +49,7 @@ func TestTriggerRejectReviewedHeadReportsRunningReview(t *testing.T) {
 func TestTriggerRejectReviewedHeadReportsAnyCompletedReview(t *testing.T) {
 	store := &fakeStore{
 		runs: []domain.ReviewRun{
-			requestedRun("run-1", domain.ReviewerClaudeCode, domain.ReviewRunComplete, domain.VerdictApproved, 1),
+			requestedRun("run-1", domain.ReviewerClaudeCode, domain.ReviewRunCompleted, domain.VerdictApproved, 1),
 			requestedRun("run-2", domain.ReviewerCodex, domain.ReviewRunFailed, domain.VerdictNone, 2),
 		},
 	}
@@ -70,7 +70,7 @@ func TestTriggerRejectReviewedHeadReportsAnyCompletedReview(t *testing.T) {
 
 func TestTriggerRejectReviewedHeadStartsAnUnreviewedHeadAsAgent(t *testing.T) {
 	store := &fakeStore{
-		runs: []domain.ReviewRun{requestedRun("run-old", domain.ReviewerClaudeCode, domain.ReviewRunComplete, domain.VerdictChangesRequested, 1)},
+		runs: []domain.ReviewRun{requestedRun("run-old", domain.ReviewerClaudeCode, domain.ReviewRunCompleted, domain.VerdictChangesRequested, 1)},
 	}
 	store.runs[0].TargetSHA = "sha0"
 	launcher := &fakeLauncher{handle: "claude-pane"}
@@ -103,7 +103,7 @@ func TestTriggerRerunReviewsAnApprovedHeadAgainWithTheSameReviewer(t *testing.T)
 	if err := store.InsertReviewRun(ctx, approved); err != nil {
 		t.Fatalf("seed run: %v", err)
 	}
-	if _, err := store.UpdateReviewRunResult(ctx, approved.ID, domain.ReviewRunComplete, domain.VerdictApproved, "", "", true); err != nil {
+	if _, err := store.TransitionReviewRun(ctx, approved.ID, domain.ActiveReviewRunStatuses, domain.ReviewRunCompleted, domain.ReviewRunPatch{Verdict: domain.VerdictApproved}); err != nil {
 		t.Fatalf("approve seeded run: %v", err)
 	}
 	launcher := &fakeLauncher{handle: "claude-pane"}
@@ -180,7 +180,7 @@ func TestTriggerReleasesAnIdleOtherReviewer(t *testing.T) {
 		reviews: map[domain.ReviewerHarness]domain.Review{
 			domain.ReviewerClaudeCode: {ID: "rev-claude-code", SessionID: "mer-1", Harness: domain.ReviewerClaudeCode, ReviewerHandleID: "claude-pane"},
 		},
-		runs: []domain.ReviewRun{requestedRun("run-1", domain.ReviewerClaudeCode, domain.ReviewRunComplete, domain.VerdictApproved, 1)},
+		runs: []domain.ReviewRun{requestedRun("run-1", domain.ReviewerClaudeCode, domain.ReviewRunCompleted, domain.VerdictApproved, 1)},
 	}
 	launcher := &fakeLauncher{alive: true, handle: "codex-pane"}
 	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{}, launcher)
@@ -246,13 +246,23 @@ func TestCancelStopsEveryRunningReviewer(t *testing.T) {
 	if len(res.CancelledRuns) != 2 {
 		t.Fatalf("cancelled = %+v, want both reviewers' runs", res.CancelledRuns)
 	}
+	// Both reviewers are still alive, so the stop is not confirmed yet.
 	for _, run := range store.runs {
-		if run.Status != domain.ReviewRunCancelled {
-			t.Fatalf("run %s = %q, want cancelled", run.ID, run.Status)
+		if run.Status != domain.ReviewRunCancelling || run.CancelledBy != domain.ReviewCancelledByUser || run.CancelRequestedAt == nil {
+			t.Fatalf("run %s = %+v, want cancelling by user", run.ID, run)
 		}
 	}
 	if res.ReviewerHandleID != "claude-pane" {
 		t.Fatalf("reported handle = %q, want the selected claude-code reviewer", res.ReviewerHandleID)
+	}
+	launcher.alive = false
+	if err := eng.EvaluateSession(context.Background(), "mer-1"); err != nil {
+		t.Fatalf("EvaluateSession: %v", err)
+	}
+	for _, run := range store.runs {
+		if run.Status != domain.ReviewRunCancelled || run.CancelledBy != domain.ReviewCancelledByUser {
+			t.Fatalf("run %s = %+v, want cancelled once both reviewers stopped", run.ID, run)
+		}
 	}
 }
 
@@ -268,7 +278,7 @@ func TestTriggerStaleReviewerCancelIsScopedToThatReviewer(t *testing.T) {
 		},
 	}
 	store.runs[0].PRURL = "https://github.com/o/r/pull/2"
-	launcher := &fakeLauncher{handle: "claude-pane"}
+	launcher := &fakeLauncher{alive: true, handle: "claude-pane"}
 	prs := fakePRs{prs: []domain.PullRequest{{URL: requestedPRURL, Number: 1, HeadSHA: "sha1"}, {URL: "https://github.com/o/r/pull/2", Number: 2, HeadSHA: "sha1"}}}
 	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prs, fakeProjects{}, launcher)
 
@@ -303,8 +313,8 @@ func TestReviewerDefaultsToTheProjectDefaultWorkerConfig(t *testing.T) {
 }
 
 // Restoring a worker restores its selected reviewer. Another reviewer running
-// alongside it keeps running when its pane survived, and is cancelled with an
-// accurate reason when it did not, instead of being reported as "switched".
+// alongside it keeps running when its pane survived, and fails as
+// process_exited when it did not, instead of being reported as "switched".
 func TestRestoreReviewerKeepsALiveParallelReviewerAndCancelsADeadOne(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
@@ -312,7 +322,7 @@ func TestRestoreReviewerKeepsALiveParallelReviewerAndCancelsADeadOne(t *testing.
 		wantStatus domain.ReviewRunStatus
 	}{
 		{"live", "opencode-pane", domain.ReviewRunRunning},
-		{"torn down", "", domain.ReviewRunCancelled},
+		{"torn down", "", domain.ReviewRunFailed},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			store := &fakeStore{
@@ -321,7 +331,7 @@ func TestRestoreReviewerKeepsALiveParallelReviewerAndCancelsADeadOne(t *testing.
 					domain.ReviewerOpenCode:   {ID: "rev-opencode", SessionID: "mer-1", Harness: domain.ReviewerOpenCode, ReviewerHandleID: tc.handle},
 				},
 				runs: []domain.ReviewRun{
-					requestedRun("run-claude", domain.ReviewerClaudeCode, domain.ReviewRunComplete, domain.VerdictApproved, 1),
+					requestedRun("run-claude", domain.ReviewerClaudeCode, domain.ReviewRunCompleted, domain.VerdictApproved, 1),
 					requestedRun("run-opencode", domain.ReviewerOpenCode, domain.ReviewRunRunning, domain.VerdictNone, 2),
 				},
 			}
@@ -339,6 +349,9 @@ func TestRestoreReviewerKeepsALiveParallelReviewerAndCancelsADeadOne(t *testing.
 			}
 			if got.Status != tc.wantStatus {
 				t.Fatalf("opencode run = %+v, want %s", got, tc.wantStatus)
+			}
+			if tc.wantStatus == domain.ReviewRunFailed && got.FailureReason != domain.ReviewFailureProcessExited {
+				t.Fatalf("opencode failure reason = %q, want process_exited", got.FailureReason)
 			}
 			if strings.Contains(got.Body, "switched") {
 				t.Fatalf("opencode run body = %q, must not claim the reviewer was switched", got.Body)
@@ -360,7 +373,7 @@ func TestListKeepsTheSelectedReviewerAndListsTheWorkingOneAsActive(t *testing.T)
 			domain.ReviewerCodex:      {ID: "rev-codex", SessionID: "mer-1", Harness: domain.ReviewerCodex, ReviewerHandleID: "codex-pane", ReviewerActivityState: domain.ActivityActive},
 		},
 		runs: []domain.ReviewRun{
-			requestedRun("run-claude", domain.ReviewerClaudeCode, domain.ReviewRunComplete, domain.VerdictApproved, 1),
+			requestedRun("run-claude", domain.ReviewerClaudeCode, domain.ReviewRunCompleted, domain.VerdictApproved, 1),
 			requestedRun("run-codex", domain.ReviewerCodex, domain.ReviewRunRunning, domain.VerdictNone, 2),
 		},
 	}
@@ -388,7 +401,7 @@ func TestRestoreReviewerLeavesARunningChatReviewerToChatRecovery(t *testing.T) {
 			domain.ReviewerCodex:      {ID: "rev-codex", SessionID: "mer-1", Harness: domain.ReviewerCodex, InterfaceMode: domain.ReviewerInterfaceChat},
 		},
 		runs: []domain.ReviewRun{
-			requestedRun("run-claude", domain.ReviewerClaudeCode, domain.ReviewRunComplete, domain.VerdictApproved, 1),
+			requestedRun("run-claude", domain.ReviewerClaudeCode, domain.ReviewRunCompleted, domain.VerdictApproved, 1),
 			requestedRun("run-codex", domain.ReviewerCodex, domain.ReviewRunRunning, domain.VerdictNone, 2),
 		},
 	}

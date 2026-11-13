@@ -48,7 +48,7 @@ func TestSessionListDerivesKanbanColumn(t *testing.T) {
 			record: domain.SessionRecord{ID: "mer-1", ProjectID: "mer"},
 			pr:     &domain.PRFacts{URL: "pr1", HeadSHA: "head1"},
 			runs: []domain.CurrentHeadReviewRun{
-				{PRURL: "pr1", Status: domain.ReviewRunComplete, Verdict: domain.VerdictApproved},
+				{PRURL: "pr1", Status: domain.ReviewRunCompleted, Verdict: domain.VerdictApproved},
 			},
 			want: domain.KanbanNeedsReview,
 		},
@@ -57,7 +57,7 @@ func TestSessionListDerivesKanbanColumn(t *testing.T) {
 			record: domain.SessionRecord{ID: "mer-1", ProjectID: "mer", AutoReviewEnabled: true},
 			pr:     &domain.PRFacts{URL: "pr1", HeadSHA: "head1"},
 			runs: []domain.CurrentHeadReviewRun{
-				{PRURL: "pr1", Status: domain.ReviewRunComplete, Verdict: domain.VerdictChangesRequested},
+				{PRURL: "pr1", Status: domain.ReviewRunCompleted, Verdict: domain.VerdictChangesRequested},
 			},
 			want: domain.KanbanValidating,
 		},
@@ -341,7 +341,7 @@ func TestSessionGetUsesLatestCurrentHeadRunPerHarness(t *testing.T) {
 		t.Helper()
 		if err := st.InsertReviewRun(ctx, domain.ReviewRun{
 			ID: id, ReviewID: "rev", SessionID: rec.ID, Harness: "claude-code",
-			PRURL: "pr/1", TargetSHA: "head1", Status: domain.ReviewRunComplete,
+			PRURL: "pr/1", TargetSHA: "head1", Status: domain.ReviewRunCompleted,
 			Verdict: verdict, CreatedAt: createdAt, AutoInjectReview: true,
 		}); err != nil {
 			t.Fatalf("insert %s: %v", id, err)
@@ -441,11 +441,11 @@ func TestSessionGetDoesNotPromiseARetryAutoReviewWillNotRun(t *testing.T) {
 		},
 		{
 			name: "approved pass before a failed rerun", earlierHarness: "claude-code",
-			earlierStatus: domain.ReviewRunComplete, earlierVerdict: domain.VerdictApproved, wantDisplay: contract.DisplayReviewFailed,
+			earlierStatus: domain.ReviewRunCompleted, earlierVerdict: domain.VerdictApproved, wantDisplay: contract.DisplayReviewFailed,
 		},
 		{
 			name: "changes requested before a failed rerun", earlierHarness: "claude-code",
-			earlierStatus: domain.ReviewRunComplete, earlierVerdict: domain.VerdictChangesRequested, wantDisplay: contract.DisplayReviewFailed,
+			earlierStatus: domain.ReviewRunCompleted, earlierVerdict: domain.VerdictChangesRequested, wantDisplay: contract.DisplayReviewFailed,
 		},
 		{
 			name: "another harness cancelled does not stop this one", earlierHarness: "codex",
@@ -544,7 +544,7 @@ func TestSessionKanbanIdleWorkerAfterAOReviewDeliveryRequestsChanges(t *testing.
 	if err := st.InsertReviewRun(ctx, domain.ReviewRun{
 		ID: "current", ReviewID: "rev", SessionID: rec.ID, Harness: "claude-code",
 		PRURL: "pr/1", TargetSHA: "head1", GithubReviewID: providerReviewID,
-		Status: domain.ReviewRunComplete, Verdict: domain.VerdictChangesRequested,
+		Status: domain.ReviewRunCompleted, Verdict: domain.VerdictChangesRequested,
 		AutoInjectReview: true, CreatedAt: now,
 	}); err != nil {
 		t.Fatal(err)

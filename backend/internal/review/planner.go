@@ -62,15 +62,14 @@ func Plan(prs []domain.PullRequest, runs []domain.ReviewRun) []PRReviewState {
 		if run, ok := latest[review.PRURL+"\x00"+review.TargetSHA]; ok {
 			review.LatestRun = &run
 			switch {
-			case run.Status == domain.ReviewRunRunning:
+			case run.Status.IsActive():
 				review.Status = ReviewStateRunning
-			case run.Verdict == domain.VerdictApproved:
+			case run.Status == domain.ReviewRunCompleted && run.Verdict == domain.VerdictApproved:
 				review.Status = ReviewStateUpToDate
-			case run.Verdict == domain.VerdictChangesRequested:
+			case run.Status == domain.ReviewRunCompleted && run.Verdict == domain.VerdictChangesRequested:
 				review.Status = ReviewStateChangesRequested
-			case run.Status == domain.ReviewRunFailed || run.Status == domain.ReviewRunCancelled:
-				review.Status = ReviewStateNeedsReview
 			default:
+				// failed, cancelled and superseded passes never produced a review.
 				review.Status = ReviewStateNeedsReview
 			}
 		}
@@ -95,7 +94,7 @@ func latestCompletedRunForOtherSHA(runs []domain.ReviewRun, prURL, targetSHA str
 		if run.PRURL != prURL || run.TargetSHA == "" || run.TargetSHA == targetSHA {
 			continue
 		}
-		if run.Status != domain.ReviewRunComplete && run.Status != domain.ReviewRunDelivered {
+		if run.Status != domain.ReviewRunCompleted {
 			continue
 		}
 		if run.Verdict != domain.VerdictApproved && run.Verdict != domain.VerdictChangesRequested {
@@ -110,7 +109,7 @@ func latestCompletedRunForOtherSHA(runs []domain.ReviewRun, prURL, targetSHA str
 }
 
 // latestRunsByPRAndSHA picks the authoritative run per PR head: the newest
-// running pass while any reviewer is still working on that head, otherwise the
+// active pass while any reviewer is still working on that head, otherwise the
 // newest pass. Several reviewers may review one head at once, so a reviewer that
 // finished first must not hide one that is still running.
 func latestRunsByPRAndSHA(runs []domain.ReviewRun) map[string]domain.ReviewRun {
@@ -125,8 +124,8 @@ func latestRunsByPRAndSHA(runs []domain.ReviewRun) map[string]domain.ReviewRun {
 			latest[key] = run
 			continue
 		}
-		runRunning := run.Status == domain.ReviewRunRunning
-		existingRunning := existing.Status == domain.ReviewRunRunning
+		runRunning := run.Status.IsActive()
+		existingRunning := existing.Status.IsActive()
 		if runRunning != existingRunning {
 			if runRunning {
 				latest[key] = run

@@ -187,7 +187,7 @@ func existingHeadReason(runs []domain.ReviewRun, prURL, targetSHA string) string
 		if run.PRURL != prURL || run.TargetSHA != targetSHA {
 			continue
 		}
-		if run.Status == domain.ReviewRunRunning {
+		if run.Status.IsActive() {
 			return "review_running"
 		}
 		if run.Status == domain.ReviewRunCancelled {
@@ -198,6 +198,11 @@ func existingHeadReason(runs []domain.ReviewRun, prURL, targetSHA string) string
 		}
 		if run.Verdict == domain.VerdictChangesRequested {
 			return "changes_requested_same_sha"
+		}
+		if run.Status == domain.ReviewRunFailed && !run.FailureReason.AutoRetryable() {
+			// A failed preflight needs a person; an unconfirmed cancel may still
+			// have a reviewer working. Neither is retried automatically.
+			return "failed_not_retryable"
 		}
 		if run.Status == domain.ReviewRunFailed && run.TriggerSource == domain.ReviewTriggerAuto {
 			failedAutoRuns++

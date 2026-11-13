@@ -68,13 +68,13 @@ func TestEvaluateSessionEligibility(t *testing.T) {
 		{name: "missing head", mutate: func(f *fakeStore) { f.prs[0].HeadSHA = "" }},
 		{name: "no PR", mutate: func(f *fakeStore) { f.prs = nil }},
 		{name: "approved current head", mutate: func(f *fakeStore) {
-			f.runs = []domain.ReviewRun{{PRURL: "pr1", TargetSHA: "sha1", Status: domain.ReviewRunComplete, Verdict: domain.VerdictApproved, CreatedAt: now}}
+			f.runs = []domain.ReviewRun{{PRURL: "pr1", TargetSHA: "sha1", Status: domain.ReviewRunCompleted, Verdict: domain.VerdictApproved, CreatedAt: now}}
 		}},
 		{name: "changes requested current head", mutate: func(f *fakeStore) {
-			f.runs = []domain.ReviewRun{{PRURL: "pr1", TargetSHA: "sha1", Status: domain.ReviewRunComplete, Verdict: domain.VerdictChangesRequested, TriggerSource: domain.ReviewTriggerAuto, CreatedAt: now}}
+			f.runs = []domain.ReviewRun{{PRURL: "pr1", TargetSHA: "sha1", Status: domain.ReviewRunCompleted, Verdict: domain.VerdictChangesRequested, TriggerSource: domain.ReviewTriggerAuto, CreatedAt: now}}
 		}},
 		{name: "new head after changes requested", want: true, mutate: func(f *fakeStore) {
-			f.runs = []domain.ReviewRun{{PRURL: "pr1", TargetSHA: "old", Status: domain.ReviewRunComplete, Verdict: domain.VerdictChangesRequested, TriggerSource: domain.ReviewTriggerAuto, CreatedAt: now}}
+			f.runs = []domain.ReviewRun{{PRURL: "pr1", TargetSHA: "old", Status: domain.ReviewRunCompleted, Verdict: domain.VerdictChangesRequested, TriggerSource: domain.ReviewTriggerAuto, CreatedAt: now}}
 		}},
 		{name: "failed current head retries under limit", want: true, mutate: func(f *fakeStore) {
 			f.runs = []domain.ReviewRun{

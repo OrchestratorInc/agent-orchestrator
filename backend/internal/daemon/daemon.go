@@ -1444,6 +1444,16 @@ func Run(buildVersion string) (retErr error) {
 				log.Warn("reviewer chat recovery deferred", "err", reconcileErr)
 			}
 			close(reviewerChatsRecovered)
+			// Settle review runs the previous daemon left active before anything
+			// supervises them: a reviewer that cannot be re-adopted fails its run
+			// (daemon_restarted) and its orphaned process tree is reaped.
+			if sweepErr := reviewSvc.SweepReviewRunsAfterRestart(ctx); sweepErr != nil {
+				log.Error("review run startup sweep failed", "err", sweepErr)
+			}
+			go func() {
+				defer sentryobs.RecoverBackground()
+				reviewSvc.RunReviewSupervisor(ctx)
+			}()
 			if reconcileErr := sessMgr.ReconcileBackground(ctx); reconcileErr != nil {
 				log.Error("background session reconciliation on boot failed", "err", reconcileErr)
 			}
