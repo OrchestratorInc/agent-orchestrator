@@ -51,6 +51,12 @@ function contextSeverity(fraction: number): Severity {
 	return "normal";
 }
 
+/** True once the conversation reaches the critical threshold, for the composer edge. */
+export function isContextFull(usage: ConversationUsage | undefined): boolean {
+	if (!usage || usage.contextWindow <= 0) return false;
+	return usage.contextUsed / usage.contextWindow >= CONTEXT_CRITICAL;
+}
+
 function quotaSeverity(percent: number): Severity {
 	if (percent >= QUOTA_CRITICAL) return "critical";
 	if (percent >= QUOTA_WARN) return "warn";

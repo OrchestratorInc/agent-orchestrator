@@ -2984,6 +2984,12 @@ html.sidebar-reordering * {
 	background: color-mix(in oklch, var(--composer-bg) 94%, var(--color-logo-accent));
 }
 
+/* A nearly full context window (90%+, the meter's critical threshold) puts a red
+   hairline on the composer, so the risk shows where the next turn is typed. */
+.cursor-chat-composer[data-context-full] {
+	box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-status-exited) 55%, transparent);
+}
+
 /* The session header arriving in the new chat page's empty strip. */
 @keyframes chat-header-slide-in {
 	from {

@@ -184,7 +184,7 @@ import type { AgentSwitchProps } from "./AgentSwitchPicker";
 import type { ComposerPromptSuggestion } from "./ComposerEditor";
 import { ChatTokenSkills } from "./sentComposerTokens";
 import { ChatComposer, type ChatComposerHandle, type StoredComposerAttachment } from "./ChatComposer";
-import { ContextMeter } from "./ContextMeter";
+import { ContextMeter, isContextFull } from "./ContextMeter";
 import { stagedAttachmentParts, attachmentName } from "./messageAttachments";
 import type { QueuedMessageEditOptions } from "../../types/conversation";
 import { QueuedMessageDock, type QueuedMessage } from "./QueuedMessageDock";
@@ -2275,6 +2275,7 @@ function ChatWorkspaceContent({
 											queueEdit?.turnId &&
 												editQueuedTurnPendingTurnId === queueEdit.turnId,
 										)}
+										contextFull={isContextFull(snapshot.usage)}
 										onCancelQueuedEdit={cancelQueuedEdit}
 										onQueuedDraftChange={queueEdit ? changeQueuedDraft : undefined}
 										onDraftEmptyChange={setComposerEmpty}

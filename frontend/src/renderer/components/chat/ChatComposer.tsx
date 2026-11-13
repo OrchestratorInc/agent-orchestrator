@@ -253,6 +253,7 @@ export const ChatComposer = memo(function ChatComposer({
 	disabled,
 	disabledPlaceholder,
 	starting,
+	contextFull = false,
 	holdAttachments,
 	onHeldAttachmentsChange,
 	attachmentsRefusal,
@@ -348,6 +349,8 @@ export const ChatComposer = memo(function ChatComposer({
 	/** Explains why message entry is temporarily blocked. */
 	disabledPlaceholder?: string;
 	starting?: boolean;
+	/** The context window is nearly full (90%+); the composer edge turns red. */
+	contextFull?: boolean;
 	/**
 	 * Files that cannot be staged yet (no workspace to write into) stay in the
 	 * composer with their bytes and go to `onSend` with the message, for a chat
@@ -2309,6 +2312,7 @@ export const ChatComposer = memo(function ChatComposer({
 				// here and half there.
 				data-dragging={dragging || undefined}
 				data-starting={starting || undefined}
+				data-context-full={contextFull || undefined}
 				aria-busy={starting || undefined}
 				onMouseDown={(e) => {
 					if (controlsDisabled || e.button !== 0) return;

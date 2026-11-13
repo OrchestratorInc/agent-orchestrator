@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
-import { ContextMeter } from "./ContextMeter";
+import { ContextMeter, isContextFull } from "./ContextMeter";
 import type { ConversationRateLimits, ConversationUsage } from "../../types/conversation";
 
 // The behaviour under test is the threshold encoding, because that is what carries
@@ -171,5 +171,17 @@ describe("ContextMeter", () => {
 			expect(screen.getByText("Session 97% used")).toBeInTheDocument();
 			expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
 		});
+	});
+});
+
+describe("isContextFull", () => {
+	it("flags the composer only from the critical threshold", () => {
+		expect(isContextFull(undefined)).toBe(false);
+		expect(isContextFull(usage())).toBe(false);
+		expect(isContextFull(usage({ contextUsed: 230000 }))).toBe(false);
+		expect(isContextFull(usage({ contextUsed: 232560 }))).toBe(true);
+		expect(isContextFull(usage({ contextUsed: 300000 }))).toBe(true);
+		// No window means no fraction, so no claim that it is full.
+		expect(isContextFull(usage({ contextWindow: 0 }))).toBe(false);
 	});
 });
