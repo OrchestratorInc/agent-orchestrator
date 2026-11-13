@@ -959,6 +959,21 @@ describe("ChatWorkspace timeline", () => {
 	});
 
 	// The meter can warn about the account's quota, but only if it is handed it.
+	it("flashes the usage warning beside the composer's own model controls", () => {
+		vi.useFakeTimers();
+		try {
+			render(<ChatWorkspace snapshot={{ ...idleSnapshot(chatFixture), rateLimits: { primaryUsedPercent: 82, secondaryUsedPercent: -1 } }} />);
+			const composer = screen.getByLabelText("Message the agent").closest("form") as HTMLElement;
+			expect(within(composer).getByText("Approaching limit")).toBeInTheDocument();
+			// The flash, then the outgoing layer's fade.
+			act(() => { vi.advanceTimersByTime(5_000); });
+			act(() => { vi.advanceTimersByTime(300); });
+			expect(within(composer).queryByText("Approaching limit")).not.toBeInTheDocument();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("refreshes the owning workspace after renaming the primary chat tab", async () => {
 		const user = userEvent.setup();
 		const onSessionRenamed = vi.fn().mockResolvedValue(undefined);

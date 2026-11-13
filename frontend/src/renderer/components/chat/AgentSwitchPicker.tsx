@@ -49,6 +49,7 @@ import { Pressable } from "../ui/pressable";
 import { ModelMenuChoices } from "./ModelMenuChoices";
 import { ProviderMark } from "./ProviderMark";
 import { SmoothSwap } from "./SmoothSwap";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../ui/tooltip";
 import { sharesAgentMark } from "../AgentAvatar";
 import { useCloudAgentCatalogOptions } from "../../hooks/useCloudModelCatalog";
 
@@ -435,15 +436,15 @@ export function AgentModelPicker({
 	return (
 		// Not modal, so one click on the composer both closes the menu and focuses it.
 		<OptionMenu open={open} onOpenChange={setOpen} modal={false}>
+			{/* Always mounted, so the trigger (and its label's crossfade) never remounts; it only has content during an override. */}
+			<TooltipProvider><Tooltip><TooltipTrigger asChild>
 			<OptionMenuTrigger variant="ghost"
 				ref={management.triggerRef}
 				disabled={disabled && agentSwitch.disabled}
 				onPointerEnter={warmCatalogs}
 				onFocus={warmCatalogs}
 				aria-label={terminal ? t("agentSwitch.terminalAgent") : t("agentSwitch.pickerLabel")}
-				title={override && !terminal
-					? `${override.title}\n${[shownModel, shownEffort].filter(Boolean).join(" ")}`
-					: title ?? (terminal ? t("agentSwitch.switchAnother") : t("agentSwitch.pickerLabel"))}
+				title={override && !terminal ? undefined : title ?? (terminal ? t("agentSwitch.switchAnother") : t("agentSwitch.pickerLabel"))}
 				className={cn(TRIGGER_CLASS, terminal ? "w-full justify-start" : undefined)}
 				showCaret={false}
 				data-shortcut-target={terminal ? undefined : "model-picker"}
@@ -456,6 +457,12 @@ export function AgentModelPicker({
 					</SmoothSwap>
 				)}
 			</OptionMenuTrigger>
+			</TooltipTrigger>{override && !terminal ? (
+				<TooltipContent>
+					<p>{override.title}</p>
+					<p className="text-muted-foreground">{[shownModel, shownEffort].filter(Boolean).join(" ")}</p>
+				</TooltipContent>
+			) : null}</Tooltip></TooltipProvider>
 			{/* Pinned to the trigger's left edge, which stays put while its label changes width. */}
 			<OptionMenuContent align="start" side={terminal ? "right" : "top"} steady className="chat-settings-menu w-64 text-[12px]!"
 				onCloseAutoFocus={(event) => {

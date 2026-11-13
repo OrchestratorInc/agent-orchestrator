@@ -186,7 +186,8 @@ import type { ComposerPromptSuggestion } from "./ComposerEditor";
 import { ChatTokenSkills } from "./sentComposerTokens";
 import { ChatComposer, type ChatComposerHandle, type StoredComposerAttachment } from "./ChatComposer";
 import { ContextMeter } from "./ContextMeter";
-import { nearQuotaWindow, QuotaMenuNotice, QuotaReadout, quotaTitle, useQuotaFlash } from "./QuotaReadout";
+import { nearQuotaWindow, QuotaMenuNotice, QuotaPill, QuotaReadout, quotaTitle, useQuotaFlash } from "./QuotaReadout";
+import { SmoothSwap } from "./SmoothSwap";
 import { stagedAttachmentParts, attachmentName } from "./messageAttachments";
 import type { QueuedMessageEditOptions } from "../../types/conversation";
 import { QueuedMessageDock, type QueuedMessage } from "./QueuedMessageDock";
@@ -2313,6 +2314,11 @@ function ChatWorkspaceContent({
 										commandError={queueDraftError ?? (queueEdit && !queueEdit.clientMessageId && !queuedMessages.some((entry) => entry.turnId === queueEdit.turnId) ? "chat.draft.queueMissing" : commandError)}
 										settings={draftSettings ?? <>
 											{agentSwitch ? null : <ContextMeter usage={snapshot.usage} compactsAt={compactsAt} />}
+											{!agentSwitch && nearQuota ? (
+												<SmoothSwap swapKey={pickerOverride?.key ?? "hidden"}>
+													{pickerOverride ? <QuotaPill quota={nearQuota} /> : null}
+												</SmoothSwap>
+											) : null}
 											{composerSettings}
 										</>}
 										addMenuItems={agentSwitch ? (

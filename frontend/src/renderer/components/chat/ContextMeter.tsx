@@ -39,12 +39,12 @@ function contextSeverity(fraction: number): Severity {
 
 /**
  * Normal usage is informational rather than session activity, so it uses AO's
- * logo blue. Warning and critical retain the established status colours: amber
- * means "a human should look", and red means the next turn is at risk.
+ * logo blue. Warning is the caution amber, distinct from the red that means the
+ * next turn is at risk.
  */
 const RING: Record<Severity, string> = {
 	normal: "text-logo-accent",
-	warn: "text-status-needs-you",
+	warn: "text-status-in-review",
 	critical: "text-status-exited",
 };
 

@@ -65,7 +65,7 @@ describe("ContextMeter", () => {
 		it("shifts to the needs-you token from 70%", () => {
 			// Exactly at the boundary, which must warn rather than stay normal.
 			render(<ContextMeter usage={usage({ contextUsed: 180_880 })} />);
-			expect(screen.getByRole("progressbar")).toHaveClass("text-status-needs-you");
+			expect(screen.getByRole("progressbar")).toHaveClass("text-status-in-review");
 		});
 
 		it("shifts to the exited token from 90%, where the next turn is at risk", () => {

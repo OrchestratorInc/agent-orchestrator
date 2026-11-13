@@ -9,6 +9,7 @@ import type { TFunction } from "i18next";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { AlertTriangle, Clock } from "@/components/app-icons";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../ui/tooltip";
 import type { ConversationRateLimits } from "../../types/conversation";
 
 /** Where the warning replaces the model name. */
@@ -63,6 +64,17 @@ export function QuotaReadout({ quota }: { quota: QuotaWindow }) {
 				? <span className="tabular-nums" aria-label={t("chat.quota.resetsIn", { time: resets })}>{resets}</span>
 				: <span className="truncate">{label}</span>}
 		</span>
+	);
+}
+
+/** The pill on its own, for composers whose model controls are not the agent picker. */
+export function QuotaPill({ quota }: { quota: QuotaWindow }) {
+	const { t } = useTranslation();
+	return (
+		<TooltipProvider><Tooltip>
+			<TooltipTrigger asChild><span tabIndex={0} className="inline-flex rounded-full focus-visible:outline-2 focus-visible:outline-ring"><QuotaReadout quota={quota} /></span></TooltipTrigger>
+			<TooltipContent>{quotaTitle(quota, t)}</TooltipContent>
+		</Tooltip></TooltipProvider>
 	);
 }
 
