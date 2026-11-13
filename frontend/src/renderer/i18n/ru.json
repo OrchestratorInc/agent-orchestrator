@@ -1976,6 +1976,8 @@
 	"settings.storage": "Хранилище",
 	"settings.storage.measure": "Измерить снова",
 	"settings.storage.measuring": "Измеряем использование диска",
+	"settings.storage.scanFailed": "Не удалось измерить: {{error}}",
+	"settings.storage.clearCacheFailed": "Не удалось очистить кэш: {{error}}",
 	"settings.storage.cleaning": "Очистка",
 	"settings.storage.disk": "Диск",
 	"settings.storage.diskFree": "Свободно {{free}} из {{total}}",

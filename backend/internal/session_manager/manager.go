@@ -7014,10 +7014,13 @@ func HookPATH(executable func() (string, error), getenv func(string) string, pro
 // post-create commands. Either failing aborts the spawn so a half-provisioned
 // workspace never launches an agent.
 func (m *Manager) provisionWorkspace(ctx context.Context, project domain.ProjectRecord, workspacePath string) error {
-	m.seedWorkspaceDependencies(ctx, project, workspacePath)
 	if err := applySymlinks(project.Path, workspacePath, project.Config.Symlinks); err != nil {
 		return err
 	}
+	// After the symlinks, so a configured shared folder is never shadowed by
+	// a private copy cloned from a template. A fork's copied dependencies
+	// already exist, and seeding leaves existing folders alone.
+	m.seedWorkspaceDependencies(ctx, project, workspacePath)
 	var aoEnv map[string]string
 	if m.takeForkWorkspace(workspacePath) {
 		// Setup still runs for a fork: the original's lockfile may differ

@@ -322,3 +322,42 @@ func TestStorageLogPrintsEntriesAndKeepsErrorEnvelope(t *testing.T) {
 		t.Fatalf("err=%v, want the daemon error envelope", err)
 	}
 }
+
+func TestStorageCleanRejectsBlankKind(t *testing.T) {
+	setConfigEnv(t)
+	_, _, err := executeCLI(t, storageTestDeps(), "storage", "clean", "--only", " ")
+	if err == nil || ExitCode(err) != 2 || !strings.Contains(err.Error(), "empty value") {
+		t.Fatalf("err=%v exit=%d, want a usage error for a blank kind", err, ExitCode(err))
+	}
+}
+
+func TestStorageCleanFailsWhenAnActionFailed(t *testing.T) {
+	cfg := setConfigEnv(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/internal/telemetry/cli-invoked":
+			w.WriteHeader(http.StatusAccepted)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/storage/clean":
+			_, _ = io.WriteString(w, `{"startedAt":"2026-11-13T00:00:00Z","running":false,"dryRun":true,"freedBytes":10,
+				"actions":[{"at":"2026-11-13T00:00:00Z","kind":"logs","target":"/s/logs/a.jsonl","reason":"old","bytes":10,"dryRun":true,"result":"planned"}]}`)
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/storage":
+			last := `"lastClean": {"startedAt":"2026-11-13T00:00:00Z","running":false,"dryRun":false,"freedBytes":0,
+				"actions":[{"at":"2026-11-13T00:00:00Z","kind":"logs","target":"/s/logs/a.jsonl","reason":"old","bytes":0,"dryRun":false,"result":"failed","error":"permission denied"}]},`
+			_, _ = io.WriteString(w, storageReport(false, false, last))
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(server.Close)
+	writeRunFileFor(t, cfg, server)
+
+	out, _, err := executeCLI(t, storageTestDeps(), "storage", "clean", "--yes")
+	if err == nil || ExitCode(err) != 1 || !strings.Contains(err.Error(), "1 cleanup action failed") {
+		t.Fatalf("err=%v exit=%d, want a runtime failure", err, ExitCode(err))
+	}
+	if !strings.Contains(out, "Failed: /s/logs/a.jsonl (permission denied)") {
+		t.Fatalf("output should still list the failure:\n%s", out)
+	}
+}

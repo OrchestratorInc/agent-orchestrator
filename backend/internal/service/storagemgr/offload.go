@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
@@ -43,6 +44,41 @@ func nameSet(names ...string) map[string]bool {
 // project lists them and git ignores them: secrets, AO's own files and agent
 // or editor state.
 var protectedSegments = []string{".git", ".ao", ".claude", ".codex", ".agents", ".vscode", ".idea", ".ssh", ".aws"}
+
+// packageManaged are folders a package manager fills entirely from its
+// registry; their contents are never the user's own files, so they are not
+// searched for secrets (packages routinely ship test keys).
+var packageManaged = nameSet(
+	"node_modules", ".venv", "Pods", ".gradle", ".dart_tool", "__pycache__", ".tox", ".terraform",
+	".pytest_cache", ".mypy_cache", ".ruff_cache",
+)
+
+// containsProtected reports whether any path under dir is protected.
+func containsProtected(ctx context.Context, dir string) (bool, error) {
+	found := false
+	visited := 0
+	err := filepath.WalkDir(dir, func(p string, _ fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return nil //nolint:nilerr // an unreadable entry is skipped; the rest is still checked
+		}
+		visited++
+		if visited%4096 == 0 {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
+		}
+		rel, relErr := filepath.Rel(dir, p)
+		if relErr != nil || rel == "." {
+			return nil //nolint:nilerr // the root itself was already checked by name
+		}
+		if isProtected(filepath.ToSlash(rel)) {
+			found = true
+			return fs.SkipAll
+		}
+		return nil
+	})
+	return found, err
+}
 
 func isProtected(rel string) bool {
 	for _, segment := range strings.Split(rel, "/") {
@@ -135,6 +171,17 @@ func findOffloadTargets(ctx context.Context, worktree string, projectPaths []str
 		if nested {
 			continue
 		}
+		if !packageManaged[path.Base(rel)] {
+			// A build or cache folder can hold a copied secret (dist/.env); one
+			// that does is left whole rather than removed with it.
+			protected, protErr := containsProtected(ctx, filepath.Join(worktree, filepath.FromSlash(rel)))
+			if protErr != nil {
+				return nil, protErr
+			}
+			if protected {
+				continue
+			}
+		}
 		size, sizeErr := treeSize(ctx, filepath.Join(worktree, filepath.FromSlash(rel)))
 		if sizeErr != nil {
 			return nil, sizeErr
@@ -224,56 +271,102 @@ func (s *Service) adoptTemplate(key string, meta templateMeta, abs string) bool 
 	return true
 }
 
+// offloadResult is what an offload removed from a worktree, and how much of
+// it actually went back to the disk: a tree adopted as a template stays on the
+// volume, so only trashed trees count as freed.
+type offloadResult struct {
+	facts domain.SessionStorageFacts
+	freed int64
+}
+
+type plannedOffload struct {
+	target   offloadTarget
+	abs      string
+	key      string
+	lockHash string
+}
+
 // offloadWorktree removes a worktree's dependency and build folders, moving
 // node_modules into a template when the filesystem can clone it back. The
 // caller holds the session's quiet guard.
-func (s *Service) offloadWorktree(ctx context.Context, project domain.ProjectRecord, worktree string) (domain.SessionStorageFacts, error) {
-	facts := domain.SessionStorageFacts{TemplateKeys: map[string]string{}}
+//
+// record persists the offload facts. It is called with every planned path
+// before anything is removed, and nothing is removed if that write fails, so
+// a restore always knows what may be missing; it is called again with what
+// was actually removed.
+func (s *Service) offloadWorktree(ctx context.Context, project domain.ProjectRecord, worktree string, record func(domain.SessionStorageFacts) error) (offloadResult, error) {
+	result := offloadResult{facts: domain.SessionStorageFacts{TemplateKeys: map[string]string{}}}
 	if !Within(s.layout.Worktrees(), worktree) {
-		return facts, errors.New("worktree is outside AO's managed worktrees")
+		return result, errors.New("worktree is outside AO's managed worktrees")
 	}
 	targets, err := findOffloadTargets(ctx, worktree, project.Config.StorageOffloadPaths)
-	if err != nil {
-		return facts, err
+	if err != nil || len(targets) == 0 {
+		return result, err
 	}
 	cloneable := s.cloneSupported()
 	nodeVersion := ""
 	if cloneable {
 		nodeVersion = s.nodeVersion(ctx)
 	}
-	var errs []error
+	projectID := domain.ProjectID(project.ID)
+	plan := make([]plannedOffload, 0, len(targets))
+	planned := domain.SessionStorageFacts{TemplateKeys: map[string]string{}}
 	for _, target := range targets {
 		abs := filepath.Join(worktree, filepath.FromSlash(target.Rel))
 		if !Within(worktree, abs) {
 			continue
 		}
-		key := ""
+		step := plannedOffload{target: target, abs: abs}
 		if cloneable && path.Base(target.Rel) == "node_modules" {
-			if lockHash := lockfileHash(filepath.Dir(abs), nodeVersion); lockHash != "" {
-				key = templateKey(domain.ProjectID(project.ID), target.Rel, lockHash)
-				meta := templateMeta{ProjectID: domain.ProjectID(project.ID), Rel: target.Rel, LockHash: lockHash, CreatedAt: s.now()}
-				if s.adoptTemplate(key, meta, abs) {
-					facts.OffloadedPaths = append(facts.OffloadedPaths, target.Rel)
-					facts.OffloadedBytes += target.Bytes
-					facts.TemplateKeys[target.Rel] = key
-					continue
-				}
-				if !pathExists(filepath.Join(s.templateDir(key), templateTreeName)) {
-					key = ""
-				}
+			if step.lockHash = lockfileHash(filepath.Dir(abs), nodeVersion); step.lockHash != "" {
+				step.key = templateKey(projectID, target.Rel, step.lockHash)
+				planned.TemplateKeys[target.Rel] = step.key
 			}
 		}
-		if _, err := moveToTrash(s.layout.Trash(), abs); err != nil {
+		planned.OffloadedPaths = append(planned.OffloadedPaths, target.Rel)
+		planned.OffloadedBytes += target.Bytes
+		plan = append(plan, step)
+	}
+	if len(plan) == 0 {
+		return result, nil
+	}
+	if err := record(planned); err != nil {
+		return result, fmt.Errorf("record offload before removing anything: %w", err)
+	}
+
+	var errs []error
+	for _, step := range plan {
+		key := step.key
+		if key != "" {
+			meta := templateMeta{ProjectID: projectID, Rel: step.target.Rel, LockHash: step.lockHash, CreatedAt: s.now()}
+			if s.adoptTemplate(key, meta, step.abs) {
+				result.facts.OffloadedPaths = append(result.facts.OffloadedPaths, step.target.Rel)
+				result.facts.OffloadedBytes += step.target.Bytes
+				result.facts.TemplateKeys[step.target.Rel] = key
+				continue
+			}
+			if !pathExists(filepath.Join(s.templateDir(key), templateTreeName)) {
+				key = ""
+			}
+		}
+		if _, err := moveToTrash(s.layout.Trash(), step.abs); err != nil {
 			errs = append(errs, err)
 			continue
 		}
-		facts.OffloadedPaths = append(facts.OffloadedPaths, target.Rel)
-		facts.OffloadedBytes += target.Bytes
+		result.facts.OffloadedPaths = append(result.facts.OffloadedPaths, step.target.Rel)
+		result.facts.OffloadedBytes += step.target.Bytes
+		result.freed += step.target.Bytes
 		if key != "" {
-			facts.TemplateKeys[target.Rel] = key
+			result.facts.TemplateKeys[step.target.Rel] = key
 		}
 	}
-	return facts, errors.Join(errs...)
+	if len(result.facts.OffloadedPaths) > 0 {
+		// The planned record already covers every path; this only narrows it.
+		if err := record(result.facts); err != nil {
+			s.logger.Warn("storage: narrow offload record", "worktree", worktree, "error", err)
+		}
+	}
+	return result, errors.Join(errs...)
 }
 
 // restoreFromTemplate clones a template back into a worktree when the

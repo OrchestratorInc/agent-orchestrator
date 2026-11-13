@@ -2898,6 +2898,8 @@
 	"settings.storage": "저장 공간",
 	"settings.storage.measure": "다시 측정",
 	"settings.storage.measuring": "디스크 사용량 측정 중",
+	"settings.storage.scanFailed": "측정 실패: {{error}}",
+	"settings.storage.clearCacheFailed": "캐시를 지우지 못했습니다: {{error}}",
 	"settings.storage.cleaning": "정리 중",
 	"settings.storage.disk": "디스크",
 	"settings.storage.diskFree": "{{total}} 중 {{free}} 사용 가능",

@@ -41,7 +41,12 @@ func TestOffloadWorktreeRemovesOnlyTargetsAndRecordsFacts(t *testing.T) {
 	newRepoWorktree(t, worktree)
 	project := domain.ProjectRecord{ID: "p", Config: domain.ProjectConfig{StorageOffloadPaths: []string{"out-custom"}}}
 
-	facts, err := svc.offloadWorktree(context.Background(), project, worktree)
+	var records []domain.SessionStorageFacts
+	result, err := svc.offloadWorktree(context.Background(), project, worktree, func(f domain.SessionStorageFacts) error {
+		records = append(records, f)
+		return nil
+	})
+	facts := result.facts
 	if err != nil {
 		t.Fatalf("offload: %v", err)
 	}
@@ -58,12 +63,53 @@ func TestOffloadWorktreeRemovesOnlyTargetsAndRecordsFacts(t *testing.T) {
 			t.Fatalf("%s must be kept", kept)
 		}
 	}
+	if len(records) == 0 || len(records[0].OffloadedPaths) != 4 {
+		t.Fatalf("records = %+v, want the planned paths recorded before removal", records)
+	}
+}
+
+func noRecord(domain.SessionStorageFacts) error { return nil }
+
+func TestOffloadRemovesNothingWhenTheRecordFails(t *testing.T) {
+	svc, layout := newTestService(t, newFakeStore(), nil, nil, nil)
+	worktree := filepath.Join(layout.Worktrees(), "p", "p-1")
+	newRepoWorktree(t, worktree)
+	_, err := svc.offloadWorktree(context.Background(), domain.ProjectRecord{ID: "p"}, worktree, func(domain.SessionStorageFacts) error {
+		return errors.New("disk full")
+	})
+	if err == nil {
+		t.Fatal("a failed record must fail the offload")
+	}
+	for _, kept := range []string{"node_modules/dep/index.js", "dist/bundle.js"} {
+		if !pathExists(filepath.Join(worktree, filepath.FromSlash(kept))) {
+			t.Fatalf("%s removed although nothing was recorded", kept)
+		}
+	}
+}
+
+func TestOffloadSkipsBuildFolderHoldingASecret(t *testing.T) {
+	dir := t.TempDir()
+	newRepoWorktree(t, dir)
+	writeFile(t, filepath.Join(dir, "dist", ".env.production"), "SECRET=2")
+	writeFile(t, filepath.Join(dir, "node_modules", "pkg", "test", "server.key"), "fixture key")
+	targets, err := findOffloadTargets(context.Background(), dir, nil)
+	if err != nil {
+		t.Fatalf("find targets: %v", err)
+	}
+	var rels []string
+	for _, target := range targets {
+		rels = append(rels, target.Rel)
+	}
+	want := []string{"node_modules", "packages/x/node_modules"}
+	if !reflect.DeepEqual(rels, want) {
+		t.Fatalf("targets = %v, want %v (dist holds a secret; node_modules fixtures are package content)", rels, want)
+	}
 }
 
 func TestOffloadRefusesWorktreeOutsideManagedRoot(t *testing.T) {
 	svc, _ := newTestService(t, newFakeStore(), nil, nil, nil)
 	outside := t.TempDir()
-	if _, err := svc.offloadWorktree(context.Background(), domain.ProjectRecord{ID: "p"}, outside); err == nil {
+	if _, err := svc.offloadWorktree(context.Background(), domain.ProjectRecord{ID: "p"}, outside, noRecord); err == nil {
 		t.Fatal("offload outside the managed worktrees must be refused")
 	}
 }
@@ -118,7 +164,8 @@ func TestOffloadAndRestoreThroughTemplateWhenCloneSupported(t *testing.T) {
 	project := domain.ProjectRecord{ID: "p", Config: domain.ProjectConfig{PostCreate: []string{"npm ci"}}}
 	ctx := context.Background()
 
-	facts, err := svc.offloadWorktree(ctx, project, worktree)
+	result, err := svc.offloadWorktree(ctx, project, worktree, noRecord)
+	facts := result.facts
 	if err != nil {
 		t.Fatalf("offload: %v", err)
 	}

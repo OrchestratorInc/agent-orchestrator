@@ -3,6 +3,8 @@ package sessionmanager
 import (
 	"context"
 	"errors"
+	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -96,7 +98,57 @@ func (m *Manager) sessionAgentQuiet(ctx context.Context, rec domain.SessionRecor
 	if rec.Activity.State != domain.ActivityExited {
 		return false
 	}
-	return !m.launchedTUIAgentStillAlive(ctx, rec)
+	return m.launchedTUIAgentConfirmedExited(ctx, rec)
+}
+
+// launchedTUIAgentConfirmedExited reports whether the exact AO supervisor of
+// the session's current launch proves no agent child is alive. Unlike
+// launchedTUIAgentStillAlive, every uncertain reading (missing process
+// identity, a runtime without the strict probe, a probe error) is false: an
+// offload needs a confirmed exit, not merely an unproven life.
+func (m *Manager) launchedTUIAgentConfirmedExited(ctx context.Context, rec domain.SessionRecord) bool {
+	handleID := strings.TrimSpace(rec.Metadata.RuntimeHandleID)
+	launchID := strings.TrimSpace(rec.Metadata.RuntimeLaunchID)
+	if handleID == "" || launchID == "" {
+		return false
+	}
+	inspector, ok := m.runtime.(ports.ExactSupervisedProcessInspector)
+	if !ok {
+		return false
+	}
+	alive, err := inspector.IsExactSupervisedProcessAlive(ctx, ports.RuntimeHandle{ID: handleID}, ports.SupervisedProcessRef{
+		SessionID: rec.ID,
+		LaunchID:  launchID,
+	})
+	return err == nil && !alive
+}
+
+// ErrWorkspaceOwned refuses removing a worktree that a session owns.
+var ErrWorkspaceOwned = errors.New("session: worktree belongs to a session")
+
+// WithUnownedWorkspace runs fn while holding the project's workspace gate,
+// after confirming that no session's workspace is path, contains it, or sits
+// inside it. Spawn, restore and import allocate workspaces under the same
+// gate, so none of them can claim path until fn returns.
+func (m *Manager) WithUnownedWorkspace(ctx context.Context, projectID domain.ProjectID, path string, fn func() error) error {
+	release := m.acquireWorkspaceGate(projectID)
+	defer release()
+	recs, err := m.store.ListAllSessions(ctx)
+	if err != nil {
+		return err
+	}
+	target := normalizeWorkspacePath(path)
+	sep := string(filepath.Separator)
+	for _, rec := range recs {
+		if rec.Metadata.WorkspacePath == "" {
+			continue
+		}
+		owned := normalizeWorkspacePath(rec.Metadata.WorkspacePath)
+		if owned == target || strings.HasPrefix(target, owned+sep) || strings.HasPrefix(owned, target+sep) {
+			return ErrWorkspaceOwned
+		}
+	}
+	return fn()
 }
 
 // restoreOffloadedDependencies restores an offloaded session's dependencies

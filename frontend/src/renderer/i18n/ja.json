@@ -2898,6 +2898,8 @@
 	"settings.storage": "ストレージ",
 	"settings.storage.measure": "再測定",
 	"settings.storage.measuring": "ディスク使用量を測定中",
+	"settings.storage.scanFailed": "測定に失敗しました: {{error}}",
+	"settings.storage.clearCacheFailed": "キャッシュを消去できませんでした: {{error}}",
 	"settings.storage.cleaning": "クリーンアップ中",
 	"settings.storage.disk": "ディスク",
 	"settings.storage.diskFree": "{{total}} 中 {{free}} 空き",

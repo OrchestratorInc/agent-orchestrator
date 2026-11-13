@@ -2943,6 +2943,8 @@
 	"settings.storage": "Stockage",
 	"settings.storage.measure": "Mesurer à nouveau",
 	"settings.storage.measuring": "Mesure de l’espace disque",
+	"settings.storage.scanFailed": "La mesure a échoué : {{error}}",
+	"settings.storage.clearCacheFailed": "Impossible de vider le cache : {{error}}",
 	"settings.storage.cleaning": "Nettoyage en cours",
 	"settings.storage.disk": "Disque",
 	"settings.storage.diskFree": "{{free}} libres sur {{total}}",

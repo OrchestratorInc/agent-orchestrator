@@ -106,16 +106,36 @@ func (refuseAll) WithQuietSession(context.Context, domain.SessionID, func(domain
 
 func TestUpdateSettingsValidates(t *testing.T) {
 	svc, _ := newTestService(t, newFakeStore(), nil, nil, nil)
-	settings := domain.DefaultStorageSettings()
-	settings.OffloadIdleHours = 0
-	if _, err := svc.UpdateSettings(context.Background(), settings); err == nil {
+	ctx := context.Background()
+	if _, err := svc.UpdateSettings(ctx, func(s *domain.StorageSettings) { s.OffloadIdleHours = 0 }); err == nil {
 		t.Fatal("offloadIdleHours=0 must be rejected")
 	}
-	settings.OffloadIdleHours = 72
-	got, err := svc.UpdateSettings(context.Background(), settings)
+	got, err := svc.UpdateSettings(ctx, func(s *domain.StorageSettings) { s.OffloadIdleHours = 72 })
 	if err != nil || got.OffloadIdleHours != 72 || got.UpdatedAt.IsZero() {
 		t.Fatalf("got=%+v err=%v", got, err)
 	}
+	// A second change keeps the first: each one patches what is stored now.
+	got, err = svc.UpdateSettings(ctx, func(s *domain.StorageSettings) { s.LogDays = 30 })
+	if err != nil || got.OffloadIdleHours != 72 || got.LogDays != 30 {
+		t.Fatalf("got=%+v err=%v", got, err)
+	}
+}
+
+func TestOrphanRemovalSkippedWhenASessionOwnsIt(t *testing.T) {
+	svc, layout := newTestService(t, newFakeStore(), nil, nil, nil)
+	svc.workspaces = ownedWorkspaces{}
+	target := filepath.Join(layout.Worktrees(), "p", "orphan")
+	writeFile(t, filepath.Join(target, "README"), "x")
+	action := svc.runOrphanRemoval(context.Background(), PlannedAction{Kind: domain.StorageCleanOrphanWorktrees, Target: target, ProjectID: "p", Bytes: 1})
+	if action.Result != domain.StorageActionSkipped || !pathExists(target) {
+		t.Fatalf("action=%+v exists=%v, want skipped and kept", action, pathExists(target))
+	}
+}
+
+type ownedWorkspaces struct{}
+
+func (ownedWorkspaces) WithUnownedWorkspace(context.Context, domain.ProjectID, string, func() error) error {
+	return sessionmanager.ErrWorkspaceOwned
 }
 
 func TestAutomaticPassWithAutoCleanOffOnlyLogsDryRun(t *testing.T) {

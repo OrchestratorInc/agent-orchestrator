@@ -1909,6 +1909,8 @@
 	"settings.storage": "Storage",
 	"settings.storage.measure": "Measure again",
 	"settings.storage.measuring": "Measuring disk usage",
+	"settings.storage.scanFailed": "Measuring failed: {{error}}",
+	"settings.storage.clearCacheFailed": "Could not clear the cache: {{error}}",
 	"settings.storage.cleaning": "Cleaning up",
 	"settings.storage.disk": "Disk",
 	"settings.storage.diskFree": "{{free}} free of {{total}}",

@@ -2943,6 +2943,8 @@
 	"settings.storage": "Almacenamiento",
 	"settings.storage.measure": "Medir de nuevo",
 	"settings.storage.measuring": "Midiendo el uso del disco",
+	"settings.storage.scanFailed": "No se pudo medir: {{error}}",
+	"settings.storage.clearCacheFailed": "No se pudo vaciar la caché: {{error}}",
 	"settings.storage.cleaning": "Limpiando",
 	"settings.storage.disk": "Disco",
 	"settings.storage.diskFree": "{{free}} libres de {{total}}",

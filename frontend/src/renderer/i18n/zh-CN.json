@@ -2968,6 +2968,8 @@
 	"settings.storage": "存储",
 	"settings.storage.measure": "重新测量",
 	"settings.storage.measuring": "正在测量磁盘占用",
+	"settings.storage.scanFailed": "测量失败：{{error}}",
+	"settings.storage.clearCacheFailed": "无法清除缓存：{{error}}",
 	"settings.storage.cleaning": "正在清理",
 	"settings.storage.disk": "磁盘",
 	"settings.storage.diskFree": "可用 {{free}}，共 {{total}}",

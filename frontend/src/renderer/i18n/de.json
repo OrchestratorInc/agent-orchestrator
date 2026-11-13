@@ -2898,6 +2898,8 @@
 	"settings.storage": "Speicher",
 	"settings.storage.measure": "Erneut messen",
 	"settings.storage.measuring": "Speichernutzung wird gemessen",
+	"settings.storage.scanFailed": "Messen fehlgeschlagen: {{error}}",
+	"settings.storage.clearCacheFailed": "Cache konnte nicht geleert werden: {{error}}",
 	"settings.storage.cleaning": "Wird aufgeräumt",
 	"settings.storage.disk": "Datenträger",
 	"settings.storage.diskFree": "{{free}} frei von {{total}}",
