@@ -12,6 +12,8 @@ import { useTranslation } from "react-i18next";
 import { SHELL_PANEL_SPRING } from "@/lib/motion-spring";
 import { CommandPalette } from "../components/CommandPalette";
 import { useLatestCallback } from "../hooks/useStable";
+import { isRemoveTarget, useRemoveProject } from "../hooks/useRemoveProject";
+import { clearOptimisticProjectRemoval } from "../hooks/optimistic-project-removals";
 import { CenterPanelShell } from "../components/CenterPanelShell";
 import { DaemonFailureBanner } from "../components/DaemonFailureBanner";
 import { DaemonStartupLoader } from "../components/DaemonStartupLoader";
@@ -48,7 +50,7 @@ import { useDaemonStatus } from "../hooks/useDaemonStatus";
 import { useOpenShellTerminal } from "../hooks/useShellTerminals";
 import { useDocumentFlag } from "../hooks/useElementFlag";
 import { useWindowFullScreen } from "../hooks/useWindowFullScreen";
-import { cloudProjectsQueryKey, cloudSessionsQueryKey, useRemoteWorkspaces, useWorkspacePolling, useWorkspaceQuery, workspaceQueryKey, toWorkspaceSession, workspaceQueryOptions } from "../hooks/useWorkspaceQuery";
+import { useRemoteWorkspaces, useWorkspacePolling, useWorkspaceQuery, workspaceQueryKey, toWorkspaceSession, workspaceQueryOptions } from "../hooks/useWorkspaceQuery";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useCloudOrg } from "../hooks/useCloudOrg";
 import { apiClient, apiErrorCode, apiErrorDetails, apiErrorMessage, apiErrorRequestId, hasTrustedApiBaseUrl } from "../lib/api-client";
@@ -74,7 +76,7 @@ import {
 	hidesShellTopbar,
 } from "../lib/platform";
 import { sidebarIsVisible, sidebarOccupiesLayout, useUiStore } from "../stores/ui-store";
-import { CLOUD_PROJECT_KIND, hasConfiguredOrchestratorAgent, newestActiveOrchestrator, sessionIsActive, STANDALONE_PROJECT_KIND, STANDALONE_WORKSPACE_ID, toProjectKind, type WorkspaceSession, type WorkspaceSummary } from "../types/workspace";
+import { CLOUD_PROJECT_KIND, hasConfiguredOrchestratorAgent, newestActiveOrchestrator, isScratchpadWorkspace, sessionIsActive, STANDALONE_WORKSPACE_ID, toProjectKind, type WorkspaceSession, type WorkspaceSummary } from "../types/workspace";
 import type { components } from "../../api/schema";
 import { useAgentInventoryTelemetry, useSetupCheckedTelemetry } from "../hooks/useAgentInventoryTelemetry";
 import { useSessionSwitchSnap } from "../hooks/useSessionSwitchSnap";
@@ -132,7 +134,7 @@ function lastProjectId(workspaces: WorkspaceSummary[]): string | undefined {
 	} catch {
 		return undefined;
 	}
-	return workspaces.some((workspace) => workspace.id === id && workspace.kind !== STANDALONE_PROJECT_KIND) ? id ?? undefined : undefined;
+	return workspaces.some((workspace) => workspace.id === id && !isScratchpadWorkspace(workspace)) ? id ?? undefined : undefined;
 }
 
 export const Route = createFileRoute("/_shell")({
@@ -241,6 +243,7 @@ function findRegisteredWorkspaceByPath(workspaces: WorkspaceSummary[], path: str
 type CreateProjectConfigInput = {
 	workerAgent: string;
 	orchestratorAgent: string;
+	reviewerAgent?: string;
 	trackerIntake?: components["schemas"]["TrackerIntakeConfig"];
 	defaultBranch?: string;
 };
@@ -250,6 +253,7 @@ export function createProjectConfig(input: CreateProjectConfigInput): components
 		...(input.defaultBranch ? { defaultBranch: input.defaultBranch } : {}),
 		worker: { agent: input.workerAgent as components["schemas"]["RoleOverride"]["agent"] },
 		orchestrator: { agent: input.orchestratorAgent as components["schemas"]["RoleOverride"]["agent"] },
+		...(input.reviewerAgent ? { reviewers: [{ harness: input.reviewerAgent }] } : {}),
 		...(input.trackerIntake ? { trackerIntake: input.trackerIntake } : {}),
 	};
 }
@@ -457,7 +461,9 @@ function ShellLayout() {
 			workspaces.some((workspace) => workspace.id === routeParams.projectId && workspace.kind !== CLOUD_PROJECT_KIND),
 		leavePage: () => void navigate({ to: "/", replace: true }),
 	});
-	const linkSession = routeParams.hostId ? undefined : workspaces.flatMap((workspace) => workspace.sessions).find((session) => session.id === routeParams.sessionId);
+	const linkSession = (routeParams.hostId ? remoteWorkspaces ?? [] : workspaces)
+		.flatMap((workspace) => workspace.sessions)
+		.find((session) => session.id === routeParams.sessionId && session.hostId === routeParams.hostId);
 	const openBrowserLink = useSessionBrowserLink(linkSession);
 	const canOpenBrowserLink = linkSession?.kind === "worker" && sessionIsActive(linkSession);
 	useEffect(() => {
@@ -531,7 +537,7 @@ function ShellLayout() {
 	// The last project the user was in, so a new session started from outside any
 	// project opens there rather than in the scratchpad.
 	const scopedIsProject = Boolean(scopedProjectId) && workspaces.some(
-		(workspace) => workspace.id === scopedProjectId && workspace.kind !== STANDALONE_PROJECT_KIND,
+		(workspace) => workspace.id === scopedProjectId && !isScratchpadWorkspace(workspace),
 	);
 	useEffect(() => {
 		if (!scopedIsProject || !scopedProjectId || scopedProjectId === STANDALONE_WORKSPACE_ID) return;
@@ -749,19 +755,22 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 					? { ...item, sessions: [toWorkspaceSession(spawnData.session, { id: workspace.id, name: workspace.name }), ...item.sessions.filter((session) => session.id !== sessionId)] }
 					: item),
 			);
+			// Follow the new orchestrator only if the user is still waiting on
+			// this project's board; do not pull them back from another page.
+			// The provisioning gate stays up until the session route has landed,
+			// otherwise the board shows through for a beat between the two.
+			const current = routeParamsRef.current;
+			if (current.projectId === workspace.id && !current.sessionId && !current.hostId) {
+				// A failed navigation is not a failed start: the session exists.
+				await navigate({
+					to: "/projects/$projectId/sessions/$sessionId",
+					params: { projectId: workspace.id, sessionId },
+				}).catch(() => undefined);
+			}
 			// The session now exists, so the sidebar button can open it even if
 			// the user left while it spawned.
 			window.clearTimeout(provisioningGuard);
 			setProjectProvisioning(workspace.id, false);
-			// Follow the new orchestrator only if the user is still waiting on
-			// this project's board; do not pull them back from another page.
-			const current = routeParamsRef.current;
-			if (current.projectId === workspace.id && !current.sessionId && !current.hostId) {
-				void navigate({
-					to: "/projects/$projectId/sessions/$sessionId",
-					params: { projectId: workspace.id, sessionId },
-				});
-			}
 		} catch (spawnError) {
 			window.clearTimeout(provisioningGuard);
 			setProjectProvisioning(workspace.id, false);
@@ -796,6 +805,8 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			void captureRendererEvent(source === "project_add" ? "ao.projects.added" : "ao.renderer.project_clone_succeeded", { project_id: workspace.id });
 			// A pre-create list request must not erase the newly registered project.
 			await queryClient.cancelQueries({ queryKey: workspaceQueryKey });
+			// Ids come from the folder name: a folder removed and added again is the same id.
+			clearOptimisticProjectRemoval(workspace.id);
 			useSidebarOrderStore.getState().moveProjectToTop(workspace.id);
 			updateWorkspaces((current) => [workspace, ...current.filter((item) => item.id !== workspace.id)]);
 			setOrchestratorStartupError(workspace.id, null);
@@ -811,6 +822,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			path: string;
 			workerAgent: string;
 			orchestratorAgent: string;
+			reviewerAgent?: string;
 			trackerIntake?: components["schemas"]["TrackerIntakeConfig"];
 			asWorkspace?: boolean;
 			clonePreparationId?: string;
@@ -909,6 +921,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			destinationParent: string;
 			workerAgent: string;
 			orchestratorAgent: string;
+			reviewerAgent?: string;
 			trackerIntake?: components["schemas"]["TrackerIntakeConfig"];
 			signal?: AbortSignal;
 		}) => {
@@ -992,6 +1005,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			}
 		}
 		if (!projectId) throw Object.assign(apiErrorException(error, "Could not add project on this host."), { code: apiErrorCode(error) });
+		clearOptimisticProjectRemoval(projectId, hostId);
 		const showProject = (sessionId?: string) => {
 			void queryClient.invalidateQueries({ queryKey: remoteWorkspaceQueryKey(hostId) });
 			void navigate(sessionId ? sessionNavigateTarget(projectId, sessionId, hostId) : projectNavigateTarget(projectId, hostId));
@@ -1032,95 +1046,31 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 		[],
 	);
 
+	// Removal is optimistic: the project leaves every list on confirm and the
+	// daemon's teardown runs in the background (see useRemoveProject).
+	const findWorkspaceToRemove = useCallback((projectId: string, hostId?: string, cloud?: boolean) =>
+		(hostId ? remoteWorkspacesRef.current ?? [] : workspacesRef.current)
+			.find((workspace) => isRemoveTarget(workspace, projectId, hostId, cloud)), []);
+	const isViewingProject = useCallback((workspace: WorkspaceSummary) => {
+		const route = routeParamsRef.current;
+		if (route.hostId !== workspace.hostId) return false;
+		return route.projectId === workspace.id ||
+			(route.sessionId !== undefined && workspace.sessions.some((session) => session.id === route.sessionId));
+	}, []);
+	const removeProjectById = useRemoveProject({
+		findWorkspace: findWorkspaceToRemove,
+		isViewing: isViewingProject,
+		cloud: { client: cloudClient, orgId: cloudOrg?.id },
+	});
+	// The flag tells a local project from a cloud project with the same id.
 	const removeProject = useCallback(
-		async (projectId: string) => {
-			const isLastWorkspace =
-              workspaces.length === 1 && workspaces[0]?.id === projectId;
-			void addRendererExceptionStep("Project removal requested", {
-				source: "project-remove",
-				operation: "project_remove",
-				surface: "project_board",
-				project_id: projectId,
-			});
-			// Cloud projects live in the control plane, not the local daemon: route
-			// their delete to the CP (which archives the project and all its
-			// sessions) instead of the local project endpoint.
-			const isCloudProject =
-				workspaces.find((item) => item.id === projectId)?.kind === CLOUD_PROJECT_KIND;
-			if (isCloudProject) {
-				if (!cloudOrg?.id) {
-					const failure = new Error("The cloud control plane is not ready. Sign in and try again.") as Error & {
-						code?: string;
-					};
-					failure.code = "cloud_not_ready";
-					void captureRendererException(failure, {
-						source: "project-remove",
-						operation: "project_remove",
-						surface: "project_board",
-						project_id: projectId,
-					});
-					throw failure;
-				}
-				try {
-					await cloudClient.deleteProject(cloudOrg.id, projectId);
-				} catch (error) {
-					const failure = new Error(
-						error instanceof Error ? error.message : "Unable to delete cloud project",
-					) as Error & { code?: string };
-					void captureRendererException(failure, {
-						source: "project-remove",
-						operation: "project_remove",
-						surface: "project_board",
-						project_id: projectId,
-					});
-					throw failure;
-				}
-				void captureRendererEvent("ao.projects.removed", { project_id: projectId });
-				// The archive is asynchronous (202); refresh the cloud queries so the
-				// merged board drops the project and its sessions on the next fetch.
-				await queryClient.invalidateQueries({ queryKey: cloudProjectsQueryKey });
-				await queryClient.invalidateQueries({ queryKey: cloudSessionsQueryKey });
-				if (isLastWorkspace) {
-					void navigate({ to: "/" });
-				}
-				return;
-			}
-			const { error } = await apiClient.DELETE("/api/v1/projects/{id}", {
-				params: { path: { id: projectId } },
-			});
-			if (error) {
-				const failure = apiErrorException(error) as Error & { code?: string };
-				failure.code = apiErrorCode(error);
-				void captureRendererException(failure, {
-					source: "project-remove",
-					operation: "project_remove",
-					surface: "project_board",
-					project_id: projectId,
-				});
-				throw failure;
-			}
-			void captureRendererEvent("ao.projects.removed", { project_id: projectId });
-			updateWorkspaces((current) => current.filter((item) => item.id !== projectId));
-			if (isLastWorkspace) {
-              void navigate({ to: "/" });
-}
-		},
-		[cloudClient, cloudOrg?.id, navigate, queryClient, updateWorkspaces, workspaces],
+		(projectId: string, cloud: boolean) => removeProjectById(projectId, undefined, cloud),
+		[removeProjectById],
 	);
-	const removeRemoteProject = useCallback(async (hostId: string, projectId: string) => {
-		const selectedProject = routeParams.hostId === hostId && (
-			routeParams.projectId === projectId || remoteWorkspaces.some((workspace) =>
-				workspace.hostId === hostId && workspace.id === projectId &&
-				workspace.sessions.some((session) => session.id === routeParams.sessionId),
-			)
-		);
-		const { error } = await clientForHost(hostId).DELETE("/api/v1/projects/{id}", {
-			params: { path: { id: projectId } },
-		});
-		if (error) throw apiErrorException(error);
-		void queryClient.invalidateQueries({ queryKey: remoteWorkspaceQueryKey(hostId) });
-		if (selectedProject) void navigate({ to: "/" });
-	}, [navigate, queryClient, remoteWorkspaces, routeParams.hostId, routeParams.projectId, routeParams.sessionId]);
+	const removeRemoteProjectFromSidebar = useCallback(
+		(hostId: string, projectId: string) => removeProjectById(projectId, hostId),
+		[removeProjectById],
+	);
 	const openRemoteProjectOrchestrator = useCallback(async (hostId: string, projectId: string) => {
 		const workspace = remoteWorkspaces.find((item) => item.hostId === hostId && item.id === projectId);
 		if (!workspace) return;
@@ -1156,7 +1106,6 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 		(hostId: string, projectId: string) => openProjectSettings(projectId, hostId),
 		[openProjectSettings],
 	);
-	const removeRemoteProjectFromSidebar = useLatestCallback(removeRemoteProject);
 	const retryRemoteHosts = useCallback(() => {
 		void refreshRemoteHosts();
 		void queryClient.invalidateQueries({ queryKey: ["remote-workspaces"] });
@@ -1476,6 +1425,8 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			initializeProjectRepository,
 			openRemoteProjectSettings: (hostId: string, projectId: string) => openProjectSettings(projectId, hostId),
 			openProject,
+			remoteHosts,
+			retryRemoteHosts,
 			validateImport,
 		}),
 		[
@@ -1485,6 +1436,8 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			initializeProjectRepository,
 			openProjectSettings,
 			openProject,
+			remoteHosts,
+			retryRemoteHosts,
 			validateImport,
 			workspaceStartupState,
 		],

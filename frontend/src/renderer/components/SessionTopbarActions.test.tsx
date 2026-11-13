@@ -267,6 +267,20 @@ describe("optimistic orchestrator topbar", () => {
 		expect(screen.getByRole("button", { name: "New task" })).toBeDisabled();
 		expect(screen.getByRole("button", { name: "Board" })).toBeDisabled();
 		expect(screen.queryByRole("button", { name: "Notifications" })).not.toBeInTheDocument();
+		// The editor and cue controls hold their place so nothing slides in when the session lands.
+		expect(screen.getByRole("button", { name: "Choose editor", hidden: true })).toBeDisabled();
+		expect(screen.getByRole("button", { name: "Run a cue" })).toBeDisabled();
+	});
+
+	it("reserves no editor or cue slot on a remote host, where the session has neither", () => {
+		useWorkspaceQueryMock.mockReturnValue({ data: [], isError: false, isLoading: false, isSuccess: true });
+		render(
+			<QueryClientProvider client={new QueryClient()}>
+				<TooltipProvider><SessionTopbarActions startingOrchestrator route={{ hostId: "host-1", projectId: "proj-1" }} /></TooltipProvider>
+			</QueryClientProvider>,
+		);
+		expect(screen.queryByRole("button", { name: "Choose editor", hidden: true })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Run a cue" })).not.toBeInTheDocument();
 	});
 });
 
@@ -292,6 +306,24 @@ describe("SessionTopbarActions embedded actions", () => {
 
 		const plain = renderTopbar(sessionWith());
 		expect(plain.container.querySelector("[data-session-owner-tag]")).toBeNull();
+	});
+
+	it("offers no orchestrator in a Cloud standalone agent, which has none", () => {
+		const agent = sessionWith({ workspaceId: "agent-1", workspaceName: "Fix the flake", cloud: { orgId: "org" } });
+		const data: WorkspaceSummary[] = [
+			{ id: "agent-1", name: "Fix the flake", path: "", kind: "cloud", cloudOrgId: "org", standaloneAgent: true, sessions: [agent] },
+		];
+		useWorkspaceQueryMock.mockReturnValue({ data, isError: false, isLoading: false, isSuccess: true });
+		paramsMock.projectId = "agent-1";
+		paramsMock.sessionId = agent.id;
+		render(
+			<QueryClientProvider client={new QueryClient()}>
+				<TooltipProvider>
+					<SessionTopbarActions />
+				</TooltipProvider>
+			</QueryClientProvider>,
+		);
+		expect(screen.queryByRole("button", { name: "Open orchestrator" })).toBeNull();
 	});
 
 	it("renders only session actions when embedded in the terminal bar", () => {

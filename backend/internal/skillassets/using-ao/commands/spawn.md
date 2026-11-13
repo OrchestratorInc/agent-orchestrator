@@ -21,7 +21,7 @@ ao spawn [flags]
 | `--model string` | Agent model override for this session only; overrides project/role config | - |
 | `--effort string` | Reasoning effort override for this session only (for example `low`, `medium`, `high`); overrides project/role config | - |
 | `--name string` | Display name shown in the sidebar (max 100 characters) | Required |
-| `--mode chat\|tui` | Initial session interface; Chat requires harness support | Daemon default, otherwise Terminal UI |
+| `--mode chat\|tui` | Initial session interface; Chat requires harness support (including Grok Build via native ACP) | Daemon default, otherwise Terminal UI |
 | `--output artifact` | Ask the worker for a file in its artifact directory instead of a PR | Ordinary task |
 | `--no-takeover` | Refuse if another active session owns the claimed PR (requires `--claim-pr`) | - |
 | `--project string` | Project id to spawn the session in | Optional when `--standalone` is used; defaults to `AO_PROJECT_ID` or the current repo's registered project |

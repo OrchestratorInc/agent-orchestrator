@@ -4,9 +4,11 @@ import { ActivityIndicator, Keyboard, Platform, Pressable, StyleSheet, TextInput
 import { AppSymbol } from "./AppSymbol";
 import { ChatAttachmentMenu } from "./chat/ChatAttachmentMenu";
 import { ComposerGlass } from "./chat/composer-glass";
+import type { ComposerImageAsset, PasteOverflow } from "./chat/composerImages";
 import { COMPOSER_DISC, COMPOSER_FIELD_HEIGHT, COMPOSER_RADIUS, composerStyleRules } from "./chat/composerStyles";
 import { usePressFeedback } from "./pressFeedback";
 import type { SpawnComposerVoice } from "./spawn-composer-controls.types";
+import { useImagePaste } from "./chat/useImagePaste";
 import { DictationField } from "./voice/DictationField";
 import type { Theme } from "./theme";
 import { useTheme, useThemedStyles } from "./ThemeProvider";
@@ -28,6 +30,8 @@ export type SpawnComposerProps = {
 	settings: ReactNode;
 	onChoosePhoto: () => void;
 	onChooseFile: () => void;
+	/** Takes images pasted into the field; null while they can't be attached. */
+	onPasteImages?: ((assets: ComposerImageAsset[], overflow?: PasteOverflow) => void) | null;
 	voice: SpawnComposerVoice;
 	onSpawn: () => void;
 	busy: boolean;
@@ -41,11 +45,12 @@ export type SpawnComposerProps = {
  * page is for choosing who runs the task, so the model, effort and approval
  * stay in sight while the field is empty and unfocused.
  */
-export function SpawnComposer({ prompt, onChangePrompt, placeholder, attachments, settings, onChoosePhoto, onChooseFile, voice, onSpawn, busy, disabled }: SpawnComposerProps) {
+export function SpawnComposer({ prompt, onChangePrompt, placeholder, attachments, settings, onChoosePhoto, onChooseFile, onPasteImages, voice, onSpawn, busy, disabled }: SpawnComposerProps) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const sendFeedback = usePressFeedback("button", { tone: "onAccent" });
 	const field = useRef<TextInput>(null);
+	const pasteLayout = useImagePaste(onPasteImages ?? null);
 	const navigation = useNavigation<NativeStackNavigationProp<Record<string, object | undefined>>>();
 	// A new task is for typing into, so the page opens with the keyboard up, as
 	// a new chat does. iOS focuses
@@ -115,6 +120,7 @@ export function SpawnComposer({ prompt, onChangePrompt, placeholder, attachments
 				{dictating ? <DictationField state={voice.state} partial={voice.partial} subscribeLevel={voice.subscribeLevel} style={styles.dictation} waveformOnly /> : null}
 				<TextInput
 					ref={field}
+					onLayout={pasteLayout}
 					accessibilityLabel="Task prompt"
 					value={prompt}
 					onChangeText={onChangePrompt}
