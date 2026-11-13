@@ -135,7 +135,8 @@ function QueuedMessageRowContent({
 		Boolean(onPromoteQueuedTurn && canSteer && !showPersistentSteer && !suppressHoverSteer);
 	// Each send briefly disables every row. Dimming them on every Enter made the
 	// dock flicker and showed the hidden hover Steer on every row.
-	const steadyClass = steady ? "disabled:opacity-100" : undefined;
+	// Row actions change state instantly: no fades on hover, disable or key hint.
+	const steadyClass = cn("transition-none", steady && "disabled:opacity-100");
 
 	return (
 		<div className="queue-dock-row-content flex h-10 w-full min-w-0 items-center gap-2.5 overflow-hidden px-3">
@@ -162,7 +163,7 @@ function QueuedMessageRowContent({
 							void onRunAction(turnId, () => onPromoteQueuedTurn!(turnId));
 						}}
 						className={cn(
-							"focus-visible:pointer-events-auto focus-visible:opacity-100",
+							"transition-none focus-visible:pointer-events-auto focus-visible:opacity-100",
 							showHoverSteer
 								? "pointer-events-none opacity-100"
 								: busy
@@ -191,7 +192,7 @@ function QueuedMessageRowContent({
 						{/* The key hint fades in place, so typing never resizes the row's actions. */}
 						<span
 							className={cn(
-								"inline-flex shrink-0 items-center gap-1 text-muted-foreground transition-opacity duration-150 motion-reduce:transition-none",
+								"inline-flex shrink-0 items-center gap-1 text-muted-foreground",
 								!enterSteers && "opacity-0",
 							)}
 							data-enter-steers={enterSteers ? "true" : undefined}
@@ -595,7 +596,7 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 				onClick={() => hasMore && setExpanded((open) => !open)}
 				disabled={!hasMore}
 				className={cn(
-					"queue-dock-toggle relative z-[1] flex w-full items-center gap-2 bg-surface px-3 py-2 text-left motion-reduce:transition-none",
+					"queue-dock-toggle relative z-[1] flex w-full items-center gap-2 bg-surface px-3 py-2 text-left transition-none",
 					hasMore && "cursor-pointer",
 					!hasMore && "cursor-default",
 				)}
@@ -605,18 +606,18 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 				<span
 					aria-hidden="true"
 					className={cn(
-						"grid h-3.5 shrink-0 overflow-hidden transition-[width] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] motion-reduce:transition-none",
+						"grid h-3.5 shrink-0 overflow-hidden",
 						hasMore ? "w-3.5" : "w-0",
 					)}
 				>
 					<ChevronDown
 						className={cn(
-							"size-3.5 shrink-0 text-muted-foreground transition-transform duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] motion-reduce:transition-none",
+							"size-3.5 shrink-0 text-muted-foreground",
 							expanded ? "rotate-0" : "-rotate-90",
 						)}
 					/>
 				</span>
-				<span className="queue-dock-label text-xs font-medium text-muted-foreground transition-colors duration-150">
+				<span className="queue-dock-label text-xs font-medium text-muted-foreground">
 					<span
 						className="inline-block w-fit"
 					>

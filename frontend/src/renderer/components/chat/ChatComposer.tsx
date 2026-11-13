@@ -2216,7 +2216,6 @@ export const ChatComposer = memo(function ChatComposer({
 	) : discardedUnsent ? (
 		<UnsentMessageStrip discarded onUndo={undoDiscardUnsent} />
 	) : null;
-	const queueEnters = useDockEntrance(queuedDock ? "queue" : null);
 	const elicitationEnters = useDockEntrance(elicitation ? String((isValidElement(elicitation) && elicitation.key) || "elicitation") : null);
 	const unsentEnters = useDockEntrance(unsentStrip ? (stripDelivery?.draft ? "unsent" : "discarded") : null);
 	const withQueueStack = (form: ReactElement) =>
@@ -2224,7 +2223,8 @@ export const ChatComposer = memo(function ChatComposer({
 			<div className="relative mx-auto flex w-full max-w-3xl flex-col">
 				{queuedDock ? (
 				<div
-					className={cn("cursor-chat-composer-queue relative z-10 mx-auto mb-2 w-[calc(100%-2rem)]", queueEnters && "queue-dock-enter")}
+					// The queue appears at once, like its rows: no entrance fade.
+					className="cursor-chat-composer-queue relative z-10 mx-auto mb-2 w-[calc(100%-2rem)]"
 					data-testid="queued-composer-dock"
 				>
 					{queuedDockWithSteer}

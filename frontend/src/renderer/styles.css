@@ -3077,8 +3077,6 @@ html[data-window-translucent="true"] :is(.queue-dock, .queue-dock-toggle, .queue
 	overflow: hidden;
 	min-width: 0;
 	height: var(--queue-dock-row-height);
-	transition: height var(--duration-normal) var(--ease-out);
-	will-change: height;
 }
 
 .queue-dock[data-reordering="true"] .queue-dock-body,
@@ -3090,16 +3088,8 @@ html[data-window-translucent="true"] :is(.queue-dock, .queue-dock-toggle, .queue
 	height: var(--queue-dock-collapsed-height, 4.5rem);
 	min-width: 0;
 	max-width: 100%;
-	/* Rows arrive with every queued send; a long settle reads as lag. */
-	transition: height var(--duration-normal) var(--ease-out);
-	will-change: height;
-}
-
-@media (prefers-reduced-motion: reduce) {
-	.queue-dock,
-	.queue-dock-body {
-		transition: none;
-	}
+	/* No height animation: rows arrive and leave with every send, and the dock
+	   follows at once. */
 }
 
 .queue-dock[data-collapsible="true"][data-expanded="true"] {
