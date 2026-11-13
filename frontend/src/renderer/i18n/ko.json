@@ -4135,5 +4135,7 @@
 	"settings.harness.troubleshoot.report.not_needed": "확인을 통과했으므로 보통은 신고가 필요하지 않습니다. 문제가 계속되면 그래도 신고를 작성할 수 있습니다.",
 	"settings.harness.troubleshoot.openIssue": "GitHub 이슈 열기",
 	"settings.harness.troubleshoot.openIssueHelp": "미리 작성된 GitHub 이슈를 브라우저에서 엽니다. 내용을 검토한 후 직접 제출하세요.",
-	"settings.harness.troubleshoot.issuePasteRequired": "신고 내용이 링크에 담기에는 너무 길어 AO가 복사했습니다. GitHub 이슈에 붙여 넣으세요."
+	"settings.harness.troubleshoot.issuePasteRequired": "신고 내용이 링크에 담기에는 너무 길어 AO가 복사했습니다. GitHub 이슈에 붙여 넣으세요.",
+	"settings.harness.troubleshoot.launchIncomplete": "이전 도우미 실행이 완료되었는지 AO가 확인하지 못했습니다. 다시 시도해 연결하거나 새 도우미를 시작하세요. 이전 도우미가 작업 목록에 보이면 그곳에서 중지하세요.",
+	"settings.harness.troubleshoot.newLaunch": "대신 새 도우미 시작"
 }

@@ -4217,5 +4217,7 @@
 	"settings.harness.troubleshoot.report.not_needed": "Suas verificações passaram, então normalmente não é preciso relatar. Você ainda pode preparar um relato se o problema continuar.",
 	"settings.harness.troubleshoot.openIssue": "Abrir issue no GitHub",
 	"settings.harness.troubleshoot.openIssueHelp": "Abre no navegador uma issue do GitHub já preenchida. Revise-a lá e envie você mesmo.",
-	"settings.harness.troubleshoot.issuePasteRequired": "O relato era longo demais para um link, então o AO o copiou. Cole-o na issue do GitHub."
+	"settings.harness.troubleshoot.issuePasteRequired": "O relato era longo demais para um link, então o AO o copiou. Cole-o na issue do GitHub.",
+	"settings.harness.troubleshoot.launchIncomplete": "O AO não conseguiu confirmar que a inicialização anterior do agente auxiliar terminou. Tente novamente para reconectar ou inicie um novo agente auxiliar. Se o anterior aparecer na sua lista de tarefas, pare-o por lá.",
+	"settings.harness.troubleshoot.newLaunch": "Iniciar um novo agente auxiliar"
 }

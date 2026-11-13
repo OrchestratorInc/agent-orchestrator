@@ -4292,5 +4292,7 @@
 	"settings.harness.troubleshoot.report.not_needed": "Проверки пройдены, поэтому отчёт обычно не нужен. Вы всё равно можете подготовить его, если проблема не исчезнет.",
 	"settings.harness.troubleshoot.openIssue": "Открыть issue на GitHub",
 	"settings.harness.troubleshoot.openIssueHelp": "Открывает в браузере заполненный issue на GitHub. Проверьте его там и отправьте сами.",
-	"settings.harness.troubleshoot.issuePasteRequired": "Отчёт слишком длинный для ссылки, поэтому AO скопировал его. Вставьте его в issue на GitHub."
+	"settings.harness.troubleshoot.issuePasteRequired": "Отчёт слишком длинный для ссылки, поэтому AO скопировал его. Вставьте его в issue на GitHub.",
+	"settings.harness.troubleshoot.launchIncomplete": "AO не удалось подтвердить, что предыдущий запуск помощника завершился. Повторите попытку, чтобы переподключиться, или запустите нового помощника. Если предыдущий помощник есть в списке задач, остановите его там.",
+	"settings.harness.troubleshoot.newLaunch": "Запустить нового помощника"
 }

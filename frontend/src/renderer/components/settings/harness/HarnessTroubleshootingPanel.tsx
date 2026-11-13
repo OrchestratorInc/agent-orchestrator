@@ -7,7 +7,7 @@ import type { components } from "../../../../api/schema";
 import type { AgentReadinessSnapshot } from "../../../hooks/useAgentReadinessQuery";
 import { toWorkspaceSession, workspaceQueryKey } from "../../../hooks/useWorkspaceQuery";
 import { agentLabel, type AgentId } from "../../../lib/agent-options";
-import { apiClient, apiErrorMessage } from "../../../lib/api-client";
+import { apiClient, apiErrorCode, apiErrorMessage } from "../../../lib/api-client";
 import { subscribeArtifactFileChanges } from "../../../lib/artifact-file-events";
 import { aoBridge } from "../../../lib/bridge";
 import { STANDALONE_WORKSPACE_ID } from "../../../types/workspace";
@@ -38,6 +38,8 @@ type TroubleshootingState = {
 	// Keep the exact request until the daemon acknowledges its session. A lost
 	// response must not turn a changed claim, helper or snapshot into another launch.
 	launchRequest?: components["schemas"]["SpawnSessionRequest"];
+	// The daemon reported an earlier launch with this request ID as unfinished.
+	launchIncomplete?: boolean;
 	verificationFailed?: boolean;
 	checkStage?: TroubleshootingCheckStage;
 };
@@ -143,10 +145,20 @@ export function HarnessTroubleshootingPanel({ agentId, agents, installationBusy,
 				displayName: `Troubleshoot ${agentLabel(agentId)}`, prompt: troubleshootingPrompt(claim, latest),
 			};
 		}
-		update(agentId, { launchRequest: request });
+		update(agentId, { launchRequest: request, launchIncomplete: false });
+		// A thrown request is a transport failure: the helper may have started,
+		// so the exact request stays pinned for Retry.
 		const { data, error } = await apiClient.POST("/api/v1/sessions", { body: request });
-		if (error || !data) throw new Error(apiErrorMessage(error, t("settings.harness.troubleshoot.failed")));
-		update(agentId, { session: data.session, helperHarness: request.harness, stopped: data.session.isTerminated, launchRequest: undefined });
+		if (error || !data) {
+			// A coded error is the daemon's answer that this request did not start a
+			// helper, so release it for a new launch. An unfinished earlier launch
+			// with the same ID may still complete: keep Retry and offer a new launch.
+			const code = apiErrorCode(error);
+			if (code === "CLIENT_REQUEST_INCOMPLETE") update(agentId, { launchIncomplete: true });
+			else if (code) update(agentId, { launchRequest: undefined });
+			throw new Error(apiErrorMessage(error, t("settings.harness.troubleshoot.failed")));
+		}
+		update(agentId, { session: data.session, helperHarness: request.harness, stopped: data.session.isTerminated, launchRequest: undefined, launchIncomplete: false });
 		void queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
 	});
 	const stop = () => run("stopping", async () => {
@@ -230,7 +242,11 @@ export function HarnessTroubleshootingPanel({ agentId, agents, installationBusy,
 							: <div className="space-y-3"><p className="text-xs leading-5 text-settings-muted">{t("settings.harness.troubleshoot.noHelper")}</p><div className="flex flex-wrap gap-2">{TROUBLESHOOTING_HELPERS.map((id) => <Button key={id} className={actionClass} size="sm" variant="outline" disabled={busy || installationBusy} onClick={() => onOpenAccount(id)}>{t("settings.harness.troubleshoot.openSetup", { agent: agentLabel(id) })}</Button>)}</div><p className="text-xs leading-5 text-settings-muted">{t("settings.harness.troubleshoot.returnAfterSetup")}</p></div>}
 					<p className="flex items-start gap-2 text-xs leading-5 text-settings-muted"><ShieldCheck className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />{t("settings.harness.troubleshoot.sharingSummary")}</p>
 					<details className="group"><summary className={summaryClass}><ChevronDown className="size-3.5 shrink-0 group-open:rotate-180" aria-hidden="true" />{t("settings.harness.troubleshoot.sharingDetails")}</summary><p className="mt-2 text-xs leading-5 text-settings-muted">{t("settings.harness.troubleshoot.disclosure")}</p></details>
-					{pendingLaunch || helper ? <Button className={actionClass} size="sm" disabled={busy || (!pendingLaunch && (installationBusy || state?.verificationFailed))} onClick={() => void start()}>{state?.operation === "starting" ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : <TerminalSquare aria-hidden="true" />}{t(pendingLaunch ? "settings.harness.troubleshoot.retryLaunch" : "settings.harness.troubleshoot.start")}</Button> : null}
+					{pendingLaunch && state?.launchIncomplete ? <p className="max-w-prose text-xs leading-5 text-settings-muted">{t("settings.harness.troubleshoot.launchIncomplete")}</p> : null}
+					{pendingLaunch || helper ? <div className="flex flex-wrap gap-2">
+						<Button className={actionClass} size="sm" disabled={busy || (!pendingLaunch && (installationBusy || state?.verificationFailed))} onClick={() => void start()}>{state?.operation === "starting" ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : <TerminalSquare aria-hidden="true" />}{t(pendingLaunch ? "settings.harness.troubleshoot.retryLaunch" : "settings.harness.troubleshoot.start")}</Button>
+						{pendingLaunch && state?.launchIncomplete ? <Button className={actionClass} size="sm" variant="secondary" disabled={busy} onClick={() => update(agentId, { launchRequest: undefined, launchIncomplete: false, error: undefined })}>{t("settings.harness.troubleshoot.newLaunch")}</Button> : null}
+					</div> : null}
 				</div> : null}
 				{session ? <div className="rounded-lg border border-border bg-(--color-bg-secondary)">
 					<div className="sticky top-0 z-10 flex flex-wrap items-center justify-between gap-2 rounded-t-lg border-b border-border bg-(--color-bg-secondary) px-3 py-2.5" data-testid="helper-controls">

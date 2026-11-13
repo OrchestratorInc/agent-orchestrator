@@ -4217,5 +4217,7 @@
 	"settings.harness.troubleshoot.report.not_needed": "Vos vérifications ont réussi : un signalement n’est généralement pas nécessaire. Vous pouvez tout de même en préparer un si le problème persiste.",
 	"settings.harness.troubleshoot.openIssue": "Ouvrir un ticket GitHub",
 	"settings.harness.troubleshoot.openIssueHelp": "Ouvre dans votre navigateur un ticket GitHub prérempli. Relisez-le, puis envoyez-le vous-même.",
-	"settings.harness.troubleshoot.issuePasteRequired": "Le signalement était trop long pour un lien, AO l’a donc copié. Collez-le dans le ticket GitHub."
+	"settings.harness.troubleshoot.issuePasteRequired": "Le signalement était trop long pour un lien, AO l’a donc copié. Collez-le dans le ticket GitHub.",
+	"settings.harness.troubleshoot.launchIncomplete": "AO n’a pas pu confirmer que le lancement précédent de l’agent d’assistance s’est terminé. Réessayez pour vous y reconnecter, ou lancez un nouvel agent d’assistance. Si l’ancien apparaît dans votre liste de tâches, arrêtez-le depuis celle-ci.",
+	"settings.harness.troubleshoot.newLaunch": "Lancer plutôt un nouvel agent d’assistance"
 }

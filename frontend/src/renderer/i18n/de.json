@@ -4135,5 +4135,7 @@
 	"settings.harness.troubleshoot.report.not_needed": "Deine Prüfungen waren erfolgreich, daher ist meist keine Meldung nötig. Du kannst trotzdem eine erstellen, wenn das Problem weiter besteht.",
 	"settings.harness.troubleshoot.openIssue": "GitHub-Issue öffnen",
 	"settings.harness.troubleshoot.openIssueHelp": "Öffnet ein vorausgefülltes GitHub-Issue in deinem Browser. Prüfe es dort und sende es dann selbst ab.",
-	"settings.harness.troubleshoot.issuePasteRequired": "Die Meldung war für einen Link zu lang, daher hat AO sie kopiert. Füge sie in das GitHub-Issue ein."
+	"settings.harness.troubleshoot.issuePasteRequired": "Die Meldung war für einen Link zu lang, daher hat AO sie kopiert. Füge sie in das GitHub-Issue ein.",
+	"settings.harness.troubleshoot.launchIncomplete": "AO konnte nicht bestätigen, dass der frühere Start des Hilfsagenten abgeschlossen wurde. Versuche es erneut, um dich mit ihm zu verbinden, oder starte einen neuen Hilfsagenten. Wenn der frühere Hilfsagent in deiner Aufgabenliste erscheint, stoppe ihn dort.",
+	"settings.harness.troubleshoot.newLaunch": "Stattdessen neuen Hilfsagenten starten"
 }

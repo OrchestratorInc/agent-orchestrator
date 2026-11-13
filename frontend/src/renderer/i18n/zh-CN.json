@@ -4117,5 +4117,7 @@
 	"settings.harness.troubleshoot.report.not_needed": "你的检查已通过，通常无需报告。如果问题仍然存在，你仍可以准备一份报告。",
 	"settings.harness.troubleshoot.openIssue": "打开 GitHub Issue",
 	"settings.harness.troubleshoot.openIssueHelp": "在浏览器中打开预填好的 GitHub Issue。请在那里审阅，然后自行提交。",
-	"settings.harness.troubleshoot.issuePasteRequired": "报告太长，无法放入链接，因此 AO 已复制它。请将其粘贴到 GitHub Issue 中。"
+	"settings.harness.troubleshoot.issuePasteRequired": "报告太长，无法放入链接，因此 AO 已复制它。请将其粘贴到 GitHub Issue 中。",
+	"settings.harness.troubleshoot.launchIncomplete": "AO 无法确认之前的辅助智能体启动是否已完成。请重试以重新连接，或启动一个新的辅助智能体。如果之前的辅助智能体出现在任务列表中，请在那里停止它。",
+	"settings.harness.troubleshoot.newLaunch": "改为启动新的辅助智能体"
 }

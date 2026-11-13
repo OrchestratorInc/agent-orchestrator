@@ -4135,5 +4135,7 @@
 	"settings.harness.troubleshoot.report.not_needed": "チェックは成功したため、通常は報告は不要です。問題が続く場合は報告を作成することもできます。",
 	"settings.harness.troubleshoot.openIssue": "GitHub Issue を開く",
 	"settings.harness.troubleshoot.openIssueHelp": "入力済みの GitHub Issue をブラウザーで開きます。内容を確認してから、ご自身で送信してください。",
-	"settings.harness.troubleshoot.issuePasteRequired": "報告がリンクには長すぎるため、AO がコピーしました。GitHub Issue に貼り付けてください。"
+	"settings.harness.troubleshoot.issuePasteRequired": "報告がリンクには長すぎるため、AO がコピーしました。GitHub Issue に貼り付けてください。",
+	"settings.harness.troubleshoot.launchIncomplete": "以前の補助エージェントの起動が完了したことを AO で確認できませんでした。再試行して再接続するか、新しい補助エージェントを起動してください。以前の補助エージェントがタスク一覧に表示されている場合は、そこで停止してください。",
+	"settings.harness.troubleshoot.newLaunch": "代わりに新しい補助エージェントを起動"
 }

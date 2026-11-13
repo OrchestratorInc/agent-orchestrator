@@ -4116,5 +4116,7 @@
 	"settings.harness.troubleshoot.report.not_needed": "Your checks passed, so a report is usually not needed. You can still prepare one if the problem continues.",
 	"settings.harness.troubleshoot.openIssue": "Open GitHub issue",
 	"settings.harness.troubleshoot.openIssueHelp": "Opens a prefilled GitHub issue in your browser. Review it there, then submit it yourself.",
-	"settings.harness.troubleshoot.issuePasteRequired": "The report was too long for a link, so AO copied it. Paste it into the GitHub issue."
+	"settings.harness.troubleshoot.issuePasteRequired": "The report was too long for a link, so AO copied it. Paste it into the GitHub issue.",
+	"settings.harness.troubleshoot.launchIncomplete": "AO could not confirm that the earlier helper launch finished. Retry to reconnect to it, or start a new helper. If the earlier helper appears in your task list, stop it there.",
+	"settings.harness.troubleshoot.newLaunch": "Start a new helper instead"
 }
