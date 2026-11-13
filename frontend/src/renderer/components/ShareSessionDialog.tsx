@@ -5,7 +5,6 @@ import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useCloudSession } from "../lib/cloud-session";
-import { useCloudOrg } from "../hooks/useCloudOrg";
 import { useRestoreFocusOnClose } from "../hooks/useRestoreFocusOnClose";
 import {
 	invalidateTeamsAndShares,
@@ -32,7 +31,6 @@ import {
 	actualLinkCap,
 	anyoneSentence,
 	DEFAULT_EXPIRY,
-	isPersonalWorkspace,
 	type LinkAccess,
 	LinkRevokeError,
 	linkErrorMessage,
@@ -254,19 +252,13 @@ function useShareController({ active: open, orgId, projectId, sessionId, teams, 
 	const { client, baseUrl, ready } = useCloudCp();
 	const me = useCloudSession().session?.user;
 	const myEmail = me?.email?.toLowerCase() ?? "";
-	// A project belongs to its workspace: the access list names it on top.
-	// Undefined while it loads or when it couldn't be read.
-	const { org } = useCloudOrg(open);
-	const workspace = org?.id === orgId ? org : undefined;
-	const workspaceName = workspace?.displayName;
-	// A personal workspace has nobody else in it, so "people in <it>" reads oddly.
-	// Nobody else in the workspace can open a standalone agent either, so it
-	// reads the same: only its owner and the people added.
-	const personal = standaloneAgent || isPersonalWorkspace(workspace);
 	const queryClient = useQueryClient();
 	// Opened for a project rather than a session: there is no session to go back to.
+	// The same dialog can be handed a session again (the header follows the
+	// session on screen), so the scope follows it rather than its first one.
 	const projectOnly = !sessionId;
-	const [scope, setScope] = useState<ShareScope>(projectOnly ? "project" : "session");
+	const [chosenScope, setScope] = useState<ShareScope>("session");
+	const scope: ShareScope = projectOnly ? "project" : chosenScope;
 	const [view, setView] = useState<"main" | "settings">("main");
 	const [staged, setStaged] = useState<Recipient[]>([]);
 	const [stagedRole, setStagedRole] = useState<CloudCpShareRole>("viewer");
@@ -469,7 +461,7 @@ function useShareController({ active: open, orgId, projectId, sessionId, teams, 
 		setStaged([]);
 		setStagedRole("viewer");
 		setStagedCap("read-only");
-		setScope(projectOnly ? "project" : "session");
+		setScope("session");
 		setView("main");
 		setConfirm(null);
 		setAnnouncement("");
@@ -557,7 +549,7 @@ function useShareController({ active: open, orgId, projectId, sessionId, teams, 
 
 	// General access. Turning link access on makes a Can watch link; anything
 	// that widens it, turns it off, or replaces a link asks first.
-	const restricted = restrictedSentence(t, { scope, workspaceName, personal, people: peopleAvailable });
+	const restricted = restrictedSentence(t, { scope, people: peopleAvailable });
 	const turnOnLinks = () => {
 		undoNotice.clearFailure();
 		links.turnOn.mutate({ role: "viewer", modeCap: "read-only", expiry });
@@ -696,7 +688,7 @@ function useShareController({ active: open, orgId, projectId, sessionId, teams, 
 		orgId, projectId, projectOnly, standaloneAgent, scope, scopeSession, switchScope, view, openSettings, closeSettings, staging, canStepBack, stepBack, initialFocus,
 		contentRef, fieldInputRef, copyButtonRef, backButtonRef, ready, peopleAvailable, error, locale: i18n.language,
 		staged, setStaged, stagedRole, setStagedRole, stagedCap, setStagedCap, share, unavailable, submitShare, cancelStaging, ownEntries, myEmail,
-		access, ordered, workspaceName, personal, update, accessKey, stopEntry, undoNotice, links, restricted, turnOnLinks, askTurnOff, askChange,
+		access, ordered, update, accessKey, stopEntry, undoNotice, links, restricted, turnOnLinks, askTurnOff, askChange,
 		expiry, setExpiry, askRevoke, checkingRevoke, announcement, announceCopy, askCopy, newTeamFor, setNewTeamFor,
 		confirm, removeJoined, setRemoveJoined, runConfirm, cancelConfirm,
 	};
@@ -858,7 +850,7 @@ function SharePanel({ share: controller, layout }: { share: ShareController; lay
 		orgId, projectId, scope, scopeSession, switchScope, view, openSettings, closeSettings, staging, canStepBack, stepBack,
 		contentRef, fieldInputRef, copyButtonRef, backButtonRef, ready, peopleAvailable, error, locale,
 		staged, setStaged, stagedRole, setStagedRole, stagedCap, setStagedCap, share, unavailable, submitShare, cancelStaging, ownEntries, myEmail,
-		access, ordered, workspaceName, personal, update, accessKey, stopEntry, undoNotice, links, restricted, turnOnLinks, askTurnOff, askChange,
+		access, ordered, update, accessKey, stopEntry, undoNotice, links, restricted, turnOnLinks, askTurnOff, askChange,
 		expiry, setExpiry, askRevoke, checkingRevoke, announcement, announceCopy, askCopy, newTeamFor, setNewTeamFor,
 		confirm, removeJoined, setRemoveJoined, runConfirm, cancelConfirm,
 	} = controller;
@@ -921,6 +913,8 @@ function SharePanel({ share: controller, layout }: { share: ShareController; lay
 			membersHaveAccess={!controller.standaloneAgent}
 		/>
 	);
+	// A project nobody has been added to has no owner row either: no empty list under its heading.
+	const accessEmpty = !access.isLoading && !access.data?.owner && ordered.length === 0;
 	const accessList = (
 		<AccessList
 			orgId={orgId}
@@ -931,8 +925,6 @@ function SharePanel({ share: controller, layout }: { share: ShareController; lay
 			entries={ordered}
 			loading={access.isLoading}
 			me={myEmail}
-			workspaceName={workspaceName}
-			personal={personal}
 			label={!inline}
 			onChange={(entry, next) => update.mutate({ key: accessKey, entry, ...next })}
 			onStop={stopEntry}
@@ -1077,7 +1069,7 @@ function SharePanel({ share: controller, layout }: { share: ShareController; lay
 									</div>
 								</div>
 							) : (
-								<SettingsSection title={t("share.peopleWithAccess")} sectionId="share-people">{accessList}</SettingsSection>
+								accessEmpty ? null : <SettingsSection title={t("share.peopleWithAccess")} sectionId="share-people">{accessList}</SettingsSection>
 							)
 						) : null}
 						{staging ? null : (
@@ -1113,7 +1105,7 @@ function SharePanel({ share: controller, layout }: { share: ShareController; lay
 							<>
 								{peopleField}
 								{errorLine("-mt-1.5")}
-								{staging ? stagedSummary : accessList}
+								{staging ? stagedSummary : accessEmpty ? null : accessList}
 							</>
 						) : errorLine()}
 						{staging ? null : generalAccess}
@@ -1242,7 +1234,7 @@ export function orderEntries(entries: readonly CloudCpShareEntry[], scope: Share
 		.map(({ entry }) => entry);
 }
 
-function AccessList({ orgId, projectId, sessionId, scope, access, entries, loading, me, workspaceName, personal, label = true, onChange, onStop, onShowProject }: {
+function AccessList({ orgId, projectId, sessionId, scope, access, entries, loading, me, label = true, onChange, onStop, onShowProject }: {
 	orgId: string;
 	projectId: string;
 	sessionId: string | undefined;
@@ -1252,10 +1244,6 @@ function AccessList({ orgId, projectId, sessionId, scope, access, entries, loadi
 	entries: CloudCpShareEntry[];
 	loading: boolean;
 	me: string | undefined;
-	/** The workspace that owns the project; its people have full access. */
-	workspaceName?: string;
-	/** A personal workspace has nobody but its owner, so it gets no row of its own. */
-	personal: boolean;
 	/** "People with access" over the list; off where a section heading says it. */
 	label?: boolean;
 	onChange: (entry: CloudCpShareEntry, next: { role: CloudCpShareRole; modeCap: ShareModeCap }) => void;
@@ -1279,8 +1267,6 @@ function AccessList({ orgId, projectId, sessionId, scope, access, entries, loadi
 			</div>
 		);
 	}
-	// A project has no owner of its own: it is the workspace's, which always shows.
-	const workspaceRow = !personal || (!owner && scope === "project");
 	return (
 		<div className="flex flex-col gap-1.5">
 			{label ? <p className="text-xs text-muted-foreground">{t("share.peopleWithAccess")}</p> : null}
@@ -1296,18 +1282,6 @@ function AccessList({ orgId, projectId, sessionId, scope, access, entries, loadi
 							{owner.name && owner.email ? <p className="truncate text-xs text-muted-foreground">{owner.email}</p> : null}
 						</div>
 						<span className="pr-1 text-control text-passive">{t("share.owner")}</span>
-					</li>
-				) : null}
-				{workspaceRow ? (
-					<li className="flex min-h-11 items-center gap-2.5 py-1.5 pr-2 pl-2.5" data-share-workspace-row="">
-						<TeamTile name={workspaceName || "W"} />
-						<div className="min-w-0 flex-1">
-							<p className="truncate text-control text-foreground">
-								{workspaceName ? t("share.workspacePeople", { name: workspaceName }) : t("share.workspacePeopleUnnamed")}
-							</p>
-							<p className="truncate text-xs text-muted-foreground">{t("share.workspaceMembers")}</p>
-						</div>
-						<span className="pr-1 text-control text-passive">{t("teams.access.full")}</span>
 					</li>
 				) : null}
 				{entries.map((entry) => (

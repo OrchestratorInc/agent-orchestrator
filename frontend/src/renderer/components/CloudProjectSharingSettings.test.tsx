@@ -66,7 +66,6 @@ vi.mock("../hooks/useCloudCp", () => ({
 		},
 	}),
 }));
-vi.mock("../hooks/useCloudOrg", () => ({ useCloudOrg: () => ({ org: { id: "org", displayName: "Northwind" } }) }));
 vi.mock("../lib/cloud-session", () => ({ useCloudSession: () => ({ session: { user: { email: "asha@northwind.dev" } } }) }));
 vi.mock("../hooks/useTeamsEnabled", () => ({ useTeamsEnabled: () => true }));
 
@@ -131,7 +130,8 @@ describe("Project settings › Sharing", () => {
 		expect(screen.getByText("Includes every session, also ones started later.")).toBeInTheDocument();
 		expect(screen.getByRole("combobox", { name: "Add people or teams" })).toBeInTheDocument();
 		expect(screen.getByRole("heading", { name: "People with access" })).toBeInTheDocument();
-		expect(within(list).getByText("People in Northwind")).toBeInTheDocument();
+		// AO has no workspaces to list: only the people and teams the project is shared with.
+		expect(within(list).queryByText(/People in |Workspace members/)).toBeNull();
 		expect(within(list).getByText("Data infra")).toBeInTheDocument();
 		// General access, with Link settings and Copy link beside its heading.
 		const section = generalSection();
@@ -174,7 +174,9 @@ describe("Project settings › Sharing", () => {
 		await userEvent.click(within(rowOf(list, "Data infra")).getByRole("button", { name: /Change access/ }));
 		await userEvent.click(await screen.findByRole("menuitem", { name: "Remove access" }));
 		await waitFor(() => expect(mocks.calls.find((call) => call[0] === "revokeShareGrant")).toEqual(["revokeShareGrant", "org", "proj", "g-data"]));
-		await waitFor(() => expect(within(list).queryByText("Data infra")).toBeNull());
+		// The last share gone, the page shows no empty list under its heading.
+		await waitFor(() => expect(screen.queryByText("Data infra")).toBeNull());
+		expect(screen.queryByRole("heading", { name: "People with access" })).toBeNull();
 		const notice = await within(pane()!).findByRole("status");
 		expect(notice).toHaveTextContent("Removed Data infra's access");
 		expect(within(notice).getByRole("button", { name: "Undo" })).toBeInTheDocument();

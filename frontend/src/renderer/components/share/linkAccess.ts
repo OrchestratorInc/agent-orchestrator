@@ -156,35 +156,15 @@ export function anyoneSentence(t: TFunction, scope: ShareScope, role: CloudCpSha
 	return role === "editor" ? t("share.general.anyoneSessionWrite") : t("share.general.anyoneSessionWatch");
 }
 
-/**
- * Whether a workspace is someone's own rather than a team's, so "people in
- * <it>" would read oddly ("people in Asha's organization"). Only the control
- * plane's word for it (`kind`) counts: a name or an offering can't tell (a
- * team can be named after a person, or run on Freestyle only). Unknown (an
- * older control plane, or the workspace still loading) is a team's: naming
- * the workspace's people never understates who can open the session.
- */
-export function isPersonalWorkspace(org: { kind?: string } | undefined): boolean {
-	return org?.kind === "personal";
-}
-
-/** "Only people with access" in words that fit the workspace. */
-export function restrictedSentence(t: TFunction, { scope, workspaceName, personal, people }: {
+/** "Only people with access" in words that fit what can be shared. */
+export function restrictedSentence(t: TFunction, { scope, people }: {
 	scope: ShareScope;
-	/** Undefined while it loads or when it couldn't be read. */
-	workspaceName: string | undefined;
-	/** A personal workspace has nobody else in it: "people in Asha's organization" reads oddly. */
-	personal: boolean;
 	/** Whether people can be added above (Teams); without it only links share. */
 	people: boolean;
 }): string {
 	const project = scope === "project";
-	if (personal && people) return project ? t("share.general.restrictedProjectPersonal") : t("share.general.restrictedSessionPersonal");
-	// Without a workspace to name, the plain sentence: "only you" could understate a team's.
-	if (!people || !workspaceName) return project ? t("share.general.restrictedProjectNoPeople") : t("share.general.restrictedSessionNoPeople");
-	return project
-		? t("share.general.restrictedProject", { workspace: workspaceName })
-		: t("share.general.restrictedSession", { workspace: workspaceName });
+	if (!people) return project ? t("share.general.restrictedProjectNoPeople") : t("share.general.restrictedSessionNoPeople");
+	return project ? t("share.general.restrictedProject") : t("share.general.restrictedSession");
 }
 
 export function expiryText(t: TFunction, link: Pick<CloudCpShareLink, "expiresAt">, locale: string): string {
