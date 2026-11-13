@@ -78,13 +78,13 @@ export function SessionAccountSummary({ session }: { session: WorkspaceSession }
 		}
 	};
 
-	const status = message || (moving
+	const status = moving
 		? t("settings.agentAccounts.switching", { email: label(accountMove?.targetAccountId) })
 		: settledPhase === "completed" && accountMove?.targetAccountId === currentId && !messagedSinceMove
 			? t("settings.agentAccounts.moved", { from: label(accountMove?.sourceAccountId), to: label(currentId) })
 			: settledPhase === "failed" || settledPhase === "recovery_required"
 				? accountMove?.errorDetail || t("settings.agentAccounts.switchFailed")
-				: "");
+				: "";
 
 	return <section className="mt-3 border-t border-(--color-border-settings-input) pt-3" data-testid="session-account-summary">
 		<div className="flex items-center justify-between gap-3">
@@ -109,7 +109,8 @@ export function SessionAccountSummary({ session }: { session: WorkspaceSession }
 				onCheckedChange={(stay) => void setStay(stay)}
 			/>
 		</div> : null}
-		{status ? <p className="mt-2 text-xs text-muted-foreground" role="status">{status}</p> : null}
+		{message ? <p className="mt-2 text-xs text-muted-foreground" role="status">{message}</p> : null}
+		{status && status !== message ? <p className="mt-2 text-xs text-muted-foreground" role="status">{status}</p> : null}
 		{account ? <AccountLimits account={account} /> : null}
 		{confirming ? <ConfirmDialog open
 			title={t("settings.agentAccounts.stopAndMoveTitle")}
