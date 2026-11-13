@@ -107,11 +107,11 @@ export function ComposerSuggestMenu({
 										</span>
 									) : null}
 								</span>
-								{badge ? <span className="shrink-0 text-micro text-passive">{badge}</span> : null}
+								{badge ? <span className="shrink-0 text-micro text-muted-foreground">{badge}</span> : null}
 								{active ? (
 									<span
 										aria-label="Press Tab or Enter to insert"
-										className="flex shrink-0 items-center text-passive"
+										className="flex shrink-0 items-center text-muted-foreground"
 									>
 										<CornerDownLeft aria-hidden="true" className="size-3" />
 									</span>
