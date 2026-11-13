@@ -1306,6 +1306,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/mention-candidates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        /** @description Who the composer's @ menu offers in the session, by name only, never an email address. Only people who can open the session (read or write) are listed, and never the caller. People in the session come first, those there now first of all. A member of the session's workspace also gets the workspace's other people who can open the session, and the workspace's teams; a guest gets only the people in the session and no teams. A mention the menu would not offer is refused when sent. */
+        get: operations["listMentionCandidates"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/chat-models": {
         parameters: {
             query?: never;
@@ -2682,6 +2702,75 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/me/notifications": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The caller's notifications from every organization, newest first, every kind included. A guest mentioned in a session of a workspace they are not a member of gets that notification here, which the organization's own list (it needs membership) cannot give them. Only notifications whose session the caller can still open are listed; one without a session is always listed. unreadCount counts the same set, and latestSequence is the newest event of the caller's notification-events stream. */
+        get: operations["listMyCloudNotifications"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/me/notification-events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The caller's notification events from every organization, under the same visibility rule as listMyCloudNotifications, as JSON or, with Accept text/event-stream, as a replay after `after` followed by a live stream. Events have the organization stream's shape, and sequences increase across organizations, so one cursor covers them all. */
+        get: operations["listMyCloudNotificationEvents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/me/notifications/state": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Marks some of the caller's own notifications read, in any organization. Ids that aren't the caller's change nothing. */
+        post: operations["changeMyCloudNotificationState"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/me/notification-preferences": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Which notifications alert the caller on the desktop and the phone. Preferences belong to the person and are the same in every organization. Every field is on until the person turns it off. */
+        get: operations["getMyNotificationPreferences"];
+        /** @description Stores the caller's preferences. A field left out keeps its value. Off stops the desktop alert and the phone push for that kind; the notification is still created and listed. */
+        put: operations["setMyNotificationPreferences"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/me/hosts": {
         parameters: {
             query?: never;
@@ -2974,6 +3063,7 @@ export interface components {
             sessionId?: string;
             /** @constant */
             source: "cloud";
+            /** @description What happened. `mentioned`: someone named the recipient, or a team they are in, in a session's message or steer; its metadata is a MentionNotificationMetadata. A client shows kinds it doesn't know by title and body. */
             type: string;
             title: string;
             body: string;
@@ -3015,6 +3105,54 @@ export interface components {
         NotificationEventPage: {
             items: components["schemas"]["CloudNotificationEvent"][];
             hasMore: boolean;
+        };
+        /** @description The metadata of a `mentioned` notification. The recipient has one active mention notification per session: a newer mention there replaces it (same id, new title, body and metadata, unread again, and a notification_created event so it alerts again). If they were named both directly and through a team, the notification is the personal one. Their own message in the session resolves it. title is "{author} mentioned you", or "{author} mentioned {team}" when only the team named them; body is the message's first line, about 200 characters, with each mention as @Name. */
+        MentionNotificationMetadata: {
+            /** Format: uuid */
+            authorUserId: string;
+            /** @description Never an email address. */
+            authorName: string;
+            /**
+             * Format: int64
+             * @description The session event (chat.user_message, or the steer's event) that named them, to open the session at it.
+             */
+            sequence: number;
+            /** Format: uuid */
+            turnId?: string;
+            /**
+             * Format: uuid
+             * @description Set when only a team named the recipient.
+             */
+            teamId?: string;
+            teamName?: string;
+            sessionTitle?: string;
+            projectName?: string;
+        } & {
+            [key: string]: unknown;
+        };
+        /** @description Marks some of the caller's own notifications read. Name exactly one target: ids; all (every notification the caller has, in every organization); or orgId with sessionId (the caller's mention notifications in that session, which a client marks when it opens the session). */
+        NotificationStateChange: {
+            ids?: string[];
+            /** @constant */
+            all?: true;
+            /** Format: uuid */
+            orgId?: string;
+            /** Format: uuid */
+            sessionId?: string;
+            /** @constant */
+            read: true;
+        };
+        /** @description Which notifications alert the person on the desktop and the phone. Off stops the alert and the push only; the notification is still listed. */
+        NotificationPreferences: {
+            /** @description Someone mentions me. On by default. */
+            mentions: boolean;
+            /** @description Someone mentions a team I'm in. On by default. */
+            teamMentions: boolean;
+        };
+        /** @description The preferences to change; a field left out keeps its value. */
+        NotificationPreferencesInput: {
+            mentions?: boolean;
+            teamMentions?: boolean;
         };
         /** @enum {string} */
         AuthProvider: "workos" | "local";
@@ -4219,6 +4357,8 @@ export interface components {
             } & {
                 [key: string]: unknown;
             })[];
+            /** @description People and teams the message notifies. Each must be someone who can open the session, or a team, and a guest may name only people in the session; anything else is refused with 422. Recorded, with their names, on the chat.user_message event; the agent receives `text` only, where the composer writes each one as @Name. */
+            mentions?: components["schemas"]["MentionToken"][];
         };
         MessageAttachment: {
             /** Format: uuid */
@@ -4267,6 +4407,60 @@ export interface components {
              * @description The composer lease grant the sender holds (see composerAcquire). Omitted or 0, the request succeeds only while nobody holds the lease and nobody is waiting; otherwise it fails with 409 COMPOSER_LOCKED. Succeeding releases the lease to the next person in line.
              */
             composerEpoch?: number;
+        };
+        /** @description Guidance for the running turn. SendMessageInput with the mentions a message may carry. */
+        SteerTurnInput: {
+            text: string;
+            /**
+             * Format: int64
+             * @description The composer lease grant the sender holds (see composerAcquire). Omitted or 0, the request succeeds only while nobody holds the lease and nobody is waiting; otherwise it fails with 409 COMPOSER_LOCKED. Succeeding releases the lease to the next person in line.
+             */
+            composerEpoch?: number;
+            /** @description People and teams the guidance notifies, checked as on a message. Recorded, with their names, on the steer's events; the agent receives `text` only. */
+            mentions?: components["schemas"]["MentionToken"][];
+        };
+        /** @description A person or team named in a message or a steer, as the composer sends it: a chip in the composer, @Name in the text. The person, or every member of the team when the message is sent, is notified if they can open the session; the sender never is. A client sends no name; the control plane records the current one on the event. */
+        MentionToken: components["schemas"]["PersonMentionToken"] | components["schemas"]["TeamMentionToken"];
+        PersonMentionToken: {
+            /** @constant */
+            kind: "person";
+            /** Format: uuid */
+            userId: string;
+        };
+        TeamMentionToken: {
+            /** @constant */
+            kind: "team";
+            /** Format: uuid */
+            teamId: string;
+        };
+        /** @description A person or team a message or steer named, as recorded on its event, so a transcript can draw it as a chip. name is the name it had when the message was sent and never an email address. */
+        EventMention: {
+            /** @enum {string} */
+            kind: "person" | "team";
+            /**
+             * Format: uuid
+             * @description The person's userId or the team's teamId.
+             */
+            id: string;
+            name: string;
+        };
+        /** @description What the @ menu offers, by name only. Everyone listed can open the session; the caller is never listed. A guest gets no teams. */
+        MentionCandidates: {
+            /** @description People in the session first (those there now first of all), then the workspace's other people who can open the session. */
+            people: {
+                /** Format: uuid */
+                userId: string;
+                name: string;
+                /** @description Has the session open now. */
+                present: boolean;
+                /** @description In the session (shown under In this session); false for the workspace's other people who can open it. */
+                inSession: boolean;
+            }[];
+            teams: {
+                /** Format: uuid */
+                teamId: string;
+                name: string;
+            }[];
         };
         /** @description A queued message's new text and files. Text may be empty only when attachmentIds names a file. */
         EditQueuedMessageInput: {
@@ -5424,6 +5618,8 @@ export interface components {
                 authorName?: string;
                 /** @description The files the message carries. */
                 attachments?: components["schemas"]["MessageAttachment"][];
+                /** @description The people and teams the message named, with their names when it was sent, in the order sent. Absent when it named none. */
+                mentions?: components["schemas"]["EventMention"][];
             };
             /** Format: date-time */
             createdAt: string;
@@ -5552,6 +5748,8 @@ export interface components {
                 turnId: string;
                 text: string;
                 clientMessageId: string;
+                /** @description The people and teams the guidance named, with their names when it was sent. Carried by chat.turn_steered and by the event the steer request returns. Absent when it named none. */
+                mentions?: components["schemas"]["EventMention"][];
             };
             /** Format: date-time */
             createdAt: string;
@@ -8149,6 +8347,37 @@ export interface operations {
                     };
                 };
             };
+            /** @description `validation_error`: a field is invalid. For a mention, details.field is `mentions` and details.reason says why: `unknown` (no such person or team in the workspace), `no_access` (the person can't open the session), `outside_session` (a guest named someone who isn't in the session, or a team), or `too_many` (more than 20). Nothing is appended. */
+            422: components["responses"]["ValidationError"];
+            default: components["responses"]["Error"];
+        };
+    };
+    listMentionCandidates: {
+        parameters: {
+            query?: {
+                /** @description Part of a name to match, case insensitively. Empty lists everyone. */
+                q?: string;
+                /** @description At most this many people outside the session, and this many teams. */
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The candidates. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MentionCandidates"];
+                };
+            };
             default: components["responses"]["Error"];
         };
     };
@@ -8579,7 +8808,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["SendMessageInput"];
+                "application/json": components["schemas"]["SteerTurnInput"];
             };
         };
         responses: {
@@ -8594,6 +8823,8 @@ export interface operations {
                     };
                 };
             };
+            /** @description `validation_error`: a field is invalid. A refused mention has details.field `mentions` and a details.reason as on sendMessage. Nothing is appended and the agent receives nothing. */
+            422: components["responses"]["ValidationError"];
             default: components["responses"]["Error"];
         };
     };
@@ -10333,6 +10564,130 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listMyCloudNotifications: {
+        parameters: {
+            query?: {
+                status?: "all" | "unread" | "read";
+                cursor?: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The caller's notifications across organizations. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationPage"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listMyCloudNotificationEvents: {
+        parameters: {
+            query?: {
+                after?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Ordered durable notification events. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationEventPage"];
+                    "text/event-stream": string;
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    changeMyCloudNotificationState: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NotificationStateChange"];
+            };
+        };
+        responses: {
+            /** @description How many notifications changed. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        updated: number;
+                    };
+                };
+            };
+            /** @description `validation_error`: the body names no target, or more than one (ids, all, or orgId with sessionId). */
+            422: components["responses"]["ValidationError"];
+            default: components["responses"]["Error"];
+        };
+    };
+    getMyNotificationPreferences: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The caller's preferences. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationPreferences"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    setMyNotificationPreferences: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NotificationPreferencesInput"];
+            };
+        };
+        responses: {
+            /** @description Every preference after the change. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationPreferences"];
+                };
             };
             default: components["responses"]["Error"];
         };
