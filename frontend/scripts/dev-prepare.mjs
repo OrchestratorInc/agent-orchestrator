@@ -38,10 +38,18 @@ import {
 	writeJSON,
 } from "./dev-cache.mjs";
 
-const scriptsDir = path.dirname(fileURLToPath(import.meta.url));
-const frontend = path.resolve(scriptsDir, "..");
-const repoRoot = path.resolve(frontend, "..");
-const stampFile = path.join(frontend, "node_modules", ".cache", "ao-dev-prepare.json");
+// The checkout to prepare: this script's own by default, or another one with
+// --worktree (so a pinned copy can prepare branches that predate this file; it
+// still runs that checkout's own build scripts).
+let repoRoot;
+let frontend;
+let stampFile;
+function useCheckout(root) {
+	repoRoot = root;
+	frontend = path.join(root, "frontend");
+	stampFile = path.join(frontend, "node_modules", ".cache", "ao-dev-prepare.json");
+}
+useCheckout(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", ".."));
 
 // Go settings that change the compiled daemon. Paths are made repo-relative so
 // two checkouts of the same source share a key.
@@ -409,10 +417,20 @@ function printSummary(results, started, dryRun) {
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
 	const args = process.argv.slice(2);
-	const unknown = args.filter((arg) => arg !== "--dry-run");
-	if (unknown.length > 0) {
-		console.error(`Usage: dev-prepare.mjs [--dry-run]  (unknown: ${unknown.join(" ")})`);
+	const worktreeAt = args.indexOf("--worktree");
+	const worktree = worktreeAt >= 0 ? args[worktreeAt + 1] : null;
+	const unknown = args.filter((arg, i) => arg !== "--dry-run" && !(worktreeAt >= 0 && (i === worktreeAt || i === worktreeAt + 1)));
+	if (unknown.length > 0 || (worktreeAt >= 0 && !worktree)) {
+		console.error(`Usage: dev-prepare.mjs [--dry-run] [--worktree <checkout root>]  (unknown: ${unknown.join(" ")})`);
 		process.exit(2);
+	}
+	if (worktree) {
+		const root = path.resolve(worktree);
+		if (!existsSync(path.join(root, "frontend", "package.json"))) {
+			console.error(`dev-prepare: ${root} is not an Agent Orchestrator checkout`);
+			process.exit(2);
+		}
+		useCheckout(root);
 	}
 	process.exitCode = await prepare({ dryRun: args.includes("--dry-run") });
 }
