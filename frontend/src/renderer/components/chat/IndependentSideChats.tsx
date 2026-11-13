@@ -919,7 +919,7 @@ export function useIndependentSideChats(
 									text: text.slice(btw?.[0].length ?? 0).trim(),
 									resources: [...submitted.attachments.map((file) => file.path), ...staged].map((path) => ({ uri: path, name: path.split(/[\\/]/).at(-1) || "Attachment" })),
 									attachments: nativeImages ? images : [],
-									references: submitted.references.map(({ conversationId, messageId, revision, text, snapshot, id, order }) => ({ conversationId, messageId, revision, text, snapshot, id, order })),
+									references: submitted.references.map(({ conversationId, messageId, revision, text, comment, snapshot, id, order }) => ({ conversationId, messageId, revision, text, comment, snapshot, id, order })),
 								},
 							},
 						};
@@ -1033,7 +1033,7 @@ export function useIndependentSideChats(
 								conversationId: ref.conversationId,
 								messageId: ref.messageId,
 								revision: ref.revision,
-								text: ref.text, snapshot: ref.snapshot, id: ref.id, order: ref.order,
+								text: ref.text, comment: ref.comment, snapshot: ref.snapshot, id: ref.id, order: ref.order,
 							})),
 						},
 					};
@@ -1562,6 +1562,13 @@ export function useIndependentSideChats(
 									onLoadOlder={() => void loadOlder()}
 									excerptsEnabled
 									onAddToChat={(excerpt) => addReference(activeId, excerpt)}
+									annotations={drafts[activeId]?.references}
+									onAnnotationsChange={(references) =>
+										setDrafts((current) => ({
+											...current,
+											[activeId]: { ...(current[activeId] ?? emptySideChatDraft()), references },
+										}))
+									}
 									onForeignAnnotation={(annotation) => onNavigate?.(annotation)}
 									onDecide={(requestId, decisionId) => void resolveApproval(activeId, requestId, decisionId)}
 									busy={conversation.controller.state === "busy"}

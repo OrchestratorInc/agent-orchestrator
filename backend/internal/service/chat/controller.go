@@ -2282,6 +2282,13 @@ func excerptDeliveryMessage(msg ports.ChatUserMessage) ports.ChatUserMessage {
 			fallback.WriteString(ctx.AssistantMessage)
 		}
 		fallback.WriteString("\n---")
+		if comment := strings.TrimSpace(ctx.Reference.Comment); comment != "" {
+			if numbered {
+				fmt.Fprintf(&fallback, "\nUser's comment on annotation %d:\n%s", annotationIndex, comment)
+			} else {
+				fallback.WriteString("\nUser's comment on the selected text:\n" + comment)
+			}
+		}
 	}
 	msg.Content = content
 	msg.Text += fallback.String()

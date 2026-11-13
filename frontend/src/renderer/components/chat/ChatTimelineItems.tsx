@@ -1088,6 +1088,7 @@ export function HumanMessage({
 			annotations={excerptReferences.map((excerpt) => ({
 				fileReference: excerpt.fileReference, id: excerpt.annotationId ?? excerpt.fileReference?.id, order: excerpt.annotationOrder ?? excerpt.fileReference?.order,
 				text: excerpt.text ?? "",
+				comment: excerpt.comment,
 				conversationId: excerpt.sourceConversationId,
 				messageId: excerpt.sourceMessageId,
 				revision: excerpt.sourceRevision,

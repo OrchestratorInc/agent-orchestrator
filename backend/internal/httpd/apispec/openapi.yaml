@@ -18401,6 +18401,8 @@ components:
         annotationOrder:
           format: int64
           type: integer
+        comment:
+          type: string
         fileReference:
           $ref: '#/components/schemas/ConversationFileReferenceRequest'
         mimeType:
@@ -18453,6 +18455,9 @@ components:
       type: object
     ConversationExcerptReferenceRequest:
       properties:
+        comment:
+          maxLength: 4096
+          type: string
         conversationId:
           type: string
         id:
@@ -19572,6 +19577,8 @@ components:
       type: object
     DomainSideReference:
       properties:
+        comment:
+          type: string
         conversationId:
           type: string
         id:

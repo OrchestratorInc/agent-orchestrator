@@ -6313,6 +6313,7 @@ export interface components {
             annotationId?: string;
             /** Format: int64 */
             annotationOrder?: number;
+            comment?: string;
             fileReference?: components["schemas"]["ConversationFileReferenceRequest"];
             mimeType?: string;
             name?: string;
@@ -6334,6 +6335,7 @@ export interface components {
             status: "added" | "modified" | "deleted" | "renamed";
         };
         ConversationExcerptReferenceRequest: {
+            comment?: string;
             conversationId: string;
             id?: string;
             messageId: string;
@@ -6754,6 +6756,7 @@ export interface components {
             reviewId: string;
         };
         DomainSideReference: {
+            comment?: string;
             conversationId: string;
             id?: string;
             messageId: string;

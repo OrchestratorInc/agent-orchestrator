@@ -430,6 +430,7 @@ type ChatExcerptReference struct {
 	MessageID      string                      `json:"messageId"`
 	Revision       int64                       `json:"revision"`
 	Text           string                      `json:"text"`
+	Comment        string                      `json:"comment,omitempty"`
 }
 
 // ChatExcerptContext carries a frozen selection. Captured context lives in
