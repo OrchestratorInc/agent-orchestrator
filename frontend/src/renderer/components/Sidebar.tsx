@@ -70,12 +70,12 @@ import {
 	resolveNextNavigationAfterSessionKill,
 	workerSessions,
 	CLOUD_PROJECT_KIND,
+	ownScratchpadWorkspaces,
 	STANDALONE_PROJECT_KIND,
 	STANDALONE_WORKSPACE_ID,
 } from "../types/workspace";
 import {
 	getSessionRowIndicator,
-	getSessionStatusDotView,
 	sessionNeedsInput,
 	type SessionRowMarker,
 } from "../lib/session-presentation";
@@ -150,7 +150,6 @@ import { AwakeMenuItem, awakeNeedsAttention, useFooterStayAwake } from "./AwakeC
 import { FOOTER_RAIL_BUTTON_CLASS, SidebarUpdateRail, SidebarUpdateRow } from "./SidebarUpdate";
 import { SettingsSaveStatus, useSettingsPage } from "./SettingsDialog";
 import { useUiStore } from "../stores/ui-store";
-import { isNewSidebarDesign } from "../lib/new-sidebar-design";
 import { useSidebarOrderStore } from "../stores/sidebar-order-store";
 import { useSessionImportStore } from "../stores/session-import-store";
 import { sessionReadKey, useSessionReadStore, useSessionUnread } from "../stores/session-read-store";
@@ -625,34 +624,12 @@ function SessionMarkerIcon({ marker, popped, onPopEnd, ...rest }: {
 	);
 }
 
-// The dot before the new sidebar design (switched off in Developer mode):
-// colour from the board section, breathing while the agent works.
-function LegacySessionStatusDot({ session }: { session: WorkspaceSession }) {
-	const dot = getSessionStatusDotView(session);
-	return (
-		<span
-			aria-hidden="true"
-			className="relative z-[1] inline-flex shrink-0 items-center justify-center px-1.5"
-		>
-			<span
-				className={cn(
-					"size-2 rounded-full",
-					dot.className,
-					dot.breathe && "animate-status-pulse",
-				)}
-				data-session-status={session.status}
-			/>
-		</span>
-	);
-}
-
 // A row flags only what the user has something to do about, a spinner while
 // its agent works (ahead of any marker), and otherwise a quiet dot. A marker that appears after the row is on screen pops in once; one already
 // there on mount does not.
-function SessionStatusDot({ session, indicator, legacy }: {
+function SessionStatusDot({ session, indicator }: {
 	session: WorkspaceSession;
 	indicator: ReturnType<typeof getSessionRowIndicator>;
-	legacy: boolean;
 }) {
 	// A working agent shows the spinner even when its PR has a state to flag:
 	// the agent may be on another PR, and the hover card has the PR detail.
@@ -667,7 +644,6 @@ function SessionStatusDot({ session, indicator, legacy }: {
 		if (previous.current !== marker && marker) setPopped(true);
 		previous.current = marker;
 	}, [marker]);
-	if (legacy) return <LegacySessionStatusDot session={session} />;
 	// Rows with nothing to flag still get a quiet dot, so every title starts on
 	// the same column: filled while unread, hollow once the user has read it.
 	const stopped =
@@ -931,15 +907,26 @@ export const Sidebar = memo(function Sidebar({
 
 	// The ad hoc group is a bucket for projectless sessions, not a project: it
 	// gets its own Scratchpad section below the project list rather than a
-	// project row appended to the end of it.
-	const projectWorkspaces = useMemo(
-		() => orderedWorkspaces.filter((workspace) => workspace.kind !== STANDALONE_PROJECT_KIND),
-		[orderedWorkspaces],
-	);
-	const standaloneWorkspace = useMemo(
-		() => workspaces.find((workspace) => workspace.kind === STANDALONE_PROJECT_KIND),
-		[workspaces],
-	);
+	// project row appended to the end of it. The person's own Cloud standalone
+	// agents join it there; each keeps its project, which routes it.
+	const projectWorkspaces = useMemo(() => {
+		const scratchpads = new Set(ownScratchpadWorkspaces(orderedWorkspaces));
+		return orderedWorkspaces.filter((workspace) => !scratchpads.has(workspace));
+	}, [orderedWorkspaces]);
+	const standaloneWorkspace = useMemo((): WorkspaceSummary | undefined => {
+		const scratchpads = ownScratchpadWorkspaces(workspaces);
+		const local = scratchpads.find((workspace) => workspace.kind === STANDALONE_PROJECT_KIND);
+		// Cloud standalone agents alone make a section only when it has a row for
+		// them: one of their sessions, or the entry to their archived ones. An agent
+		// with no session at all (a refused start) has none.
+		if (!local && !scratchpads.some((workspace) => workspace.sessions.some((session) =>
+			scratchpadListsSession(session) || scratchpadArchivesSession(session)))) return undefined;
+		if (scratchpads.length === 1 && local) return local;
+		return {
+			...(local ?? scratchpadSummary(t("standalone.workspaceName"))),
+			sessions: scratchpads.flatMap((workspace) => workspace.sessions),
+		};
+	}, [t, workspaces]);
 	const projectAvatars = useProjectAvatars(projectWorkspaces);
 	const {
 		listed: visibleWorkspaces,
@@ -1070,6 +1057,9 @@ export const Sidebar = memo(function Sidebar({
 			const nextRoute = resolveNextNavigationAfterSessionKill(workspace, killedSession.id);
 			if (nextRoute.target === "session") {
 				selection.goSession(killedSession.workspaceId, nextRoute.sessionId);
+			} else if (workspace?.standaloneAgent) {
+				// A Cloud standalone agent has no board to fall back to.
+				selection.goHome();
 			} else {
 				selection.goProject(killedSession.workspaceId);
 			}
@@ -1564,6 +1554,9 @@ const ProjectItem = memo(function ProjectItem({
 	const { t } = useTranslation();
 	const nameWithHost = hostLabel ? `${workspace.name} · ${hostLabel}` : workspace.name;
 	const isStandalone = workspace.id === STANDALONE_WORKSPACE_ID;
+	// A Cloud standalone agent (here, one shared with the person) is one
+	// session: it has no board, orchestrator or project settings to offer.
+	const isAgent = workspace.standaloneAgent === true;
 	const prefersReducedMotion = useReducedMotion();
 	const activeProjectMatches = selection.activeProjectId === workspace.id;
 	const projectHeaderRef = useRef<HTMLDivElement>(null);
@@ -1609,18 +1602,14 @@ const ProjectItem = memo(function ProjectItem({
 		).filter((session) => session.isTerminated !== true),
 		[workspace.sessions, workspace.shared],
 	);
-	const newSidebarDesign = useUiStore(isNewSidebarDesign);
-	const projectNeedsInput = useMemo(
-		() => newSidebarDesign && visibleSessions.some(sessionNeedsInput),
-		[newSidebarDesign, visibleSessions],
-	);
+	const projectNeedsInput = useMemo(() => visibleSessions.some(sessionNeedsInput), [visibleSessions]);
 	const [sessionOrder, setSessionOrder] = useState<string[]>([]);
 	const sessions = useMemo(
 		() => {
 			const ordered = applyOrder(visibleSessions, (session) => session.id, sessionOrder, "start");
-			return newSidebarDesign ? floatAttention(ordered, sessionOrder.length > 0) : ordered;
+			return floatAttention(ordered, sessionOrder.length > 0);
 		},
-		[newSidebarDesign, sessionOrder, visibleSessions],
+		[sessionOrder, visibleSessions],
 	);
 	// Publish the order shown here so keyboard navigation follows it.
 	useEffect(() => {
@@ -1679,7 +1668,7 @@ const ProjectItem = memo(function ProjectItem({
 		const nextRoute = resolveNextNavigationAfterSessionKill(workspace, killedSession.id, sessions);
 		if (nextRoute.target === "session") {
 			selection.goSession(workspace.id, nextRoute.sessionId);
-		} else if (workspace.id === STANDALONE_WORKSPACE_ID) {
+		} else if (workspace.id === STANDALONE_WORKSPACE_ID || isAgent) {
 			selection.goHome();
 		} else {
 			selection.goProject(workspace.id);
@@ -1784,6 +1773,14 @@ const ProjectItem = memo(function ProjectItem({
 			toggleDisclosure();
 			return;
 		}
+		// A Cloud standalone agent listed here (one shared with the person) has
+		// no board: its row opens its one session.
+		if (workspace.standaloneAgent) {
+			if (!expanded) toggleDisclosure();
+			const agentSession = workerSessions(workspace.sessions)[0];
+			if (agentSession) selection.goSession(workspace.id, agentSession.id);
+			return;
+		}
 		if (!expanded) {
 			toggleDisclosure();
 			selection.goProject(workspace.id);
@@ -1833,15 +1830,18 @@ const ProjectItem = memo(function ProjectItem({
 		// Archive button and Cmd+K's Open archive are.
 		const archivedCount = isStandalone ? 0 : workerSessions(workspace.sessions).filter(isArchivedSession).length;
 		return [
-			{
-				kind: "item",
-				id: "new-task",
-				icon: <Plus aria-hidden="true" />,
-				label: t("shell.newTask"),
-				disabled: isProjectRestarting,
-				onSelect: () => requestNewTask(workspace.id, workspace.hostId),
-			},
-			...(!isStandalone && (!workspace.shared || orchestrator)
+			// A new task in someone else's agent is a dead end: it takes no session but its own.
+			...(!isAgent
+				? [{
+					kind: "item" as const,
+					id: "new-task",
+					icon: <Plus aria-hidden="true" />,
+					label: t("shell.newTask"),
+					disabled: isProjectRestarting,
+					onSelect: () => requestNewTask(workspace.id, workspace.hostId),
+				}]
+				: []),
+			...(!isStandalone && !isAgent && (!workspace.shared || orchestrator)
 				? [{
 					kind: "item" as const,
 					id: "orchestrator",
@@ -1851,7 +1851,7 @@ const ProjectItem = memo(function ProjectItem({
 					onSelect: () => void openOrchestrator(),
 				}]
 				: []),
-			...(!isStandalone
+			...(!isStandalone && !isAgent
 				? [{
 					kind: "item" as const,
 					id: "board",
@@ -1892,7 +1892,7 @@ const ProjectItem = memo(function ProjectItem({
 					onSelect: () => setProjectPinned(workspace.id, !isPinned),
 				}]
 				: []),
-			...(!isStandalone
+			...(!isStandalone && !isAgent
 				? [
 					{
 						kind: "item" as const,
@@ -2290,6 +2290,21 @@ const ProjectItem = memo(function ProjectItem({
 	);
 }, projectItemPropsEqual);
 
+/** Whether the Scratchpad section lists the session: a worker that is not archived. */
+function scratchpadListsSession(session: WorkspaceSession): boolean {
+	return !isOrchestratorSession(session) && session.isTerminated !== true;
+}
+
+/** Whether the session is in the Scratchpad's archive (the /sessions page). */
+function scratchpadArchivesSession(session: WorkspaceSession): boolean {
+	return !isOrchestratorSession(session) && isArchivedSession(session);
+}
+
+/** The Scratchpad section's own fields, for when it holds Cloud standalone agents alone. */
+function scratchpadSummary(name: string): Pick<WorkspaceSummary, "id" | "name" | "kind" | "path"> {
+	return { id: STANDALONE_WORKSPACE_ID, name, kind: STANDALONE_PROJECT_KIND, path: "" };
+}
+
 /** Projectless ("ad hoc") agents. Their own section under Projects — same
  *  header chrome, own capped scroller, own Show more — instead of a project row
  *  appended to the project list. */
@@ -2309,7 +2324,7 @@ function ScratchpadSection({
 	const { t } = useTranslation();
 	const requestNewTask = useUiStore((state) => state.requestNewTask);
 	const visibleSessions = useMemo(
-		() => sortedWorkerSessions(workspace.sessions).filter((session) => session.isTerminated !== true),
+		() => sortedWorkerSessions(workspace.sessions).filter(scratchpadListsSession),
 		[workspace.sessions],
 	);
 	const [sessionOrder, setSessionOrder] = useState<string[]>([]);
@@ -2332,6 +2347,10 @@ function ScratchpadSection({
 	} = useShowMoreCap(sessions, SIDEBAR_INITIAL_SECTION_LIMIT, selection.activeSessionId, isCollapsed);
 	// Stable while the ids are: a rebuilt array would invalidate every sortable row.
 	const listedSessionIds = useStableArray(useMemo(() => listedSessions.map((session) => session.id), [listedSessions]));
+	// With every session archived, the section keeps one row: the way to them,
+	// rather than a header with nothing under it.
+	const archivedCount = useMemo(() => workspace.sessions.filter(scratchpadArchivesSession).length, [workspace.sessions]);
+	const showArchivedRow = listedSessions.length === 0 && archivedCount > 0;
 	const commitSessionOrder = useCallback(
 		(next: string[] | null) => {
 			if (!next) return;
@@ -2342,16 +2361,22 @@ function ScratchpadSection({
 		},
 		[sessions],
 	);
+	// A Cloud standalone agent opens on its own project's route, a local one on
+	// the scratchpad's.
+	const scratchpadRouteOf = (sessionId: string) => {
+		const session = workspace.sessions.find((candidate) => candidate.id === sessionId);
+		return session?.cloud ? session.workspaceId : STANDALONE_WORKSPACE_ID;
+	};
 	const openSession = useLatestCallback((sessionId: string) => {
 		recordManualWorkerOpen(sessionId);
-		selection.goSession(STANDALONE_WORKSPACE_ID, sessionId);
+		selection.goSession(scratchpadRouteOf(sessionId), sessionId);
 	});
 	const handleSessionKilled = useLatestCallback((killedSession: WorkspaceSession) => {
 		if (selection.activeSessionId !== killedSession.id) return;
 		const nextRoute = resolveNextNavigationAfterSessionKill(workspace, killedSession.id, sessions);
 		// An ad hoc agent has no project board to fall back to.
 		if (nextRoute.target === "session") {
-			selection.goSession(STANDALONE_WORKSPACE_ID, nextRoute.sessionId);
+			selection.goSession(scratchpadRouteOf(nextRoute.sessionId), nextRoute.sessionId);
 		} else {
 			selection.goHome();
 		}
@@ -2435,7 +2460,7 @@ function ScratchpadSection({
 					</ContextMenuItem>
 				</ContextMenuContent>
 			</ContextMenu>
-			<AnimatedSectionBody open={open && listedSessions.length > 0} className="min-h-0 flex-1">
+			<AnimatedSectionBody open={open && (listedSessions.length > 0 || showArchivedRow)} className="min-h-0 flex-1">
 				<SidebarSectionScroller
 					className={`${SECTION_SCROLLER_CLASS} min-h-0 flex-1`}
 					testId="sidebar-scratchpad-scroller"
@@ -2449,6 +2474,7 @@ function ScratchpadSection({
 						sessionIds={listedSessionIds}
 						activeSessionId={selection.activeSessionId}
 						indented={false}
+						cloudBadge
 						onReorder={commitSessionOrder}
 						onKilled={handleSessionKilled}
 						onOpen={openSession}
@@ -2460,6 +2486,19 @@ function ScratchpadSection({
 						label={showAll ? t("shell.showLessAgents") : t("shell.showMoreAgents", { count: hiddenSessionCount })}
 						onClick={toggleShowAll}
 					/>
+				) : null}
+				{showArchivedRow ? (
+					<button
+						type="button"
+						aria-label={t("shell.archiveSessionsAria", { count: archivedCount })}
+						className={cn(SECTION_ROW_CLASS, NAV_ROW_HIGHLIGHT_HOST_CLASS, "mb-1 shrink-0 rounded-lg text-left text-muted-foreground")}
+						data-scratchpad-archived-row=""
+						onClick={selection.goStandaloneBoard}
+					>
+						<Archive aria-hidden="true" className="size-icon-sm shrink-0" />
+						<span className="min-w-0 flex-1 truncate">{t("shell.archivedSessions")}</span>
+						<span className="tabular-nums">{archivedCount}</span>
+					</button>
 				) : null}
 			</AnimatedSectionBody>
 		</div>
@@ -2493,12 +2532,14 @@ const SortableSessionRow = memo(function SortableSessionRow({
 	layoutDependency,
 	listIsDragging,
 	dropTransitionDisabled,
+	hostLabel,
 	onKilled,
 	onOpen,
 }: {
 	session: WorkspaceSession;
 	active: boolean;
 	consumeDragClick: (id: string) => boolean;
+	hostLabel?: string;
 	indented?: boolean;
 	layoutDependency?: string;
 	listIsDragging: boolean;
@@ -2522,6 +2563,7 @@ const SortableSessionRow = memo(function SortableSessionRow({
 		<SessionRow
 			session={session}
 			active={active}
+			hostLabel={hostLabel}
 			indented={indented}
 			onKilled={onKilled}
 			onOpen={open}
@@ -2544,6 +2586,7 @@ function SessionReorderList({
 	activeSessionId,
 	indented = true,
 	plain = false,
+	cloudBadge = false,
 	onReorder,
 	onKilled,
 	onOpen,
@@ -2555,6 +2598,8 @@ function SessionReorderList({
 	sessionIds: string[];
 	activeSessionId?: string;
 	indented?: boolean;
+	/** Badge Cloud sessions, in a list (the Scratchpad) that mixes them with local ones. */
+	cloudBadge?: boolean;
 	/** While a project is being dragged, leave the session lists as plain rows:
 	 *  otherwise every expanded project's DnD context measures its sortable
 	 *  descendants on drop. */
@@ -2563,6 +2608,8 @@ function SessionReorderList({
 	onKilled?: (session: WorkspaceSession) => void;
 	onOpen: (sessionId: string) => void;
 }) {
+	const { t } = useTranslation();
+	const hostLabelOf = (session: WorkspaceSession) => cloudBadge && session.cloud ? t("shell.cloudProjectBadge") : undefined;
 	// Suppress the vertical glide for the first 500ms after the list mounts, so the
 	// re-sorts that follow a daemon settle or a project expanding do not shuffle rows.
 	const [layoutSettled, setLayoutSettled] = useState(false);
@@ -2612,6 +2659,7 @@ function SessionReorderList({
 						key={session.id}
 						session={session}
 						active={activeSessionId === session.id}
+						hostLabel={hostLabelOf(session)}
 						indented={indented}
 						onKilled={onKilled}
 						onOpen={() => onOpen(session.id)}
@@ -2639,6 +2687,7 @@ function SessionReorderList({
 							session={session}
 							active={activeSessionId === session.id}
 							consumeDragClick={dragClickGuard.consumeClick}
+							hostLabel={hostLabelOf(session)}
 							indented={indented}
 							layoutDependency={layoutDependency}
 							listIsDragging={listDragging}
@@ -2690,7 +2739,6 @@ const SessionRow = memo(function SessionRow({
 	useGrabbingCursor(Boolean(reorder?.isDragging));
 	// The open row keeps a full-contrast title, so it gets the spinner without
 	// the shimmer.
-	const newSidebarDesign = useUiStore(isNewSidebarDesign);
 	const indicator = getSessionRowIndicator(session);
 	const working = indicator === "working";
 	// Having the session open reads it, including anything that lands while it is open.
@@ -2700,8 +2748,8 @@ const SessionRow = memo(function SessionRow({
 		const updated = Date.parse(session.updatedAt);
 		if (Number.isFinite(updated)) markRead(sessionReadKey(session), updated);
 	}, [active, markRead, session]);
-	const shimmer = newSidebarDesign && working && !active;
-	const marker = !newSidebarDesign || working ? null : indicator;
+	const shimmer = working && !active;
+	const marker = working ? null : indicator;
 	const queryClient = useQueryClient();
 	const refreshWorkspaces = useCallback(
 		() => queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(session.hostId) }),
@@ -2711,7 +2759,7 @@ const SessionRow = memo(function SessionRow({
 	const [contextMenuOpen, setContextMenuOpen] = useState(false);
 	// No preview while renaming, dragging, or with the context menu open.
 	const preview = useSessionPreviewHover(
-		Boolean(!newSidebarDesign || reorder?.isDragging || listIsDragging || rename.isEditing || contextMenuOpen),
+		Boolean(reorder?.isDragging || listIsDragging || rename.isEditing || contextMenuOpen),
 	);
 	const setSortableNode = reorder?.setNodeRef;
 	const setPreviewRow = preview.rowRef;
@@ -2770,7 +2818,7 @@ const SessionRow = memo(function SessionRow({
 					data-session-row=""
 				>
 					<NavRowHighlight active={active} />
-					<SessionStatusDot indicator={indicator} legacy={!newSidebarDesign} session={session} />
+					<SessionStatusDot indicator={indicator} session={session} />
 					<input
 						aria-label={t("shell.renameSession", { title: session.title })}
 						autoFocus
@@ -2877,7 +2925,7 @@ const SessionRow = memo(function SessionRow({
 							ref={reorder?.setActivatorNodeRef}
 							type="button"
 						>
-							<SessionStatusDot indicator={indicator} legacy={!newSidebarDesign} session={session} />
+							<SessionStatusDot indicator={indicator} session={session} />
 							<span className="flex min-w-0 flex-1 items-center gap-1.5">
 								<span
 									className={cn(

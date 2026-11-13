@@ -53,6 +53,8 @@ const sheetRoutes = [
 	"sheets/cloud-plan.tsx",
 	"sheets/composer-picker.tsx",
 	"sheets/conversation-usage.tsx",
+	"sheets/files-branch.tsx",
+	"sheets/files-changes.tsx",
 	"sheets/machine-name.tsx",
 	"sheets/model.tsx",
 	"sheets/review-actions.tsx",

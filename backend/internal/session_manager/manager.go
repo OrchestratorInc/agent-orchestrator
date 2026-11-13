@@ -67,6 +67,9 @@ var (
 	// ErrScratchBranchUnsupported means a caller tried to force git branch
 	// semantics onto a scratch project.
 	ErrScratchBranchUnsupported = errors.New("session: scratch projects do not support branches")
+	// ErrBaseBranchUnsupported means a caller asked for a base branch in a
+	// project that doesn't have one repository to take it from.
+	ErrBaseBranchUnsupported = errors.New("session: base branches need a repository project")
 	// ErrNotResumable means a terminated session cannot be relaunched: its adapter
 	// cannot natively resume it AND it has no prompt to fresh-launch from, and it is
 	// not an orchestrator (orchestrators are promptless by design and relaunch fresh
@@ -1052,6 +1055,20 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 	}
 	if projectKind == domain.ProjectKindScratch && strings.TrimSpace(cfg.Branch) != "" {
 		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w", ErrScratchBranchUnsupported)
+	}
+	if base := strings.TrimSpace(cfg.BaseBranch); base != "" {
+		if projectKind != domain.ProjectKindSingleRepo {
+			return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w", ErrBaseBranchUnsupported)
+		}
+		// This session only: it fetches, branches from and diffs against the base.
+		project.Config.DefaultBranch = base
+		// A prepared worktree was cut from the project's own default.
+		cfg.TaskPreparation = ""
+		// A branch that already exists keeps its own history, so the session
+		// would not start from the base its prompt names: a named branch must be new.
+		if strings.TrimSpace(cfg.Branch) != "" {
+			cfg.RequireNewBranch = true
+		}
 	}
 	if cfg.ParentSessionID != "" && cfg.AgentConfig.Permissions == "" {
 		permissions, err := m.inheritedSpawnPermissions(ctx, cfg.ProjectID, cfg.ParentSessionID)
@@ -6068,6 +6085,7 @@ func buildPrompt(cfg ports.SpawnConfig) string {
 		Prompt:       cfg.Prompt,
 		IssueID:      string(cfg.IssueID),
 		IssueContext: cfg.IssueContext,
+		BaseBranch:   cfg.BaseBranch,
 	})
 }
 

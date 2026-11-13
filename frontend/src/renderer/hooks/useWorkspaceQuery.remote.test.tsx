@@ -210,7 +210,8 @@ it("keeps the same lists across re-renders until a host's data changes", async (
 	await waitFor(() => expect(result.current.data[0]?.name).toBe("Renamed"));
 });
 
-it("re-maps remote session titles when Developer Mode changes with unchanged host data", async () => {
+it("labels remote sessions with their program title without Developer Mode", async () => {
+	useUiStore.setState({ developerMode: false });
 	remoteConnect.mockResolvedValue({ hostId: "box-a", label: "Box A", url: "http://box-a:3001", base: "http://127.0.0.1:4000" });
 	vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
 		const url = input instanceof Request ? input.url : String(input);
@@ -223,14 +224,7 @@ it("re-maps remote session titles when Developer Mode changes with unchanged hos
 	const { result } = renderHook(() => useRemoteWorkspaces(), {
 		wrapper: ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>,
 	});
-	// Developer Mode is on (beforeEach): the terminal title shows.
 	await waitFor(() => expect(result.current.data[0]?.sessions[0]?.title).toBe("vim main.go"));
-	const sessionsData = client.getQueryData(["remote-workspaces", "box-a", "sessions"]);
-
-	act(() => useUiStore.setState({ developerMode: false }));
-
-	expect(client.getQueryData(["remote-workspaces", "box-a", "sessions"])).toBe(sessionsData);
-	expect(result.current.data[0]?.sessions[0]?.title).toBe("Fix login");
 });
 
 // A saved host whose lists are only in the cache: nothing below refetches, so

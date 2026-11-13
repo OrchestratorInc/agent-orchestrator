@@ -6,6 +6,8 @@ const fixtures = vi.hoisted(() => ({
 	dismiss: vi.fn(),
 	platform: "ios",
 	listeners: new Map<string, (event: { data: { closing: boolean } }) => void>(),
+	pasteLayout: () => {},
+	useImagePaste: vi.fn(),
 }));
 
 vi.mock("react-native", () => ({
@@ -31,6 +33,7 @@ vi.mock("./pressFeedback", () => ({ usePressFeedback: () => ({ android_ripple: u
 vi.mock("./AppSymbol", () => ({ AppSymbol: "AppSymbol" }));
 vi.mock("./chat/ChatAttachmentMenu", () => ({ ChatAttachmentMenu: "ChatAttachmentMenu" }));
 vi.mock("./voice/DictationField", () => ({ DictationField: "DictationField" }));
+vi.mock("./chat/useImagePaste", () => ({ useImagePaste: fixtures.useImagePaste }));
 vi.mock("./chat/composer-glass", () => ({ ComposerGlass: "ComposerGlass", composerGlassSupported: false }));
 
 import { SpawnComposer, type SpawnComposerProps } from "./spawn-composer";
@@ -47,6 +50,7 @@ beforeEach(() => {
 	fixtures.dismiss.mockClear();
 	fixtures.platform = "ios";
 	fixtures.listeners.clear();
+	fixtures.useImagePaste.mockReset().mockReturnValue(fixtures.pasteLayout);
 });
 
 afterEach(async () => {
@@ -92,6 +96,18 @@ describe("SpawnComposer", () => {
 		expect(attach.props).toMatchObject({ disabled: false, canAttachFile: true });
 		attach.props.onChoosePhoto();
 		expect(props.onChoosePhoto).toHaveBeenCalledOnce();
+	});
+
+	// Pasting an image is a way to attach, as in a conversation's composer.
+	it("takes pasted images into the field, and stops while they can't be attached", async () => {
+		const onPasteImages = vi.fn();
+		const root = await render(baseProps({ onPasteImages }));
+		expect(fixtures.useImagePaste).toHaveBeenLastCalledWith(onPasteImages);
+		expect(root.findByType("TextInput" as never).props.onLayout).toBe(fixtures.pasteLayout);
+		await render(baseProps({ onPasteImages: null }));
+		expect(fixtures.useImagePaste).toHaveBeenLastCalledWith(null);
+		await render(baseProps());
+		expect(fixtures.useImagePaste).toHaveBeenLastCalledWith(null);
 	});
 
 	it("starts the task once there is text", async () => {

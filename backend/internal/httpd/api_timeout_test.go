@@ -17,6 +17,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/computeruse"
+	prsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/pr"
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
 	sessionsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/session"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/sessionimport"
@@ -193,6 +194,100 @@ func TestAttachmentCapableSendUsesExtendedTimeoutOnlyForUploads(t *testing.T) {
 			}
 			if !tc.upload && (budget <= 0 || budget > configuredTimeout) {
 				t.Fatalf("plain text budget = %s, want no more than %s", budget, configuredTimeout)
+			}
+		})
+	}
+}
+
+// timeoutProbePRs records the request budget a PR comment post runs under.
+type timeoutProbePRs struct {
+	prsvc.ActionManager
+	budget chan time.Duration
+}
+
+func (p *timeoutProbePRs) PostComment(ctx context.Context, _ prsvc.CommentRequest) (prsvc.CommentResult, error) {
+	p.budget <- remainingRequestBudget(ctx)
+	return prsvc.CommentResult{ID: "c1"}, nil
+}
+
+func (p *timeoutProbePRs) Merge(ctx context.Context, _ prsvc.MergeRequest) (prsvc.MergeResult, error) {
+	p.budget <- remainingRequestBudget(ctx)
+	return prsvc.MergeResult{}, nil
+}
+
+func (p *timeoutProbePRs) MergeStack(ctx context.Context, _ prsvc.StackMergeRequest) (prsvc.StackMergeResult, error) {
+	p.budget <- remainingRequestBudget(ctx)
+	return prsvc.StackMergeResult{}, nil
+}
+
+// A stack merge waits up to two minutes for GitHub to land it; the one-minute
+// REST budget cancelled it, and the layers it landed went unrecorded. A plain
+// merge keeps the ordinary budget.
+func TestStackMergeRouteUsesExtendedTimeout(t *testing.T) {
+	const configuredTimeout = 250 * time.Millisecond
+	svc := &timeoutProbePRs{budget: make(chan time.Duration, 1)}
+	router := NewRouterWithControl(config.Config{RequestTimeout: configuredTimeout}, discardLogger(), nil, APIDeps{PRs: svc}, ControlDeps{})
+	const head = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	for _, tc := range []struct {
+		path, body string
+		long       bool
+	}{
+		{path: "/api/v1/prs/2/stack/merge", body: `{"prUrl":"https://github.com/acme/widgets/pull/2","expectedHeads":[{"number":2,"headSha":"` + head + `"}]}`, long: true},
+		{path: "/api/v1/prs/2/merge", body: `{"prUrl":"https://github.com/acme/widgets/pull/2","expectedHeadSha":"` + head + `"}`},
+	} {
+		req := httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(tc.body))
+		req.Header.Set("Content-Type", "application/json")
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, req)
+		select {
+		case budget := <-svc.budget:
+			if tc.long && (budget < 179*time.Second || budget > 3*time.Minute) {
+				t.Fatalf("%s budget = %s, want about 3 minutes", tc.path, budget)
+			}
+			if !tc.long && (budget <= 0 || budget > configuredTimeout) {
+				t.Fatalf("%s budget = %s, want no more than %s", tc.path, budget, configuredTimeout)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("%s never reached the PR service: status=%d body=%s", tc.path, response.Code, response.Body.String())
+		}
+	}
+}
+
+func TestPRCommentWithFilesUsesExtendedTimeout(t *testing.T) {
+	const configuredTimeout = 250 * time.Millisecond
+	prs := &timeoutProbePRs{budget: make(chan time.Duration, 2)}
+	router := NewRouterWithControl(
+		config.Config{RequestTimeout: configuredTimeout},
+		discardLogger(),
+		nil,
+		APIDeps{PRs: prs},
+		ControlDeps{},
+	)
+	for _, tc := range []struct {
+		name   string
+		body   string
+		upload bool
+	}{
+		{name: "text", body: `{"prUrl":"https://github.com/acme/app/pull/7","body":"hello"}`},
+		{name: "files", body: `{"prUrl":"https://github.com/acme/app/pull/7","body":"![a.png](attachment:0)","attachments":[{"name":"a.png","contentType":"image/png","data":"iVBORw=="}]}`, upload: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/prs/7/comments", bytes.NewBufferString(tc.body))
+			req.Header.Set("Content-Type", "application/json")
+			if tc.upload {
+				req.Header.Set(attachmentUploadHeader, "1")
+			}
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, req)
+			if response.Code != http.StatusOK {
+				t.Fatalf("comment status = %d, want 200; body=%s", response.Code, response.Body.String())
+			}
+			budget := <-prs.budget
+			if tc.upload && (budget < 9*time.Minute || budget > 10*time.Minute) {
+				t.Fatalf("comment with files budget = %s, want about 10 minutes", budget)
+			}
+			if !tc.upload && (budget <= 0 || budget > configuredTimeout) {
+				t.Fatalf("text comment budget = %s, want no more than %s", budget, configuredTimeout)
 			}
 		})
 	}

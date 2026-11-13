@@ -254,6 +254,7 @@ vi.mock("../hooks/useAgentReadinessQuery", () => ({
 	// which keeps these shortcut tests free of telemetry side effects.
 	useAgentReadinessQuery: () => ({ data: undefined }),
 	useEnsureAgentReadiness: vi.fn(),
+	useProjectAgentDefaults: () => async () => ({ workerAgent: "claude-code", orchestratorAgent: "claude-code", reviewerAgent: "claude-code" }),
 }));
 
 // ao.setup.checked reads the startup checks' react-query cache; these
@@ -737,13 +738,13 @@ describe("shell workspace startup", () => {
 			useUiStore.getState().setProjectCreationPending(false);
 		});
 		view.rerender(<Suspense fallback={null}><ShellRoute /></Suspense>);
-		expect(screen.getByText("Getting your project ready")).toBeInTheDocument();
+		expect(screen.getByText("Starting your orchestrator")).toBeInTheDocument();
 		shellMocks.state.routeParams = { projectId: "proj-1", sessionId: "sess-1" };
 		view.rerender(<Suspense fallback={null}><ShellRoute /></Suspense>);
 		expect(screen.getByLabelText("Message the agent")).toBe(composer);
-		expect(screen.getByText("Getting your project ready")).toBeInTheDocument();
+		expect(screen.getByText("Starting your orchestrator")).toBeInTheDocument();
 		act(() => useUiStore.getState().setProjectProvisioning("proj-1", false));
-		expect(screen.queryByText("Getting your project ready")).not.toBeInTheDocument();
+		expect(screen.queryByText("Starting your orchestrator")).not.toBeInTheDocument();
 	});
 
 	const spawnNewProject = () => {
