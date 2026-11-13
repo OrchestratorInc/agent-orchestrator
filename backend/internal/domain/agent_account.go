@@ -58,7 +58,6 @@ type AgentAccountLimitWindow struct {
 	ResetsAt        *time.Time `json:"resetsAt,omitempty"`
 	DurationMinutes int        `json:"durationMinutes,omitempty" minimum:"0"`
 	Scope           string     `json:"-"`
-	Reached         bool       `json:"-"`
 }
 
 // AgentLimitReading is one limit window's value as read at one moment.
@@ -82,6 +81,8 @@ type AgentAccountLimits struct {
 	// AutoResumeResetsAt is present only when native rolling limits identify an
 	// unambiguous future deadline. Nil does not establish available capacity.
 	AutoResumeResetsAt *time.Time `json:"-"`
+	// ReachedScopes are the meter scopes the provider reports as exhausted.
+	ReachedScopes []string `json:"-"`
 	// ExtraUsage is Claude's paid usage beyond the plan, in the plan's currency.
 	ExtraUsage *AgentAccountExtraUsage `json:"extraUsage,omitempty"`
 	// ResetCredits counts Codex usage-limit resets the account can spend.
@@ -96,7 +97,11 @@ type AgentAccountLimits struct {
 func (l AgentAccountLimits) HandoffHeadroom(p AgentAccountProvider, model string) (float64, bool) {
 	model = normalizeLimitScope(model)
 	fullest, relevant := 0.0, false
-	for _, w := range l.Windows {
+	meters := append([]AgentAccountLimitWindow{}, l.Windows...)
+	for _, scope := range l.ReachedScopes {
+		meters = append(meters, AgentAccountLimitWindow{Scope: scope, UsedPercent: 100})
+	}
+	for _, w := range meters {
 		scope := normalizeLimitScope(w.Scope)
 		switch {
 		case scope == "":
@@ -107,9 +112,6 @@ func (l AgentAccountLimits) HandoffHeadroom(p AgentAccountProvider, model string
 		}
 		relevant = true
 		fullest = max(fullest, w.UsedPercent)
-		if w.Reached {
-			fullest = 100
-		}
 	}
 	if !relevant || fullest >= 100 {
 		return 0, false

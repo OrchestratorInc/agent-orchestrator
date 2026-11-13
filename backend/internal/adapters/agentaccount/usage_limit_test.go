@@ -106,15 +106,35 @@ func TestCodexLimitsPreservesPrivateSafeReset(t *testing.T) {
 }
 
 func TestCodexLimitsReachedBucketLeavesNoHandoffRoom(t *testing.T) {
-	cli := &Codex{Accounts: &limitsAccountFactory{client: &limitsAccountClient{capacity: ports.CodexCapacityObservation{
-		Overall: &domain.CodexCapacityBucket{LimitID: "codex", Reached: domain.CodexCapacityReached, Primary: &domain.CodexCapacityWindow{UsedPercent: 12}},
-	}}}}
-	limits, err := cli.Limits(context.Background(), "/codex")
-	if err != nil || len(limits.Windows) != 1 || limits.Windows[0].UsedPercent != 12 {
-		t.Fatalf("limits = %+v, %v", limits, err)
-	}
-	if room, ok := limits.HandoffHeadroom(domain.AgentAccountProviderCodex, ""); ok {
-		t.Fatalf("a reached bucket at 12%% left %v%% room", room)
+	spark := "GPT-5.3-Codex-Spark"
+	for _, tc := range []struct {
+		name     string
+		capacity ports.CodexCapacityObservation
+		model    string
+		ok       bool
+	}{
+		{"reached overall bucket at 12%", ports.CodexCapacityObservation{
+			Overall: &domain.CodexCapacityBucket{LimitID: "codex", Reached: domain.CodexCapacityReached, Primary: &domain.CodexCapacityWindow{UsedPercent: 12}},
+		}, "", false},
+		{"reached spark bucket without windows", ports.CodexCapacityObservation{
+			Overall:           &domain.CodexCapacityBucket{LimitID: "codex", Primary: &domain.CodexCapacityWindow{UsedPercent: 20}},
+			AdditionalBuckets: []domain.CodexCapacityBucket{{LimitID: "spark", DisplayName: &spark, Reached: domain.CodexCapacityReached}},
+		}, "gpt-5.3-codex-spark", false},
+		{"another model ignores the reached spark bucket", ports.CodexCapacityObservation{
+			Overall:           &domain.CodexCapacityBucket{LimitID: "codex", Primary: &domain.CodexCapacityWindow{UsedPercent: 20}},
+			AdditionalBuckets: []domain.CodexCapacityBucket{{LimitID: "spark", DisplayName: &spark, Reached: domain.CodexCapacityReached}},
+		}, "gpt-5.5", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cli := &Codex{Accounts: &limitsAccountFactory{client: &limitsAccountClient{capacity: tc.capacity}}}
+			limits, err := cli.Limits(context.Background(), "/codex")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if room, ok := limits.HandoffHeadroom(domain.AgentAccountProviderCodex, tc.model); ok != tc.ok {
+				t.Fatalf("HandoffHeadroom = %v, %v; want ok %v (windows %+v)", room, ok, tc.ok, limits.Windows)
+			}
+		})
 	}
 }
 
