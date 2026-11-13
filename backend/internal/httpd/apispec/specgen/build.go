@@ -689,18 +689,24 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersDevImportProjectsRequest":  "DevImportProjectsRequest",
 	"ControllersDevImportProjectsResponse": "DevImportProjectsResponse",
 	// httpd/controllers: mobile wire envelopes
-	"ControllersMobileStatusResponse":          "MobileStatusResponse",
-	"ControllersSetBrowserRemoteAccessRequest": "SetBrowserRemoteAccessRequest",
-	"MobilebridgeEndpoint":                     "MobileEndpoint",
-	"MobilebridgeTunnelStatus":                 "MobileTunnelStatus",
-	"ControllersIdentityResponse":              "IdentityResponse",
-	"ControllersEndpointsResponse":             "EndpointsResponse",
-	"ControllersLinkPreviewQuery":              "LinkPreviewQuery",
-	"ControllersLinkPreviewResponse":           "LinkPreviewResponse",
-	"ControllersMobileDeviceResponse":          "MobileDeviceResponse",
-	"ControllersMobileDevicesResponse":         "MobileDevicesResponse",
-	"ControllersMobileDeviceIDParam":           "MobileDeviceIDParam",
-	"ControllersPushPairingIDParam":            "PushPairingIDParam",
+	"ControllersMobileStatusResponse":             "MobileStatusResponse",
+	"ControllersSetBrowserRemoteAccessRequest":    "SetBrowserRemoteAccessRequest",
+	"MobilebridgeEndpoint":                        "MobileEndpoint",
+	"MobilebridgeTunnelStatus":                    "MobileTunnelStatus",
+	"ControllersIdentityResponse":                 "IdentityResponse",
+	"ControllersEndpointsResponse":                "EndpointsResponse",
+	"ControllersLinkPreviewQuery":                 "LinkPreviewQuery",
+	"ControllersLinkPreviewResponse":              "LinkPreviewResponse",
+	"ControllersSessionSearchQuery":               "SessionSearchQuery",
+	"ControllersSessionSearchResponse":            "SessionSearchResponse",
+	"ControllersSessionSearchResult":              "SessionSearchResult",
+	"ControllersSessionSearchHighlight":           "SessionSearchHighlight",
+	"ControllersSessionSearchCoverage":            "SessionSearchCoverage",
+	"ControllersSessionSearchIndexStatusResponse": "SessionSearchIndexStatusResponse",
+	"ControllersMobileDeviceResponse":             "MobileDeviceResponse",
+	"ControllersMobileDevicesResponse":            "MobileDevicesResponse",
+	"ControllersMobileDeviceIDParam":              "MobileDeviceIDParam",
+	"ControllersPushPairingIDParam":               "PushPairingIDParam",
 	// devimport report
 	"DevimportReport":   "DevImportProjectsReport",
 	"DevimportConflict": "DevImportProjectsConflict",
@@ -771,8 +777,8 @@ func validNullableReferenceUnions(p jsonschema.InterceptNullabilityParams) {
 	}
 }
 
-// requiredFromJSONTag marks a property required when its json tag lacks
-// `omitempty` (the Go convention for "always present"). Runs after default
+// requiredFromJSONTag marks a property required when its json tag has neither
+// `omitempty` nor `omitzero` (the Go convention for "always present"). Runs after default
 // processing so ParentSchema exists; skips fields without a json tag (e.g. path
 // params, which swaggest marks required on their own).
 func requiredFromJSONTag(p jsonschema.InterceptPropParams) error {
@@ -789,7 +795,7 @@ func requiredFromJSONTag(p jsonschema.InterceptPropParams) error {
 		name = p.Name
 	}
 	for _, opt := range parts[1:] {
-		if opt == "omitempty" {
+		if opt == "omitempty" || opt == "omitzero" {
 			return nil
 		}
 	}
@@ -848,6 +854,7 @@ func operations() []operation {
 	ops = append(ops, endpointsOperations()...)
 	ops = append(ops, telemetryIdentityOperations()...)
 	ops = append(ops, linkPreviewOperations()...)
+	ops = append(ops, sessionSearchOperations()...)
 	return ops
 }
 
@@ -866,6 +873,42 @@ func automationOperations() []operation {
 		{method: http.MethodPatch, path: "/api/v1/automations/{automationId}", id: "updateAutomation", tag: "automations", summary: "Update a recurring automation", pathParams: id, reqBody: controllers.UpdateAutomationRequest{}, resps: append([]respUnit{{http.StatusOK, controllers.AutomationEnvelope{}}}, commonErrors...)},
 		{method: http.MethodDelete, path: "/api/v1/automations/{automationId}", id: "deleteAutomation", tag: "automations", summary: "Delete an automation and its run history", pathParams: id, resps: append([]respUnit{{http.StatusNoContent, nil}}, commonErrors...)},
 		{method: http.MethodGet, path: "/api/v1/automations/{automationId}/runs", id: "listAutomationRuns", tag: "automations", summary: "List durable automation run history", pathParams: []any{controllers.AutomationIDParam{}, controllers.ListAutomationRunsQuery{}}, resps: append([]respUnit{{http.StatusOK, controllers.ListAutomationRunsResponse{}}}, commonErrors...)},
+	}
+}
+
+// sessionSearchOperations declares the ranked search over past sessions. Must
+// stay 1:1 with the routes SessionSearchController.Register mounts (enforced by
+// the parity test).
+func sessionSearchOperations() []operation {
+	commonErrors := []respUnit{
+		{http.StatusBadRequest, envelope.APIError{}},
+		{http.StatusInternalServerError, envelope.APIError{}},
+		{http.StatusNotImplemented, envelope.APIError{}},
+	}
+	return []operation{
+		{
+			method: http.MethodGet, path: "/api/v1/search/sessions", id: "searchSessions", tag: "sessions",
+			summary:    "Search past sessions by title, message text, tool output, and touched file paths",
+			pathParams: []any{controllers.SessionSearchQuery{}},
+			resps: append([]respUnit{
+				{http.StatusOK, controllers.SessionSearchResponse{}},
+			}, commonErrors...),
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/search/index-status", id: "getSessionSearchIndexStatus", tag: "sessions",
+			summary: "Report what the session search index covers",
+			resps: append([]respUnit{
+				{http.StatusOK, controllers.SessionSearchIndexStatusResponse{}},
+			}, commonErrors...),
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/search/reindex", id: "reindexSessionSearch", tag: "sessions",
+			summary: "Empty the session search index and rebuild it from scratch in the background",
+			resps: append([]respUnit{
+				{http.StatusAccepted, controllers.SessionSearchIndexStatusResponse{}},
+				{http.StatusServiceUnavailable, envelope.APIError{}},
+			}, commonErrors...),
+		},
 	}
 }
 
