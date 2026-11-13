@@ -191,7 +191,7 @@ export function TurnSettingsBar({
 	beforePicker?: ReactNode;
 	/** Shown in the picker after the agent's logo, in place of the model and effort, such as the usage limit near its end. */
 	pickerOverride?: PickerOverride;
-	/** A note at the top of the open model menu, such as the usage limit near its end. */
+	/** A line under the Agent row of the open model menu, such as the usage limit near its end. */
 	pickerNotice?: ReactNode;
 	/** The agent is starting again; the picker names no model until it reports its own. */
 	modelsLoading?: boolean;

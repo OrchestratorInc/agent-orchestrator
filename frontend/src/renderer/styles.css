@@ -2114,41 +2114,47 @@ textarea,
 	box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--quota-tone) 24%, transparent);
 }
 .quota-pill[data-severity="full"],
-.quota-notice[data-severity="full"] {
+.quota-note[data-severity="full"] {
 	--quota-tone: var(--color-status-exited);
 }
-.quota-pill > svg,
-.quota-notice > svg {
+.quota-pill > svg {
 	color: var(--quota-tone);
 }
-/* The same warning at the top of the open model menu, with when it resets. */
-.quota-notice {
+/*
+ * The same warning as one quiet line inside the menu's Agent row: the icon and
+ * label in the status hue, the reset time muted after a middle dot. No box, so
+ * it reads as part of the agent rather than as a banner over the menu.
+ */
+.quota-note {
 	--quota-tone: var(--color-status-in-review);
 	display: flex;
-	align-items: flex-start;
-	gap: 8px;
-	margin: 0 0 6px;
-	padding: 8px 10px;
-	border-radius: 7px;
-	color: var(--color-foreground);
-	background: color-mix(in srgb, var(--quota-tone) 10%, transparent);
-	box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--quota-tone) 18%, transparent);
+	align-items: center;
+	gap: 5px;
+	min-width: 0;
+	font-size: 11px;
+	line-height: 14px;
 }
-.quota-notice > svg {
-	width: 14px;
-	height: 14px;
-	margin-top: 1px;
+.quota-note > svg {
+	width: 12px;
+	height: 12px;
 	flex-shrink: 0;
+	color: var(--quota-tone);
 }
-.quota-notice-title {
+.quota-note-label {
+	flex-shrink: 0;
 	font-weight: 500;
-	line-height: 16px;
+	color: color-mix(in srgb, var(--quota-tone) 80%, var(--color-foreground));
 }
-.quota-notice-meta {
+.quota-note-meta {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
 	color: var(--color-muted-foreground);
-	font-size: 11.5px;
-	line-height: 15px;
 	font-variant-numeric: tabular-nums;
+}
+.quota-note-meta::before {
+	content: "·";
+	margin-right: 5px;
 }
 
 /*

@@ -4,7 +4,7 @@
  * Below the warning line the picker names the agent and model as usual. Close
  * to the limit a warning pill takes the model's place for a few seconds, when a
  * chat opens or when usage first crosses the line, then the model comes back;
- * the open model menu keeps the warning at its top. Once the window is full a
+ * the open model menu keeps the warning under its Agent row. Once the window is full a
  * clock and the time until it resets stay in the picker, since nothing runs
  * until then. The picker still opens on click and names the model on hover.
  */
@@ -102,7 +102,7 @@ export function useQuotaFlash(quota: QuotaWindow | undefined, scope: string): bo
 	return full || (key !== undefined && key !== dismissed);
 }
 
-/** The warning at the top of the open model menu, which outlasts the pill. */
+/** The warning under the Agent row of the open model menu, which outlasts the pill. */
 export function QuotaMenuNotice({ quota }: { quota: QuotaWindow }) {
 	const { t } = useTranslation();
 	const full = quota.percent >= 100;
@@ -111,13 +111,11 @@ export function QuotaMenuNotice({ quota }: { quota: QuotaWindow }) {
 		? t("chat.usageLimit.title")
 		: t(quota.kind === "session" ? "chat.quota.approaching" : "chat.quota.approachingWeekly");
 	return (
-		<div role="status" data-severity={full ? "full" : "warn"} className="quota-notice">
+		<span role="status" data-severity={full ? "full" : "warn"} className="quota-note">
 			{full ? <Clock aria-hidden="true" /> : <AlertTriangle aria-hidden="true" />}
-			<span className="flex min-w-0 flex-1 flex-col gap-0.5">
-				<span className="quota-notice-title">{label}</span>
-				{resets ? <span className="quota-notice-meta">{t("chat.quota.resetsIn", { time: resets })}</span> : null}
-			</span>
-		</div>
+			<span className="quota-note-label">{label}</span>
+			{resets ? <span className="quota-note-meta">{t("chat.quota.resetsIn", { time: resets })}</span> : null}
+		</span>
 	);
 }
 

@@ -219,7 +219,7 @@ export function AgentModelPicker({
 }: {
 	/** Shown after the agent's logo in place of the model and effort; the menu is unchanged. */
 	override?: PickerOverride;
-	/** A note at the top of the open menu, such as the usage limit near its end. */
+	/** A line under the Agent row of the open menu, such as the agent's usage limit near its end. */
 	notice?: ReactNode;
 	/** Shown under the settings of the agent picked to switch to, such as its Switch and Cancel buttons. */
 	pendingFooter?: ReactNode;
@@ -463,7 +463,6 @@ export function AgentModelPicker({
 					if (!event.defaultPrevented) onCloseAutoFocus?.(event);
 				}}
 			>
-				{notice && !terminal ? notice : null}
 				<ModelMenuChoices models={searchRows} searchable searchPlaceholder={t("agentSwitch.search")}>
 					{(matches, searchActiveID, optionID, query) => query ? matches.map((row) => (
 						<SearchRow
@@ -499,7 +498,20 @@ export function AgentModelPicker({
 							))}
 							<div className={setups.length > 0 ? DIVIDER : undefined}>
 								<OptionMenuSub closeOnSelect>
-									<OptionMenuSubTrigger label={t("agentSwitch.agent")} value={agentLabel(shownHarness)} />
+									<OptionMenuSubTrigger label={t("agentSwitch.agent")} value={agentLabel(shownHarness)}
+										className={notice && !terminal ? "flex-col items-stretch gap-1" : undefined}>
+										{/* The agent's account note sits inside its row, under the agent it belongs to. */}
+										{notice && !terminal ? <>
+											<span className="flex items-center justify-between gap-3">
+												<span>{t("agentSwitch.agent")}</span>
+												<span className="flex min-w-0 items-center gap-1.5 text-muted-foreground">
+													<span className="min-w-0 truncate">{agentLabel(shownHarness)}</span>
+													<ChevronRight aria-hidden="true" className="size-3 shrink-0" />
+												</span>
+											</span>
+											{notice}
+										</> : undefined}
+									</OptionMenuSubTrigger>
 									<OptionMenuSubContent scrollable className={SUB_CLASS}>
 										<div className="model-menu-scroll max-h-[calc(var(--size-select-menu-max)-var(--space-2)*2)] overflow-y-auto overscroll-contain">
 											{agents.map((agent) => (
