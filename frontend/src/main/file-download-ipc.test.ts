@@ -13,8 +13,8 @@ afterEach(async () => {
 	await rm(dir, { recursive: true, force: true });
 });
 
-function sender(id = 1) {
-	return Object.assign(new EventEmitter(), { id });
+function sender(id = 1, destroyed = false) {
+	return Object.assign(new EventEmitter(), { id, isDestroyed: () => destroyed });
 }
 
 function setup(chosen: string | null) {
@@ -61,6 +61,12 @@ describe("registerFileDownloadIpc", () => {
 		expect(await readdir(dir)).toHaveLength(1);
 		window.emit("destroyed");
 		await vi.waitFor(async () => expect(await readdir(dir)).toEqual([]));
+	});
+
+	it("keeps nothing when the window closed while the dialog was open", async () => {
+		const { call } = setup(path.join(dir, "a.bin"));
+		await expect(call("start", sender(1, true), "a.bin")).resolves.toBeNull();
+		expect(await readdir(dir)).toEqual([]);
 	});
 
 	it("refuses another window's download", async () => {
