@@ -7304,6 +7304,10 @@ func (m *Manager) waitForPromptReadiness(ctx context.Context, agent ports.Agent,
 	if err != nil {
 		return fmt.Errorf("prompt readiness: %w", err)
 	}
+	lines := hints.Lines
+	if lines <= 0 {
+		lines = 80
+	}
 	callerDeadline, hasCallerDeadline := ctx.Deadline()
 	if hints.InitialDelay > 0 {
 		if hasCallerDeadline && time.Until(callerDeadline)-promptDeliveryDeadlineReserve <= hints.InitialDelay {
@@ -7312,22 +7316,18 @@ func (m *Manager) waitForPromptReadiness(ctx context.Context, agent ports.Agent,
 				"kind", string(cfg.Kind),
 				"configuredTimeout", hints.Timeout.String(),
 			)
-			return nil
+			return m.promptReadinessSkipped(ctx, handle, lines, hints)
 		}
 		if err := sleepContext(ctx, hints.InitialDelay); err != nil {
 			return err
 		}
 	}
 	if len(hints.Patterns) == 0 || hints.Timeout <= 0 {
-		return nil
+		return m.promptReadinessSkipped(ctx, handle, lines, hints)
 	}
 	poll := hints.PollInterval
 	if poll <= 0 {
 		poll = 200 * time.Millisecond
-	}
-	lines := hints.Lines
-	if lines <= 0 {
-		lines = 80
 	}
 
 	waitTimeout, hasReadinessBudget := promptReadinessWaitTimeout(hints.Timeout, callerDeadline, hasCallerDeadline)
@@ -7337,7 +7337,7 @@ func (m *Manager) waitForPromptReadiness(ctx context.Context, agent ports.Agent,
 			"kind", string(cfg.Kind),
 			"configuredTimeout", hints.Timeout.String(),
 		)
-		return nil
+		return m.promptReadinessSkipped(ctx, handle, lines, hints)
 	}
 
 	deadline := time.NewTimer(waitTimeout)
@@ -7345,15 +7345,25 @@ func (m *Manager) waitForPromptReadiness(ctx context.Context, agent ports.Agent,
 	ticker := time.NewTicker(poll)
 	defer ticker.Stop()
 
+	blocked := false
 	for {
-		output, err := m.runtime.GetOutput(ctx, handle, lines)
-		if err == nil && promptOutputContains(output, hints.Patterns) {
-			return nil
+		output, err := m.promptReadinessOutput(ctx, handle, lines, hints.RenderedScreen)
+		if err == nil {
+			blocked = promptOutputContainsWrapped(output, hints.BlockingPatterns)
+			if !blocked && promptOutputContains(output, hints.Patterns) {
+				return nil
+			}
 		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-deadline.C:
+			if blocked {
+				// A startup dialog (for example a folder-trust prompt) still owns
+				// the terminal. Typing the prompt there would answer the dialog
+				// with arbitrary keys, so fail delivery instead.
+				return fmt.Errorf("prompt readiness: %w", errPromptBlockedByDialog)
+			}
 			// Prompt readiness is best-effort: a missing terminal marker must not
 			// block spawn forever or be treated as confirmed readiness. Fall back
 			// to delivering the prompt and make the degraded path observable.
@@ -7386,6 +7396,74 @@ func promptReadinessWaitTimeout(configured time.Duration, callerDeadline time.Ti
 // output ring, so a styled prompt such as Kimi's "│ >" arrives with a colour
 // code inside it and never matched until the readiness wait timed out.
 var promptOutputEscape = regexp.MustCompile(`\x1b(?:\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]|\][^\x07]*(?:\x07|\x1b\\))`)
+
+// errPromptBlockedByDialog reports that an agent's startup dialog was still on
+// screen when prompt readiness timed out.
+var errPromptBlockedByDialog = errors.New("agent is still showing a startup dialog; prompt not delivered")
+
+// errPromptDialogUnchecked reports that readiness could not confirm an agent's
+// startup dialog was gone, so the prompt was not risked against it.
+var errPromptDialogUnchecked = errors.New("could not confirm the agent's startup dialog closed; prompt not delivered")
+
+// promptReadinessSkipped decides delivery when the full readiness wait cannot
+// run (no caller budget, or no wait configured). Adapters without blocking
+// patterns keep best-effort delivery. With blocking patterns, typing into a
+// dialog can answer it (Grok's trust dialog quits on "n"), so one screen read
+// must show no dialog and, when the adapter has a ready marker, that marker.
+func (m *Manager) promptReadinessSkipped(ctx context.Context, handle ports.RuntimeHandle, lines int, hints ports.PromptReadinessHints) error {
+	if len(hints.BlockingPatterns) == 0 {
+		return nil
+	}
+	output, err := m.promptReadinessOutput(ctx, handle, lines, hints.RenderedScreen)
+	switch {
+	case err != nil:
+		return fmt.Errorf("prompt readiness: %w: %w", errPromptDialogUnchecked, err)
+	case promptOutputContainsWrapped(output, hints.BlockingPatterns):
+		return fmt.Errorf("prompt readiness: %w", errPromptBlockedByDialog)
+	case len(hints.Patterns) > 0 && !promptOutputContains(output, hints.Patterns):
+		return fmt.Errorf("prompt readiness: %w", errPromptDialogUnchecked)
+	}
+	return nil
+}
+
+// promptReadinessOutput reads the terminal text readiness patterns are matched
+// against: the rendered current viewport when the adapter asks for it and the
+// runtime can provide it for this handle, otherwise the raw output ring.
+func (m *Manager) promptReadinessOutput(ctx context.Context, handle ports.RuntimeHandle, lines int, rendered bool) (string, error) {
+	if rendered {
+		if reader, ok := m.runtime.(ports.StyledTerminalOutputReader); ok {
+			output, err := reader.GetStyledOutput(ctx, handle, lines)
+			if !errors.Is(err, ports.ErrStyledTerminalOutputUnavailable) {
+				return output, err
+			}
+		}
+	}
+	return m.runtime.GetOutput(ctx, handle, lines)
+}
+
+// promptOutputContainsWrapped matches blocking patterns even when a narrow
+// pane wraps a dialog heading across lines, possibly between box-drawing
+// borders: escapes are stripped, borders become spaces, and every whitespace
+// run (including line breaks) collapses to one space on both sides.
+func promptOutputContainsWrapped(output string, patterns []string) bool {
+	screen := foldPromptText(promptOutputEscape.ReplaceAllString(output, ""))
+	for _, pattern := range patterns {
+		if folded := foldPromptText(pattern); folded != "" && strings.Contains(screen, folded) {
+			return true
+		}
+	}
+	return false
+}
+
+func foldPromptText(s string) string {
+	s = strings.Map(func(r rune) rune {
+		if r >= 0x2500 && r <= 0x257f { // Box Drawing block: dialog borders.
+			return ' '
+		}
+		return r
+	}, s)
+	return strings.Join(strings.Fields(s), " ")
+}
 
 func promptOutputContains(output string, patterns []string) bool {
 	plain := promptOutputEscape.ReplaceAllString(output, "")
