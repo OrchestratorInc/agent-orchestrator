@@ -526,7 +526,7 @@ export function useMobileConversation(
 				turnOptionsRequest.current++;
 				setConfigOptions(options);
 				turnOptionsCache.set(cacheKey, { models, configOptions: options });
-				rememberTurnOptions(cacheKey, { models, configOptions: options });
+				rememberTurnOptions(cacheKey, { models, configOptions: options }, harnessRef.current);
 				if (options.length) turnOptionsLoaded.current = true;
 				return options;
 			}),
