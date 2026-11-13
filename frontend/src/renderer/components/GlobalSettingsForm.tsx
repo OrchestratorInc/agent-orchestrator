@@ -34,8 +34,9 @@ export function GlobalSettingsForm({
 }) {
 	const { t } = useTranslation();
 	const diagnostics = useUiStore((state) => state.developerMode && state.diagnostics);
+	const developerMode = useUiStore((state) => state.developerMode);
 	const all = section === "all";
-	const context = { cloudEnabled, diagnostics, customCoder, selfServeBilling, teams, focusAgentId, hostId, harnessView, startLogin, showDiagnostics, singlePage: !all };
+	const context = { cloudEnabled, diagnostics, developerMode, customCoder, selfServeBilling, teams, focusAgentId, hostId, harnessView, startLogin, showDiagnostics, singlePage: !all };
 	const items = globalSettingsItemsFor(section, context);
 	// On a single page the pane's title names it; SettingsSection hides only a
 	// heading that would repeat that title, so other section headings show.

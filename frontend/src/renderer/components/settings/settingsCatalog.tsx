@@ -1,5 +1,5 @@
 import { BrowserIcon, type AppIcon } from "../icons";
-import { Activity, Bot, CircleHelp, CreditCard, Keyboard, MousePointerClick, RefreshCw, Server, Settings2, Smartphone, Users } from "@/components/app-icons";
+import { Activity, Mic, Bot, CircleHelp, CreditCard, Keyboard, MousePointerClick, RefreshCw, Server, Settings2, Smartphone, Users } from "@/components/app-icons";
 import { lazy, type ReactNode } from "react";
 import type { TFunction } from "i18next";
 import type { GlobalSettingsSection, HarnessDiagnosticsRequest } from "../../stores/ui-store";
@@ -8,6 +8,7 @@ import { BrowserChromeSection } from "./BrowserChromeSection";
 import { BrowserDownloadsSection } from "./BrowserDownloadsSection";
 import { BrowserProfilesSection } from "./BrowserProfilesSection";
 import { CoderSettingsSection } from "./CoderSettingsSection";
+import { DictationSection } from "./DictationSection";
 import { ComputerUseSection } from "./ComputerUseSection";
 import { ConnectMobileContent } from "./ConnectMobileContent";
 import { GeneralSettingsSection } from "./GeneralSettingsSection";
@@ -55,6 +56,8 @@ type CatalogContext = {
 	cloudEnabled: boolean;
 	/** Developer mode with the Diagnostics toggle on — gates the memory and CPU page. */
 	diagnostics: boolean;
+	/** Developer mode: gates pages for features still in preview, such as Dictation. */
+	developerMode?: boolean;
 	/** The org holds the coder capability: gates the bring-your-own-Coder page. */
 	customCoder: boolean;
 	/** The org is on self-serve billing: gates the Upgrade (plans and usage) page. */
@@ -162,6 +165,13 @@ const globalSettingsCatalog: SettingsCatalogItem[] = [
 				<MobileDevicesSection />
 			</>
 		),
+	},
+	{
+		id: "dictation",
+		icon: Mic,
+		label: (t) => t("settings.dictation"),
+		visible: ({ developerMode }) => Boolean(developerMode),
+		render: (_t, titleHidden) => <DictationSection titleHidden={titleHidden} />,
 	},
 	{
 		id: "shortcuts",

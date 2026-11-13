@@ -65,6 +65,7 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 	const closeSettings = useUiStore((state) => state.closeSettings);
 	// Diagnostics (memory and CPU) is listed only with its toggle on in Developer mode.
 	const diagnostics = useUiStore((state) => state.developerMode && state.diagnostics);
+	const developerMode = useUiStore((state) => state.developerMode);
 	// Reads the daemon settings the dialog tree already queries; no extra fetch.
 	const { cloudEnabled } = useCloudGate();
 	// The org's offering decides the cloud pages: the bring-your-own-Coder page
@@ -97,7 +98,7 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 	}, [deferSettingsBody, settingsModal]);
 	const isBodyReady = bodySettings === displaySettings;
 
-	const globalSections = visibleGlobalSettings({ cloudEnabled, diagnostics, customCoder, selfServeBilling, teams });
+	const globalSections = visibleGlobalSettings({ cloudEnabled, diagnostics, developerMode, customCoder, selfServeBilling, teams });
 	const remoteHostId = displaySettings?.scope === "project" ? displaySettings.hostId : undefined;
 	// A cloud project lives only in the control plane; the local daemon has no
 	// record of it. Resolve it here so its settings load from the control plane.
@@ -187,7 +188,7 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 
 	const activeLabel = !settingsModal ? "" : isProjectSettings
 		? (projectSections.find((s) => s.id === activeProjectSection)?.label ?? t("settings.project.general"))
-		: globalSettingsItem(activeSection, { cloudEnabled, diagnostics, customCoder, selfServeBilling, teams }).label(t);
+		: globalSettingsItem(activeSection, { cloudEnabled, diagnostics, developerMode, customCoder, selfServeBilling, teams }).label(t);
 
 	const closeSettingsDialog = () => {
 		if (!settingsModal) return;
@@ -236,12 +237,12 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 	// it once the offering allows it.
 	useEffect(() => {
 		if (settingsModal?.scope === "global") {
-			const section = globalSettingsItem(settingsModal.section ?? "general", { cloudEnabled, diagnostics, customCoder, selfServeBilling, teams }).id;
+			const section = globalSettingsItem(settingsModal.section ?? "general", { cloudEnabled, diagnostics, developerMode, customCoder, selfServeBilling, teams }).id;
 			if (globalRequestRef.current?.modal !== settingsModal) globalHistory.reset(section);
 			else if (globalRequestRef.current.section !== section) globalHistory.visit(section);
 			globalRequestRef.current = { modal: settingsModal, section };
 		}
-	}, [cloudEnabled, diagnostics, customCoder, selfServeBilling, teams, settingsModal, globalHistory.reset, globalHistory.visit]);
+	}, [cloudEnabled, diagnostics, developerMode, customCoder, selfServeBilling, teams, settingsModal, globalHistory.reset, globalHistory.visit]);
 	// Project scope resets only when a project is opened, never when a gate
 	// settles, so a reported save state survives the offering loading.
 	useEffect(() => {
