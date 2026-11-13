@@ -1025,6 +1025,24 @@ describe("CloudClient", () => {
     expect(fetchMock.mock.calls[0]?.[1]?.body).toBe(JSON.stringify({ text: "Use the new parser", attachmentIds: ["file"] }));
   });
 
+  it("deletes a queued message through the public client", async () => {
+    const fetchMock = vi.fn<
+      (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
+    >(async () => jsonResponse({ ok: true }, 202));
+    const client = createCloudClient({
+      baseUrl: "https://cloud.example.com",
+      getAccessToken: () => "access-token",
+      fetch: fetchMock as typeof fetch,
+    });
+
+    await expect(client.deleteQueuedMessage("tenant", "session", "turn one")).resolves.toEqual({ ok: true });
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "https://cloud.example.com/api/cloud/v1/orgs/tenant/sessions/session/turns/turn%20one/delete",
+    );
+    expect(fetchMock.mock.calls[0]?.[1]?.method).toBe("POST");
+    expect(fetchMock.mock.calls[0]?.[1]?.body).toBeUndefined();
+  });
+
   it("submits an approval decision through the public client", async () => {
     const fetchMock = vi.fn<
       (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>

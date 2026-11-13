@@ -773,6 +773,29 @@ export class CloudClient {
     );
   }
 
+  /**
+   * Take back a message whose turn is still queued (offered when
+   * offering.features lists queued-delete). Unlike cancelTurn it never stops a
+   * turn that left the queue: 409 TURN_NOT_QUEUED once the agent took it.
+   */
+  deleteQueuedMessage(
+    orgId: string,
+    sessionId: string,
+    turnId: string,
+    options: RequestOptions = {},
+  ): Promise<WorkerOKResponse> {
+    return this.request(
+      this.orgPath(
+        orgId,
+        `/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/delete`,
+      ),
+      {
+        method: "POST",
+        signal: options.signal,
+      },
+    );
+  }
+
   decideChatApproval(
     orgId: string,
     sessionId: string,

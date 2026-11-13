@@ -1629,6 +1629,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/turns/{turnId}/delete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                turnId: components["parameters"]["TurnId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Take back a message whose turn is still queued, before the agent starts on it: the turn ends at once with chat.turn_interrupted of attempt 0 and reason deleted, and a client drops the message. Unlike cancelTurn it never stops a turn that left the queue. Allowed for whoever may stop the turn: the person whose message started it, the composer lease holder, the session's creator, and the organization's owners and admins. Deleting a message already deleted answers 202 again. Offered when offering.features lists queued-delete. */
+        post: operations["deleteQueuedMessage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/approvals/{requestId}/decide": {
         parameters: {
             query?: never;
@@ -3123,7 +3144,7 @@ export interface components {
              * @enum {string}
              */
             kind: "b2b" | "b2c" | "both" | "none";
-            /** @description The organization's product features (share lets it share sessions) and the deployment's own: attachments when the session attachment routes are on, queued-edit when a queued message can be edited (editQueuedMessage). Empty when none apply. */
+            /** @description The organization's product features (share lets it share sessions) and the deployment's own: attachments when the session attachment routes are on, queued-edit when a queued message can be edited (editQueuedMessage), queued-delete when a queued message can be deleted without stopping a started turn (deleteQueuedMessage). Empty when none apply. */
             features: string[];
             /**
              * Format: int64
@@ -5486,7 +5507,7 @@ export interface components {
             /** Format: date-time */
             createdAt: string;
         };
-        /** @description A turn ended in failure, with payload.error saying why. Also a queued message the control plane did not run because, when the agent came to it, its author could no longer write to the session (cut to watching, share revoked, gone from the organization or the team). */
+        /** @description A turn ended in failure, with payload.error saying why. Also a queued message the control plane did not run because, when the agent came to it, its author could no longer write to the session (cut to watching, share revoked, gone from the organization or the team); that one carries payload.reason author_cannot_write. */
         TurnAbortedEvent: {
             sessionId: string;
             /** Format: int64 */
@@ -5498,6 +5519,11 @@ export interface components {
                 turnId: string;
                 attempt: number;
                 error: string;
+                /**
+                 * @description Set when the control plane did not run the message at all. author_cannot_write: its author could no longer write to the session when the agent came to it, so a client shows the message as not run (error says why). Absent for a turn that failed while it ran and for events written before reasons existed; a client reads a missing or unknown reason as a normal failure.
+                 * @enum {string}
+                 */
+                reason?: "author_cannot_write";
             };
             /** Format: date-time */
             createdAt: string;
@@ -8597,6 +8623,49 @@ export interface operations {
                     "application/json": {
                         event: components["schemas"]["UserMessageEditedEvent"];
                     };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    deleteQueuedMessage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                turnId: components["parameters"]["TurnId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The queued message was deleted, now or before. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerOKResponse"];
+                };
+            };
+            /** @description forbidden. The caller may not stop this turn, or only watches the session. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description TURN_NOT_QUEUED: the agent started on the message, or it was stopped or ended otherwise, so it can no longer be deleted (the turn is left as it is). SESSION_TERMINATED: the session ended. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             default: components["responses"]["Error"];
