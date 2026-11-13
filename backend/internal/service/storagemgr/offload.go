@@ -248,8 +248,8 @@ func (s *Service) offloadWorktree(ctx context.Context, project domain.ProjectRec
 		key := ""
 		if cloneable && path.Base(target.Rel) == "node_modules" {
 			if lockHash := lockfileHash(filepath.Dir(abs), nodeVersion); lockHash != "" {
-				key = templateKey(project.ID, target.Rel, lockHash)
-				meta := templateMeta{ProjectID: project.ID, Rel: target.Rel, LockHash: lockHash, CreatedAt: s.now()}
+				key = templateKey(domain.ProjectID(project.ID), target.Rel, lockHash)
+				meta := templateMeta{ProjectID: domain.ProjectID(project.ID), Rel: target.Rel, LockHash: lockHash, CreatedAt: s.now()}
 				if s.adoptTemplate(key, meta, abs) {
 					facts.OffloadedPaths = append(facts.OffloadedPaths, target.Rel)
 					facts.OffloadedBytes += target.Bytes
@@ -281,7 +281,7 @@ func (s *Service) restoreFromTemplate(ctx context.Context, project domain.Projec
 		return errCloneUnsupported
 	}
 	abs := filepath.Join(worktree, filepath.FromSlash(rel))
-	if lockHash := lockfileHash(filepath.Dir(abs), s.nodeVersion(ctx)); lockHash == "" || templateKey(project.ID, rel, lockHash) != key {
+	if lockHash := lockfileHash(filepath.Dir(abs), s.nodeVersion(ctx)); lockHash == "" || templateKey(domain.ProjectID(project.ID), rel, lockHash) != key {
 		return errors.New("lockfile changed since offload")
 	}
 	tree := filepath.Join(s.templateDir(key), templateTreeName)
@@ -371,7 +371,7 @@ func (s *Service) SeedWorkspace(ctx context.Context, project domain.ProjectRecor
 			continue
 		}
 		meta, ok := s.readTemplateMeta(entry.Name())
-		if !ok || meta.ProjectID != project.ID {
+		if !ok || meta.ProjectID != domain.ProjectID(project.ID) {
 			continue
 		}
 		abs := filepath.Join(workspacePath, filepath.FromSlash(meta.Rel))

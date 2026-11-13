@@ -104,7 +104,6 @@ func (refuseAll) WithQuietSession(context.Context, domain.SessionID, func(domain
 	return sessionmanager.ErrSessionNotQuiet
 }
 
-
 func TestUpdateSettingsValidates(t *testing.T) {
 	svc, _ := newTestService(t, newFakeStore(), nil, nil, nil)
 	settings := domain.DefaultStorageSettings()

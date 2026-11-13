@@ -23,7 +23,7 @@ const busyPollMs = 2_000;
 const idlePollMs = 60_000;
 
 export function useStorageReport(enabled = true) {
-	const query = useQuery({
+	const query = useQuery<StorageReport>({
 		queryKey: storageQueryKey,
 		enabled,
 		refetchInterval: (q) => (q.state.data?.scanning || q.state.data?.cleaning ? busyPollMs : idlePollMs),
