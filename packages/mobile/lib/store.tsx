@@ -32,13 +32,13 @@ import {
 import { hostMachineIdentity, isConfigured, machineIdentity, type ServerConfig } from "./config";
 import { resolveActiveConfig, runtimeResolveDeps } from "./resolveConfig";
 import { pollIntervalFor } from "./pollInterval";
-import { fetchAdvertisedEndpoints, rejectedEndpointNeedsRace, type ConnectOptions } from "./connectRuntime";
+import { endpointStillAnswers, fetchAdvertisedEndpoints, rejectedEndpointNeedsRace, type ConnectOptions } from "./connectRuntime";
 import type { Endpoint } from "./endpoints";
 import { activeHost, loadHosts, sameHostConnections, setActiveHost, updateHostEndpoints, type Host } from "./hosts";
 import { knowsRemoteAddress, learnRemoteAddress, LEARN_REMOTE_EVERY_MS, LEARN_REMOTE_FOR_MS } from "./learnRemoteAddress";
 import { loadAccount } from "./account";
 import { cancelAccountHostSync, syncAccountHosts } from "./accountHosts";
-import { shouldReRace } from "./reRace";
+import { recoveryDelayMs, shouldReRace } from "./reRace";
 import { shouldRaceForUpgrade, UPGRADE_RACE_CHECK_MS } from "./upgradeRace";
 import { pollResultIsCurrent, sameServerConfig } from "./sameConfig";
 import { shouldShowLoading } from "./configLoading";
@@ -564,8 +564,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			const hosts = await loadHosts().catch(() => null);
 			if (resolution !== configResolution.current) return null;
 			if (hosts) setPairedHosts((previous) => sameHostConnections(previous, hosts) ? previous : hosts);
-			const c = await resolveActiveConfig(runtimeResolveDeps(options));
+			let c = await resolveActiveConfig(runtimeResolveDeps(options));
 			if (resolution !== configResolution.current) return null;
+			// A re-check (a network change, the look for a better address) that
+			// found nothing must not cost a connection that still works: the one in
+			// use is asked once more, with the slow-link limit, before it goes.
+			const working = cfgRef.current;
+			if (!(c && isConfigured(c)) && working?.hostId && working.hostId === selected?.id && await endpointStillAnswers(working)) {
+				if (resolution !== configResolution.current) return null;
+				c = working;
+			}
 			// Every endpoint was tried and none answered. The poll stops without a
 			// config, so this race (and the reconnect timer's next ones) is what
 			// moves the link from "reconnecting" to "unreachable".
@@ -750,12 +758,24 @@ export function AppProvider({ children }: { children: ReactNode }) {
 		// Pointless while the phone has no network at all: the network listener
 		// races the moment it comes back. On a network the OS wrongly calls
 		// offline, its report never changes, so this probe is the only way back.
-		const timer = setInterval(() => {
-			if (worthProbingForRecovery(phoneNetworkRef.current, phoneNetworkReportedAtRef.current, lastAnsweredRequestAt(), Date.now())) {
-				void reloadConfig();
-			}
-		}, 15_000);
-		return () => clearInterval(timer);
+		// Soon at first, then less often (see recoveryDelayMs), one attempt at a
+		// time: a race on a slow link can take 15 s, and starting another would
+		// throw that one away.
+		let stopped = false;
+		let attempt = 0;
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const schedule = () => {
+			timer = setTimeout(async () => {
+				if (stopped) return;
+				if (worthProbingForRecovery(phoneNetworkRef.current, phoneNetworkReportedAtRef.current, lastAnsweredRequestAt(), Date.now())) {
+					await reloadConfig().catch(() => null);
+				}
+				attempt += 1;
+				if (!stopped) schedule();
+			}, recoveryDelayMs(attempt));
+		};
+		schedule();
+		return () => { stopped = true; clearTimeout(timer); };
 	}, [appActive, configResolved, selectedHostId, config, reloadConfig]);
 
 	// Nothing re-picks a path while the current one answers, so once the app
