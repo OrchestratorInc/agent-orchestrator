@@ -931,8 +931,19 @@ func TestASlowCheckOnAPlanWithoutWindowsStillBacksOff(t *testing.T) {
 	if svc.needsReading(id, false) {
 		t.Fatal("a slow check was read again after 30 seconds")
 	}
-	now = now.Add(retryFailedAfter)
-	if !svc.needsReading(id, false) {
-		t.Fatal("a slow check was not read again after a minute")
+	now = now.Add(-retryEmptyAfter - time.Second)
+	// Each slow check in a row doubles the wait: one, two, then four minutes.
+	for _, wait := range []time.Duration{time.Minute, 2 * time.Minute, 4 * time.Minute} {
+		now = now.Add(wait - time.Second)
+		if svc.needsReading(id, false) {
+			t.Fatalf("read again before %v", wait)
+		}
+		now = now.Add(2 * time.Second)
+		if !svc.needsReading(id, false) {
+			t.Fatalf("not read again after %v", wait)
+		}
+		if _, err := svc.List(ctx, false); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
