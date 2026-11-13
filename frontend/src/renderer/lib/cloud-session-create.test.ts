@@ -148,6 +148,22 @@ describe("createCloudChatSessionWithFiles", () => {
 		expect(second).not.toBe(first);
 	});
 
+	// The other files stop uploading once one fails, and the session is
+	// deleted only after they stopped, so none lands in it afterwards.
+	it("stops the other uploads when one fails, before deleting the session", async () => {
+		const client = clientFor();
+		const order: string[] = [];
+		client.deleteSession.mockImplementation(async () => { order.push("delete"); });
+		const upload = vi.fn((_sessionId: string, file: { name?: string }, signal: AbortSignal) => file.name === "screen.png"
+			? Promise.reject(new Error("This file type is not allowed."))
+			: new Promise<{ id: string }>((_resolve, reject) => signal.addEventListener("abort", () => {
+				order.push("stopped");
+				reject(new DOMException("Aborted", "AbortError"));
+			})));
+		await expect(createCloudChatSessionWithFiles(client, "org-1", chatBody, files, upload)).rejects.toBeInstanceOf(CloudTaskFilesUndeliveredError);
+		expect(order).toEqual(["stopped", "delete"]);
+	});
+
 	it.each([
 		["a file that fails to upload", "upload"],
 		["a brief the control plane refuses", "send"],

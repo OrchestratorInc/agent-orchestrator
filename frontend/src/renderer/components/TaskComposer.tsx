@@ -289,7 +289,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 				} else if (files.length > 0) {
 					({ session } = await createCloudChatSessionWithFiles(cloudClient, orgId,
 						{ projectId: input.projectId, kind: "worker", ...body, interfaceMode: "chat" }, files,
-						(sessionId, file) => uploadCloudAttachment(cloudBaseUrl, orgId, sessionId, { name: file.name || "attachment", data: file.data }),
+						(sessionId, file, signal) => uploadCloudAttachment(cloudBaseUrl, orgId, sessionId, { name: file.name || "attachment", data: file.data }, { signal }),
 						{ idempotencyKey: input.clientRequestId }));
 				} else {
 					({ session } = await createCloudSession(cloudClient, orgId, { projectId: input.projectId, kind: "worker", ...body }, createOptions));

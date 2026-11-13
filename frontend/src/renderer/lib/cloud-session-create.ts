@@ -119,7 +119,8 @@ export async function createCloudChatSessionWithFiles(
 	orgId: string,
 	body: CloudCpCreateSessionRequest & { interfaceMode: "chat" },
 	files: readonly CloudTaskFile[],
-	upload: (sessionId: string, file: CloudTaskFile) => Promise<{ id: string }>,
+	/** Uploads one file to the session; the signal stops it once another file failed. */
+	upload: (sessionId: string, file: CloudTaskFile, signal: AbortSignal) => Promise<{ id: string }>,
 	options: { idempotencyKey?: string } = {},
 ): Promise<CloudCpSessionResponse> {
 	const requestId = options.idempotencyKey;
@@ -142,7 +143,15 @@ export async function createCloudChatSessionWithFiles(
 	try {
 		if (created.session.interfaceMode !== "chat") throw new CloudTaskFilesNeedChatError();
 		if (attempt.sessionId !== sessionId || !attempt.attachmentIds) {
-			const attachments = await Promise.all(files.map((file) => upload(sessionId, file)));
+			// One failed file stops the others, and they finish stopping before the
+			// session is deleted, so none lands in it afterwards.
+			const stop = new AbortController();
+			const uploads = files.map((file) => upload(sessionId, file, stop.signal));
+			const attachments = await Promise.all(uploads).catch(async (error: unknown) => {
+				stop.abort();
+				await Promise.allSettled(uploads);
+				throw error;
+			});
 			Object.assign(attempt, { sessionId, attachmentIds: attachments.map((attachment) => attachment.id) });
 		}
 		await client.sendSessionMessage(orgId, sessionId, {
