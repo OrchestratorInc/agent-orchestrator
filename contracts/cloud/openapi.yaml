@@ -10350,7 +10350,8 @@ components:
         A turn ended in failure, with payload.error saying why. Also a queued
         message the control plane did not run because, when the agent came to
         it, its author could no longer write to the session (cut to watching,
-        share revoked, gone from the organization or the team).
+        share revoked, gone from the organization or the team); that one
+        carries payload.reason author_cannot_write.
       properties:
         sessionId:
           type: string
@@ -10373,6 +10374,17 @@ components:
               minimum: 1
             error:
               type: string
+            reason:
+              type: string
+              enum: [author_cannot_write]
+              description: >-
+                Set when the control plane did not run the message at all.
+                author_cannot_write: its author could no longer write to the
+                session when the agent came to it, so a client shows the
+                message as not run (error says why). Absent for a turn that
+                failed while it ran and for events written before reasons
+                existed; a client reads a missing or unknown reason as a
+                normal failure.
         createdAt:
           type: string
           format: date-time
