@@ -37,13 +37,16 @@ import { useUiStore } from "../../stores/ui-store";
 type Side = components["schemas"]["SideConversation"];
 type Snapshot = components["schemas"]["SideSnapshot"];
 
-function appendReference(draft: SideChatDraft, excerpt: ChatDraftExcerptReference): { draft: SideChatDraft; error?: string } {
-	const duplicate = draft.references.some(ref => ref.conversationId === excerpt.conversationId &&
+export function appendReference(draft: SideChatDraft, excerpt: ChatDraftExcerptReference): { draft: SideChatDraft; error?: string } {
+	const duplicate = draft.references.find(ref => ref.conversationId === excerpt.conversationId &&
 		ref.messageId === excerpt.messageId && ref.revision === excerpt.revision && ref.text === excerpt.text &&
 		JSON.stringify(ref.snapshot?.sourceRange) === JSON.stringify(excerpt.snapshot?.sourceRange) &&
 		JSON.stringify(ref.snapshot?.renderedRange) === JSON.stringify(excerpt.snapshot?.renderedRange) &&
 		JSON.stringify(ref.snapshot?.diagramRange) === JSON.stringify(excerpt.snapshot?.diagramRange));
-	if (duplicate) return { draft };
+	if (duplicate) {
+		if (!excerpt.comment || excerpt.comment === duplicate.comment) return { draft };
+		return { draft: { ...draft, references: draft.references.map(ref => (ref === duplicate ? { ...ref, comment: excerpt.comment } : ref)) } };
+	}
 	const error = excerptSizeError([...draft.references, excerpt]);
 	if (error) return { draft, error };
 	const order = excerpt.order ?? Math.max(Date.now(), ...draft.references.map(ref => (ref.order ?? 0) + 1));
