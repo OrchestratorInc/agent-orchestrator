@@ -40,8 +40,14 @@ func (s *Service) trackerIDForIssue(cfg ports.SpawnConfig, project domain.Projec
 		return domain.TrackerID{}, false
 	}
 	// 1. Try GitHub URL or owner/repo#N native form.
-	if native, ok := canonicalGitHubIssueNative(issue); ok {
-		return domain.TrackerID{Provider: domain.TrackerProviderGitHub, Native: native}, true
+	if native, host, ok := canonicalGitHubIssueNative(issue); ok {
+		// owner/repo#N names an issue on the project's own GitHub host.
+		if !strings.Contains(issue, "://") {
+			if provider, projectHost, _, ok := s.repoForTracker(project, cfg.TrackerProvider); ok && provider == domain.TrackerProviderGitHub {
+				host = projectHost
+			}
+		}
+		return domain.TrackerID{Provider: domain.TrackerProviderGitHub, Native: native, Host: host}, true
 	}
 	// 2. Try GitLab issue URL (/-/issues/<iid> pattern).
 	if native, host, ok := canonicalGitLabIssueURL(issue); ok {
@@ -87,13 +93,13 @@ func (s *Service) repoForTracker(project domain.ProjectRecord, fallbackProvider 
 }
 
 // normalizeTrackerHost returns the host to set on a TrackerID/TrackerRepo.
-// For GitHub, the host is always "" — GitHub tracker IDs don't use Host.
+// For GitHub, the host is "" except for a GHE.com tenant, which keeps its host.
 // For GitLab, "gitlab.com" and "www.gitlab.com" normalize to "" (the zero
 // value meaning gitlab.com) so that callers don't need to special-case the
 // default host. Self-managed hosts pass through unchanged.
 func normalizeTrackerHost(provider, host string) string {
 	if provider != string(domain.TrackerProviderGitLab) {
-		return ""
+		return domain.GHECloudTrackerHost(host)
 	}
 	host = strings.ToLower(strings.TrimSpace(host))
 	if host == "gitlab.com" || host == "www.gitlab.com" {
@@ -102,24 +108,26 @@ func normalizeTrackerHost(provider, host string) string {
 	return host
 }
 
-func canonicalGitHubIssueNative(raw string) (string, bool) {
+// canonicalGitHubIssueNative returns the native id and, for a GHE.com tenant
+// issue URL, its tracker host ("" for github.com and the owner/repo#N form).
+func canonicalGitHubIssueNative(raw string) (string, string, bool) {
 	if strings.Contains(raw, "://") {
 		return canonicalGitHubIssueURL(raw)
 	}
 	hash := strings.LastIndexByte(raw, '#')
 	if hash <= 0 || hash == len(raw)-1 {
-		return "", false
+		return "", "", false
 	}
 	repo := strings.Trim(raw[:hash], "/")
 	owner, name, ok := splitIssueOwnerRepo(repo)
 	if !ok {
-		return "", false
+		return "", "", false
 	}
 	n, err := strconv.Atoi(raw[hash+1:])
 	if err != nil || n <= 0 {
-		return "", false
+		return "", "", false
 	}
-	return fmt.Sprintf("%s/%s#%d", owner, name, n), true
+	return fmt.Sprintf("%s/%s#%d", owner, name, n), "", true
 }
 
 func splitIssueOwnerRepo(repo string) (string, string, bool) {
@@ -132,20 +140,24 @@ func splitIssueOwnerRepo(repo string) (string, string, bool) {
 	return owner, name, owner != "" && name != ""
 }
 
-func canonicalGitHubIssueURL(raw string) (string, bool) {
+func canonicalGitHubIssueURL(raw string) (string, string, bool) {
 	u, err := url.Parse(raw)
-	if err != nil || !strings.EqualFold(u.Hostname(), "github.com") {
-		return "", false
+	if err != nil {
+		return "", "", false
+	}
+	host := domain.GHECloudTrackerHost(u.Host)
+	if host == "" && !strings.EqualFold(u.Hostname(), "github.com") {
+		return "", "", false
 	}
 	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
 	if len(parts) != 4 || parts[2] != "issues" {
-		return "", false
+		return "", "", false
 	}
 	n, err := strconv.Atoi(parts[3])
 	if err != nil || n <= 0 {
-		return "", false
+		return "", "", false
 	}
-	return fmt.Sprintf("%s/%s#%d", parts[0], strings.TrimSuffix(parts[1], ".git"), n), true
+	return fmt.Sprintf("%s/%s#%d", parts[0], strings.TrimSuffix(parts[1], ".git"), n), host, true
 }
 
 // canonicalGitLabIssueURL parses a GitLab issue URL into the native

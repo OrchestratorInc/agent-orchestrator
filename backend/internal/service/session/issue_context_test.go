@@ -194,3 +194,35 @@ func TestTrackerIDForIssue_PlainNumberGitHub(t *testing.T) {
 		t.Errorf("Native = %q, want owner/repo#42", id.Native)
 	}
 }
+
+func TestTrackerIDForIssue_PlainNumberGHECloudTenant(t *testing.T) {
+	svc := NewWithDeps(Deps{SCM: staticSCM{repo: ports.SCMRepo{
+		Provider: "github",
+		Host:     "acme.ghe.com",
+		Owner:    "team",
+		Name:     "app",
+		Repo:     "team/app",
+	}}})
+	id, ok := svc.trackerIDForIssue(ports.SpawnConfig{IssueID: "5"}, domain.ProjectRecord{
+		RepoOriginURL: "https://acme.ghe.com/team/app.git",
+	})
+	want := domain.TrackerID{Provider: domain.TrackerProviderGitHub, Native: "team/app#5", Host: "acme.ghe.com"}
+	if !ok || id != want {
+		t.Fatalf("trackerIDForIssue = %+v, %v, want %+v", id, ok, want)
+	}
+}
+
+func TestTrackerIDForIssue_GitHubFormsOnGHECloudTenant(t *testing.T) {
+	svc := NewWithDeps(Deps{SCM: staticSCM{repo: ports.SCMRepo{Provider: "github", Host: "acme.ghe.com", Owner: "team", Name: "app", Repo: "team/app"}}})
+	project := domain.ProjectRecord{RepoOriginURL: "https://acme.ghe.com/team/app.git"}
+	for issue, want := range map[string]domain.TrackerID{
+		"team/other#5":                           {Provider: domain.TrackerProviderGitHub, Native: "team/other#5", Host: "acme.ghe.com"},
+		"https://acme.ghe.com/team/app/issues/5": {Provider: domain.TrackerProviderGitHub, Native: "team/app#5", Host: "acme.ghe.com"},
+		"https://github.com/o/r/issues/5":        {Provider: domain.TrackerProviderGitHub, Native: "o/r#5"},
+	} {
+		id, ok := svc.trackerIDForIssue(ports.SpawnConfig{IssueID: domain.IssueID(issue)}, project)
+		if !ok || id != want {
+			t.Errorf("trackerIDForIssue(%q) = %+v, %v, want %+v", issue, id, ok, want)
+		}
+	}
+}

@@ -32,3 +32,44 @@ func TestCanonicalRepositoryValidation(t *testing.T) {
 		})
 	}
 }
+
+func TestRepositoryProviderGHECloudTenant(t *testing.T) {
+	for _, origin := range []string{
+		"https://acme.ghe.com/team/app.git",
+		"git@acme.ghe.com:team/app.git",
+		"https://ACME.GHE.COM/team/app",
+		"ssh://git@acme.ghe.com:2222/team/app.git",
+	} {
+		t.Run(origin, func(t *testing.T) {
+			got, err := ParseRepositoryIdentity(origin)
+			if err != nil {
+				t.Fatalf("ParseRepositoryIdentity: %v", err)
+			}
+			if got.Provider != "github" || got.Namespace != "team" || got.Name != "app" {
+				t.Fatalf("got %+v, want github team/app", got)
+			}
+		})
+	}
+}
+
+func TestIsGitHubHostRejectsLookAlikes(t *testing.T) {
+	for host, want := range map[string]bool{
+		"github.com": true, "api.github.com": true, "corp.ghe.io": true,
+		"acme.ghe.com": true, "ACME.ghe.com:443": true,
+		"ghe.com": false, "api.acme.ghe.com": false, "acme.ghe.com.evil.example": false,
+		"evilghe.com": false, ".ghe.com": false, "gitlab.com": false,
+	} {
+		if got := IsGitHubHost(host); got != want {
+			t.Errorf("IsGitHubHost(%q) = %v, want %v", host, got, want)
+		}
+	}
+	for host, want := range map[string]string{
+		"acme.ghe.com": "https://api.acme.ghe.com", "Acme.GHE.com:443": "https://api.acme.ghe.com",
+		"github.com": "", "corp.ghe.io": "", "api.acme.ghe.com": "", "": "",
+	} {
+		got, ok := GHECloudAPIBase(host)
+		if got != want || ok != (want != "") {
+			t.Errorf("GHECloudAPIBase(%q) = %q, %v, want %q", host, got, ok, want)
+		}
+	}
+}

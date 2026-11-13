@@ -54,14 +54,22 @@ const (
 )
 
 // identityKey builds the cache key for a per-provider, per-host identity.
-// GitHub repos carry Host="github.com" but GitHub identity is not
-// host-scoped, so all GitHub hosts collapse to the same key. GitLab repos
-// on self-managed hosts get a distinct key from gitlab.com.
+// GitHub hosts share one key, except GHE.com tenants, which have their own
+// login. GitLab repos on self-managed hosts get a distinct key from gitlab.com.
 func identityKey(provider, host string) string {
 	if provider == "github" {
-		return provider // GitHub identity is not host-scoped
+		return cooldownKey(ports.SCMRepo{Provider: provider, Host: host})
 	}
 	return provider + "|" + host
+}
+
+// cooldownKey scopes rate-limit cooldowns to one API quota: the provider,
+// split per GHE.com tenant, whose API is separate from api.github.com.
+func cooldownKey(repo ports.SCMRepo) string {
+	if base, tenant := domain.GHECloudAPIBase(repo.Host); repo.Provider == "github" && tenant {
+		return "github|" + base
+	}
+	return repo.Provider
 }
 
 // Provider is the normalized SCM provider contract used by the observer.
@@ -579,7 +587,7 @@ func (o *Observer) Poll(ctx context.Context) (pollErr error) {
 		activeKeys := make([]string, 0, end-start)
 		for i := start; i < end; i++ {
 			ref := selection.refs[i]
-			if o.inRateLimitCooldown(now, ref.Repo.Provider) {
+			if o.inRateLimitCooldown(now, cooldownKey(ref.Repo)) {
 				// Item 3 — cooldown-skip marks refresh-incomplete: when a ref
 				// is skipped under cooldown, its repository is marked as
 				// refresh-incomplete so the repo ETag and LastSyncCursor do
@@ -605,7 +613,7 @@ func (o *Observer) Poll(ctx context.Context) (pollErr error) {
 			// every 30s
 			if cooldown, ok := rateLimitCooldown(now, err); ok {
 				for _, ref := range active {
-					o.setRateLimitCooldown(now, ref.Repo.Provider, cooldown)
+					o.setRateLimitCooldown(now, cooldownKey(ref.Repo), cooldown)
 				}
 				o.logger.Warn("scm observer: provider rate-limited; entering cooldown", "cooldown", cooldown, "err", err)
 				for _, ref := range active {
@@ -637,7 +645,7 @@ func (o *Observer) Poll(ctx context.Context) (pollErr error) {
 						// so a broken tracked PR does not flood the log.
 						o.logger.Debug("scm observer: tracked PR not found at provider; marking refresh-incomplete", "provider", providerKey, "pr", ref.URL, "err", fetchErr)
 					} else if cooldown, ok := rateLimitCooldown(now, fetchErr); ok {
-						o.setRateLimitCooldown(now, providerKey, cooldown)
+						o.setRateLimitCooldown(now, cooldownKey(ref.Repo), cooldown)
 						o.logger.Warn("scm observer: provider rate-limited (per-observation); entering cooldown", "provider", providerKey, "cooldown", cooldown, "err", fetchErr)
 					} else {
 						o.logger.Warn("scm observer: provider fetch failed (per-observation); marking refresh-incomplete", "provider", providerKey, "err", fetchErr)
@@ -1623,7 +1631,7 @@ func (o *Observer) reconcileTerminalGitHubPRs(ctx context.Context, subjects map[
 		// batch[i] is attributed to activePending[i]'s subject positionally.
 		activePending := make([]pendingReconcile, 0, len(chunk))
 		for _, r := range chunk {
-			if o.inRateLimitCooldown(now, r.ref.Repo.Provider) {
+			if o.inRateLimitCooldown(now, cooldownKey(r.ref.Repo)) {
 				markRepoFailed(r.ref.Repo)
 				continue
 			}
@@ -1642,7 +1650,7 @@ func (o *Observer) reconcileTerminalGitHubPRs(ctx context.Context, subjects map[
 		if err != nil {
 			if cooldown, ok := rateLimitCooldown(now, err); ok {
 				for _, ref := range active {
-					o.setRateLimitCooldown(now, ref.Repo.Provider, cooldown)
+					o.setRateLimitCooldown(now, cooldownKey(ref.Repo), cooldown)
 				}
 				o.logger.Warn("scm observer: reconciliation rate-limited; entering cooldown", "cooldown", cooldown, "err", err)
 			} else {
@@ -1667,7 +1675,7 @@ func (o *Observer) reconcileTerminalGitHubPRs(ctx context.Context, subjects map[
 						// Warn, so a broken tracked PR does not flood the log.
 						o.logger.Debug("scm observer: reconciled PR not found at provider; marking refresh-incomplete", "provider", providerKey, "pr", r.ref.URL, "err", fetchErr)
 					} else if cooldown, ok := rateLimitCooldown(now, fetchErr); ok {
-						o.setRateLimitCooldown(now, providerKey, cooldown)
+						o.setRateLimitCooldown(now, cooldownKey(r.ref.Repo), cooldown)
 						o.logger.Warn("scm observer: reconciliation rate-limited (per-observation); entering cooldown", "provider", providerKey, "cooldown", cooldown, "err", fetchErr)
 					} else {
 						o.logger.Warn("scm observer: reconciliation fetch failed (per-observation); marking refresh-incomplete", "provider", providerKey, "err", fetchErr)
@@ -1799,7 +1807,7 @@ func (o *Observer) refreshReviews(ctx context.Context, subjects map[string]*subj
 		}
 		// A rate-limited provider gets no calls until its cooldown ends, a forced
 		// refresh included; the regular poll fetches the threads afterwards.
-		if o.inRateLimitCooldown(now, s.repo.Provider) {
+		if o.inRateLimitCooldown(now, cooldownKey(s.repo)) {
 			continue
 		}
 		started := time.Now()
@@ -2429,8 +2437,8 @@ func cacheDelete[V any](m map[string]V, order *[]string, key string) {
 }
 
 // inRateLimitCooldown reports whether the named provider is currently under a
-// rate-limit cooldown. Provider key is the SCMRepo.Provider
-// value (e.g. "gitlab", "github").
+// rate-limit cooldown. The key comes from cooldownKey (e.g. "gitlab",
+// "github", "github|https://api.acme.ghe.com").
 func (o *Observer) inRateLimitCooldown(now time.Time, providerKey string) bool {
 	if o.rateLimitUntil == nil {
 		return false

@@ -54,7 +54,13 @@ func newGitHubSCMProvider(logger *slog.Logger) (*scmgithub.Provider, error) {
 		scmgithub.EnvTokenSource{EnvVars: []string{"AO_GITHUB_TOKEN"}},
 		&scmgithub.GHTokenSource{},
 	}
-	return scmgithub.NewProvider(scmgithub.ProviderOptions{Token: tokens, SkipTokenPreflight: true, Logger: logger})
+	return scmgithub.NewProvider(scmgithub.ProviderOptions{Token: tokens, HostToken: githubHostToken, SkipTokenPreflight: true, Logger: logger})
+}
+
+// githubHostToken is the only credential source for a GHE.com tenant host:
+// that host's gh login. The github.com env/default chain is never used.
+func githubHostToken(host string) scmgithub.TokenSource {
+	return &scmgithub.GHTokenSource{Hostname: host}
 }
 
 // newGitHubRepoResolver returns the resolver that follows github.com repository

@@ -4,10 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
 	"net/url"
 	"strconv"
 	"strings"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
 func (c *commandContext) resolvePRRef(ctx context.Context, ref string, project projectDetails) (string, error) {
@@ -54,7 +55,7 @@ func isNumericPRRef(ref string) bool {
 // cliPRURLFromParts constructs the canonical PR/MR URL for a provider.
 // GitHub uses /pull/N; GitLab uses /-/merge_requests/N.
 func cliPRURLFromParts(host, owner, repo string, number int) string {
-	if isCLIGitHubHost(host) {
+	if domain.IsGitHubHost(host) {
 		return fmt.Sprintf("https://%s/%s/%s/pull/%d", host, owner, repo, number)
 	}
 	return fmt.Sprintf("https://%s/%s/%s/-/merge_requests/%d", host, owner, repo, number)
@@ -72,7 +73,7 @@ func cliParsePRURL(raw string) (host, owner, name string, number int, err error)
 	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
 
 	// GitHub: /owner/repo/pull/N → 4 parts, parts[2] == "pull"
-	if isCLIGitHubHost(host) && len(parts) == 4 && parts[2] == "pull" {
+	if domain.IsGitHubHost(host) && len(parts) == 4 && parts[2] == "pull" {
 		n, parseErr := strconv.Atoi(parts[3])
 		if parseErr != nil || n <= 0 {
 			return "", "", "", 0, errors.New("bad number")
@@ -82,7 +83,7 @@ func cliParsePRURL(raw string) (host, owner, name string, number int, err error)
 
 	// GitLab: /owner/repo/-/merge_requests/N
 	// Supports nested groups: /group/subgroup/repo/-/merge_requests/N
-	if !isCLIGitHubHost(host) && len(parts) >= 5 && parts[len(parts)-2] == "merge_requests" && parts[len(parts)-3] == "-" {
+	if !domain.IsGitHubHost(host) && len(parts) >= 5 && parts[len(parts)-2] == "merge_requests" && parts[len(parts)-3] == "-" {
 		n, parseErr := strconv.Atoi(parts[len(parts)-1])
 		if parseErr != nil || n <= 0 {
 			return "", "", "", 0, errors.New("bad number")
@@ -142,13 +143,4 @@ func cliRepoFromURL(raw string) (host, owner, name string, err error) {
 	name = strings.TrimSuffix(parts[len(parts)-1], ".git")
 	owner = strings.Join(parts[:len(parts)-1], "/")
 	return host, owner, name, nil
-}
-
-func isCLIGitHubHost(host string) bool {
-	if hostname, _, err := net.SplitHostPort(host); err == nil {
-		host = hostname
-	}
-	host = strings.ToLower(host)
-	return host == "github.com" || host == "www.github.com" || host == "api.github.com" ||
-		strings.HasSuffix(host, ".github.com") || strings.HasSuffix(host, ".ghe.io")
 }

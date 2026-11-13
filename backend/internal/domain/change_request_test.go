@@ -11,6 +11,7 @@ func TestParseChangeRequestURL(t *testing.T) {
 	}{
 		{"http://github.com/OWNER/Repo/pull/042/", "https://github.com/owner/repo/pull/42", "github|github.com|owner/repo|42"},
 		{"https://www.github.com/Owner/Repo/pull/42", "https://github.com/owner/repo/pull/42", "github|github.com|owner/repo|42"},
+		{"https://acme.ghe.com/Team/App/pull/7", "https://acme.ghe.com/team/app/pull/7", "github|acme.ghe.com|team/app|7"},
 		{"https://gitlab.com/group/sub/repo/-/merge_requests/9", "https://gitlab.com/group/sub/repo/-/merge_requests/9", "gitlab|gitlab.com|group/sub/repo|9"},
 	}
 	for _, tc := range tests {
@@ -22,6 +23,7 @@ func TestParseChangeRequestURL(t *testing.T) {
 	invalid := []string{
 		"https://github.com/o/r/pull/0", "https://github.com/o/r/issues/1",
 		"https://api.github.com/o/r/pull/1", "https://gist.github.com/o/r/pull/1",
+		"https://api.acme.ghe.com/o/r/pull/1", "https://ghe.com/o/r/pull/1",
 		"https://github.com/o/r/pull/1?x=1", "https://github.com/o/r/pull/1#x",
 		"https://user:pass@github.com/o/r/pull/1", "https://github.com:123/o/r/pull/1",
 		"https://gitlab.com/group/repo/-/merge_requests/nope", "https://gitlab.com/a/-/merge_requests/1",

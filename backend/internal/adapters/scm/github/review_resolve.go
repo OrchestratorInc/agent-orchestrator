@@ -19,7 +19,11 @@ func (p *Provider) ResolveReviewThread(ctx context.Context, request ports.SCMRev
 	if threadID == "" {
 		return fmt.Errorf("github scm: review thread id is required")
 	}
-	data, err := p.client.doGraphQL(ctx, `mutation ResolveReviewThread($threadId: ID!) {
+	c, err := p.clientFor(request.PR.Repo.Host)
+	if err != nil {
+		return err
+	}
+	data, err := c.doGraphQL(ctx, `mutation ResolveReviewThread($threadId: ID!) {
   resolveReviewThread(input: { threadId: $threadId }) { thread { id isResolved } }
 }`, map[string]any{"threadId": threadID})
 	if err != nil {

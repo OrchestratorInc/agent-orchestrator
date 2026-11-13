@@ -835,3 +835,46 @@ func TestList_RejectsBadRepo(t *testing.T) {
 		})
 	}
 }
+
+func newTenantTrackerForTest(t *testing.T, f *fakeGH) *Tracker {
+	t.Helper()
+	tr, err := New(Options{BaseURL: f.server.URL, Token: StaticTokenSource("tkn-test"), HTTPClient: f.server.Client(), Host: "acme.ghe.com"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return tr
+}
+
+func TestTrackerStampsHostOnIssueIDs(t *testing.T) {
+	f := newFakeGH(t)
+	issueJSON := `{"number":5,"title":"t","state":"open","html_url":"https://acme.ghe.com/team/app/issues/5"}`
+	f.on("GET", "/repos/team/app/issues/5", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(issueJSON)) })
+	f.on("GET", "/repos/team/app/issues", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("[" + issueJSON + "]")) })
+	tr := newTenantTrackerForTest(t, f)
+	want := domain.TrackerID{Provider: domain.TrackerProviderGitHub, Native: "team/app#5", Host: "acme.ghe.com"}
+
+	issue, err := tr.Get(ctx(), want)
+	if err != nil || issue.ID != want {
+		t.Fatalf("Get = %+v, %v, want ID %+v", issue.ID, err, want)
+	}
+	issues, err := tr.List(ctx(), domain.TrackerRepo{Provider: domain.TrackerProviderGitHub, Native: "team/app", Host: "acme.ghe.com"}, domain.ListFilter{State: domain.ListOpen})
+	if err != nil || len(issues) != 1 || issues[0].ID != want {
+		t.Fatalf("List = %+v, %v, want one issue with ID %+v", issues, err, want)
+	}
+}
+
+func TestTrackerRejectsIDForOtherHost(t *testing.T) {
+	f := newFakeGH(t)
+	tr := newTenantTrackerForTest(t, f)
+	for _, host := range []string{"", "other.ghe.com"} {
+		if _, err := tr.Get(ctx(), domain.TrackerID{Provider: domain.TrackerProviderGitHub, Native: "team/app#5", Host: host}); !errors.Is(err, ErrWrongProvider) {
+			t.Errorf("Get host %q = %v, want ErrWrongProvider", host, err)
+		}
+		if _, err := tr.List(ctx(), domain.TrackerRepo{Provider: domain.TrackerProviderGitHub, Native: "team/app", Host: host}, domain.ListFilter{}); !errors.Is(err, ErrWrongProvider) {
+			t.Errorf("List host %q = %v, want ErrWrongProvider", host, err)
+		}
+	}
+	if n := len(f.calls()); n != 0 {
+		t.Fatalf("sent %d requests for a foreign host", n)
+	}
+}
