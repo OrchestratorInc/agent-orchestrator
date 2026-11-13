@@ -1,5 +1,7 @@
-import { Check, ChevronDown, Loader2, RefreshCw, Search } from "lucide-react";
-import { type ReactNode, useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Check, ChevronDown, Loader2, RefreshCw, Search } from "@/components/app-icons";
+import { Fragment, type ReactNode, useMemo, useRef, useState } from "react";
+import { useUiStore } from "../../stores/ui-store";
+import { useEdgeFade } from "../../hooks/useEdgeFade";
 import { useTranslation } from "react-i18next";
 import type { AgentModelCatalog } from "../../hooks/useAgentModelsQuery";
 import { useSuppressStrayFocusRing } from "../../hooks/useSuppressStrayFocusRing";
@@ -8,7 +10,7 @@ import { fallbackEffort, useApplyEffortDefault } from "../../lib/effort";
 import { collapseModelVariants, findModelVariant, listsModelVariants, pickModelVariant, type ModelVariant } from "../../lib/model-variants";
 import { cn } from "../../lib/utils";
 import { ToggleRow } from "../chat/AgentSwitchPicker";
-import { formatEffortLabel } from "./EffortPicker";
+import { EffortPicker, formatEffortLabel } from "./EffortPicker";
 import { useModelTuning, type ModelTuningControlsProps } from "./ModelTuningControls";
 import { OptionMenuItem, OptionMenuSub, OptionMenuSubContent, OptionMenuSubTrigger } from "../ui/option-menu";
 import { Pressable } from "../ui/pressable";
@@ -58,6 +60,7 @@ export type ModelSearchResult = {
 };
 
 export function AgentModelCombobox({
+	hostId,
 	value,
 	models,
 	allowCustom,
@@ -72,6 +75,7 @@ export function AgentModelCombobox({
 	onUseDefault,
 	emptyLabel,
 	footer,
+	modelHint,
 	triggerLabel,
 	triggerClassName,
 	menuAlign = "end",
@@ -80,11 +84,14 @@ export function AgentModelCombobox({
 	recentScope,
 	compact = false,
 	showEffortInTrigger = true,
+	effortPlacement = "menu",
+	warningClassName,
 	agentId,
 	tuning,
 	disabled = false,
 	"aria-label": ariaLabel,
 }: {
+	hostId?: string;
 	value: string;
 	models: AgentModel[];
 	allowCustom?: boolean;
@@ -102,6 +109,8 @@ export function AgentModelCombobox({
 	emptyLabel?: string;
 	/** A note under the models, such as where they come from. */
 	footer?: ReactNode;
+	/** A quiet note beside one model's name, such as the one the orchestrator runs. */
+	modelHint?: { id: string; label: string };
 	/** Claude Code lists its newest model per family and folds the rest under "Other models". */
 	agentId?: string;
 	triggerLabel?: string;
@@ -121,10 +130,15 @@ export function AgentModelCombobox({
 	showEffortInTrigger?: boolean;
 	/** Callers opt into a combined model and reasoning-effort menu. */
 	tuning?: ModelEffortSelection;
+	/** "chip" moves reasoning effort out of the model menu into its own picker beside it. */
+	effortPlacement?: "menu" | "chip";
+	/** Where the unsupported-effort warning sits in the caller's layout. */
+	warningClassName?: string;
 	disabled?: boolean;
 	"aria-label": string;
 }) {
 	const { t } = useTranslation();
+	const openGlobalSettings = useUiStore((state) => state.openGlobalSettings);
 	const concreteModels = useMemo(
 		() => models.filter((model) => isConcreteModelID(model.id)),
 		[models],
@@ -182,6 +196,9 @@ export function AgentModelCombobox({
 	const variant = families ? findModelVariant(families, effectiveModel) : undefined;
 	// The row a Cursor variant id shows as is its model's.
 	const shownModel = variant?.family.id ?? effectiveModel;
+	// Cursor's effort is part of its model variant, so it stays in the model menu.
+	const effortChip = effortPlacement === "chip" && !variant;
+	const effortInMenu = showEffort && !effortChip;
 	const selected = searchIndex.byID.get(normalizeSearch(shownModel));
 	const hasMultipleProviders = useMemo(
 		() =>
@@ -233,23 +250,7 @@ export function AgentModelCombobox({
 	const scrollRef = useRef<HTMLDivElement>(null);
 	const searchInputRef = useRef<HTMLInputElement>(null);
 	const effortTriggerRef = useRef<HTMLDivElement>(null);
-	const [canScrollDown, setCanScrollDown] = useState(false);
-	const updateScrollCue = useCallback(() => {
-		const element = scrollRef.current;
-		setCanScrollDown(Boolean(element && element.scrollHeight - element.scrollTop > element.clientHeight + 1));
-	}, []);
-	useLayoutEffect(() => {
-		if (!menuOpen) {
-			setCanScrollDown(false);
-			return;
-		}
-		updateScrollCue();
-		const element = scrollRef.current;
-		if (!element || typeof ResizeObserver === "undefined") return;
-		const observer = new ResizeObserver(updateScrollCue);
-		observer.observe(element);
-		return () => observer.disconnect();
-	}, [groups.length, menuOpen, normalizedSearch, showCustomSearchAction, updateScrollCue, visibleModels.length]);
+	useEdgeFade(scrollRef, "y", [menuOpen]);
 	const onCloseAutoFocus = useSuppressStrayFocusRing(menuOpen);
 	const selectModel = (picked: string, want?: Partial<ModelVariant>) => {
 		// A Cursor model keeps the current effort, thinking and speed where it has them.
@@ -265,7 +266,7 @@ export function AgentModelCombobox({
 		const family = families?.find((entry) => entry.id === item.id);
 		const openEffort = family
 			? Boolean(tuning) && (family.efforts.length > 1 || family.hasThinkingChoice)
-			: Boolean(tuning && item.model.efforts?.some((effort) => effort && effort.toLowerCase() !== "default"));
+			: Boolean(tuning && !effortChip && item.model.efforts?.some((effort) => effort && effort.toLowerCase() !== "default"));
 		if (openEffort) event.preventDefault();
 		selectModel(item.id);
 		setEffortMenuOpen(openEffort);
@@ -283,7 +284,7 @@ export function AgentModelCombobox({
 		void Promise.resolve(onRefresh()).catch(() => setRefreshFailed(true)).finally(() => setRefreshingLocal(false));
 	};
 
-	return (
+	const menu = (
 		<DropdownMenu
 			open={menuOpen}
 			onOpenChange={(open) => {
@@ -313,7 +314,7 @@ export function AgentModelCombobox({
 					) : (
 						<span className="min-w-0 truncate">{currentLabel}</span>
 					)}
-					{showEffort && showEffortInTrigger && <span className="shrink-0 text-settings-muted"> · {currentEffortLabel}</span>}
+					{effortInMenu && showEffortInTrigger && <span className="shrink-0 text-settings-muted"> · {currentEffortLabel}</span>}
 					{variant?.variant.effort && tuning && showEffortInTrigger && <span className="shrink-0 text-settings-muted"> · {formatEffortLabel(variant.variant.effort, t)}</span>}
 					<ChevronDown
 						className="size-icon-sm shrink-0 opacity-70 transition-transform duration-300 ease-out group-data-[state=open]/agent-model-trigger:rotate-180"
@@ -419,8 +420,7 @@ export function AgentModelCombobox({
 				<div className="relative grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)] overflow-hidden">
 					<div
 						ref={scrollRef}
-						className="model-menu-scroll min-h-0 overflow-y-auto overscroll-contain"
-						onScroll={updateScrollCue}
+						className="model-menu-scroll edge-fade min-h-0 overflow-y-auto overscroll-contain"
 					>
 						{onUseDefault && normalizedSearch === "" && (
 							<>
@@ -436,10 +436,10 @@ export function AgentModelCombobox({
 							<div key={group.key}>
 								{!compact && (groupIndex > 0 || normalizedSearch === "") && <DropdownMenuSeparator />}
 								{!compact && <DropdownMenuLabel className="normal-case tracking-normal">{group.label}</DropdownMenuLabel>}
-								{group.models.map((item) =>
-									compact ? (
+								{group.models.map((item) => (
+									<Fragment key={item.id}>
+									{compact ? (
 										<DropdownMenuItem
-											key={item.id}
 											disabled={Boolean(item.model.unavailableReason)}
 											onSelect={(event) => selectCatalogModel(event, item)}
 											className={modelItemClass(item.id === shownModel)}
@@ -451,11 +451,13 @@ export function AgentModelCombobox({
 													<p className="text-xs text-settings-muted">{item.model.unavailableReason}</p>
 												)}
 											</div>
+											{modelHint?.id === item.id && (
+												<span className="ml-2 shrink-0 text-xs text-settings-muted">{modelHint.label}</span>
+											)}
 											{tuning && item.id === shownModel && <Check className="ml-auto size-icon-sm shrink-0" aria-hidden="true" />}
 										</DropdownMenuItem>
 									) : (
 										<DropdownMenuItem
-											key={item.id}
 											disabled={Boolean(item.model.unavailableReason)}
 											onSelect={(event) => selectCatalogModel(event, item)}
 											className={modelItemClass(item.id === shownModel)}
@@ -470,13 +472,26 @@ export function AgentModelCombobox({
 														<p className="text-xs text-settings-muted">{item.model.unavailableReason}</p>
 													)}
 												</div>
+												{modelHint?.id === item.id && (
+													<span className="shrink-0 text-xs text-settings-muted">{modelHint.label}</span>
+												)}
 												{group.kind !== "provider" && item.provider !== "Other" && (
 													<span className="shrink-0 text-xs text-settings-muted">{item.provider}</span>
 												)}
 											</div>
 										</DropdownMenuItem>
-									),
-								)}
+									)}
+									{item.model.requiresVersion && agentId === "claude-code" && (
+										// The model row is disabled; the way out is the usual update flow.
+										<DropdownMenuItem
+											onSelect={() => openGlobalSettings("harness", { hostId, focusAgentId: agentId, harnessView: "local", preserveProject: true })}
+											className="pl-6 text-xs text-settings-label"
+										>
+											{t("settings.models.updateClaudeCode", { defaultValue: "Update Claude Code" })}
+										</DropdownMenuItem>
+									)}
+									</Fragment>
+								))}
 							</div>
 						))}
 
@@ -541,10 +556,6 @@ export function AgentModelCombobox({
 							</p>
 						)}
 					</div>
-					<div
-						className={cn("model-menu-overflow-cue", canScrollDown ? "opacity-100" : "opacity-0")}
-						aria-hidden="true"
-					/>
 				</div>
 				{footer && (
 					<div className="shrink-0">
@@ -574,7 +585,7 @@ export function AgentModelCombobox({
 						</OptionMenuSub>
 					</div>
 				)}
-				{showEffort && tuning && (
+				{effortInMenu && tuning && (
 					<div className="shrink-0">
 						<DropdownMenuSeparator />
 						<OptionMenuSub open={effortMenuOpen} onOpenChange={(open) => {
@@ -605,10 +616,33 @@ export function AgentModelCombobox({
 					</div>
 				)}
 			</DropdownMenuContent>
-			{tuning && invalidEffort && <p role="alert" className="px-1 text-xs leading-row text-warning">
-				{t("settings.models.unsupportedTuning", { role: tuning.roleLabel ? `${tuning.roleLabel} ` : "" })}
-			</p>}
 		</DropdownMenu>
+	);
+	const effortRoleLabel = tuning?.roleLabel ? `${tuning.roleLabel} ` : "";
+	// Like useModelTuning: a listed model that reports no efforts hasn't ruled a saved effort out.
+	const effortAvailability = effortModel && effortModel.efforts === undefined ? "unknown" : "supported";
+	return (
+		<>
+			{/* The wrapper stays put while the catalog loads, so the model trigger is never remounted. */}
+			{effortPlacement === "chip" ? (
+				<div className="flex min-w-0 flex-wrap items-center gap-2">
+					{menu}
+					{effortChip && showEffort && tuning && <EffortPicker
+						label={`${effortRoleLabel}${t("settings.models.effort")}`}
+						value={effectiveEffort}
+						choices={effortOptions.map((effort) => ({ value: effort }))}
+						defaultEffort={defaultEffort || undefined}
+						availability={effortAvailability}
+						disabled={disabled}
+						triggerClassName="w-fit"
+						onChange={tuning.onEffortChange}
+					/>}
+				</div>
+			) : menu}
+			{tuning && invalidEffort && <p role="alert" className={cn("px-1 text-xs leading-row text-warning", warningClassName)}>
+				{t("settings.models.unsupportedTuning", { role: effortRoleLabel })}
+			</p>}
+		</>
 	);
 }
 

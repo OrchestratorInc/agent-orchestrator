@@ -124,7 +124,7 @@ def brand(canvas: Image.Image, draw: ImageDraw.ImageDraw, x: int, y: int, scale:
     if ICON.exists():
         icon = Image.open(ICON).convert("RGBA").resize((size, size), Image.Resampling.LANCZOS)
         canvas.alpha_composite(icon, (x, y))
-    draw.text((x + size + int(16 * scale), y + int(7 * scale)), "AO - Mobile", font=font(int(32 * scale), "bold"), fill=ink)
+    draw.text((x + size + int(16 * scale), y + int(7 * scale)), "Orchestrator - Mobile", font=font(int(32 * scale), "bold"), fill=ink)
 
 
 def caption(draw: ImageDraw.ImageDraw, x: int, y: int, width: int, item: dict[str, str], scale: float, ink: str) -> int:
@@ -199,7 +199,7 @@ def feature_graphic() -> Image.Image:
     brand(canvas, draw, 52, 44, 0.85, "#111827")
     draw.text((52, 150), "Your agent fleet,", font=font(54, "bold"), fill="#111827")
     draw.text((52, 214), "now on mobile", font=font(54, "bold"), fill="#111827")
-    draw.text((54, 314), "Coordinate sessions, PRs, and prompts from AO - Mobile.", font=font(25), fill="#526070")
+    draw.text((54, 314), "Coordinate sessions, PRs, and prompts from Orchestrator - Mobile.", font=font(25), fill="#526070")
     shot = Image.open(CAPTURES[1]["src"]).convert("RGB")
     phone(canvas, shot, (728, 28, 220, 476), 36)
     return canvas

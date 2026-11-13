@@ -513,6 +513,64 @@ detachEvents:
 	}
 }
 
+func TestPersistentACPResumeRestoresAvailableCommands(t *testing.T) {
+	initialize, err := json.Marshal(acpsdk.InitializeResponse{
+		ProtocolVersion: acpsdk.ProtocolVersionNumber,
+		AgentCapabilities: acpsdk.AgentCapabilities{
+			SessionCapabilities: acpsdk.SessionCapabilities{Resume: &acpsdk.SessionResumeCapabilities{}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := json.Marshal(acpsdk.NewSessionResponse{SessionId: "provider-session"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	daemon, host := net.Pipe()
+	t.Cleanup(func() { _ = host.Close() })
+	driver := New(Config{
+		Harness: domain.HarnessClaudeCode,
+		Capabilities: ports.ChatCapabilities{
+			ports.ChatCapabilityStreaming: true, ports.ChatCapabilityResume: true,
+		},
+		Launch: func(context.Context, LaunchConfig) (Launch, error) {
+			return Launch{Command: "fake"}, nil
+		},
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.connectHost = func(context.Context, persistenthost.Config) (*persistenthost.Transport, error) {
+		return &persistenthost.Transport{
+			Stdin: daemon, Stdout: daemon, Reconnected: true,
+			ACPState: &persistenthost.ACPState{
+				InitializeResult: initialize, SessionResult: session, SessionID: "provider-session",
+				AvailableCommands: json.RawMessage(`[{"name":"compact","description":"Compact"},{"name":"review","description":"Review the diff","input":{"hint":"scope"}}]`),
+			},
+		}, nil
+	}
+
+	opened, err := driver.Resume(context.Background(), ports.ChatResumeConfig{
+		SessionID: "ao-session", DataDir: t.TempDir(), WorkspacePath: t.TempDir(),
+		ProviderConversationID: "provider-session", ProviderScopeID: "scope",
+	})
+	if err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	conv := opened.(*conversation)
+	t.Cleanup(func() { _ = conv.Close() })
+
+	skills, err := conv.ListSkills(context.Background())
+	if err != nil {
+		t.Fatalf("ListSkills: %v", err)
+	}
+	if len(skills) != 2 || skills[0].Name != "compact" || skills[1].Name != "review" || skills[1].InputHint != "scope" {
+		t.Fatalf("reattached skills = %#v", skills)
+	}
+	capabilities := conv.Capabilities()
+	if !capabilities[ports.ChatCapabilitySkills] || !capabilities[ports.ChatCapabilityCompaction] {
+		t.Fatalf("reattached capabilities = %#v", capabilities)
+	}
+}
+
 func TestPersistentACPResumeAdoptsLivePromptWithoutSecondSetup(t *testing.T) {
 	initialize, err := json.Marshal(acpsdk.InitializeResponse{
 		ProtocolVersion: acpsdk.ProtocolVersionNumber,
@@ -2566,6 +2624,130 @@ func TestACPDriverUsesProviderPermissionPolicyBeforeParking(t *testing.T) {
 		t.Fatalf("automatic policy emitted a parked approval: %#v", event)
 	case <-time.After(30 * time.Millisecond):
 	}
+}
+
+func TestACPDriverPinsReadOnlyModeAndPolicy(t *testing.T) {
+	agent := &fakeAgent{}
+	var launched LaunchConfig
+	driver := New(Config{
+		Harness: domain.HarnessClaudeCode,
+		Probe:   func(context.Context) error { return nil },
+		Launch: func(_ context.Context, cfg LaunchConfig) (Launch, error) {
+			launched = cfg
+			return Launch{Command: "fake"}, nil
+		},
+		SessionMode: func(ports.PermissionMode) string { return "auto" },
+		PermissionPolicy: func(_ ports.PermissionMode, params acpsdk.RequestPermissionRequest) (acpsdk.PermissionOptionId, bool) {
+			return "allow-once", true
+		},
+		ReadOnly: func(LaunchConfig) ReadOnlySession {
+			return ReadOnlySession{Mode: "default", PermissionPolicy: func(ports.PermissionMode, acpsdk.RequestPermissionRequest) (acpsdk.PermissionOptionId, bool) {
+				return "reject-once", true
+			}}
+		},
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeSpawn(agent))
+
+	opened, err := driver.Start(context.Background(), ports.ChatStartConfig{
+		WorkspacePath: t.TempDir(), Permissions: ports.PermissionModeAuto, ReadOnly: true,
+	})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer opened.Close()
+	_ = nextEvent(t, opened.Events())
+	if !launched.ReadOnly {
+		t.Fatal("binding launch config lost ReadOnly")
+	}
+	conv := opened.(*conversation)
+	// A later turn naming Auto must not move the provider off the pinned mode.
+	if err := conv.applyTurnSettings(context.Background(), ports.ChatTurnSettings{Approval: ports.PermissionModeAuto}); err != nil {
+		t.Fatalf("apply turn settings: %v", err)
+	}
+	agent.mu.Lock()
+	mode := agent.mode
+	agent.mu.Unlock()
+	if mode != "default" {
+		t.Fatalf("provider mode = %q, want the read-only mode", mode)
+	}
+	response, err := conv.RequestPermission(context.Background(), acpsdk.RequestPermissionRequest{
+		ToolCall: acpsdk.ToolCallUpdate{ToolCallId: "edit-1", Kind: acpsdk.Ptr(acpsdk.ToolKindEdit)},
+		Options: []acpsdk.PermissionOption{
+			{OptionId: "allow-once", Name: "Allow", Kind: acpsdk.PermissionOptionKindAllowOnce},
+			{OptionId: "reject-once", Name: "Deny", Kind: acpsdk.PermissionOptionKindRejectOnce},
+		},
+	})
+	if err != nil {
+		t.Fatalf("RequestPermission: %v", err)
+	}
+	if response.Outcome.Selected == nil || response.Outcome.Selected.OptionId != "reject-once" {
+		t.Fatalf("permission response = %#v, want the read-only policy's rejection", response)
+	}
+}
+
+func TestACPDriverPolicyCanCancelARequest(t *testing.T) {
+	agent := &fakeAgent{}
+	driver := New(Config{
+		Harness: domain.HarnessClaudeCode,
+		Probe:   func(context.Context) error { return nil },
+		Launch:  func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+		PermissionPolicy: func(ports.PermissionMode, acpsdk.RequestPermissionRequest) (acpsdk.PermissionOptionId, bool) {
+			return CancelPermission, true
+		},
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeSpawn(agent))
+
+	opened, err := driver.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer opened.Close()
+	_ = nextEvent(t, opened.Events())
+	response, err := opened.(*conversation).RequestPermission(context.Background(), acpsdk.RequestPermissionRequest{
+		ToolCall: acpsdk.ToolCallUpdate{ToolCallId: "edit-1", Kind: acpsdk.Ptr(acpsdk.ToolKindEdit)},
+		Options:  []acpsdk.PermissionOption{{OptionId: "allow-always", Name: "Always", Kind: acpsdk.PermissionOptionKindAllowAlways}},
+	})
+	if err != nil {
+		t.Fatalf("RequestPermission: %v", err)
+	}
+	if response.Outcome.Cancelled == nil {
+		t.Fatalf("permission response = %#v, want a cancelled outcome", response)
+	}
+}
+
+func TestACPDriverRefusesReadOnlyWithoutBinding(t *testing.T) {
+	launches := 0
+	driver := New(Config{
+		Harness: domain.HarnessCursor,
+		Probe:   func(context.Context) error { return nil },
+		Launch: func(context.Context, LaunchConfig) (Launch, error) {
+			launches++
+			return Launch{Command: "fake"}, nil
+		},
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeSpawn(&fakeAgent{}))
+
+	_, err := driver.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir(), ReadOnly: true})
+	if !errors.Is(err, ports.ErrChatCapabilityUnavailable) {
+		t.Fatalf("Start read-only = %v, want ErrChatCapabilityUnavailable", err)
+	}
+	_, err = driver.Resume(context.Background(), ports.ChatResumeConfig{
+		WorkspacePath: t.TempDir(), ProviderConversationID: "session-1", ReadOnly: true,
+	})
+	if !errors.Is(err, ports.ErrChatCapabilityUnavailable) {
+		t.Fatalf("Resume read-only = %v, want ErrChatCapabilityUnavailable", err)
+	}
+	if launches != 0 {
+		t.Fatalf("refused read-only launch started %d provider processes", launches)
+	}
+	// A tool-less background task has nothing to restrict.
+	opened, err := driver.Start(context.Background(), ports.ChatStartConfig{
+		WorkspacePath: t.TempDir(), ReadOnly: true, DisableTools: true,
+	})
+	if err != nil {
+		t.Fatalf("Start tool-less read-only: %v", err)
+	}
+	opened.Close()
 }
 
 func TestACPDriverKeepsPermissionPolicyWhenLaterTurnSettingFails(t *testing.T) {
@@ -5070,6 +5252,173 @@ func TestACPCompactionExecutesPromptAndEmitsCompactedEvent(t *testing.T) {
 	}
 	if detail.ContextWindow != 200000 {
 		t.Errorf("contextWindow = %d, want 200000", detail.ContextWindow)
+	}
+}
+
+func compactionFailureTestDriver(t *testing.T) (*fakeAgent, ports.ChatConversation) {
+	t.Helper()
+	agent := &fakeAgent{}
+	driver := New(Config{
+		Harness:      domain.HarnessOpenCodeV2,
+		Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true, ports.ChatCapabilityCompaction: true},
+		Probe:        func(context.Context) error { return nil },
+		Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeSpawn(agent))
+	opened, err := driver.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { _ = opened.Close() })
+	_ = nextEvent(t, opened.Events()) // controller.ready
+	return agent, opened
+}
+
+func compactionStatusPrompt(agent *fakeAgent, statuses ...map[string]any) func(context.Context, acpsdk.PromptRequest) (acpsdk.PromptResponse, error) {
+	return func(ctx context.Context, params acpsdk.PromptRequest) (acpsdk.PromptResponse, error) {
+		for _, status := range statuses {
+			_ = agent.conn.SessionUpdate(ctx, acpsdk.SessionNotification{
+				SessionId: params.SessionId,
+				Update: acpsdk.SessionUpdate{SessionInfoUpdate: &acpsdk.SessionSessionInfoUpdate{
+					SessionUpdate: "session_info_update",
+					Meta:          map[string]any{"opencode/compaction": status},
+				}},
+			})
+		}
+		return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonEndTurn}, nil
+	}
+}
+
+type compactionTurnResult struct {
+	turn      ports.ChatEvent
+	compacted bool
+	// timelineError is the turn's error row, the only timeline item a failed
+	// compaction has. Without one the timeline leaves the turn out.
+	timelineError error
+}
+
+func awaitCompactionTurn(t *testing.T, opened ports.ChatConversation) compactionTurnResult {
+	t.Helper()
+	var result compactionTurnResult
+	for {
+		ev := nextEvent(t, opened.Events())
+		switch ev.Kind {
+		case ports.ChatEventCompacted:
+			result.compacted = true
+		case ports.ChatEventError:
+			result.timelineError = ev.Err
+		case ports.ChatEventTurnCompleted:
+			result.turn = ev
+			return result
+		}
+	}
+}
+
+func TestACPCompactionReportedFailedFailsTheTurn(t *testing.T) {
+	started := map[string]any{"status": "started", "reason": "manual"}
+	for name, test := range map[string]struct {
+		failed map[string]any
+		// after are updates sent once the failure is reported.
+		after []map[string]any
+		want  string
+	}{
+		"provider message": {
+			failed: map[string]any{"status": "failed", "error": map[string]any{
+				"type": "compaction.failed", "message": "Compaction summary did not match the required template",
+			}},
+			want: "Compaction summary did not match the required template",
+		},
+		"no message": {failed: map[string]any{"status": "failed"}, want: "Compaction failed"},
+		"unknown status after the failure": {
+			failed: map[string]any{"status": "failed"},
+			after:  []map[string]any{{"status": "aborted"}, {"reason": "manual"}},
+			want:   "Compaction failed",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			agent, opened := compactionFailureTestDriver(t)
+			agent.mu.Lock()
+			agent.customPrompt = compactionStatusPrompt(agent, append([]map[string]any{started, test.failed}, test.after...)...)
+			agent.mu.Unlock()
+
+			if _, err := opened.(ports.ChatCompactor).Compact(context.Background()); err != nil {
+				t.Fatalf("Compact: %v", err)
+			}
+			result := awaitCompactionTurn(t, opened)
+			if result.compacted {
+				t.Fatal("ChatEventCompacted emitted for a compaction the provider reported as failed")
+			}
+			if result.turn.TurnState != domain.TurnStateFailed {
+				t.Fatalf("turn state = %v, want TurnStateFailed", result.turn.TurnState)
+			}
+			if result.turn.Err == nil || result.turn.Err.Error() != test.want {
+				t.Fatalf("turn error = %v, want %q", result.turn.Err, test.want)
+			}
+			if result.timelineError == nil || result.timelineError.Error() != test.want {
+				t.Fatalf("timeline error = %v, want %q", result.timelineError, test.want)
+			}
+		})
+	}
+}
+
+func TestACPCompactionFailureDoesNotCarryIntoTheNextCompaction(t *testing.T) {
+	agent, opened := compactionFailureTestDriver(t)
+	agent.mu.Lock()
+	agent.customPrompt = compactionStatusPrompt(agent, map[string]any{"status": "failed"})
+	agent.mu.Unlock()
+	if _, err := opened.(ports.ChatCompactor).Compact(context.Background()); err != nil {
+		t.Fatalf("first Compact: %v", err)
+	}
+	if result := awaitCompactionTurn(t, opened); result.turn.TurnState != domain.TurnStateFailed {
+		t.Fatalf("first turn state = %v, want TurnStateFailed", result.turn.TurnState)
+	}
+	if ev := nextEvent(t, opened.Events()); ev.Kind != ports.ChatEventControllerState {
+		t.Fatalf("event after failed turn = %v, want controller state", ev.Kind)
+	}
+
+	agent.mu.Lock()
+	agent.customPrompt = compactionStatusPrompt(agent, map[string]any{"status": "started"}, map[string]any{"status": "completed"})
+	agent.mu.Unlock()
+	if _, err := opened.(ports.ChatCompactor).Compact(context.Background()); err != nil {
+		t.Fatalf("second Compact: %v", err)
+	}
+	result := awaitCompactionTurn(t, opened)
+	if result.turn.TurnState != domain.TurnStateCompleted || !result.compacted || result.timelineError != nil {
+		t.Fatalf("second compaction = %+v, want completed and compacted with no error", result)
+	}
+}
+
+func TestACPCompactionPromptErrorReachesTheTimeline(t *testing.T) {
+	agent, opened := compactionFailureTestDriver(t)
+	agent.mu.Lock()
+	agent.customPrompt = func(context.Context, acpsdk.PromptRequest) (acpsdk.PromptResponse, error) {
+		return acpsdk.PromptResponse{}, errors.New("provider refused")
+	}
+	agent.mu.Unlock()
+	if _, err := opened.(ports.ChatCompactor).Compact(context.Background()); err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
+	result := awaitCompactionTurn(t, opened)
+	if result.turn.TurnState != domain.TurnStateFailed || result.timelineError == nil {
+		t.Fatalf("compaction = %+v, want failed with a timeline error", result)
+	}
+}
+
+func TestACPAutomaticCompactionFailureLeavesANormalTurnCompleted(t *testing.T) {
+	agent, opened := compactionFailureTestDriver(t)
+	agent.mu.Lock()
+	agent.customPrompt = compactionStatusPrompt(agent, map[string]any{"status": "failed", "reason": "auto"})
+	agent.mu.Unlock()
+
+	ref, err := opened.SendTurn(context.Background(), ports.ChatUserMessage{Text: "continue"})
+	if err != nil {
+		t.Fatalf("SendTurn: %v", err)
+	}
+	if err := opened.(ports.ChatDeferredTurnStarter).StartDeferredTurn(ref.ProviderTurnID); err != nil {
+		t.Fatalf("StartDeferredTurn: %v", err)
+	}
+	if result := awaitCompactionTurn(t, opened); result.turn.TurnState != domain.TurnStateCompleted || result.compacted {
+		t.Fatalf("turn = %+v, want completed and not compacted", result)
 	}
 }
 

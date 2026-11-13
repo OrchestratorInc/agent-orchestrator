@@ -8,11 +8,15 @@ import { settingsQueryKey } from "../../hooks/useSettings";
 import type { CloudCpClientEvent } from "../../lib/cloud-cp";
 import { CloudCpError } from "../../lib/cloud-cp/errors";
 import type { WorkspaceSession } from "../../types/workspace";
+import type { ChatDraftExcerptReference } from "../../lib/chat-drafts";
 import { sessionUiKey } from "../../lib/hosts";
 import { useUiStore } from "../../stores/ui-store";
 import type { ChatConfigOption, ChatModel, TurnSettings } from "../../types/conversation";
 import type { AgentSwitchProps, PickerSource } from "./AgentSwitchPicker";
-import { appendCloudEvents, cloudMessageBody, CloudSessionChatSurface, cloudStartupChecklist, cloudWorkspaceFilePath, loadCloudChatEvents, mergeCloudEvents, toSnapshot } from "./CloudSessionChatSurface";
+import { cloudSessionsQueryKey, sharedCloudWorkspacesQueryKey } from "../../hooks/useWorkspaceQuery";
+import { appendCloudEvents, CHAT_EVENTS_CACHE_MS, cloudExcerptText, cloudAnnotationContent, cloudMessageBody, CloudSessionChatSurface, cloudStartupChecklist, cloudWorkspaceFilePath, toSnapshot } from "./CloudSessionChatSurface";
+import { CLOUD_CHAT_NEWEST, cloudChatHistoryKey, mergeCloudEvents } from "../../lib/cloud-chat-history";
+import { clearPreviousAccountState } from "../../hooks/useCloudAccountSwitchReset";
 import { TurnSettingsBar } from "./TurnSettingsBar";
 
 const cloudMocks = vi.hoisted(() => ({
@@ -30,7 +34,7 @@ const cloudMocks = vi.hoisted(() => ({
 // The control plane's base URL and attachment limit, for the tests that attach files.
 const cloudSetup = vi.hoisted(() => ({ baseUrl: "", maxAttachmentBytes: undefined as number | undefined }));
 vi.mock("../../hooks/useCloudCp", () => ({
-	useCloudCp: () => ({ ready: true, client: cloudMocks, baseUrl: cloudSetup.baseUrl }),
+	useCloudCp: () => ({ ready: true, client: cloudMocks, baseUrl: cloudSetup.baseUrl, userId: "user-1" }),
 }));
 vi.mock("../../hooks/useCloudOffering", () => ({
 	useCloudOffering: () => ({
@@ -76,12 +80,90 @@ const session = {
 	prs: [],
 } satisfies WorkspaceSession;
 
+function capturedCloudExcerpt(): ChatDraftExcerptReference {
+	return {
+		id: "captured", order: 2, conversationId: `cloud:${session.id}`, messageId: "deleted-source", revision: 0, role: "assistant", text: "缓存",
+		snapshot: {
+			version: 1, referenceFormat: "numbered-v1", rawText: "**缓存**", captureMode: "exact", sourceTurnId: "source-turn",
+			sourceRange: { start: 20, end: 26, offsetUnit: "utf-16" }, renderedRange: { start: 4, end: 6, offsetUnit: "utf-16" }, prefix: "the ", suffix: " rest",
+			turn: { id: "source-turn", messages: [{ role: "user", text: "FROZEN_QUESTION\n" + "问".repeat(1000) }, { role: "assistant", text: "FROZEN_ANSWER\n" + "答".repeat(1000) }], truncated: true },
+		},
+	};
+}
+
 describe("CloudSessionChatSurface", () => {
 	beforeEach(() => {
 		localStorage.clear();
 		cloudMocks.listUserAgentModels.mockReset().mockResolvedValue({ models: [] });
 		cloudSetup.baseUrl = "";
 		cloudSetup.maxAttachmentBytes = undefined;
+	});
+
+	it("lists the session's agent's models from Cloud's list for the account, not this computer's", async () => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} /></QueryClientProvider>);
+		await waitFor(() => expect(cloudMocks.chatProps).toHaveBeenCalled());
+		// The composer's agent and model picker reads each agent's list through
+		// this organization's Cloud catalog (AgentSwitchPicker).
+		expect(cloudMocks.chatProps.mock.lastCall?.[0].agentSwitch).toMatchObject({ cloudOrgId: "org-1", harnessView: "cloud" });
+	});
+
+	it("holds a chat it hasn't read yet as one with history, and reopens a closed chat from its cache", async () => {
+		const events = [
+			{ sessionId: session.id, sequence: 1, type: "chat.user_message", payload: { text: "Why?", turnId: "turn-1" }, createdAt: session.updatedAt },
+			{ sessionId: session.id, sequence: 2, type: "chat.assistant_delta", payload: { text: "Because of the cache.", turnId: "turn-1", itemId: "reply" }, createdAt: session.updatedAt },
+		];
+		let answer!: (page: { events: typeof events; hasMore: boolean; nextAfter: number; hasOlder: boolean; nextBefore: number }) => void;
+		cloudMocks.listChatEvents.mockReset().mockImplementationOnce(() => new Promise((resolve) => { answer = resolve; }));
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		cloudMocks.chatProps.mockClear();
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const surface = <QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} /></QueryClientProvider>;
+		const view = render(surface);
+		// Unread, the history is unknown rather than empty: no new-chat welcome.
+		await waitFor(() => expect(cloudMocks.listChatEvents).toHaveBeenCalledTimes(1));
+		expect(cloudMocks.chatProps.mock.lastCall?.[0].historyPending).toBe(true);
+		// The whole chat fits the newest page: nothing older to read.
+		await act(async () => answer({ events, hasMore: false, nextAfter: 2, hasOlder: false, nextBefore: 1 }));
+		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].snapshot.items).toHaveLength(2));
+		expect(cloudMocks.chatProps.mock.lastCall?.[0].historyPending).toBe(false);
+		view.unmount();
+		// Closed, the chat's events outlive React Query's 5 minute default.
+		expect(queryClient.getQueryCache().find({ queryKey: ["cloud-chat-events", "org-1", session.id] })?.gcTime).toBe(CHAT_EVENTS_CACHE_MS);
+		expect(CHAT_EVENTS_CACHE_MS).toBeGreaterThan(5 * 60_000);
+		// Reopened, it shows the cached conversation from its first frame and reads only what is newer.
+		cloudMocks.chatProps.mockClear();
+		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 2, hasOlder: false, nextBefore: CLOUD_CHAT_NEWEST });
+		render(surface);
+		expect(cloudMocks.chatProps.mock.calls[0]?.[0].snapshot.items).toHaveLength(2);
+		expect(cloudMocks.chatProps.mock.calls[0]?.[0].historyPending).toBe(false);
+		await waitFor(() => expect(cloudMocks.listChatEvents).toHaveBeenLastCalledWith("org-1", session.id, { after: 2, before: CLOUD_CHAT_NEWEST, limit: 500 }));
+	});
+
+	it("reads the next account's own chat, never the previous account's cached one", async () => {
+		const step = (output: Record<string, unknown>): CloudCpClientEvent => ({
+			sessionId: session.id, sequence: 1, type: "workspace.script.step", createdAt: "2026-11-08T10:00:00Z",
+			payload: { phase: "setup", runId: "setup-1", step: 1, total: 1, status: "succeeded", exitCode: 0, durationMs: 10, command: "make deps", repository: "", startedAt: "2026-11-08T10:00:00Z", ...output },
+		});
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		// A member read the chat: Setup's output, which a share guest is not served.
+		queryClient.setQueryData(["cloud-chat-events", "org-1", session.id], [step({ output: "DB host db.internal:5432", user: "ao-worker" })]);
+		queryClient.setQueryData(cloudChatHistoryKey("org-1", session.id), { hasOlder: true, nextBefore: 1, recentPending: false, loadingOlder: false, generation: 1 });
+		// Another account signs in.
+		clearPreviousAccountState(queryClient);
+		cloudMocks.listChatEvents.mockReset().mockResolvedValue({ events: [step({ output: "", outputHidden: true })], hasMore: false, nextAfter: 1, hasOlder: false, nextBefore: 1 });
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		cloudMocks.chatProps.mockClear();
+		render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} /></QueryClientProvider>);
+		// The first frame waits for the read rather than showing the cached chat.
+		expect(cloudMocks.chatProps.mock.calls[0]?.[0].historyPending).toBe(true);
+		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].historyPending).toBe(false));
+		// It reads the newest page from scratch, not only what came after the cached list.
+		expect(cloudMocks.listChatEvents.mock.calls[0]?.[2]).toEqual({ before: CLOUD_CHAT_NEWEST, limit: 150 });
+		const shown = JSON.stringify(cloudMocks.chatProps.mock.calls.map((call) => call[0].snapshot));
+		expect(shown).toContain("make deps");
+		expect(shown).not.toContain("db.internal");
+		expect(shown).not.toContain("ao-worker");
 	});
 
 	it("offers to attach files only while the control plane takes them, up to its limit", async () => {
@@ -109,6 +191,7 @@ describe("CloudSessionChatSurface", () => {
 		render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{...session,cloud:{orgId:"org-1"}}}/></QueryClientProvider>);
 		const props=cloudMocks.chatProps.mock.lastCall?.[0];
 		expect(props.fileReferenceDelivery).toBe("text");
+		expect(props.messageByteLimit).toBe(64 * 1024);
 		const ref=captureFileReference({path:"cloud.ts",side:"file",line:1,endLine:1,lines:[{kind:"context",oldNo:1,newNo:1,text:"CLOUD_PROVIDER_MARKER"}]},session.id);
 		await expect(props.onSend("question",undefined,"capture-retry",undefined,[ref])).rejects.toThrow("offline");
 		await props.onSend("question",undefined,"capture-retry",undefined,[ref]);
@@ -117,6 +200,40 @@ describe("CloudSessionChatSurface", () => {
 		expect(calls[0][2].text.match(/CLOUD_PROVIDER_MARKER/g)).toHaveLength(1);
 		expect(calls[0][2].text).toContain('"cloud.ts"#L1-L1');
 		expect(calls[0][3]).toEqual({idempotencyKey:"capture-retry"});
+	});
+	it.each(["retry", "fallback"])("keeps frozen background in agent text while omitting it from display content on %s", async (failure) => {
+		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		cloudMocks.sendSessionMessage.mockReset().mockRejectedValueOnce(failure === "retry"
+			? new Error("offline") : new CloudCpError("unsupported display", { status: 400, code: "invalid_request" })).mockResolvedValue({ event: {} });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+		render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} /></QueryClientProvider>);
+		const props = cloudMocks.chatProps.mock.lastCall?.[0];
+		const excerpt = capturedCloudExcerpt();
+		const original = structuredClone(excerpt);
+		const file = { ...captureFileReference({ path: "cache.ts", side: "file", line: 1, endLine: 1, lines: [{ kind: "context", oldNo: 1, newNo: 1, text: "FILE_MARKER" }] }, session.id), order: 1 };
+		const send = () => props.onSend("Explain this", undefined, "frozen-receipt", [excerpt], [file], "Explain this");
+		if (failure === "retry") {
+			await expect(send()).rejects.toThrow("offline");
+			await send();
+		} else await send();
+		const [first, second] = cloudMocks.sendSessionMessage.mock.calls;
+		expect(first[2].text).toContain("FROZEN_QUESTION");
+		expect(first[2].text).toContain("FROZEN_ANSWER");
+		expect(first[2].text).toContain("FILE_MARKER");
+		expect(first[2].text).toContain("**缓存**");
+		expect(first[2].content.map((block: { type: string }) => block.type)).toEqual(["file_reference", "excerpt"]);
+		expect(first[2].content[1].snapshot).not.toHaveProperty("turn");
+		expect(first[2].content[1].snapshot).not.toHaveProperty("contextOmitted");
+		expect({ ...first[2].content[1].snapshot, turn: original.snapshot!.turn }).toEqual(original.snapshot);
+		expect(first[3]).toEqual({ idempotencyKey: "frozen-receipt" });
+		expect(second[3]).toEqual(first[3]);
+		if (failure === "retry") expect(second).toEqual(first);
+		else {
+			expect(second[2]).not.toHaveProperty("content");
+			expect(second[2].text).toBe(first[2].text);
+		}
+		expect(excerpt).toEqual(original);
 	});
 	it("sends quotes and captures inlined for the agent and as content blocks for the transcript", async () => {
 		cloudMocks.listChatEvents.mockResolvedValue({ events: [
@@ -193,13 +310,13 @@ describe("CloudSessionChatSurface", () => {
 		const [[, , first], [, , second]] = cloudMocks.sendSessionMessage.mock.calls;
 		expect(first.attachmentIds).toEqual([attachmentId]);
 		expect(first.displayText).toBe("Is this right?");
-		expect(first.text.startsWith("Is this right?\n\nUser-supplied captured code")).toBe(true);
+		expect(first.text.startsWith("Is this right?\n\nReferenced annotations.")).toBe(true);
 		expect(first.text).toContain("const ttl = 60;");
 		expect(first.text).toContain("Selected text:\n---\nthe cache");
 		expect(first.content).toHaveLength(2);
 		expect(second.attachmentIds).toEqual([attachmentId]);
 		expect(second).not.toHaveProperty("displayText");
-		expect(second.text.startsWith("User-supplied captured code")).toBe(true);
+		expect(second.text.startsWith("Referenced annotations.")).toBe(true);
 		for (const body of [first, second]) {
 			expect(JSON.stringify(body)).not.toContain("ao-cloud-attachment:");
 			expect(JSON.stringify(body)).not.toContain("Attached files");
@@ -242,6 +359,11 @@ describe("CloudSessionChatSurface", () => {
 		}]);
 		expect(snapshot.items[0]).toMatchObject({ text: "Explain this", content: [{ type: "excerpt", text: "the cache", annotationId: "ex-1", sourceMessageId: "m-1" }] });
 	});
+	it("retains a chart-only annotation when history omits its empty display text", () => {
+		const chart = { version: 1, referenceFormat: "numbered-v1", captureMode: "block", containsFlowchart: true, badgeOnly: true, rawText: "```mermaid\nflowchart LR; A-->B\n```" };
+		const snapshot = toSnapshot(session, [{ sessionId: session.id, sequence: 1, type: "chat.user_message", payload: { text: "Explain the chart", content: [{ type: "excerpt", annotationId: "chart", snapshot: chart }] }, createdAt: session.updatedAt }]);
+		expect(snapshot.items[0]).toMatchObject({ content: [{ type: "excerpt", text: "", snapshot: chart }] });
+	});
 
 	it("shows a message of only files, with its files and no text", () => {
 		const files = [
@@ -277,6 +399,27 @@ describe("CloudSessionChatSurface", () => {
 			role: "user", origin: "automation", senderLabel: "Worker · Builder", text: "Full prompt",
 		});
 	});
+	it("says once, outside any turn, that the session runs the default because the account lacks the project's model", () => {
+		const events: CloudCpClientEvent[] = [
+			{ sessionId: session.id, sequence: 1, type: "session.model_unavailable", payload: { model: "claude-opus-5-5", harness: "claude-code" }, createdAt: "2026-10-01T00:00:00Z" },
+			// A malformed one shows nothing.
+			{ sessionId: session.id, sequence: 2, type: "session.model_unavailable", payload: { harness: "claude-code" }, createdAt: "2026-10-01T00:00:00Z" },
+		];
+		const items = toSnapshot(session, events).items;
+		expect(items).toHaveLength(1);
+		expect(items[0]).toMatchObject({
+			kind: "activity", activityKind: "system", status: "completed",
+			summary: "claude-opus-5-5 isn't available to your Claude Code account on Cloud, so this session uses the default model.",
+			detail: { event: "session.model_unavailable" },
+		});
+		expect(items[0]?.turnId).toBeUndefined();
+		// Without a harness in the event, the session's own agent names the account.
+		const fallback = toSnapshot({ ...session, provider: "codex" }, [
+			{ sessionId: session.id, sequence: 1, type: "session.model_unavailable", payload: { model: "gpt-6.1-sol" }, createdAt: "2026-10-01T00:00:00Z" },
+		]).items[0];
+		expect(fallback).toMatchObject({ summary: "gpt-6.1-sol isn't available to your Codex account on Cloud, so this session uses the default model." });
+	});
+
 	it("shows a project setup outcome as a system row outside any turn", () => {
 		const events: CloudCpClientEvent[] = [
 			{ sessionId: session.id, sequence: 1, type: "workspace.setup", payload: { status: "succeeded", exitCode: 0, durationMs: 12_400, output: "stack up" }, createdAt: "2026-10-01T00:00:00Z" },
@@ -461,6 +604,36 @@ describe("CloudSessionChatSurface", () => {
 		act(() => props().onChooseConfigOption("model", { value: "claude-opus-5" }));
 		await props().onSend("go", [], "model-1");
 		expect(cloudMocks.sendSessionMessage).toHaveBeenLastCalledWith("org-1", session.id, expect.objectContaining({ model: "claude-opus-5" }), { idempotencyKey: "model-1" });
+	});
+
+	it("has the account's Cloud model lists read again once the session lists the account's own models", async () => {
+		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
+		cloudMocks.listChatModels.mockResolvedValue({ accountListed: true, cliVersion: "2.1.287", models: [
+			{ id: "opus", displayName: "Opus", default: true },
+		] });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+		render(
+			<QueryClientProvider client={queryClient}>
+				<CloudSessionChatSurface session={{ ...session, provider: "claude-code", cloud: { orgId: "org-1", permissionMode: "trusted" } }} />
+			</QueryClientProvider>,
+		);
+		await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["cloud-agent-models", cloudSetup.baseUrl, "user-1", "org-1", "claude-code"] }));
+	});
+
+	it("leaves the Cloud model lists alone when the session's list is the CLI's built-in one", async () => {
+		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
+		cloudMocks.listChatModels.mockResolvedValue({ accountListed: false, models: [{ id: "gpt-6.1-sol", displayName: "GPT-6.1-Sol", default: true }] });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+		render(
+			<QueryClientProvider client={queryClient}>
+				<CloudSessionChatSurface session={{ ...session, provider: "codex", cloud: { orgId: "org-1", permissionMode: "trusted" } }} />
+			</QueryClientProvider>,
+		);
+		await waitFor(() => expect(cloudMocks.listChatModels).toHaveBeenCalled());
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		expect(invalidate).not.toHaveBeenCalledWith(expect.objectContaining({ queryKey: expect.arrayContaining(["cloud-agent-models"]) }));
 	});
 
 	it("names a Claude alias by the model the session's own list describes, never this computer's", async () => {
@@ -1718,6 +1891,50 @@ describe("CloudSessionChatSurface", () => {
 		await expect(cloudWorkspaceFilePath("/etc/hosts", search)).resolves.toBeUndefined();
 	});
 
+	it("opens a file the agent just wrote to its artifact directory in Artifacts, before the session lists it", async () => {
+		// The file view reads through the checkout and refuses the artifact
+		// directory (HTTP 422), so the click never goes there, listed or not.
+		cloudMocks.listChatEvents.mockReset().mockResolvedValue({ events: [], hasMore: false, nextAfter: 0, hasOlder: false, nextBefore: CLOUD_CHAT_NEWEST });
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		cloudMocks.chatProps.mockClear();
+		useUiStore.setState({ workspaceFileOpenRequest: null });
+		const onOpenFile = vi.fn();
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+		const listed = { kind: "markdown" as const, name: "plan.md", path: "plan.md", size: 1, updatedAt: session.updatedAt };
+		const surface = (cloud: { orgId: string; shared?: boolean }) =>
+			<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, cloud, artifactFiles: [listed] }} onOpenFile={onOpenFile} /></QueryClientProvider>;
+		const view = render(surface({ orgId: "org-1" }));
+		await waitFor(() => expect(cloudMocks.chatProps).toHaveBeenCalled());
+		const openFile = (path: string) => act(() => cloudMocks.chatProps.mock.lastCall?.[0].onOpenFile(path));
+
+		openFile("/workspace/.ao/worker/artifacts/session-1/Migration Guide.md");
+		expect(useUiStore.getState().workspaceFileOpenRequest).toMatchObject({ sessionId: "session-1", path: "Migration Guide.md", source: "artifact" });
+		// Not listed yet: the session list is read again now, not at its next poll.
+		expect(invalidate).toHaveBeenCalledExactlyOnceWith({ queryKey: cloudSessionsQueryKey });
+		expect(onOpenFile).not.toHaveBeenCalled();
+
+		// A listed one opens without a read. (A link's query is cut where the link
+		// is read, in ChatMarkdown; this opener gets file paths.)
+		openFile("/workspace/.ao/worker/artifacts/session-1/plan.md");
+		expect(useUiStore.getState().workspaceFileOpenRequest).toMatchObject({ sessionId: "session-1", path: "plan.md", source: "artifact" });
+		expect(invalidate).toHaveBeenCalledTimes(1);
+
+		// "#" and "?" in a file name are part of it.
+		openFile("/workspace/.ao/worker/artifacts/session-1/issue #42?.md");
+		expect(useUiStore.getState().workspaceFileOpenRequest).toMatchObject({ sessionId: "session-1", path: "issue #42?.md", source: "artifact" });
+		expect(invalidate).toHaveBeenCalledTimes(2);
+
+		// A session shared with this person is listed with the shared projects.
+		view.rerender(surface({ orgId: "org-1", shared: true }));
+		openFile("/workspace/.ao/worker/artifacts/session-1/fresh.md");
+		expect(invalidate).toHaveBeenLastCalledWith({ queryKey: sharedCloudWorkspacesQueryKey });
+
+		// A checkout file still opens in the workspace.
+		openFile("/workspace/repository/src/app.ts");
+		await waitFor(() => expect(onOpenFile).toHaveBeenCalledExactlyOnceWith("src/app.ts"));
+	});
+
 	it("merges streamed and polled events in order without dropping either side's", () => {
 		const event = (sequence: number): CloudCpClientEvent => ({
 			sessionId: session.id, sequence, type: "chat.assistant_delta",
@@ -1770,15 +1987,102 @@ describe("CloudSessionChatSurface", () => {
 		expect(failed.items.find((item) => item.kind === "activity")).toMatchObject({ status: "recovered" });
 	});
 
-	it("continues a long history from its last sequence", async () => {
-		const event = (sequence: number): CloudCpClientEvent => ({
-			sessionId: session.id, sequence, type: "chat.assistant_delta",
-			payload: { text: String(sequence) }, createdAt: session.updatedAt,
+	it("reads a turn whose start is not loaded as started, and marks older history", () => {
+		const event = (sequence: number, type: string, payload: unknown): CloudCpClientEvent => ({
+			sessionId: session.id, sequence, type, payload, createdAt: session.updatedAt,
 		});
-		const listChatEvents = vi.fn().mockResolvedValue({ events: [event(500), event(501)], hasMore: false, nextAfter: 501 });
-		const events = await loadCloudChatEvents({ listChatEvents }, "org-1", session.id, [event(1), event(500)]);
-		expect(listChatEvents).toHaveBeenCalledWith("org-1", session.id, { after: 500, limit: 500 });
-		expect(events.map((item) => item.sequence)).toEqual([1, 500, 501]);
+		// The newest events begin inside turn-1: its prompt and start are older.
+		const events = [
+			event(50, "chat.assistant_delta", { turnId: "turn-1", text: "Still working" }),
+			event(51, "chat.user_message", { text: "Next", turnId: "turn-2" }),
+		];
+		const partial = toSnapshot(session, events, undefined, { partial: true });
+		expect(partial.turns.map((turn) => [turn.id, turn.state])).toEqual([["turn-1", "running"], ["turn-2", "queued"]]);
+		expect(partial).toMatchObject({ hasMoreBefore: true, oldestSequence: 50, latestSequence: 51 });
+		const settled = toSnapshot(session, [...events, event(52, "chat.turn_completed", { turnId: "turn-1" })], undefined, { partial: true });
+		expect(settled.turns.map((turn) => [turn.id, turn.state])).toEqual([["turn-1", "completed"], ["turn-2", "running"]]);
+		// The whole history from the session's start reads as it always did.
+		expect(toSnapshot(session, events)).toMatchObject({ hasMoreBefore: false });
+	});
+
+	it("keeps a later Setup where it ran when the session's first prompt is not loaded", () => {
+		const step = (sequence: number): CloudCpClientEvent => ({
+			sessionId: session.id, sequence, type: "workspace.script.step", createdAt: "2026-10-20T16:02:01Z",
+			payload: { phase: "setup", runId: "reopen", step: 1, total: 1, status: "succeeded", exitCode: 0, durationMs: 10, command: "./setup.sh", repository: "", startedAt: "2026-10-20T16:02:01Z" },
+		});
+		const events: CloudCpClientEvent[] = [
+			{ sessionId: session.id, sequence: 60, type: "chat.user_message", payload: { text: "Wake up", turnId: "turn-9" }, createdAt: "2026-10-20T16:02:00Z" },
+			step(61),
+			{ sessionId: session.id, sequence: 62, type: "chat.turn_started", payload: { turnId: "turn-9" }, createdAt: "2026-10-20T16:02:02Z" },
+		];
+		const order = (items: { kind: string; detail?: { event?: string } }[]) =>
+			items.map((item) => item.detail?.event === "workspace.script.run" ? "setup" : item.kind);
+		// From the session's start this is its first prompt, which its Setup leads.
+		expect(order(toSnapshot(session, events).items)).toEqual(["setup", "message"]);
+		// Here it is only the first one loaded: the Setup stays after it, as it does once older pages load.
+		expect(order(toSnapshot(session, events, undefined, { partial: true }).items)).toEqual(["message", "setup"]);
+	});
+
+	it("shows the newest page first, then the half hour before it, and older pages on demand", async () => {
+		const at = (minutes: number) => new Date(Date.UTC(2026, 10, 8, 10, minutes)).toISOString();
+		const event = (sequence: number, type: string, payload: unknown, createdAt: string): CloudCpClientEvent => ({ sessionId: session.id, sequence, type, payload, createdAt });
+		const newest = [
+			event(90, "chat.user_message", { text: "Latest", turnId: "turn-3" }, at(50)),
+			event(91, "chat.turn_started", { turnId: "turn-3" }, at(50)),
+			event(92, "chat.turn_completed", { turnId: "turn-3" }, at(51)),
+		];
+		const recent = [
+			event(70, "chat.user_message", { text: "Earlier", turnId: "turn-2" }, at(30)),
+			event(71, "chat.turn_completed", { turnId: "turn-2" }, at(31)),
+		];
+		const oldest = [event(1, "chat.user_message", { text: "First", turnId: "turn-1" }, at(0)), event(2, "chat.turn_completed", { turnId: "turn-1" }, at(1))];
+		let releaseRecent!: () => void;
+		const recentHeld = new Promise<void>((resolve) => { releaseRecent = resolve; });
+		cloudMocks.listChatEvents.mockReset().mockImplementation(async (_org: string, _session: string, query: { before?: number; after?: number; since?: string }) => {
+			if (query.before === 9007199254740991 && query.after === undefined) return { events: newest, hasMore: false, nextAfter: 92, hasOlder: true, nextBefore: 90 };
+			if (query.before === 90) {
+				await recentHeld;
+				return { events: recent, hasMore: false, nextAfter: 71, hasOlder: true, nextBefore: 70 };
+			}
+			if (query.before === 70) return { events: oldest, hasMore: false, nextAfter: 2, hasOlder: false, nextBefore: 1 };
+			return { events: [], hasMore: false, nextAfter: query.after ?? 0, hasOlder: false, nextBefore: query.before };
+		});
+		cloudMocks.listChatModels.mockReset().mockResolvedValue({ models: [] });
+		cloudMocks.chatProps.mockClear();
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} /></QueryClientProvider>);
+		const props = () => cloudMocks.chatProps.mock.lastCall?.[0];
+		const texts = () => (props()?.snapshot.items as { kind: string; text?: string }[]).filter((item) => item.kind === "message").map((item) => item.text);
+		// The newest page shows while the half hour before it is still being read.
+		await waitFor(() => expect(texts()).toEqual(["Latest"]));
+		expect(props()).toMatchObject({ hasOlder: true, snapshot: { hasMoreBefore: true } });
+		expect(cloudMocks.listChatEvents).toHaveBeenCalledWith("org-1", session.id, { before: 90, limit: 500, since: at(20) });
+		releaseRecent();
+		await waitFor(() => expect(texts()).toEqual(["Earlier", "Latest"]));
+		expect(cloudMocks.listChatEvents).not.toHaveBeenCalledWith("org-1", session.id, expect.objectContaining({ before: 70 }));
+		// Older pages only on demand, as the reader scrolls up.
+		act(() => props().onLoadOlder());
+		await waitFor(() => expect(texts()).toEqual(["First", "Earlier", "Latest"]));
+		expect(props()).toMatchObject({ hasOlder: false, loadingOlder: false, snapshot: { hasMoreBefore: false } });
+		expect(cloudMocks.listChatEvents).toHaveBeenCalledWith("org-1", session.id, { before: 70, limit: 200, since: undefined });
+	});
+
+	it("reads the whole history forward from a control plane that cannot read back", async () => {
+		const event = (sequence: number, text: string): CloudCpClientEvent => ({
+			sessionId: session.id, sequence, type: "chat.user_message", payload: { text, turnId: `turn-${sequence}` }, createdAt: session.updatedAt,
+		});
+		cloudMocks.listChatEvents.mockReset()
+			.mockResolvedValueOnce({ events: [event(1, "One")], hasMore: true, nextAfter: 1 })
+			.mockResolvedValueOnce({ events: [event(2, "Two")], hasMore: false, nextAfter: 2 })
+			.mockResolvedValue({ events: [], hasMore: false, nextAfter: 2 });
+		cloudMocks.listChatModels.mockReset().mockResolvedValue({ models: [] });
+		cloudMocks.chatProps.mockClear();
+		render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} /></QueryClientProvider>);
+		const props = () => cloudMocks.chatProps.mock.lastCall?.[0];
+		await waitFor(() => expect((props()?.snapshot.items as { text?: string }[]).map((item) => item.text)).toEqual(["One", "Two"]));
+		expect(cloudMocks.listChatEvents.mock.calls.slice(0, 2).map((call) => call[2])).toEqual([{ before: 9007199254740991, limit: 150 }, { after: 1, limit: 500 }]);
+		expect(props()?.hasOlder).toBeFalsy();
+		expect(props()?.snapshot.hasMoreBefore).toBe(false);
 	});
 
 	it("projects completed and interrupted turns without leaving output streaming", () => {
@@ -2063,5 +2367,59 @@ describe("CloudSessionChatSurface palette jump", () => {
 		rerender(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={sessionA} /></QueryClientProvider>);
 		rerender(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={sessionB} /></QueryClientProvider>);
 		expect(props().annotationNavigationRequest).toBeUndefined();
+	});
+});
+
+ it("delivers frozen excerpts independently of Cloud source history", () => {
+	const ref = { id: "quote", conversationId: "cloud", messageId: "deleted", revision: 9, role: "assistant" as const, text: "selected", snapshot: { version: 1, rawText: "**selected**", captureMode: "exact" as const } };
+	const text = cloudExcerptText([ref], { items: [] });
+	expect(text).toContain("**selected**");
+	expect(text).toContain("Selected text:\n---\nselected");
+	expect(cloudAnnotationContent([ref])[0].snapshot).toEqual(ref.snapshot);
+ });
+
+describe("Cloud excerpt display snapshots", () => {
+	it("omits repeated background turns from eight excerpts without changing the captures", () => {
+		const excerpt = capturedCloudExcerpt();
+		const original = structuredClone(excerpt);
+		const refs = Array.from({ length: 8 }, (_, index) => ({ ...excerpt, id: `excerpt-${index}`, order: index }));
+		const content = cloudAnnotationContent(refs);
+		for (const [index, block] of content.entries()) {
+			expect(block.annotationId).toBe(`excerpt-${index}`);
+			expect(block.sourceRevision).toBe(0);
+			expect(block.snapshot).not.toHaveProperty("turn");
+			expect({ ...block.snapshot, turn: original.snapshot!.turn }).toEqual(original.snapshot);
+		}
+		expect(excerpt).toEqual(original);
+		const bytes = (value: unknown) => new TextEncoder().encode(JSON.stringify(value)).length;
+		const full = content.map(block => ({ ...block, snapshot: excerpt.snapshot }));
+		const removedBytes = bytes(full) - bytes(content);
+		// The only JSON removed per reference is the comma and the turn property.
+		expect(removedBytes).toBe(8 * (bytes({ turn: excerpt.snapshot!.turn }) - 1));
+		expect(removedBytes).toBeGreaterThan(48_000);
+	});
+
+	it.each(["legacy", "no-turn", "omitted", "diagram"])("preserves %s metadata and supports old transcript events", (kind) => {
+		const excerpt = capturedCloudExcerpt();
+		if (kind === "legacy") delete excerpt.snapshot;
+		else if (kind === "no-turn") delete excerpt.snapshot!.turn;
+		else if (kind === "omitted") {
+			delete excerpt.snapshot!.turn;
+			excerpt.snapshot!.contextOmitted = true;
+		} else {
+			excerpt.text = "";
+			const rawText = "```mermaid\nflowchart LR; A-->B\n```";
+			excerpt.snapshot = { ...excerpt.snapshot!, rawText, captureMode: "block", containsFlowchart: true, badgeOnly: true,
+				sourceRange: { start: 0, end: rawText.length, offsetUnit: "utf-16" }, diagramRange: { start: 0, end: rawText.length, offsetUnit: "utf-16" } };
+		}
+		const original = structuredClone(excerpt);
+		const display = cloudAnnotationContent([excerpt])[0];
+		if (display.snapshot) expect(display.snapshot).not.toHaveProperty("turn");
+		if (original.snapshot?.turn) expect({ ...display.snapshot, turn: original.snapshot.turn }).toEqual(original.snapshot);
+		else expect(display.snapshot).toEqual(original.snapshot);
+		const projected = toSnapshot(session, [{ sessionId: session.id, sequence: 1, type: "chat.user_message",
+			payload: { text: "Explain", content: [{ ...display, snapshot: original.snapshot }] }, createdAt: session.updatedAt }]);
+		expect(projected.items[0]).toMatchObject({ content: [{ text: excerpt.text, snapshot: original.snapshot }] });
+		expect(excerpt).toEqual(original);
 	});
 });

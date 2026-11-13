@@ -16,7 +16,7 @@ import {
 	MessageSquareDiff,
 	MessageSquareDot,
 	X,
-} from "lucide-react";
+} from "@/components/app-icons";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
 	useClearAllNotificationsMutation,
@@ -24,6 +24,7 @@ import {
 	useMarkAllNotificationsReadMutation,
 	useNotificationsQuery,
 } from "../hooks/useNotificationsQuery";
+import { useAppMenuAction, useAppMenuAvailable } from "../hooks/useAppMenuCommand";
 import { useRestoreSession } from "../hooks/useRestoreSession";
 import { useSwipeToDismiss } from "../hooks/useSwipeToDismiss";
 import { useRemoteWorkspaces, useWorkspaceQuery } from "../hooks/useWorkspaceQuery";
@@ -49,7 +50,6 @@ import { captureRendererEvent } from "../lib/telemetry";
 import { captureTopbarAction } from "../lib/topbar-telemetry";
 import { recordManualWorkerOpen } from "../lib/session-management-telemetry";
 import { cn } from "../lib/utils";
-import { TopbarButton } from "./TopbarButton";
 import { Button } from "./ui/button";
 import { Pressable } from "./ui/pressable";
 import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from "./ui/popover";
@@ -74,7 +74,7 @@ function useNotificationTargetNavigation() {
 			const sessionId = notification.target.sessionId || notification.sessionId;
 			if (!sessionId) return;
 			recordManualWorkerOpen(sessionId);
-			void captureRendererEvent("ao.renderer.notification_opened", { target: "session" });
+			void captureRendererEvent("ao.notifications.opened", { target: "session" });
 			navigateToSession(notification.projectId, sessionId, hostId);
 		},
 		[navigateToSession],
@@ -83,7 +83,7 @@ function useNotificationTargetNavigation() {
 	const openPrimary = useCallback(
 		(notification: NotificationDTO, hostId: HostId = LOCAL_HOST) => {
 			if (notification.target.kind === "pr" && notification.target.prUrl) {
-				void captureRendererEvent("ao.renderer.notification_opened", { target: "pr" });
+				void captureRendererEvent("ao.notifications.opened", { target: "pr" });
 				window.open(notification.target.prUrl, "_blank", "noopener,noreferrer");
 				return;
 			}
@@ -411,7 +411,7 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 
 		setMarkReadError(null);
 		void markAllMutate(newly)
-			.then(() => captureRendererEvent("ao.renderer.notification_mark_read_succeeded", { scope: "all" }))
+			.then(() => captureRendererEvent("ao.notifications.read", { scope: "all" }))
 			.catch((error: unknown) => {
 				void captureRendererEvent("ao.renderer.notification_mark_read_failed", { scope: "all" });
 				for (const id of newly) acknowledgedIdsRef.current.delete(id);
@@ -497,6 +497,16 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 		}
 	}, [queryClient]);
 
+	// A fullscreen pane mounts its own bell and covers the panel's; only the bell
+	// the user can see answers the menu.
+	const anchorRef = useRef<HTMLSpanElement>(null);
+	useAppMenuAvailable("toggle-notifications", true);
+	useAppMenuAction("toggle-notifications", () => {
+		const fullscreenElement = document.fullscreenElement;
+		if (fullscreenElement && !fullscreenElement.contains(anchorRef.current)) return;
+		setPanelOpen(!openRef.current);
+	});
+
 	const retryMarkRead = () => {
 		setMarkReadError(null);
 		setAckRetryNonce((nonce) => nonce + 1);
@@ -541,7 +551,7 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 	// their cloud project, so they open through the same session route.
 	const openCloudSession = useCallback((projectId: string, sessionId: string) => {
 		recordManualWorkerOpen(sessionId);
-		void captureRendererEvent("ao.renderer.notification_opened", { target: "session" });
+		void captureRendererEvent("ao.notifications.opened", { target: "session" });
 		navigateToSession(projectId, sessionId);
 	}, [navigateToSession]);
 
@@ -676,13 +686,13 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 		<Popover onOpenChange={setPanelOpen} open={open}>
 			{/* Keep the drawer anchored to layout bounds while the bell scales on press. */}
 			<PopoverAnchor asChild>
-				<span className="inline-flex shrink-0">
+				<span className="inline-flex shrink-0" ref={anchorRef}>
 					<PopoverTrigger asChild>
-						<TopbarButton
+						<Button type="button" size="icon-sm"
 							aria-label={unreadCount > 0 ? t("notify.unreadCount", { count: unreadCount }) : t("notify.bell")}
 							className="relative"
 							style={style}
-							variant="icon"
+							variant="quiet"
 						>
 							{unreadCount > 0 ? (
 								<BellRing className="size-icon-base fill-current text-foreground" aria-hidden="true" />
@@ -694,7 +704,7 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 									{unreadCount > 99 ? "99+" : unreadCount}
 								</span>
 							) : null}
-						</TopbarButton>
+						</Button>
 					</PopoverTrigger>
 				</span>
 			</PopoverAnchor>
@@ -1010,7 +1020,7 @@ const NotificationItem = memo(function NotificationItem({
 						notificationIconClass(notification.type),
 					)}
 				>
-					<Icon className="size-icon-base" strokeWidth={1.75} aria-hidden="true" />
+					<Icon className="size-icon-base" aria-hidden="true" />
 				</div>
 				<div className="min-w-0">
 					<div className="flex min-h-5 items-start">
@@ -1030,7 +1040,7 @@ const NotificationItem = memo(function NotificationItem({
 										href={titleLink.url}
 										onClick={(event) => {
 											event.stopPropagation();
-											void captureRendererEvent("ao.renderer.notification_opened", { target: "pr" });
+											void captureRendererEvent("ao.notifications.opened", { target: "pr" });
 										}}
 										rel="noopener noreferrer"
 										target="_blank"
@@ -1199,7 +1209,7 @@ const CloudNotificationItem = memo(function CloudNotificationItem({
 						notificationIconClass(notification.type),
 					)}
 				>
-					<Icon className="size-icon-base" strokeWidth={1.75} aria-hidden="true" />
+					<Icon className="size-icon-base" aria-hidden="true" />
 				</div>
 				<div className="min-w-0">
 					<div className="flex min-h-5 items-start gap-1.5">

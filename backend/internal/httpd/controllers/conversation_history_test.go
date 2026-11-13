@@ -435,6 +435,10 @@ func TestConversationHistoryRefusalsAreTypedNeverInternalErrors(t *testing.T) {
 		{"previous agent provider", chatsvc.ErrTurnProviderMismatch, http.StatusConflict, "CHAT_TURN_PROVIDER_MISMATCH"},
 		{"unsupported", chatsvc.ErrRollbackUnsupported, http.StatusConflict, "CHAT_ROLLBACK_UNSUPPORTED"},
 		{"provider refused", fmt.Errorf("%w: no", chatsvc.ErrProviderRefused), http.StatusConflict, "CHAT_PROVIDER_REFUSED"},
+		// A steer into a lost session is a refusal too, but the client needs the
+		// resume guidance rather than "the conversation is fine".
+		{"refusal for a lost provider session", fmt.Errorf("%w: %w", chatsvc.ErrProviderRefused,
+			fmt.Errorf("%w: Session not found", ports.ErrChatProviderSessionLost)), http.StatusConflict, "CHAT_PROVIDER_SESSION_LOST"},
 		{"no controller", chatsvc.ErrNoController, http.StatusConflict, "CHAT_CONTROLLER_NOT_READY"},
 		{"stopped before queue append", chatsvc.ErrNotProvisioning, http.StatusConflict, "CHAT_CONTROLLER_NOT_READY"},
 		{"tui session", chatsvc.ErrNotChatMode, http.StatusConflict, "SESSION_MODE_MISMATCH"},

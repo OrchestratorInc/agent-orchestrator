@@ -1,4 +1,4 @@
-import { Eraser, Import, MoreHorizontal, Pencil, Plus, Star, Trash2, UserRound } from "lucide-react";
+import { Eraser, Import, MoreHorizontal, Pencil, Plus, Star, Trash2, UserRound } from "@/components/app-icons";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { BrowserProfileUsage } from "../../../shared/browser-profiles";

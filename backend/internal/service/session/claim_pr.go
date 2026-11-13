@@ -166,6 +166,9 @@ func (s *Service) requireProjectPRRepository(ctx context.Context, project domain
 	if originErr == nil || (project.Config.CanonicalRepoURL != "" && requireSameRepo(prURL, project.Config.CanonicalRepoURL) == nil) {
 		return nil
 	}
+	if s.sameRenamedGitHubRepo(ctx, prURL, project.RepoOriginURL) {
+		return nil
+	}
 	if project.Kind.WithDefault() != domain.ProjectKindWorkspace {
 		return originErr
 	}
@@ -182,6 +185,35 @@ func (s *Service) requireProjectPRRepository(ctx context.Context, project domain
 		}
 	}
 	return ErrProjectMismatch
+}
+
+// sameRenamedGitHubRepo reports whether GitHub resolves the github.com origin
+// and the PR's repository to the same repository id, as it does after the
+// origin's owner or name was renamed or transferred. The PR is on the very
+// repository the origin's git remote already reaches through GitHub's
+// redirect, so this grants no trust beyond the origin itself. Any lookup
+// failure, other host, or different id keeps the mismatch.
+func (s *Service) sameRenamedGitHubRepo(ctx context.Context, prURL, origin string) bool {
+	if s.githubRepos == nil {
+		return false
+	}
+	prHost, prOwner, prRepo, _, err := parsePRURL(prURL)
+	if err != nil || !strings.EqualFold(prHost, "github.com") {
+		return false
+	}
+	originID, err := domain.ParseRepositoryIdentity(strings.TrimSpace(origin))
+	if err != nil || originID.Host != "github.com" {
+		return false
+	}
+	fromOrigin, err := s.githubRepos.ResolveGitHubRepository(ctx, originID.Namespace, originID.Name)
+	if err != nil || fromOrigin.ID == 0 {
+		return false
+	}
+	fromPR, err := s.githubRepos.ResolveGitHubRepository(ctx, prOwner, prRepo)
+	if err != nil {
+		return false
+	}
+	return fromPR.ID == fromOrigin.ID
 }
 
 func (s *Service) fetchClaimObservation(ctx context.Context, ref ports.SCMPRRef) (ports.SCMObservation, error) {
@@ -333,7 +365,7 @@ func claimRowsFromSCM(sessionID domain.SessionID, obs ports.SCMObservation, revi
 	for _, th := range obs.Review.Threads {
 		threads = append(threads, domain.PullRequestReviewThread{ThreadID: th.ID, Path: th.Path, Line: th.Line, Resolved: th.Resolved, IsBot: th.IsBot, UpdatedAt: now})
 		for _, c := range th.Comments {
-			comments = append(comments, domain.PullRequestComment{ThreadID: th.ID, ReviewID: c.ReviewID, ID: c.ID, Author: c.Author, File: th.Path, Line: th.Line, Body: c.Body, URL: c.URL, Resolved: th.Resolved, IsBot: c.IsBot, CreatedAt: now, AutoInjectReview: sessionRecord.AutoInjectReview})
+			comments = append(comments, domain.PullRequestComment{ThreadID: th.ID, ReviewID: c.ReviewID, ID: c.ID, Author: c.Author, File: th.Path, Line: th.Line, Body: c.Body, URL: c.URL, Resolved: th.Resolved, IsBot: c.IsBot, CreatedAt: commentCreatedAt(c.CreatedAt, now), AutoInjectReview: sessionRecord.AutoInjectReview})
 		}
 	}
 	return pr, checks, reviews, threads, comments
@@ -519,6 +551,15 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// commentCreatedAt prefers the provider's comment timestamp and falls back to
+// the observation time for providers that do not report one.
+func commentCreatedAt(provider, observed time.Time) time.Time {
+	if !provider.IsZero() {
+		return provider
+	}
+	return observed
 }
 
 // branchPRLister lists a repository's open PRs from one branch, filtered by

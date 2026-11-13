@@ -29,7 +29,7 @@ func newImportCommand(ctx *commandContext) *cobra.Command {
 	var opts importOptions
 	cmd := &cobra.Command{
 		Use:   "import",
-		Short: "Import projects from a legacy AO install",
+		Short: "Import projects from a legacy Orchestrator install",
 		Long: "Import reads the legacy Agent Orchestrator flat-file store " +
 			"(~/.agent-orchestrator) read-only and ports its projects and per-project " +
 			"settings into the rewrite database. Legacy files are never modified, and " +
@@ -40,7 +40,7 @@ func newImportCommand(ctx *commandContext) *cobra.Command {
 			return ctx.runImport(cmd, opts)
 		},
 	}
-	cmd.Flags().StringVar(&opts.from, "from", "", "Legacy AO root to read (default ~/.agent-orchestrator)")
+	cmd.Flags().StringVar(&opts.from, "from", "", "Legacy Orchestrator root to read (default ~/.agent-orchestrator)")
 	cmd.Flags().BoolVar(&opts.dryRun, "dry-run", false, "Parse and report the planned import without writing")
 	cmd.Flags().BoolVarP(&opts.yes, "yes", "y", false, "Skip the confirmation prompt (for non-interactive use)")
 	cmd.Flags().BoolVar(&opts.json, "json", false, "Output the import report as JSON")
@@ -58,7 +58,7 @@ func (c *commandContext) runImport(cmd *cobra.Command, opts importOptions) error
 	if live, err := runfile.CheckStale(cfg.RunFilePath); err != nil {
 		return fmt.Errorf("inspect run-file: %w", err)
 	} else if live != nil {
-		return usageError{fmt.Errorf("the AO daemon is running (pid %d); stop it first with `ao stop` before importing", live.PID)}
+		return usageError{fmt.Errorf("the Orchestrator daemon is running (pid %d); stop it first with `ao stop` before importing", live.PID)}
 	}
 
 	root := opts.from
@@ -73,7 +73,7 @@ func (c *commandContext) runImport(cmd *cobra.Command, opts importOptions) error
 		return fmt.Errorf("legacy config at %s: %w", root, parseErr)
 	}
 	if !legacyimport.HasLegacyData(root) {
-		_, err := fmt.Fprintf(cmd.OutOrStdout(), "No legacy AO projects found at %s. Nothing to import.\n", root)
+		_, err := fmt.Fprintf(cmd.OutOrStdout(), "No legacy Orchestrator projects found at %s. Nothing to import.\n", root)
 		return err
 	}
 

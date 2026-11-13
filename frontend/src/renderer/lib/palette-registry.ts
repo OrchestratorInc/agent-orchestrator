@@ -1,5 +1,5 @@
 import type { TFunction } from "i18next";
-import type { AppShortcutId } from "../../shared/shortcuts";
+import { isSplitPaneShortcut, type AppShortcutId } from "../../shared/shortcuts";
 import { shortcutLabelKeys } from "../i18n/key-maps";
 import type { MessageKey } from "../i18n";
 import type { GlobalSettingsSection } from "../stores/ui-store";
@@ -27,6 +27,8 @@ const SHORTCUT_COMMANDS: { id: AppShortcutId; keywords: string[] }[] = [
 	{ id: "previous-tab", keywords: ["switch tab"] },
 	{ id: "next-tab", keywords: ["switch tab"] },
 	{ id: "new-shell-terminal", keywords: ["shell", "console", "pty"] },
+	{ id: "split-shell-terminal", keywords: ["split", "side by side", "pane", "shell"] },
+	{ id: "split-shell-terminal-down", keywords: ["split", "horizontal", "below", "pane", "shell"] },
 	{ id: "close-shell-terminal", keywords: ["close terminal"] },
 	{ id: "reopen-closed-tab", keywords: ["undo close", "restore tab"] },
 	{ id: "archive-session", keywords: ["hide", "done", "remove"] },
@@ -40,8 +42,8 @@ const SHORTCUT_COMMANDS: { id: AppShortcutId; keywords: string[] }[] = [
 	{ id: "toggle-browser-devtools", keywords: ["show", "hide", "open", "close", "inspect", "web inspector", "console"] },
 ];
 
-export function buildShortcutCommands(t: TFunction): CommandItem[] {
-	return SHORTCUT_COMMANDS.map(({ id, keywords }) => ({
+export function buildShortcutCommands(t: TFunction, { splitPanes = false }: { splitPanes?: boolean } = {}): CommandItem[] {
+	return SHORTCUT_COMMANDS.filter(({ id }) => splitPanes || !isSplitPaneShortcut(id)).map(({ id, keywords }) => ({
 		id: `shortcut:${id}`,
 		group: "global",
 		title: t(shortcutLabelKeys[id]),
@@ -59,10 +61,9 @@ type SettingsEntry = {
 	keywords: string[];
 };
 
-/** Keywords every row on a page inherits: "codex" finds Add account on the accounts page. */
+/** Keywords every row on a page inherits: "accounts" finds the Harness page, where accounts live. */
 const SECTION_KEYWORDS: Partial<Record<GlobalSettingsSection, string[]>> = {
-	agents: ["accounts", "codex", "claude", "subscriptions", "plan", "login"],
-	harness: ["agents", "agent cli", "install"],
+	harness: ["agents", "agent cli", "install", "accounts", "codex", "claude", "subscriptions", "plan", "login"],
 	remoteHosts: ["ssh", "remote", "machine", "server"],
 	mobile: ["phone", "ios", "android", "pair", "qr code"],
 	browserProfiles: ["browser", "profiles", "chrome"],
@@ -84,20 +85,15 @@ const SETTINGS_ENTRIES: SettingsEntry[] = [
 	{ id: "version-refresh", section: "general", label: "settings.versionRefresh.label", keywords: ["auto upgrade sessions", "version refresh"] },
 	{ id: "terminal-shell", section: "general", label: "settings.terminalShell.label", keywords: ["zsh", "bash", "fish", "powershell", "shell path"] },
 	{ id: "copy-on-select", section: "general", label: "settings.terminalCopyOnSelect", keywords: ["terminal copy", "selection", "clipboard"] },
+	{ id: "terminal-clicks", section: "general", label: "settings.terminalClicks", keywords: ["terminal mouse", "mouse reporting", "click", "select text", "option drag"] },
 	{ id: "sound", section: "general", label: "settings.soundNotifications", keywords: ["sounds", "chime", "alert sound"] },
 	{ id: "privacy", section: "general", label: "settings.privacy", keywords: ["data", "tracking"] },
 	{ id: "analytics", section: "general", label: "settings.analytics.label", keywords: ["telemetry", "tracking", "opt out", "posthog"] },
 	{ id: "error-events", section: "general", label: "settings.telemetryEvents.label", keywords: ["crash reports", "sentry", "telemetry"] },
 	{ id: "developer-mode", section: "general", label: "settings.developerMode", keywords: ["advanced", "debug"] },
 	{ id: "side-chats", section: "general", label: "settings.sideChats", keywords: ["side chat", "secondary chat"] },
-	{ id: "new-sidebar-design", section: "general", label: "settings.newSidebarDesign", keywords: ["sidebar", "old sidebar", "status icons", "hover preview"] },
-	{ id: "simplified-topbar", section: "general", label: "settings.simplifiedTopbar", keywords: ["top bar", "topbar", "toolbar", "floating", "tabs"] },
+	{ id: "split-panes", section: "general", label: "settings.splitPanes", keywords: ["split", "side by side", "panes", "drag tabs"] },
 	{ id: "cli-link", section: "general", label: "settings.cliLink.label", keywords: ["cli", "terminal command", "path", "install"] },
-	{ id: "accounts", section: "agents", label: "settings.agents", keywords: [] },
-	{ id: "add-account", section: "agents", label: "settings.codexAccounts.add", keywords: ["sign in"] },
-	{ id: "remove-account", section: "agents", label: "settings.agentAccounts.remove", keywords: ["logout", "sign out"] },
-	{ id: "refresh-limits", section: "agents", label: "settings.agentAccounts.refresh", keywords: ["usage", "rate limit", "quota"] },
-	{ id: "usage-limits", section: "agents", label: "settings.codexAccounts.generalUsageLimits", keywords: ["usage", "rate limit", "quota"] },
 	{ id: "harness", section: "harness", label: "settings.harness", keywords: [] },
 	{ id: "harness-logins", section: "harness", label: "settings.harness.viewLabel", keywords: ["login", "agent login"] },
 	{ id: "remote-hosts", section: "remoteHosts", label: "settings.remoteHosts", keywords: [] },
@@ -131,8 +127,6 @@ type SettingsVisibility = { developerMode: boolean; diagnostics: boolean };
 /** Mirrors the visibility rules of the settings catalog for the pages the registry covers. */
 function sectionVisible(section: GlobalSettingsSection, { developerMode, diagnostics }: SettingsVisibility): boolean {
 	switch (section) {
-		case "agents":
-			return !developerMode;
 		case "diagnostics":
 			return developerMode && diagnostics;
 		default:
@@ -163,8 +157,6 @@ export function buildSettingsCommands(t: TFunction, visibility: SettingsVisibili
 /** The registry entry naming a whole settings page. */
 function sectionLeadId(section: GlobalSettingsSection): string {
 	switch (section) {
-		case "agents":
-			return "accounts";
 		case "remoteHosts":
 			return "remote-hosts";
 		case "browserProfiles":

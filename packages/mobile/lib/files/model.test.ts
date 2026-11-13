@@ -3,6 +3,7 @@ import { parseUnifiedDiff } from "../../../shared/files/diff-parser";
 import type { WorkspaceFileSummary, WorkspaceManifest } from "./api";
 import {
 	annotationTarget,
+	branchName,
 	changeAccessibilityLabel,
 	changeGroups,
 	commentAnchor,
@@ -12,6 +13,7 @@ import {
 	fileDisplayRows,
 	languageForPath,
 	orderedChanges,
+	scopedFileDetail,
 	selectedLines,
 	selectionLabel,
 	splitPath,
@@ -210,5 +212,45 @@ describe("inline comments", () => {
 	it("draws a context line's comment once, though it has both numbers", () => {
 		const out = summarize(withInlineComments(rows, [{ id: "ctx", anchor: { side: "new", line: 5 } }]));
 		expect(out.filter((row) => row === "comment ctx")).toHaveLength(1);
+	});
+});
+
+describe("branchName", () => {
+	it("says the branch a compared ref names, without its remote", () => {
+		expect(branchName("refs/remotes/origin/main")).toBe("main");
+		expect(branchName("refs/remotes/upstream/release/1.2")).toBe("release/1.2");
+		expect(branchName("refs/heads/feature/x")).toBe("feature/x");
+		expect(branchName("main")).toBe("main");
+	});
+});
+
+describe("scopedFileDetail", () => {
+	const patch = (body: string, header = "") => `diff --git a/a.ts b/a.ts\n${header}--- a/a.ts\n+++ b/a.ts\n${body}`;
+
+	// A staged edit whose worktree was put back reads as unmodified in the
+	// combined view; the scope's own patch still says what Staged holds.
+	it("takes status and counts from the scope's patch, and content from its after side", () => {
+		const detail = scopedFileDetail("a.ts", {
+			workspaceVersion: "v1",
+			groups: [{ includedPaths: ["a.ts"], patch: patch("@@ -1,3 +1,4 @@\n a\n b\n-c\n+c2\n+staged\n") }],
+		}, { exists: true, content: "a\nb\nc2\nstaged\n", revision: "r1", size: 15 });
+		expect(detail).toMatchObject({ status: "modified", additions: 2, deletions: 1, deleted: false, binary: false, content: "a\nb\nc2\nstaged\n", fileFingerprint: "r1", workspaceVersion: "v1" });
+		// Header lines are not counted as changes.
+		expect(detail.diff).toContain("+++ b/a.ts");
+	});
+
+	it("reads added, deleted and renamed files from the patch's headers", () => {
+		expect(scopedFileDetail("a.ts", { groups: [{ patch: patch("@@ -0,0 +1 @@\n+x\n", "new file mode 100644\n") }] }, { exists: true, content: "x\n" }).status).toBe("added");
+		const gone = scopedFileDetail("a.ts", { groups: [{ patch: patch("@@ -1 +0,0 @@\n-x\n", "deleted file mode 100644\n") }] }, { exists: false });
+		expect(gone).toMatchObject({ status: "deleted", deleted: true, content: "" });
+		const moved = scopedFileDetail("b.ts", { groups: [{ patch: "diff --git a/a.ts b/b.ts\nsimilarity index 100%\nrename from a.ts\nrename to b.ts\n" }] }, { exists: true, content: "x" });
+		expect(moved).toMatchObject({ status: "renamed", previousPath: "a.ts", additions: 0, deletions: 0 });
+	});
+
+	it("is unmodified with no patch, and binary when the scope defers it as binary", () => {
+		expect(scopedFileDetail("a.ts", { groups: [] }, { exists: true, content: "same" }).status).toBe("unmodified");
+		const image = scopedFileDetail("a.png", { groups: [{ patch: "", deferred: [{ path: "a.png", reason: "binary" }] }] }, { exists: true, binary: true });
+		expect(image).toMatchObject({ binary: true, content: "", diffTruncated: false });
+		expect(scopedFileDetail("a.ts", { groups: [{ patch: "", truncated: false, deferred: [{ path: "a.ts", reason: "oversized" }] }] }, { exists: true, content: "x" }).diffTruncated).toBe(true);
 	});
 });

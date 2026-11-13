@@ -18,6 +18,7 @@ import (
 
 	"github.com/google/uuid"
 
+	codexagent "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codex"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/shellterm"
@@ -50,6 +51,7 @@ type Service struct {
 	terminals Terminals
 	// stopAgents stops every running agent on an account before it is removed.
 	stopAgents func(context.Context, string) error
+	limitLog   ports.AgentLimitReadingStore
 	log        *slog.Logger
 	now        func() time.Time
 
@@ -123,11 +125,70 @@ func (s *Service) SetAgentStopper(stop func(ctx context.Context, accountID strin
 	s.stopAgents = stop
 }
 
+// SetLimitLog late-binds where each limits read is kept.
+func (s *Service) SetLimitLog(log ports.AgentLimitReadingStore) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.limitLog = log
+}
+
+// KeepReadingLimits reads each account's limits again once its last reading is stale, so the window history keeps going while no screen asks for limits.
+func (s *Service) KeepReadingLimits(ctx context.Context, every time.Duration) {
+	ticker := time.NewTicker(every)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if !s.keepingLimits(ctx) {
+				continue
+			}
+			if _, err := s.List(ctx, false); err != nil && ctx.Err() == nil {
+				s.log.DebugContext(ctx, "background limits read failed", "error", err)
+			}
+		}
+	}
+}
+
+func (s *Service) keepingLimits(ctx context.Context) bool {
+	s.mu.Lock()
+	log := s.limitLog
+	s.mu.Unlock()
+	return log != nil && log.LimitHistoryEnabled(ctx)
+}
+
+func (s *Service) recordLimits(ctx context.Context, account domain.AgentAccount, email, plan string, limits domain.AgentAccountLimits) {
+	if len(limits.Windows) == 0 || !s.keepingLimits(ctx) {
+		return
+	}
+	s.mu.Lock()
+	log := s.limitLog
+	s.mu.Unlock()
+	at := limits.FetchedAt
+	if at.IsZero() {
+		at = s.now()
+	}
+	readings := make([]domain.AgentLimitReading, 0, len(limits.Windows))
+	for _, w := range limits.Windows {
+		readings = append(readings, domain.AgentLimitReading{
+			AccountID: account.ID, Provider: account.Provider, Email: email, Plan: plan, WindowID: w.ID, Label: w.Label,
+			DurationMinutes: w.DurationMinutes, UsedPercent: w.UsedPercent, ResetsAt: w.ResetsAt, ReadAt: at,
+		})
+	}
+	if err := log.RecordAgentLimitReadings(context.WithoutCancel(ctx), readings); err != nil {
+		s.log.WarnContext(ctx, "failed to record limit readings", "account", account.ID, "error", err)
+	}
+}
+
 // AccountView is an account with its latest readings, as the app shows it.
 type AccountView struct {
-	Account     domain.AgentAccount
-	Default     bool
-	SignedIn    bool
+	Account  domain.AgentAccount
+	Default  bool
+	SignedIn bool
+	// LoggedIn is any login the CLI launches with as this account, an API key
+	// included; a folder signed in as another login is not.
+	LoggedIn    bool
 	IdentityErr string
 	Limits      *domain.AgentAccountLimits
 	LimitsErr   string
@@ -156,6 +217,7 @@ func (s *Service) List(ctx context.Context, refresh bool) ([]AccountView, error)
 		view := AccountView{Account: account, Default: def == account.ID}
 		if r != nil {
 			view.SignedIn, view.IdentityErr, view.Limits, view.LimitsErr = r.identity.SignedIn, r.identityErr, r.limits, r.limitsErr
+			view.LoggedIn = r.identity.LoggedIn && !r.mismatch
 			if account.Device() {
 				view.Account.Email, view.Account.Plan = r.identity.Email, r.identity.Plan
 			} else if r.identity.Plan != "" {
@@ -216,8 +278,21 @@ func (s *Service) read(ctx context.Context, account domain.AgentAccount) *readin
 	default:
 		if limits, limitsErr := provider.Limits(ctx, account.Home); limitsErr != nil {
 			r.limitsErr = limitsErr.Error()
+			s.mu.Lock()
+			if prev := s.readings[account.ID]; prev != nil && prev.limits != nil && strings.EqualFold(prev.identity.Email, identity.Email) {
+				r.limits = prev.limits
+			}
+			s.mu.Unlock()
 		} else {
 			r.limits = &limits
+			email, plan := identity.Email, identity.Plan
+			if email == "" {
+				email = account.Email
+			}
+			if plan == "" {
+				plan = account.Plan
+			}
+			s.recordLimits(ctx, account, email, plan, limits)
 		}
 	}
 	// A caller that went away (a closed request, a cancelled move) says nothing
@@ -232,7 +307,7 @@ func (s *Service) read(ctx context.Context, account domain.AgentAccount) *readin
 	s.mu.Unlock()
 	// The limits come from the provider's API under this login, so a reading
 	// that has them shows the login worked when the reading began.
-	if confirmed != nil && err == nil && r.identity.SignedIn && r.limits != nil {
+	if confirmed != nil && err == nil && r.identity.SignedIn && r.limits != nil && r.limitsErr == "" {
 		confirmed(account, r.at)
 	}
 	return r
@@ -415,6 +490,10 @@ func (s *Service) newSessionAccount(ctx context.Context, p domain.AgentAccountPr
 	account, err := s.find(ctx, def)
 	if err != nil {
 		return domain.AgentAccount{}, err
+	}
+	// A custom Codex model provider does not use the account's sign-in.
+	if p == domain.AgentAccountProviderCodex && codexagent.UsesCustomModelProvider() {
+		return account, nil
 	}
 	r := s.cachedReading(account.ID)
 	if !r.knownUnusable() {

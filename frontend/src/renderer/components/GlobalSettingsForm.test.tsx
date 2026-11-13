@@ -526,6 +526,30 @@ describe("GlobalSettingsForm", () => {
 		await waitFor(() => expect(setUiSettings).toHaveBeenCalledWith({ terminalShell: { kind: "git-bash" } }));
 	});
 
+	it("lists the shells the daemon detected outside Windows and stores the picked path", async () => {
+		isWindowsPlatform.mockReturnValue(false);
+		const user = userEvent.setup();
+		const qc = renderForm();
+		qc.setQueryData(["terminal-shells"], {
+			default: { id: "auto", name: "zsh", path: "/bin/zsh" },
+			shells: [
+				{ id: "/opt/homebrew/bin/fish", name: "fish", path: "/opt/homebrew/bin/fish" },
+				{ id: "/bin/zsh", name: "zsh", path: "/bin/zsh" },
+			],
+		});
+
+		expect(await screen.findByText("Applies to new terminals. Open terminals keep their shell.")).toBeInTheDocument();
+		await user.click(await screen.findByLabelText("Terminal shell"));
+		expect(await screen.findByRole("menuitem", { name: /System default/ })).toHaveTextContent("/bin/zsh");
+		expect(screen.queryByRole("menuitem", { name: "Git Bash" })).not.toBeInTheDocument();
+		await user.click(await screen.findByRole("menuitem", { name: /fish/ }));
+
+		await waitFor(() =>
+			expect(setUiSettings).toHaveBeenCalledWith({ terminalShell: { kind: "custom", path: "/opt/homebrew/bin/fish" } }),
+		);
+		await waitFor(() => expect(screen.getByLabelText("Terminal shell")).toHaveTextContent("fish"));
+	});
+
 	it("picks the default editor from the installed editors and updates every session's cached state", async () => {
 		const user = userEvent.setup();
 		const qc = renderForm("general");
@@ -570,11 +594,9 @@ describe("GlobalSettingsForm", () => {
 		renderForm();
 
 		await user.click(await screen.findByLabelText("Terminal shell"));
-		await user.click(await screen.findByRole("menuitem", { name: "Custom path" }));
-		await waitFor(() => expect(setUiSettings).toHaveBeenCalledWith({ terminalShell: { kind: "custom" } }));
+		await user.click(await screen.findByRole("menuitem", { name: "Custom…" }));
 
-		setUiSettings.mockClear();
-		await user.click(screen.getByRole("button", { name: "Edit Shell executable" }));
+		await user.click(await screen.findByRole("button", { name: "Edit Shell executable" }));
 		const input = screen.getByLabelText("Shell executable");
 		await user.type(input, "C:\\Tools\\bash.exe");
 		await user.keyboard("{Escape}");
@@ -936,14 +958,14 @@ describe("GlobalSettingsForm", () => {
 		await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
 		const copied = writeText.mock.calls[0][0] as string;
 		expect(copied).toContain("Create project fails");
-		expect(copied).toContain("AO version: 9.9.9-test");
+		expect(copied).toContain("Orchestrator version: 9.9.9-test");
 		expect(copied).toContain("Daemon: ready");
 		expect(copied).toContain("[redacted-local-path]");
 		expect(copied).toContain("[redacted-local-url]");
 		expect(copied).not.toContain("/Users/alice");
 		expect(copied).not.toContain("local-secret");
 		expect(copied).not.toContain("## Type");
-		expect(copied).not.toContain("Generated locally by AO");
+		expect(copied).not.toContain("Generated locally by Orchestrator");
 		expect(openExternal).toHaveBeenCalledWith(
 			expect.stringContaining("https://github.com/Untrivial-ai/agent-orchestrator/issues/new"),
 		);
@@ -966,7 +988,7 @@ describe("GlobalSettingsForm", () => {
 		expect(screen.getByRole("button", { name: /copy & open email/i })).toBeInTheDocument();
 		await user.click(screen.getByRole("button", { name: /copy & open discord/i }));
 		await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
-		expect(writeText.mock.calls[0][0]).toContain("**AO feedback**");
+		expect(writeText.mock.calls[0][0]).toContain("**Orchestrator feedback**");
 		expect(screen.getByText("Discord draft copied.")).toBeInTheDocument();
 		expect(screen.getByLabelText("Title")).toHaveValue("");
 		expect(screen.getByLabelText("What happened?")).toHaveValue("");
@@ -981,7 +1003,7 @@ describe("GlobalSettingsForm", () => {
 		await waitFor(() => expect(writeText).toHaveBeenCalledTimes(2));
 		expect(writeText.mock.calls[0][0]).toContain("Daemon: unknown");
 		expect(writeText.mock.calls[1][0]).toContain("To: prasad@untrivial.ai");
-		expect(writeText.mock.calls[1][0]).toContain("AO feedback");
+		expect(writeText.mock.calls[1][0]).toContain("Orchestrator feedback");
 		expect(openExternal).toHaveBeenCalledWith("https://discord.gg/WjKNa7EbB8");
 		expect(openExternal).toHaveBeenCalledWith(expect.stringContaining("https://mail.google.com/mail/"));
 		expect(open).not.toHaveBeenCalled();

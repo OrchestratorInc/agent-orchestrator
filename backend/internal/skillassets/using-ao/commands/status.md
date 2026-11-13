@@ -1,6 +1,6 @@
 # ao status
 
-Show AO daemon status. Use this to verify the daemon is up and check which port it is bound to.
+Show Orchestrator daemon status. Use this to verify the daemon is up and check which port it is bound to.
 
 ## Syntax
 

@@ -100,7 +100,8 @@ async function lookupAppStore(): Promise<StoreCheck | null> {
  * We never ask for the flexible flow: `expo-in-app-updates` calls
  * `completeUpdate()` as soon as the download lands, restarting the app
  * unannounced, where Google's contract is that a flexible update restarts only
- * when the user chooses to. The dismissible sheet is our soft tier instead.
+ * when the user chooses to. The dismissible system alert (./storeUpdatePrompt)
+ * is our soft tier instead.
  */
 export async function startPlayUpdate(): Promise<boolean> {
 	if (Platform.OS !== "android" || !play) return false;

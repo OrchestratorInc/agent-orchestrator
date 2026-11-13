@@ -5,19 +5,10 @@ name: Mobile
 # frontend/go workflows don't touch this package.
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-    paths:
-      - "packages/mobile/**"
-      - ".github/workflows/mobile.yml"
+  workflow_call:
 
 permissions:
   contents: read
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || format('{0}-{1}', github.event_name, github.ref) }}
-  cancel-in-progress: true
 
 jobs:
   check:

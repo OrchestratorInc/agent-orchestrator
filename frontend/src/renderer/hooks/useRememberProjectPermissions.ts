@@ -1,3 +1,4 @@
+import { apiErrorException } from "../lib/api-error-exception";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback } from "react";
 import { apiErrorMessage } from "../lib/api-client";
@@ -30,7 +31,7 @@ export function useRememberProjectPermissions(projectId: string, sourceHarness?:
 			const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/projects/{id}", {
 				params: { path: { id: projectId } },
 			});
-			if (error) throw new Error(apiErrorMessage(error));
+			if (error) throw apiErrorException(error);
 			if (data?.status !== "ok") throw new Error("Project config unavailable");
 			return data.project as ProjectPermissionsConfig;
 		},

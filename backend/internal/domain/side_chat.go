@@ -66,14 +66,17 @@ type SideTurn struct {
 	CompletedAt      *time.Time      `json:"completedAt,omitempty"`
 }
 
-// SideReference is verified and frozen when its question is accepted.
+// SideReference carries a captured snapshot or legacy server-verified context.
 type SideReference struct {
-	ConversationID string `json:"conversationId"`
-	MessageID      string `json:"messageId"`
-	Revision       int64  `json:"revision"`
-	Selection      string `json:"selection"`
-	SourceRole     string `json:"sourceRole"`
-	Context        string `json:"-"`
+	ID             string               `json:"id,omitempty"`
+	Order          int64                `json:"order,omitempty"`
+	Snapshot       *ChatExcerptSnapshot `json:"snapshot,omitempty"`
+	ConversationID string               `json:"conversationId"`
+	MessageID      string               `json:"messageId"`
+	Revision       int64                `json:"revision"`
+	Selection      string               `json:"selection"`
+	SourceRole     string               `json:"sourceRole"`
+	Context        string               `json:"-"`
 }
 
 // SideContent records structured input attached to a side turn.

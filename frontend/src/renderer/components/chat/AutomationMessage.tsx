@@ -29,10 +29,13 @@ import {
 	RefreshCw,
 	ChevronRight,
 	CornerDownRight,
-	type LucideIcon,
-} from "lucide-react";
+	type AppIcon,
+} from "@/components/app-icons";
 import { useState, type ReactNode } from "react";
 import { Trans, useTranslation } from "react-i18next";
+import type { Options } from "react-markdown";
+import rehypeRaw from "rehype-raw";
+import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import { parseBrowserAnnotationMessage, type ParsedBrowserAnnotationMessage } from "../../../shared/browser-annotations";
 import type { MessageKey } from "../../i18n/messages";
 import { cn } from "../../lib/utils";
@@ -372,7 +375,7 @@ function FileFeedbackBody({ comments }: { comments: readonly FileFeedback[] }) {
 	);
 }
 
-const GIT_ACTIONS: Record<GitAction, { icon: LucideIcon; label: MessageKey }> = {
+const GIT_ACTIONS: Record<GitAction, { icon: AppIcon; label: MessageKey }> = {
 	createPR: { icon: GitPullRequest, label: "inspector.git.createPR" },
 	createDraftPR: { icon: GitPullRequestDraft, label: "inspector.git.createDraftPR" },
 	commit: { icon: GitCommitHorizontal, label: "inspector.git.commit" },
@@ -424,7 +427,7 @@ function BrowserFeedbackBody({ annotations }: { annotations: ParsedBrowserAnnota
 	);
 }
 
-const NOTICES: Record<AutomationNotice, { icon: LucideIcon; label: MessageKey }> = {
+const NOTICES: Record<AutomationNotice, { icon: AppIcon; label: MessageKey }> = {
 	orchestratorReplaced: { icon: RefreshCw, label: "chat.automation.orchestratorReplaced" },
 	contextCarried: { icon: ArrowLeftRight, label: "chat.automation.contextCarried" },
 	reviewTask: { icon: ClipboardCheck, label: "chat.automation.reviewTask" },
@@ -466,6 +469,13 @@ function ForgeLink({ url, className, children }: { url?: string; className?: str
 	);
 }
 
+const GITHUB_HTML: Options["rehypePlugins"] = [rehypeRaw, [rehypeSanitize, {
+	...defaultSchema,
+	tagNames: defaultSchema.tagNames?.filter((tag) => tag !== "picture" && tag !== "source"),
+	protocols: { ...defaultSchema.protocols, href: [...(defaultSchema.protocols?.href ?? []), "ao"] },
+	attributes: { ...defaultSchema.attributes, img: [], code: [["className", /^language-./, "math-inline", "math-display"]] },
+}]];
+
 /** What GitHub reported on the session's PR, in the PR glyph tinted by what it means. */
 function PullRequestEvent({ automation, createdAt }: { automation: PullRequestAutomation; createdAt: string }) {
 	const { t, i18n } = useTranslation();
@@ -504,7 +514,7 @@ function PullRequestEvent({ automation, createdAt }: { automation: PullRequestAu
 						</div>
 					) : null}
 					<Folded watch={comment.body}>
-						<ChatMarkdown text={comment.body} safeOrigin />
+						<ChatMarkdown text={comment.body} safeOrigin rehypePlugins={GITHUB_HTML} />
 					</Folded>
 				</div>
 			));
@@ -514,7 +524,7 @@ function PullRequestEvent({ automation, createdAt }: { automation: PullRequestAu
 			heading = lead("chat.automation.changesRequested", automation.author ? `@${automation.author}` : t("chat.automation.aoReviewer"));
 			detail = automation.body ? (
 				<Folded watch={automation.body}>
-					<ChatMarkdown text={automation.body} safeOrigin />
+					<ChatMarkdown text={automation.body} safeOrigin rehypePlugins={GITHUB_HTML} />
 				</Folded>
 			) : null;
 			break;

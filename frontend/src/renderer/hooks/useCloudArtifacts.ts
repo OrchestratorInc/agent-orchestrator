@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import type { WorkspaceSession } from "../types/workspace";
 import { useCloudCp } from "./useCloudCp";
 
@@ -82,10 +82,9 @@ export function usePinnedArtifactUrl(root: string | undefined, path: string | un
 			setPinned(current);
 		}
 	}
-	return {
-		url: current.url,
-		root: current.root,
-		repin: () => setPinned((previous) => (previous?.url ? { ...previous, refused: previous.url } : previous)),
-		refresh: () => setPinned(undefined),
-	};
+	// Stable, since a viewer that takes repin as its file's onAccessRefused
+	// starts over (leaving an edit) when the callback changes.
+	const repin = useCallback(() => setPinned((previous) => (previous?.url ? { ...previous, refused: previous.url } : previous)), []);
+	const refresh = useCallback(() => setPinned(undefined), []);
+	return { url: current.url, root: current.root, repin, refresh };
 }

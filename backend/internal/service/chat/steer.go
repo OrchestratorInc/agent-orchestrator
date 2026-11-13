@@ -530,7 +530,7 @@ func (c *Controller) steerLocked(ctx context.Context, msg ports.ChatUserMessage)
 			return SteerResult{ProviderTurnID: landed}, recordErr
 		}
 		if len(batch) > 0 {
-			if err := c.store.CompleteQueuedBatch(context.WithoutCancel(ctx), c.conversation.ID, queuedBatchIDs(batch), landed, c.now()); err != nil {
+			if err := c.store.CompleteQueuedBatch(context.WithoutCancel(ctx), c.conversation.ID, queuedBatchIDs(batch), landed, activityID, c.now()); err != nil {
 				_ = c.store.FailQueuedBatch(context.WithoutCancel(ctx), c.conversation.ID,
 					queuedBatchIDs(batch), ErrSteerDeliveryUncertain.Error(), c.now())
 				return SteerResult{ProviderTurnID: landed, ActivityID: activityID}, fmt.Errorf("%w: complete pending messages: %w", ErrSteerDeliveryUncertain, err)
