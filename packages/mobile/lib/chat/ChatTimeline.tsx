@@ -1,7 +1,7 @@
 import { Feather } from "../icons";
 import * as Clipboard from "expo-clipboard";
 import * as Linking from "expo-linking";
-import { memo, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, useCallback, useContext, useEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from "react";
 import {
 	FlatList,
 	Image,
@@ -32,12 +32,13 @@ import { LatticeLoader } from "./LatticeLoader";
 import { TurnPlan } from "./TurnPlan";
 import { ChatMarkdown } from "./ChatMarkdown";
 import { FirstLineMarker } from "./FirstLineMarker";
+import { ProviderSwitchMarker } from "./ProviderSwitchMarker";
 import { RenderFrame } from "./RenderFrame";
 import { artifactRenderRef, notifyRenderViewport, readArtifactRef, readRenderRef } from "./renderFrameModel";
 import { HighlightedCodeText } from "./HighlightedCodeText";
 import { caretNotation, commandOutputText } from "./ansi";
 import { userMessageSurfaceStyle } from "./chatChrome";
-import { useMenuRowWidth } from "../useMenuRowWidth";
+import { MenuRowWidthScope, useMenuRowWidth } from "../useMenuRowWidth";
 import { requestPresentation } from "./chatPresentation";
 import { workingElapsedLabel } from "./conversationChrome";
 import { errorActivityDuplicatesTurn, providerErrorCopy } from "./providerError";
@@ -78,6 +79,7 @@ import type {
 	ConversationPlan,
 	ConversationSnapshot,
 	ConversationTurn,
+	DiffFile,
 	FileChange,
 	MessageFile,
 } from "./types";
@@ -103,6 +105,8 @@ import { useFilesNavigation } from "../files/navigation";
 import { userFacingError } from "../connectionError";
 import { SentResponseQuotes } from "./SentResponseQuotes";
 import { TurnRollbackButton } from "./TurnRollbackButton";
+import { TurnArtifacts, useTurnArtifactSource } from "./TurnArtifacts";
+import { turnResults } from "./turnArtifactsModel";
 import { ConversationHarness, LatestWorkerUpdates, OriginMessageView, WorkerSessionsProvider, WorkerUpdateRows } from "./AutomationMessage";
 import { humanVisibleText, latestWorkerUpdateKeys, piggybackedUpdates } from "./automationMessages";
 import { SessionStartupStatus } from "./SessionStartup";
@@ -115,7 +119,12 @@ type TimelineRow =
 	| { kind: "single"; key: string; items: [ConversationItem] }
 	| { kind: "activities"; key: string; items: ConversationActivity[] };
 
-export const ChatTimeline = memo(function ChatTimeline({
+/** The conversation's rows; its user rows share one width (see `MenuRowWidthScope`). */
+export const ChatTimeline = memo(function ChatTimeline(props: ComponentProps<typeof Timeline>) {
+	return <MenuRowWidthScope><Timeline {...props} /></MenuRowWidthScope>;
+});
+
+function Timeline({
 	snapshot,
 	loadingOlder,
 	onLoadOlder,
@@ -461,7 +470,7 @@ export const ChatTimeline = memo(function ChatTimeline({
 			</ConversationHarness.Provider>
 		</WorkerSessionsProvider>
 	);
-});
+}
 
 function ConversationTurnGroup({ group, snapshot, approvalPending, inputPending, onDecide, onResolveInput, onRollback, editableTurns, onEditMessage, editDraft, onCancelEdit, onSubmitEdit, onEditFocus, answeredBelow, workedOpen, onToggleWorked, startup }: {
 	group: ConversationGroup;
@@ -581,7 +590,7 @@ const TimelineItem = memo(function TimelineItem({
 			return (
 				<>
 				{reports.length > 0 ? <WorkerUpdateRows updates={reports} /> : null}
-				<View style={styles.userRow} onLayout={userRow.onLayout}>
+				<View ref={userRow.ref} style={styles.userRow} onLayout={userRow.onLayout}>
 					<MessageContextMenu canEdit={Boolean(onEdit)} onAction={(action) => {
 						if (action === "edit") onEdit?.(item);
 						else { void Clipboard.setStringAsync(editableMessageText(humanVisibleText(item.text)).body.trim()); haptics.success(); }
@@ -620,6 +629,9 @@ const TimelineItem = memo(function TimelineItem({
 	if (item.activityKind === "system" && item.detail?.event === "compaction") {
 		return <CompactionMarker activity={item} />;
 	}
+	if (item.detail?.event === "provider_switch") {
+		return <ProviderSwitchMarker activity={item} />;
+	}
 	if (item.activityKind === "system" && item.detail?.event === "steer") {
 		const { body, attachments } = stagedAttachmentParts(item.detail.text || item.summary);
 		const steered = <View style={styles.userRow}><View style={[styles.userBubble, styles.steerBubble]}><Text style={styles.steerLabel}>Steered</Text>{body ? <Text selectable style={styles.userText}>{body}</Text> : null}{attachments.length > 0 ? <StagedAttachments sessionId={sessionId} paths={attachments} spaced={Boolean(body)} /> : null}</View></View>;
@@ -633,7 +645,6 @@ const TimelineItem = memo(function TimelineItem({
 	const artifact = item.activityKind === "system" ? readArtifactRef(item.detail) : undefined;
 	const artifactPage = artifact ? artifactRenderRef(sessionId, artifact) : undefined;
 	if (artifact && artifactPage) return <RenderFrame render={artifactPage} artifact={{ sessionId, path: artifact.path }} />;
-	if (item.detail?.event === "model.rerouted") return <SystemSignal icon="shuffle" title={`Answered by ${item.detail.toModel || "another model"}`} detail={item.detail.fromModel ? `Instead of ${item.detail.fromModel}${item.detail.reason ? ` · ${item.detail.reason}` : ""}` : item.detail.reason} />;
 	if (item.detail?.event === "auth.reauth_required") return <SystemSignal icon="key" danger title="The provider asked you to sign in again" detail={item.detail.reason} />;
 	if (item.activityKind === "error") return <ErrorActivity activity={item} />;
 	return <ActivityRow activity={item} />;
@@ -1095,27 +1106,32 @@ function TurnSummary({ turn, plan, onRollback }: { turn: ConversationTurn; plan?
 	const styles = useThemedStyles(makeStyles);
 	const settled = turn.state !== "running" && turn.state !== "queued";
 	const canRollBack = settled && Boolean(turn.providerTurnId) && !turn.rolledBack;
+	// The deliverables a completed turn made show as tiles; every other changed
+	// file stays in the changed-files card, so nothing shows twice or goes
+	// missing (the desktop's TurnResults).
+	const source = useTurnArtifactSource();
+	const results = useMemo(() => turnResults(turn, source), [source, turn]);
 	// Nothing to show draws nothing: an empty one still padded every turn's end,
 	// most of the gap between a reply and the next prompt.
-	if (!plan && !turn.diff?.files.length && !(onRollback && canRollBack) && !turn.errorMessage) return null;
+	if (!plan && !results.artifacts.length && !results.files.length && !(onRollback && canRollBack) && !turn.errorMessage) return null;
 	return (
 		<View style={styles.turnWrap}>
 			{plan ? <TurnPlan plan={plan} live={turn.state === "running"} /> : null}
-			{turn.diff?.files.length ? <ChangedFiles turn={turn} /> : null}
+			{results.artifacts.length && source ? <TurnArtifacts artifacts={results.artifacts} source={source} /> : null}
+			{results.files.length ? <ChangedFiles turn={turn} changed={results.files} /> : null}
 			{onRollback && canRollBack ? <View style={styles.turnLine}><TurnRollbackButton turnId={turn.id} onRollback={onRollback} /></View> : null}
 			{turn.errorMessage ? <Text style={styles.turnError}>{turn.errorMessage}</Text> : null}
 		</View>
 	);
 }
 
-function ChangedFiles({ turn }: { turn: ConversationTurn }) {
+function ChangedFiles({ turn, changed }: { turn: ConversationTurn; changed: DiffFile[] }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const feedback = usePressFeedback("row");
 	const reviewFeedback = usePressFeedback("button");
 	const files = useFilesNavigation();
 	const [open, setOpen] = useState(false);
-	const changed = turn.diff?.files ?? [];
 	const additions = changed.reduce((sum, file) => sum + file.additions, 0);
 	const deletions = changed.reduce((sum, file) => sum + file.deletions, 0);
 	return <View style={styles.planCard}>

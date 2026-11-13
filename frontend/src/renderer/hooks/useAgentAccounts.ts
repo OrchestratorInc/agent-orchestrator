@@ -50,11 +50,31 @@ type AccountNameT = (key: "settings.agentAccounts.cliLoginOf" | "settings.agentA
 
 /** An account's name: its email. A Claude login without one is a
  * CLAUDE_CODE_OAUTH_TOKEN login, which reports no identity. */
-export function agentAccountName(account: Pick<AgentAccount, "email" | "provider">, t: AccountNameT): string {
+export function agentAccountName(account: Pick<AgentAccount, "email" | "provider"> & { signedIn?: boolean }, t: AccountNameT): string {
 	if (account.email) return account.email;
-	return account.provider === "claude"
+	return account.provider === "claude" && account.signedIn
 		? t("settings.agentAccounts.oauthToken")
 		: t("settings.agentAccounts.cliLoginOf", { provider: agentAccountProviderNames[account.provider] });
+}
+
+export function withoutSameLogins<T extends Pick<AgentAccount, "id" | "sameLoginAs">>(accounts: T[], keepId?: string): T[] {
+	const ids = new Set(accounts.map((account) => account.id));
+	const twinOf = (account: T) => account.sameLoginAs && ids.has(account.sameLoginAs) ? account.sameLoginAs : undefined;
+	return accounts.filter((account) => account.id === keepId || !twinOf(account));
+}
+
+export function agentAccountLabel(account: Pick<AgentAccount, "id" | "email" | "provider" | "device" | "orgId" | "orgName"> & { signedIn?: boolean }, peers: readonly Pick<AgentAccount, "id" | "email" | "orgId" | "orgName">[], t: AccountNameT): string {
+	const name = agentAccountName(account, t);
+	const email = account.email?.toLowerCase();
+	const twins = email ? peers.filter((peer) => peer.id !== account.id && peer.email?.toLowerCase() === email) : [];
+	if (twins.length === 0) return name;
+	const org = (peer: Pick<AgentAccount, "orgId" | "orgName">) => peer.orgId ?? `name:${peer.orgName ?? ""}`;
+	const otherOrgs = twins.filter((twin) => org(twin) !== org(account));
+	const parts = [name];
+	if (otherOrgs.length > 0 && account.orgName) parts.push(account.orgName);
+	if (account.orgId && otherOrgs.some((twin) => (twin.orgName ?? "") === (account.orgName ?? ""))) parts.push(account.orgId.slice(0, 8));
+	if (account.device && twins.some((twin) => org(twin) === org(account))) parts.push(t("settings.agentAccounts.cliLoginOf", { provider: agentAccountProviderNames[account.provider] }));
+	return parts.join(" · ");
 }
 
 /** A failed check of an account, said plainly. `detail` is the CLI's own
@@ -72,6 +92,7 @@ export function describeAccountProblem(account: Pick<AgentAccount, "problem" | "
 		case "rate_limited": return { text: t("settings.agentAccounts.problem.rateLimited", { provider }), detail, actionable: false };
 		case "cli_missing": return { text: t("settings.agentAccounts.problem.cliMissing", { provider }), detail, actionable: true };
 		case "other_login": return { text: t("settings.agentAccounts.problem.otherLogin"), detail, actionable: true };
+		case "other_org": return { text: t("settings.agentAccounts.problem.otherOrg"), detail, actionable: true };
 		default: return { text: t("settings.agentAccounts.problem.unavailable"), detail, actionable: false };
 	}
 }
@@ -98,7 +119,7 @@ export function useSessionAgentAccounts(sessionId: string | undefined) {
 	return useQuery({
 		queryKey: sessionAccountsKey(sessionId ?? ""),
 		enabled: Boolean(sessionId),
-		queryFn: async () => unwrap(await apiClient.GET("/api/v1/agents/accounts/sessions/{sessionId}", { params: { path: { sessionId: sessionId ?? "" } } })) ?? {},
+		queryFn: async () => unwrap(await apiClient.GET("/api/v1/agents/accounts/sessions/{sessionId}", { params: { path: { sessionId: sessionId ?? "" } } })) ?? { stayOnAccount: false },
 	});
 }
 
@@ -141,5 +162,9 @@ export function useAgentAccountActions() {
 			return result.transition;
 		},
 		refreshSession: (sessionId: string) => queryClient.invalidateQueries({ queryKey: sessionAccountsKey(sessionId) }),
+		setStayOnAccount: async (sessionId: string, stay: boolean) =>
+			queryClient.setQueryData(sessionAccountsKey(sessionId), unwrap(await apiClient.PUT("/api/v1/agents/accounts/sessions/{sessionId}/stay", {
+				params: { path: { sessionId } }, body: { stay },
+			}))),
 	};
 }

@@ -8,6 +8,9 @@ import { mobileReachablePreviewURL, restoreSession, resumeSessionAgent, type Das
 import { haptics } from "../haptics";
 import { openGitHub } from "../openGitHub";
 import { InlineBanner, type InlineBannerProps } from "../InlineBanner";
+import { pendingSwitchFor, requestedSwitchModel, type PendingAgentSwitch } from "../agentSwitch";
+import { useAgentSwitchMenu } from "./useAgentSwitchMenu";
+import { prewarmChatAgent } from "./api";
 import { useApp } from "../store";
 import {
 	mobileInterfaceTransitionIsActive,
@@ -31,17 +34,17 @@ import { KeyboardFollower } from "./KeyboardFollower";
 import { ChatLinkProvider } from "./ChatMarkdown";
 import { ChatTimeline } from "./ChatTimeline";
 import { McpServerNotice } from "./McpServerNotice";
+import { ProviderSwitchLine } from "./ProviderSwitchMarker";
 import { useChatKeyboard } from "./useChatKeyboard";
 import { ConversationTitle } from "./ConversationTitle";
 import { chatSheetRoute, type ChatSheetEntry } from "./chatSheetRegistry";
 import { conversationMenuGroups, type CloudConversationMenuAction, type ConversationMenuAction, type ConversationMenuGroup } from "./conversationMenuModel";
-import { quotaWarning } from "./conversationChrome";
 import { shouldAutoResume } from "./autoResume";
-import { controllerStoppedBanner, errorBanner, mcpNoticeKey, quotaBanner, reauthBanner, rolledBackBanner, threadBanner, type BannerCopy } from "./conversationBanners";
+import { controllerStoppedBanner, errorBanner, mcpNoticeKey, reauthBanner, rolledBackBanner, threadBanner, type BannerCopy } from "./conversationBanners";
 import { contextReadout } from "./conversationChrome";
 import { conversationActionError, conversationActionUnsupported } from "./conversationErrors";
 import { providerCatalogLive, turnOptionsLoadFor } from "./turnOptionsCatalog";
-import { brokenMcpServers, can, type ConversationSnapshot } from "./types";
+import { brokenMcpServers, can, type ChatExcerpt, type ChatImage, type ChatResource, type ConversationSnapshot } from "./types";
 import { useMobileConversation } from "./useConversation";
 import { useLastVerifiedConfig } from "../useLastVerifiedConfig";
 import { SessionStartupStatus } from "./SessionStartup";
@@ -62,6 +65,7 @@ import { backOr } from "../backNavigation";
 import { userFacingError, NOT_PAIRED_ACTION_COPY, RECONNECTING_ACTION_COPY } from "../connectionError";
 import { ARCHIVE_SESSION_CONFIRM } from "../worker-action-model";
 import { changedPathCount, fileRoute, filesRoute, FilesNavigationContext, type FilesNavigation } from "../files/navigation";
+import { TurnArtifactsContext, useTurnArtifactSourceFor } from "./TurnArtifacts";
 import { useChangeSummary } from "../files/useChangeSummary";
 import { sessionLink } from "./automationMessages";
 import { readSession } from "./sessionLookup";
@@ -176,6 +180,58 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	// stopped controller.
 	const handoff = useInterfaceHandoff(interfaceSwitch.transition, "chat");
 	const switchingToTerminal = interfaceTransitionActive || handoff.pending;
+
+	// Agent switching, from the model menu's "Other agents" (the new task's
+	// menu). As on desktop, a pick only records the agent the next message goes
+	// to; the send then switches and sends in one request. Not offered to
+	// orchestrators or terminated sessions, which desktop leaves out too.
+	const isWorker = !("projectName" in session);
+	const currentHarness = conversation.snapshot?.harness || "";
+	const agentSwitchMenu = useAgentSwitchMenu({
+		cfg: config,
+		current: currentHarness,
+		projectId: session.projectId,
+		enabled: isWorker && !terminated && Boolean(currentHarness),
+	});
+	const [chosenSwitch, setChosenSwitch] = useState<PendingAgentSwitch>();
+	const pendingSwitch = pendingSwitchFor(chosenSwitch, currentHarness || undefined);
+	// A pick whose agent the chat now runs is done, however the switch's answer went.
+	useEffect(() => {
+		if (chosenSwitch && chosenSwitch.harness === currentHarness) setChosenSwitch(undefined);
+	}, [chosenSwitch, currentHarness]);
+	useEffect(() => { setChosenSwitch(undefined); }, [session.id]);
+	// The daemon's first-start chat check can take a second; run it now so the send does not wait.
+	const pendingHarness = pendingSwitch?.harness;
+	useEffect(() => {
+		if (config && pendingHarness) void prewarmChatAgent(config, pendingHarness).catch(() => {});
+	}, [config, pendingHarness]);
+	const agentBusy = conversation.snapshot?.controller.state === "busy" ||
+		Boolean(conversation.snapshot?.turns.some((turn) => turn.state === "running" || turn.state === "queued"));
+	const otherAgents = useMemo(
+		() => (agentSwitchMenu ? { ...agentSwitchMenu, pending: pendingSwitch, disabled: agentBusy, onPick: setChosenSwitch } : undefined),
+		[agentBusy, agentSwitchMenu, pendingSwitch],
+	);
+	const agentSwitchSending = conversation.pendingSends.some((item) => item.state === "sending" && Boolean(item.providerSwitch));
+	const sendConversation = conversation.send;
+	const send = useCallback(
+		(text: string, attachments?: ChatImage[], resources?: ChatResource[], excerpts?: ChatExcerpt[]) => sendConversation(
+			text, attachments, resources, excerpts,
+			pendingSwitch ? { targetHarness: pendingSwitch.harness, model: requestedSwitchModel(pendingSwitch.model) } : undefined,
+		),
+		[pendingSwitch, sendConversation],
+	);
+	// A new agent brings its own models and options: reload them uncached, so
+	// the outgoing agent's never stay in the menu (desktop's
+	// useAgentSwitchProviderCatalogs).
+	const loadTurnOptionsNow = conversation.loadTurnOptions;
+	const snapshotHarness = conversation.snapshot?.harness;
+	const harnessSeen = useRef<{ sessionId: string; harness: string } | undefined>(undefined);
+	useEffect(() => {
+		if (!snapshotHarness) return;
+		const previous = harnessSeen.current;
+		harnessSeen.current = { sessionId: session.id, harness: snapshotHarness };
+		if (previous?.sessionId === session.id && previous.harness !== snapshotHarness) void loadTurnOptionsNow({ refresh: true }).catch(() => {});
+	}, [loadTurnOptionsNow, session.id, snapshotHarness]);
 	// The card covers the conversation only once the Chat controller starts
 	// stopping. Until then (`draining` lasts as long as the agent's turn) the
 	// conversation stays readable behind a banner, dismissed requests included.
@@ -240,6 +296,8 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		openChanges: () => router.push(filesRoute(session.id, currentHostId, sessionName)),
 		openFile: (path, previousPath) => router.push(fileRoute(session.id, path, currentHostId, previousPath)),
 	}), [currentHostId, router, session.id, sessionName]);
+	// The artifacts a turn made, drawn as cards under its reply.
+	const turnArtifacts = useTurnArtifactSourceFor(session.id, conversation.snapshot?.turns, currentHostId);
 	// Re-read git's totals when a turn reports edits, not on a timer.
 	const lastTurn = conversation.snapshot?.turns.at(-1);
 	const changeSignal = `${changedPathCount(conversation.snapshot?.turns)}:${lastTurn?.id ?? ""}:${lastTurn?.state ?? ""}:${lastTurn?.diff?.files.length ?? 0}`;
@@ -295,6 +353,11 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 			),
 		});
 	}, [headerHarness, headerState, navigation, projectName, title, t]);
+	// The route keeps its options when it swaps this screen for the terminal,
+	// which sets only `title`. A `headerTitle` left here outranks it, so the bar
+	// stayed on this screen's last state: the Chat controller the switch stopped,
+	// read as "Stopped" while the session sat idle (#8283).
+	useLayoutEffect(() => () => navigation.setOptions({ headerTitle: undefined }), [navigation]);
 	// The conversation scrolls up under a clear bar. iOS 27's is the system's
 	// glass, which blurs it beneath the title, as Settings and the board do; the
 	// edge effect is the system's own: setting `scrollEdgeEffects` from here
@@ -665,7 +728,6 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	// Once per run of the session, like the desktop: a restart starts its tool servers again.
 	const noticeKey = mcpNoticeKey(currentHostId, session.id, "createdAt" in session ? session.createdAt : undefined);
 	const rolledBack = snapshot.turns.filter((turn) => turn.rolledBack).length;
-	const quota = quotaWarning(snapshot.rateLimits);
 	const compactSupported = can(snapshot, "compaction") && !conversationActionUnsupported("compact", conversation.actionCodes.compact);
 	const steerUnsupported = conversationActionUnsupported("steer", conversation.actionCodes.steer);
 
@@ -717,7 +779,6 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 				onDismiss={dismissBanner}
 			/>
 			{conversation.error ? <DismissibleBanner copy={errorBanner("load", conversation.error)} dismissed={dismissedBanners} onDismiss={dismissBanner} tone="danger" icon="offline" action="Retry" onPress={() => void conversation.refresh()} /> : null}
-			{quota ? <DismissibleBanner copy={quotaBanner(quota)} dismissed={dismissedBanners} onDismiss={dismissBanner} tone={quota.severity === "critical" ? "danger" : "warning"} icon="warning" action="Details" onPress={openUsage} /> : null}
 			{conversation.actionError && conversation.actionError !== conversation.error ? <DismissibleBanner copy={errorBanner("action", conversation.actionError)} dismissed={dismissedBanners} onDismiss={dismissBanner} tone="danger" icon="error" /> : null}
 			{rolledBack ? <DismissibleBanner copy={rolledBackBanner(rolledBack)} dismissed={dismissedBanners} onDismiss={dismissBanner} tone="muted" icon={{ ios: "arrow.uturn.backward", android: "undo" }} /> : null}
 			{conversation.pendingSends.map((pendingSend) => pendingSend.state === "failed" ? <InlineBanner key={pendingSend.id} tone="danger" icon="error" title="Message delivery uncertain" body={pendingSend.error || "Delivery failed"} action="Retry" secondary="Discard" onPress={() => void conversation.retrySend(pendingSend.id).catch(() => {})} onSecondary={() => void conversation.discardSend(pendingSend.id).catch(() => {})} /> : null)}
@@ -740,6 +801,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 			<View style={styles.conversation}>
 			<ChatLinkProvider onLinkOpen={openLink} sessionName={nameOfSession} onSessionNameNeeded={wantSessionName} onAddToChat={conversation.snapshot?.supportsExcerpts ? addResponseToChat : undefined}>
 				<FilesNavigationContext.Provider value={filesNavigation}>
+				<TurnArtifactsContext.Provider value={turnArtifacts}>
 				<ChatTimeline
 					snapshot={snapshot}
 					loadingOlder={conversation.loadingOlder}
@@ -760,6 +822,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 					bottomInset={composerHeight}
 					jumpHidden={composerOpen}
 				/>
+				</TurnArtifactsContext.Provider>
 				</FilesNavigationContext.Provider>
 			</ChatLinkProvider>
 			{switchCardShown ? (
@@ -807,6 +870,9 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		    padding is layout, which waited on a busy JS thread (KeyboardFollower). */}
 		<KeyboardFollower lift={chatKeyboard.composerLift} style={styles.floatingComposer} onLayout={measureComposer}>
 			{switchCardShown ? null : <McpServerNotice key={noticeKey} noticeKey={noticeKey} servers={brokenServers} visible={chatFocused} />}
+			{/* While a send carries an agent switch, the line desktop draws in the
+			    transcript; the daemon's own marker replaces it once it lands. */}
+			{agentSwitchSending ? <View style={styles.switchingLine}><ProviderSwitchLine switching /></View> : null}
 			<View style={editingMessage ? styles.composerHidden : undefined}>
 				<ChatComposer
 					key={composerKey}
@@ -821,7 +887,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 					machine={machine}
 					snapshot={snapshot}
 					changes={changeSummary?.files ? { ...changeSummary, onOpen: filesNavigation.openChanges } : undefined}
-					quotaActive={Boolean(quota)}
+					onOpenUsage={openUsage}
 					request={request}
 					requestDismissed={requestDismissed}
 					onRequestDecide={conversation.resolveApproval}
@@ -840,7 +906,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 					disabled={switchingToTerminal || Boolean(failedStart)}
 					pending={mobileInterfaceTransitionIsBusy(interfaceSwitch.transition) || conversation.pendingSends.some((item) => item.state === "sending")}
 					interrupting={conversation.pendingActions.includes("interrupt")}
-					onSend={conversation.send}
+					onSend={send}
 					onAcknowledgeSend={conversation.acknowledgeSend}
 					completedRetry={conversation.completedRetry}
 					onSteer={conversation.steer}
@@ -849,6 +915,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 					onInterrupt={() => void conversation.interrupt().catch(() => {})}
 					onSettings={conversation.chooseSettings}
 					onConfigOption={conversation.setConfigOption}
+					otherAgents={otherAgents}
 					restingInset={chatKeyboard.restingInset}
 					dockRiseOverride={chatKeyboard.dockRiseOverride}
 					openingTurnId={startupView?.openingTurnId}
@@ -929,6 +996,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	// The page's colour, so the conversation scrolling up passes under the
 	// banners rather than showing between them.
 	floatingComposer: { position: "absolute", left: 0, right: 0, bottom: 0 },
+	switchingLine: { paddingHorizontal: space.xl },
 	floatingBanners: { position: "absolute", left: 0, right: 0, backgroundColor: t.bgBase },
 	headerFrost: { position: "absolute", top: 0, left: 0, right: 0 },
 	// Where the timeline will draw the checklist, so the handoff to it does not move it.

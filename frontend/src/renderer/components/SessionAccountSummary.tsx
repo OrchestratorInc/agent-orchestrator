@@ -1,12 +1,14 @@
 import { LoaderCircle } from "@/components/app-icons";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { agentAccountName, agentAccountProviderFor, useAgentAccountActions, useAgentAccountLabel, useAgentAccounts, useSessionAgentAccounts } from "../hooks/useAgentAccounts";
+import { agentAccountLabel, agentAccountProviderFor, useAgentAccountActions, useAgentAccountLabel, useAgentAccounts, useSessionAgentAccounts, withoutSameLogins } from "../hooks/useAgentAccounts";
 import { interfaceTransitionIsActive, useSessionInterfaceTransitionStatus } from "../hooks/useSessionInterfaceTransition";
+import { useSettings } from "../hooks/useSettings";
 import type { WorkspaceSession } from "../types/workspace";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { AccountLimits } from "./settings/AgentAccountsSection";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
+import { Switch } from "./ui/switch";
 
 /** The account the session's agent runs under, its limits, and the move to
  * another account. A move is the session's durable controller handoff: the
@@ -24,8 +26,10 @@ export function SessionAccountSummary({ session }: { session: WorkspaceSession }
 	const actions = useAgentAccountActions();
 	const label = useAgentAccountLabel(shown);
 	const { transition } = useSessionInterfaceTransitionStatus(shownId);
+	const { settings } = useSettings();
 	const [message, setMessage] = useState("");
 	const [confirming, setConfirming] = useState<string | null>(null);
+	const [savingStay, setSavingStay] = useState(false);
 	const accountMove = transition?.targetAccountId ? transition : undefined;
 	const moving = interfaceTransitionIsActive(accountMove);
 	const settledPhase = accountMove && !moving ? accountMove.phase : undefined;
@@ -37,8 +41,8 @@ export function SessionAccountSummary({ session }: { session: WorkspaceSession }
 	}, [settledPhase, accountMove?.id, session.id]);
 
 	if (!provider || session.cloud || session.isTerminated) return null;
-	const options = (accounts.data ?? []).filter((account) => account.provider === provider);
 	const currentId = current.data?.[provider];
+	const options = withoutSameLogins((accounts.data ?? []).filter((account) => account.provider === provider), currentId);
 	const account = options.find((option) => option.id === currentId);
 	const working = session.activity?.state === "active" || session.activity?.state === "blocked";
 	// "Moved from … to …" answers the move; the next message makes it history.
@@ -62,13 +66,25 @@ export function SessionAccountSummary({ session }: { session: WorkspaceSession }
 		}
 	};
 
+	const setStay = async (stay: boolean) => {
+		setMessage("");
+		setSavingStay(true);
+		try {
+			await actions.setStayOnAccount(session.id, stay);
+		} catch (err) {
+			setMessage(err instanceof Error ? err.message : String(err));
+		} finally {
+			setSavingStay(false);
+		}
+	};
+
 	const status = moving
 		? t("settings.agentAccounts.switching", { email: label(accountMove?.targetAccountId) })
 		: settledPhase === "completed" && accountMove?.targetAccountId === currentId && !messagedSinceMove
 			? t("settings.agentAccounts.moved", { from: label(accountMove?.sourceAccountId), to: label(currentId) })
 			: settledPhase === "failed" || settledPhase === "recovery_required"
 				? accountMove?.errorDetail || t("settings.agentAccounts.switchFailed")
-				: message;
+				: "";
 
 	return <section className="mt-3 border-t border-(--color-border-settings-input) pt-3" data-testid="session-account-summary">
 		<div className="flex items-center justify-between gap-3">
@@ -79,11 +95,21 @@ export function SessionAccountSummary({ session }: { session: WorkspaceSession }
 					<SelectTrigger size="sm" className="max-w-56" aria-label={t("settings.agentAccounts.sessionAccount")}><SelectValue /></SelectTrigger>
 					<SelectContent align="end">
 						{/* Only a subscription takes a session: the daemon refuses a move to an API-key login. */}
-						{options.map((option) => <SelectItem key={option.id} value={option.id} disabled={!option.signedIn}>{agentAccountName(option, t)}</SelectItem>)}
+						{options.map((option) => <SelectItem key={option.id} value={option.id} disabled={!option.signedIn}>{agentAccountLabel(option, options, t)}</SelectItem>)}
 					</SelectContent>
 				</Select>
 			</div>
 		</div>
+		{settings?.accountHandoff && session.mode === "chat" ? <div className="mt-2 flex items-center justify-between gap-3">
+			<p className="text-xs text-muted-foreground">{t("settings.agentAccounts.stayOnAccount")}</p>
+			<Switch
+				aria-label={t("settings.agentAccounts.stayOnAccount")}
+				checked={current.data?.stayOnAccount ?? false}
+				disabled={!current.data || savingStay}
+				onCheckedChange={(stay) => void setStay(stay)}
+			/>
+		</div> : null}
+		{message ? <p className="mt-2 text-xs text-muted-foreground" role="status">{message}</p> : null}
 		{status ? <p className="mt-2 text-xs text-muted-foreground" role="status">{status}</p> : null}
 		{account ? <AccountLimits account={account} /> : null}
 		{confirming ? <ConfirmDialog open

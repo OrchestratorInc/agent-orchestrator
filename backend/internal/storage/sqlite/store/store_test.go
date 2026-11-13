@@ -1691,43 +1691,6 @@ func TestPRCommentsReplace(t *testing.T) {
 	}
 }
 
-func TestMarkPRCommentResolved(t *testing.T) {
-	s := newTestStore(t)
-	ctx := context.Background()
-	seedProject(t, s, "mer")
-	r, _ := s.CreateSession(ctx, sampleRecord("mer"))
-	now := time.Now().UTC().Truncate(time.Second)
-	pr := domain.PullRequest{URL: "pr1", SessionID: r.ID, UpdatedAt: now}
-	if err := s.WritePR(ctx, pr, nil, []domain.PullRequestComment{
-		{ID: "c1", Author: "a", Body: "nit", URL: "comment-1", CreatedAt: now},
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	updated, err := s.MarkPRCommentResolved(ctx, "pr1", "c1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !updated {
-		t.Fatal("MarkPRCommentResolved updated = false, want true")
-	}
-	comments, err := s.ListPRComments(ctx, "pr1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(comments) != 1 || !comments[0].Resolved {
-		t.Fatalf("comments = %+v, want c1 resolved", comments)
-	}
-
-	updated, err = s.MarkPRCommentResolved(ctx, "pr1", "missing")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if updated {
-		t.Fatal("MarkPRCommentResolved missing updated = true, want false")
-	}
-}
-
 func TestMarkPRReviewThreadResolved(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

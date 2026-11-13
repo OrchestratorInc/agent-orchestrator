@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -4540,6 +4541,102 @@ func TestKill_RuntimeDestroyErrorFailsClosedEvenWhenProbeReadsGone(t *testing.T)
 	}
 }
 
+// forgettingInputGate records which terminals Session Manager tells the
+// terminal mux to forget.
+type forgettingInputGate struct {
+	mu        sync.Mutex
+	forgotten []string
+	err       error
+}
+
+func (g *forgettingInputGate) BeginInputDrain(string) (time.Time, func()) {
+	return time.Time{}, func() {}
+}
+
+func (g *forgettingInputGate) ForgetTerminalInput(_ context.Context, terminalID string) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.forgotten = append(g.forgotten, terminalID)
+	return g.err
+}
+
+func (g *forgettingInputGate) calls() []string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return slices.Clone(g.forgotten)
+}
+
+// A killed session's runtime is gone, so the terminal mux can drop its input
+// timestamp; it is keyed by the runtime handle id (#5691).
+func TestKill_ForgetsTerminalInputAfterRuntimeDestroy(t *testing.T) {
+	m, st, rt, _ := newManager()
+	gate := &forgettingInputGate{}
+	m.SetTerminalInputGate(gate)
+	rt.onDestroy = func(int, ports.RuntimeHandle) {
+		if got := gate.calls(); len(got) != 0 {
+			t.Errorf("forgot %v before the runtime was destroyed", got)
+		}
+	}
+	st.sessions["mer-1"] = mkLive("mer-1")
+
+	if _, err := m.Kill(ctx, "mer-1"); err != nil {
+		t.Fatal(err)
+	}
+	if got := gate.calls(); !slices.Equal(got, []string{"h1"}) {
+		t.Fatalf("forgotten terminals = %v, want [h1]", got)
+	}
+}
+
+// A failed destroy leaves the runtime possibly live with a draft in it, so its
+// input timestamp must stay for the idle and draft proofs.
+func TestKill_KeepsTerminalInputWhenRuntimeDestroyFails(t *testing.T) {
+	m, st, rt, _ := newManager()
+	gate := &forgettingInputGate{}
+	m.SetTerminalInputGate(gate)
+	st.sessions["mer-1"] = mkLive("mer-1")
+	rt.destroyErr = errors.New("runtime still alive")
+
+	if _, err := m.Kill(ctx, "mer-1"); err == nil {
+		t.Fatal("kill succeeded, want the runtime error")
+	}
+	if got := gate.calls(); len(got) != 0 {
+		t.Fatalf("forgotten terminals = %v, want none after a failed destroy", got)
+	}
+}
+
+// Cleanup destroys a terminated session's leftover runtime (usually already
+// gone after the agent exited on its own) and then drops its input timestamp.
+func TestCleanup_ForgetsTerminalInputOfTerminatedSessions(t *testing.T) {
+	m, st, _, _ := newManager()
+	gate := &forgettingInputGate{}
+	m.SetTerminalInputGate(gate)
+	seedTerminal(st, "mer-1", domain.SessionMetadata{WorkspacePath: "/ws/mer-1", RuntimeHandleID: "h-mer-1"})
+
+	if _, err := m.Cleanup(ctx, "mer"); err != nil {
+		t.Fatal(err)
+	}
+	if got := gate.calls(); !slices.Equal(got, []string{"h-mer-1"}) {
+		t.Fatalf("forgotten terminals = %v, want [h-mer-1]", got)
+	}
+}
+
+// Forgetting waits on the terminal's write fence under the caller's context.
+// If that fails the runtime is still destroyed, so the kill must not fail: the
+// only cost is one stale input timestamp.
+func TestKill_SucceedsWhenForgettingTerminalInputFails(t *testing.T) {
+	m, st, _, _ := newManager()
+	gate := &forgettingInputGate{err: context.DeadlineExceeded}
+	m.SetTerminalInputGate(gate)
+	st.sessions["mer-1"] = mkLive("mer-1")
+
+	if _, err := m.Kill(ctx, "mer-1"); err != nil {
+		t.Fatalf("kill failed after the runtime was destroyed: %v", err)
+	}
+	if got := gate.calls(); !slices.Equal(got, []string{"h1"}) {
+		t.Fatalf("forgotten terminals = %v, want [h1]", got)
+	}
+}
+
 // TestKill_InconclusiveRuntimeProbeStaysFailClosed pins the other side.
 // ErrRuntimeProbeInconclusive means the runtime may still be live, and its port
 // contract forbids callers from treating the session as dead. Terminating here
@@ -6528,9 +6625,10 @@ func TestSystemPrompt_AppendsConfidentialityGuard(t *testing.T) {
 				!strings.Contains(sp, "Do not create `.ao/launch.json` unless the user asks") {
 				t.Fatalf("%s: system prompt missing static-first preview safeguards:\n%s", tc.name, sp)
 			}
-			if !strings.Contains(sp, "immediately after creating or materially updating it") ||
-				!strings.Contains(sp, "do not replace an active application preview with a supporting asset") {
-				t.Fatalf("%s: system prompt missing automatic artifact handoff guidance:\n%s", tc.name, sp)
+			if !strings.Contains(sp, "Never open an artifact with `ao preview`, whatever its file type") ||
+				!strings.Contains(sp, "in the session's Artifacts tab") ||
+				strings.Contains(sp, "browser-displayable artifact") {
+				t.Fatalf("%s: system prompt missing Artifacts-tab handoff guidance:\n%s", tc.name, sp)
 			}
 		})
 	}
@@ -12259,6 +12357,18 @@ func TestAOSkillPointerRemoteHostNamesRemoteBrowserGuide(t *testing.T) {
 	}
 }
 
+func TestAOSkillPointerNamesBugTriageSkill(t *testing.T) {
+	dir := t.TempDir()
+	m := &Manager{dataDir: dir}
+	skill := filepath.ToSlash(filepath.Join(dir, "skills", "bug-triage", "SKILL.md"))
+	for _, chat := range []bool{false, true} {
+		pointer := m.aoSkillPointer(chat)
+		if !strings.Contains(pointer, "To report Orchestrator bugs, read `"+skill+"`.") {
+			t.Fatalf("chat=%v pointer does not lead to the skill:\n%s", chat, pointer)
+		}
+	}
+}
+
 func TestAOSkillPointerDesktopHostKeepsDesktopGuide(t *testing.T) {
 	m := &Manager{dataDir: t.TempDir()}
 	pointer := m.aoSkillPointer(false)
@@ -12280,6 +12390,56 @@ func TestResumeAgent_RuntimeFailureNamesRelaunchStep(t *testing.T) {
 	var relaunchErr *RelaunchError
 	if !errors.As(err, &relaunchErr) || relaunchErr.Step != "runtime" {
 		t.Fatalf("resume error = %v, want RelaunchError step runtime", err)
+	}
+}
+
+func TestSpawn_BaseBranchOverridesTheProjectDefaultForThisSessionOnly(t *testing.T) {
+	m, st, _, ws := newManager()
+	config := testRoleAgents()
+	config.DefaultBranch = "develop"
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Config: config}
+	if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, BaseBranch: "feat/parent"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := ws.lastCfg.BaseBranch; got != "feat/parent" {
+		t.Fatalf("workspace base branch = %q", got)
+	}
+	if got := ws.resolves[0].configuredBranch; got != "feat/parent" {
+		t.Fatalf("resolved branch = %q", got)
+	}
+	if got := st.projects["mer"].Config.DefaultBranch; got != "develop" {
+		t.Fatalf("project default changed to %q", got)
+	}
+}
+
+// An existing branch keeps its own history and would not start from the base,
+// so a branch named with a base must be new.
+func TestSpawn_BaseBranchWithANamedBranchRequiresItToBeNew(t *testing.T) {
+	m, st, _, ws := newManager()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Config: testRoleAgents()}
+	if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, BaseBranch: "feat/parent", Branch: "feat/child"}); err != nil {
+		t.Fatal(err)
+	}
+	if !ws.lastCfg.RequireNewBranch || ws.lastCfg.Branch != "feat/child" {
+		t.Fatalf("workspace branch = %q, require new = %v", ws.lastCfg.Branch, ws.lastCfg.RequireNewBranch)
+	}
+	// Without a base, a named branch may be an existing one to continue.
+	if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Branch: "feat/other"}); err != nil {
+		t.Fatal(err)
+	}
+	if ws.lastCfg.RequireNewBranch {
+		t.Fatal("a named branch without a base must not be required to be new")
+	}
+}
+
+func TestSpawn_BaseBranchNeedsARepositoryProject(t *testing.T) {
+	for _, kind := range []domain.ProjectKind{domain.ProjectKindScratch, domain.ProjectKindWorkspace} {
+		m, st, _, _ := newManager()
+		st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Kind: kind}
+		_, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, BaseBranch: "feat/parent"})
+		if !errors.Is(err, ErrBaseBranchUnsupported) {
+			t.Fatalf("%s: err = %v", kind, err)
+		}
 	}
 }
 

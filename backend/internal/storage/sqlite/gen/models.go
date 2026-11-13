@@ -186,6 +186,7 @@ type AppSetting struct {
 	VersionRefresh       bool
 	ComputerUse          bool
 	SessionRetentionDays int64
+	AccountHandoff       bool
 	LimitHistory         bool
 }
 
@@ -585,6 +586,19 @@ type PRComment struct {
 	ReviewID         string
 }
 
+type PRDetail struct {
+	PRURL                string
+	Description          string
+	DescriptionTruncated int64
+	Labels               string
+	RequestedReviewers   string
+	Commits              string
+	CommitCount          int64
+	ObservedAt           time.Time
+	Conversation         string
+	ProviderUpdatedAt    sql.NullTime
+}
+
 type PRReview struct {
 	PRURL            string
 	ReviewID         string
@@ -784,6 +798,10 @@ type Session struct {
 	TerminatedAt                     sql.NullTime
 	ImportSource                     string
 	DisplayNameExplicit              bool
+}
+
+type SessionAccountPin struct {
+	SessionID string
 }
 
 type SessionAgentAccount struct {

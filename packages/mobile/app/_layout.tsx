@@ -11,6 +11,7 @@ import { Platform, View } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import { SafeAreaProvider } from "react-native-safe-area-context";
+import { KeyboardResumeResync } from "../lib/KeyboardResumeResync";
 import { OnboardingGate } from "../lib/OnboardingGate";
 import { TelemetryManager } from "../lib/TelemetryManager";
 import { rootTouchStart } from "../lib/touchOutside";
@@ -57,6 +58,8 @@ const SHEET_ROUTES: readonly { name: string; detents: readonly number[] | "fitTo
 const PICKER_SHEETS = [
 	{ name: "sheets/agent", title: "Agent" },
 	{ name: "sheets/model", title: "Model" },
+	{ name: "sheets/files-branch", title: "Branch" },
+	{ name: "sheets/files-changes", title: "Changes" },
 ] as const;
 
 // iOS's machine-name sheet, the one sheet with a text input: a native bar
@@ -128,6 +131,7 @@ export default function RootLayout() {
 			    Android only fires `keyboardDidShow` once the keyboard has finished
 			    animating, so every dock and composer arrived a beat late. */}
 			<KeyboardProvider>
+				<KeyboardResumeResync />
 				<SafeAreaProvider>
 					<ThemeProvider initial={themeSettings}>
 						{/* Orchestrator Cloud outside the machines' store: the store lists cloud rows beside each machine's. */}
@@ -324,11 +328,11 @@ function Shell() {
 				<Stack.Screen
 					name="cloud/new-project"
 					options={Platform.OS === "android" ? {
-						title: "New cloud project",
+						title: "New project",
 						contentStyle: { backgroundColor: t.bgBase },
 					} : {
 						...NAME_SHEET_OPTIONS,
-						title: "New cloud project",
+						title: "New project",
 						headerStyle: { backgroundColor: t.bgBase },
 						contentStyle: { backgroundColor: t.bgBase },
 					}}

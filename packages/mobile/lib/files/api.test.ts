@@ -18,7 +18,8 @@ vi.mock("../config", () => ({
 	}),
 }));
 
-import { sendFileFeedback, workspaceImageSource } from "./api";
+import { getWorkspaceFile, getWorkspaceHistory, getWorkspaceRangeFiles, getWorkspaceTree, searchWorkspaceFiles, sendFileFeedback, workspaceImageSource } from "./api";
+import { daemonFilesBackend } from "./backend";
 import { changedPathCount } from "./navigation";
 
 const cfg = { host: "mac.local", httpPort: 3001, password: "pw", hostId: "h1" } as never;
@@ -60,6 +61,84 @@ describe("image sources", () => {
 			uri: "http://mac.local:3001/api/v1/sessions/s/workspace/file/blob?path=img%2Fa+b.png&side=before&v=v7",
 			headers: { Authorization: "Bearer pw", "X-AO-Expected-Host-ID": "h1" },
 		});
+	});
+});
+
+describe("reading another branch or a commit", () => {
+	const view = { branch: "refs/remotes/origin/main" };
+
+	it("reads one commit, or a view's snapshot of a file, from the file route", async () => {
+		await getWorkspaceFile(cfg, "s", "a.ts");
+		await getWorkspaceFile(cfg, "s", "a.ts", { commitSha: "abc" });
+		// A view is one diff, so a section would mean nothing to it.
+		await getWorkspaceFile(cfg, "s", "a.ts", { section: "staged" }, view);
+		await getWorkspaceFile(cfg, "s", "a.ts", { commitSha: "abc" }, { prNumber: 4, sourceUrl: "https://x/pull/4" });
+		expect(sent.bodies.map((entry) => entry.url)).toEqual([
+			"/api/v1/sessions/s/workspace/file?path=a.ts",
+			"/api/v1/sessions/s/workspace/file?path=a.ts&commitSha=abc",
+			"/api/v1/sessions/s/workspace/file?path=a.ts&snapshot=true&branch=refs%2Fremotes%2Forigin%2Fmain",
+			"/api/v1/sessions/s/workspace/file?path=a.ts&snapshot=true&prNumber=4&sourceUrl=https%3A%2F%2Fx%2Fpull%2F4&commitSha=abc",
+		]);
+	});
+
+	// The file route's `section` scopes only its diff; status and content stay
+	// the combined view's. A worktree scope reads its own patch and after side.
+	it("reads a worktree scope from its scoped patch and after side", async () => {
+		for (const section of ["staged", "unstaged", "uncommitted", "untracked", "committed"] as const) {
+			sent.bodies = [];
+			await getWorkspaceFile(cfg, "s", "src/a b.ts", { section });
+			expect(sent.bodies.map((entry) => entry.url).sort()).toEqual([
+				"/api/v1/sessions/s/workspace/diffs",
+				`/api/v1/sessions/s/workspace/file/revision?path=src%2Fa+b.ts&scope=${section}&side=after`,
+			]);
+			expect(sent.bodies.find((entry) => entry.url.endsWith("/diffs"))?.body).toEqual({ paths: ["src/a b.ts"], scope: section, contextLines: 3, ignoreWhitespace: false });
+		}
+	});
+
+	it("browses and searches a view's tip through its tree", async () => {
+		await getWorkspaceTree(cfg, "s", "");
+		await getWorkspaceTree(cfg, "s", "src", view);
+		await searchWorkspaceFiles(cfg, "s", "app", view);
+		expect(sent.bodies.map((entry) => entry.url)).toEqual([
+			"/api/v1/sessions/s/workspace/tree",
+			"/api/v1/sessions/s/workspace/tree?path=src&snapshot=true&branch=refs%2Fremotes%2Forigin%2Fmain",
+			"/api/v1/sessions/s/workspace/tree?filter=app&snapshot=true&branch=refs%2Fremotes%2Forigin%2Fmain",
+		]);
+	});
+
+	it("asks for a view's history and its whole range of commits", async () => {
+		await getWorkspaceHistory(cfg, "s");
+		await getWorkspaceHistory(cfg, "s", { prNumber: 4 });
+		await getWorkspaceRangeFiles(cfg, "s", view);
+		expect(sent.bodies.map((entry) => entry.url)).toEqual([
+			"/api/v1/sessions/s/workspace/history",
+			"/api/v1/sessions/s/workspace/history?prNumber=4",
+			"/api/v1/sessions/s/workspace/history/selection",
+		]);
+		expect(sent.bodies[2].body).toEqual({ branch: "refs/remotes/origin/main", commitShas: [] });
+	});
+
+	it("points a view's or a commit's image at its snapshot", () => {
+		expect(workspaceImageSource(cfg, "s", "a.png", "after", "v1", { commitSha: "abc" }, view).uri)
+			.toBe("http://mac.local:3001/api/v1/sessions/s/workspace/file/blob?path=a.png&side=after&v=v1&snapshot=true&branch=refs%2Fremotes%2Forigin%2Fmain&commitSha=abc");
+	});
+});
+
+describe("the machine's image sides", () => {
+	const backend = daemonFilesBackend(cfg);
+
+	it("offers no image for a worktree scope, rather than the base and the worktree", async () => {
+		for (const section of ["staged", "unstaged", "uncommitted", "committed"] as const) {
+			await expect(backend.imageSource("s", "a.png", "before", "v", { section })).resolves.toBeUndefined();
+			await expect(backend.imageSource("s", "a.png", "after", "v", { section })).resolves.toBeUndefined();
+		}
+	});
+
+	it("reads all changes, an untracked file, a commit and a view from the blob route", async () => {
+		expect((await backend.imageSource("s", "a.png", "after", "v"))?.uri).toContain("/workspace/file/blob?path=a.png&side=after&v=v");
+		expect((await backend.imageSource("s", "a.png", "after", "v", { section: "untracked" }))?.uri).toContain("/workspace/file/blob?");
+		expect((await backend.imageSource("s", "a.png", "before", "v", { commitSha: "abc" }))?.uri).toContain("commitSha=abc");
+		expect((await backend.git!.at({ branch: "main" }).imageSource("s", "a.png", "before", "v"))?.uri).toContain("snapshot=true&branch=main");
 	});
 });
 
