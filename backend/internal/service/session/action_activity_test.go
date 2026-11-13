@@ -277,8 +277,8 @@ func TestClaimAdmissionRejectionsWriteNoAction(t *testing.T) {
 	st.projects["mer"] = project
 	ctx := context.WithValue(context.Background(), middleware.RequestIDKey, "req-claim-admission")
 
-	if _, err := svc.ClaimPR(ctx, "mer-1", "https://github.com/other/repo/pull/7", ClaimPROptions{}); !errors.Is(err, ErrProjectMismatch) {
-		t.Fatalf("repository mismatch = %v, want ErrProjectMismatch", err)
+	if _, err := svc.ClaimPR(ctx, "mer-1", "https://github.com/other/repo/-/merge_requests/7", ClaimPROptions{}); !errors.Is(err, ErrInvalidPRRef) {
+		t.Fatalf("invalid ref = %v, want ErrInvalidPRRef", err)
 	}
 	if _, err := svc.ClaimPR(ctx, "mer-1", "https://github.com/acme/repo/pull/7", ClaimPROptions{}); !errors.Is(err, ErrSCMUnavailable) {
 		t.Fatalf("missing SCM = %v, want ErrSCMUnavailable", err)

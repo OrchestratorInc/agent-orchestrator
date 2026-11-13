@@ -2,7 +2,6 @@ package integration
 
 import (
 	"context"
-	"errors"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -40,9 +39,6 @@ func TestWorkspacePRDiscoveryAndClaimPersist(t *testing.T) {
 	result, err := svc.ClaimPR(ctx, f.session.ID, claimed.PR.URL, sessionsvc.ClaimPROptions{})
 	if err != nil || len(result.PRs) != 2 || result.PRs[0].URL != claimed.PR.URL {
 		t.Fatalf("claimed PRs = %+v, error = %v", result.PRs, err)
-	}
-	if _, err := svc.ClaimPR(ctx, f.session.ID, "https://github.com/other/hello/pull/2", sessionsvc.ClaimPROptions{}); !errors.Is(err, sessionsvc.ErrProjectMismatch) {
-		t.Fatalf("claim across workspace registry = %v, want ErrProjectMismatch", err)
 	}
 	prs, err = f.store.ListPRsBySession(ctx, f.session.ID)
 	if err != nil || len(prs) != 2 {

@@ -1448,8 +1448,12 @@ func (o *Observer) selectRefreshCandidates(ctx context.Context, subjects map[str
 			(forcedSessions[s.session.ID] && !s.known.Merged && !s.known.Closed)
 		repoCursor := o.Cache.LastSyncCursor[prKey(s.repo, 0)]
 		hasCursor := !repoCursor.IsZero()
-		g := guards[prKey(s.repo, 0)]
-		if g.err == nil && !g.result.NotModified {
+		// A PR claimed in a repository outside the session's project has no
+		// repo PR-list guard or sync cursor. It refreshes only when its
+		// commit checks change, on a forced review refresh, or at
+		// DefaultPRMaxAge, which also observes merges and closes.
+		g, guarded := guards[prKey(s.repo, 0)]
+		if guarded && g.err == nil && !g.result.NotModified {
 			// Incremental discovery: on polls after the first (hasCursor), only
 			// refresh MRs that appeared in the updated set. On the first poll
 			// (no cursor), refresh all tracked MRs
@@ -1583,9 +1587,10 @@ func (o *Observer) reconcileTerminalGitHubPRs(ctx context.Context, subjects map[
 			continue
 		}
 		repoKey := prKey(s.repo, 0)
-		g := guards[repoKey]
+		g, guarded := guards[repoKey]
 		// Reconciliation runs only when the repo-list guard is not a 304.
-		if g.err != nil || g.result.NotModified {
+		// Unguarded external-repository PRs reconcile through DefaultPRMaxAge.
+		if !guarded || g.err != nil || g.result.NotModified {
 			continue
 		}
 		key := keyForTrackedPR(s.known, s.repo)

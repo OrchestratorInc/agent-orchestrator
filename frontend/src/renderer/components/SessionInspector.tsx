@@ -397,7 +397,7 @@ const SummaryView = memo(function SummaryView({
 	const linkedPRs = query.data?.linkedPrs ?? [];
 	const projectQuery = useQuery({
 		queryKey: hostId ? ["project", hostId, session.workspaceId] : ["project", session.workspaceId],
-		enabled: linkedPRs.length > 0 && !session.cloud,
+		enabled: (linkedPRs.length > 0 || (query.data?.prs.length ?? 0) > 0) && !session.cloud,
 		queryFn: async () => {
 			const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/projects/{id}", {
 				params: { path: { id: session.workspaceId } },
@@ -411,7 +411,7 @@ const SummaryView = memo(function SummaryView({
 	const { client: cloudClient, ready: cloudReady, baseUrl: cloudBaseUrl } = useCloudCp(Boolean(session.cloud));
 	const cloudProjectQuery = useQuery({
 		queryKey: ["cloud-project-repositories", cloudBaseUrl, session.cloud?.orgId ?? "", session.workspaceId],
-		enabled: linkedPRs.length > 0 && Boolean(session.cloud) && cloudReady,
+		enabled: (linkedPRs.length > 0 || (query.data?.prs.length ?? 0) > 0) && Boolean(session.cloud) && cloudReady,
 		staleTime: 60_000,
 		queryFn: async () => {
 			const { project } = await cloudClient.getProject(session.cloud!.orgId, session.workspaceId);
@@ -471,6 +471,7 @@ const SummaryView = memo(function SummaryView({
 								<PRSummaryCard
 									canOpenReviews={canOpenReviews}
 									key={pr.url || pr.htmlUrl || pr.number}
+									external={isExternalRepository(prRepositoryIdentity(pr), projectRepositories)}
 									showRepository={prsSpanRepositories(prSummaries)}
 									onOpenReviews={onOpenReviews}
 									pr={pr}
@@ -599,8 +600,18 @@ function projectRepositoryUrls(project: components["schemas"]["Project"] | undef
 	return [project.repo, project.config?.canonicalRepoURL, ...(project.workspaceRepos?.map((repo) => repo.repo) ?? [])];
 }
 
-function isExternalRepository(pr: SessionPRReference, repositories: Array<string | null | undefined> | undefined): boolean {
-	if (!repositories) return false;
+function prRepositoryIdentity(pr: SessionPRSummary): { host: string; repo: string } | undefined {
+	try {
+		const url = new URL(pr.htmlUrl || pr.url);
+		const repo = pr.repo || prRepositoryFromUrl(url.href);
+		return repo ? { host: url.hostname, repo } : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+function isExternalRepository(pr: Pick<SessionPRReference, "host" | "repo"> | undefined, repositories: Array<string | null | undefined> | undefined): boolean {
+	if (!pr || !repositories) return false;
 	const identities = repositories.flatMap((repository) => {
 		if (!repository) return [];
 		try {
@@ -917,6 +928,7 @@ export function PRSummaryCard({
 	canOpenReviews,
 	hostId,
 	cloudOrgId,
+	external = false,
 	guest = false,
 	onOpenReviews,
 	pr,
@@ -928,6 +940,8 @@ export function PRSummaryCard({
 	canOpenReviews: boolean;
 	hostId?: string;
 	cloudOrgId?: string;
+	/** The PR is in a repository outside the session's project. */
+	external?: boolean;
 	/** Reached through a share: this person asks the project's owner to merge. */
 	guest?: boolean;
 	onOpenReviews: () => void;
@@ -995,7 +1009,8 @@ export function PRSummaryCard({
 		card: presentation,
 		href: prBrowserUrl(pr),
 		stateLabel: t(prStateLabelKeys[pr.state]),
-		repositoryLabel: showRepository ? pr.repo || prRepositoryFromUrl(pr.htmlUrl || pr.url) : undefined,
+		repositoryLabel: showRepository || external ? pr.repo || prRepositoryFromUrl(pr.htmlUrl || pr.url) : undefined,
+		externalRepositoryLabel: external ? t("inspector.externalRepository") : undefined,
 		reviewDetailsAction: canOpenReviews && pr.review.decision !== "none" ? (
 			<Button className="whitespace-nowrap text-settings-muted" onClick={onOpenReviews} type="button" variant="link">
 				<span className="text-xs">{t("pr.review.viewDetails")} ↗</span>

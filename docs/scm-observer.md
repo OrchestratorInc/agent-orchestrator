@@ -78,7 +78,14 @@ identity resolution and alias collapse:
    review-thread refreshes, and terminal reconciliation update existing rows.
 3. **Explicit claim** (`ao session claim-pr`, `spawn --claim-pr`, gh-wrapper
    capture): resolves a PR ref against the project origin and claims the row
-   for a session, including takeover rules for terminated owners.
+   for a session, including takeover rules for terminated owners. A full URL
+   in a repository outside the project is claimed as an external-repository
+   PR. A PR the worker reports with `ao report --pr-created` in such a
+   repository is claimed the same way (`TrackReportedPR`, no takeover).
+   External-repository rows have no repo PR-list guard or sync cursor, so the
+   refresh pass fetches them only on a commit-check ETag change, a forced
+   review refresh, or `DefaultPRMaxAge`, and terminal reconciliation skips
+   them.
 
 The **read model** (`ListPRSummaries`) groups rows through `pr_url_alias` so a
 PR observed under multiple URLs renders as one card, then derives the summary
