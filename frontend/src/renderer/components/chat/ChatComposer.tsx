@@ -255,6 +255,7 @@ export const ChatComposer = memo(function ChatComposer({
 	starting,
 	holdAttachments,
 	onHeldAttachmentsChange,
+	attachmentsRefusal,
 	settings,
 	addMenuItems,
 	approval,
@@ -354,6 +355,12 @@ export const ChatComposer = memo(function ChatComposer({
 	 */
 	holdAttachments?: boolean;
 	onHeldAttachmentsChange?: (attachments: FileAttachmentPayload[], preparing: boolean) => void;
+	/**
+	 * Why this chat cannot take files, for a draft that brought some along
+	 * (a new task moved to a target that takes none). They stay as chips with
+	 * this reason, and nothing is sent until they are removed.
+	 */
+	attachmentsRefusal?: string;
 	/** A contextual prompt shown before an otherwise empty conversation begins. */
 	emptyPlaceholder?: string;
 	/** A proposed next message, kept out of the draft until accepted with Tab. */
@@ -1677,6 +1684,11 @@ export const ChatComposer = memo(function ChatComposer({
 			}
 		}
 		const hasAttachments = settledAttachments.length > 0 || visibleRetainedAttachments.length > 0;
+		// Files this chat cannot take stay with their reason (attachmentError);
+		// nothing new goes until they are removed. A send already under way
+		// keeps its identity and its files until its outcome is known, so its
+		// retry goes as it was and the chat settles it.
+		if (attachmentsRefusal && settledAttachments.length > 0 && !recoveringDelivery) return;
 		const canSubmitNow =
 			(body.length > 0 || hasAttachments || contextReferences.length > 0 || Boolean(recoveringDelivery)) &&
 			(!busy || savingQueuedEdit || recoveringDelivery?.state === "accepted") &&
@@ -2212,6 +2224,7 @@ export const ChatComposer = memo(function ChatComposer({
 		fileAttachments.error ??
 		draftPersistenceError ??
 		(optimisticSend ? null : deliveryRecoveryNotice) ??
+		(attachmentsRefusal && fileAttachments.attachments.length > 0 && !durableDelivery ? attachmentsRefusal : null) ??
 		sendError ??
 		(fileAttachments.attachments.some((file) => !file.data && !file.stagedPath)
 			? "chat.draft.filesUnavailable" : null) ??

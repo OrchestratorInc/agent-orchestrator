@@ -148,6 +148,12 @@ export interface ConversationTurn {
 	groupKey?: string;
 	errorMessage?: string;
 	failureCode?: "provider_key_missing";
+	/**
+	 * The turn ended before an agent started on it (a Cloud message refused
+	 * when its turn came): it reads as not run, with errorMessage as the
+	 * reason, rather than as a run that failed.
+	 */
+	notRun?: boolean;
 	usageLimit?: ConversationUsageLimit;
 	requestedAt: string;
 	startedAt?: string;

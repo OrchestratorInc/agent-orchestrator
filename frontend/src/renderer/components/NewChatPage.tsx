@@ -33,6 +33,7 @@ import { SessionTabsTopbar } from "./PageTopbar";
 import { useTaskLaunch, type LaunchReplay } from "./TaskComposer";
 import { Button } from "./ui/button";
 import { cn } from "../lib/utils";
+import { MAX_CLOUD_CP_BINARY_BYTES } from "../../shared/cloud-binary";
 
 /**
  * New task as a chat that has no session yet. The first send creates the
@@ -111,6 +112,21 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 		},
 	});
 	const stagePrepared = useStageAttachments(preparedId, hostId);
+	// A Cloud task carries files when its control plane takes them: they ride
+	// the first message of its Chat session, up to the size one upload may be.
+	// A Cloud standalone agent starts without them (createCloudTask).
+	const cloudOffering = useCloudOffering(task.isCloudProject);
+	const cloudTaskTakesFiles = task.isCloudProject && projectId !== CLOUD_STANDALONE_WORKSPACE_ID;
+	const cloudFiles = useMemo(() => cloudTaskTakesFiles && cloudOffering.maxAttachmentBytes !== undefined
+		? { maxBytes: Math.min(cloudOffering.maxAttachmentBytes, MAX_CLOUD_CP_BINARY_BYTES) } : undefined,
+	[cloudOffering.maxAttachmentBytes, cloudTaskTakesFiles]);
+	// A draft keeps the files it brought from a target that takes them; here
+	// they stay with why this target takes none, until they are removed.
+	const attachmentsRefusal = projectId === CLOUD_STANDALONE_WORKSPACE_ID && task.isCloudProject
+		? t("newTask.cloudStandaloneNoFiles", { defaultValue: "Files can't start a standalone agent. Remove them to continue." })
+		: task.isCloudProject && cloudOffering.loaded && !cloudFiles
+			? t("newTask.cloudProjectNoFiles", { defaultValue: "Files can't start a task in this Cloud project yet. Remove them to continue." })
+			: undefined;
 	const workspaceReady = Boolean(preparedId && workspaceFiles.data);
 	// Files staged into one project's worktree do not exist in another's.
 	const attachmentsProject = useRef(projectId);
@@ -409,8 +425,13 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 				centerInWindow
 				localEchos={echo ? [echo] : undefined}
 				openingStartedAt={echo?.createdAt}
-				// A Cloud task cannot carry files yet, so its composer offers none.
-				holdAttachments={!task.isCloudProject}
+				// A Cloud task whose control plane takes no files offers none. A send
+				// whose answer was lost keeps the files it went with until its outcome
+				// is known: its retry carries them under the same request, and only a
+				// new send meets a target that takes none.
+				holdAttachments={!task.isCloudProject || Boolean(cloudFiles) || Boolean(pendingLaunch)}
+				cloudAttachments={cloudFiles}
+				attachmentsRefusal={pendingLaunch ? undefined : attachmentsRefusal}
 				onHeldAttachmentsChange={onHeldAttachmentsChange}
 				onStageAttachments={workspaceReady ? stagePrepared : undefined}
 				filePaths={workspaceFiles.data?.paths}

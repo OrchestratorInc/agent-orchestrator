@@ -9,6 +9,7 @@ import type { ChatFileReference, OpenFileAnnotation } from "../../../shared/chat
 import { TurnWorkSummary } from "./TurnWorkSummary";
 import { TurnSettleSnapshot } from "./TurnSettleSnapshot";
 import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
+import { cloudAttachmentReference } from "../../lib/cloud-attachments";
 import { cloudChatStartingInPlace } from "../../lib/cloud-lifecycle";
 import { isSettingsPageOpen } from "../../hooks/useAppShortcut";
 import { useLatestCallback, useStableSet } from "../../hooks/useStable";
@@ -633,7 +634,11 @@ export interface ChatWorkspaceProps {
 	steerRefusal?: string;
 	onPromoteQueuedTurn?: (turnId: string) => Promise<unknown>;
 	onEditQueuedTurn?: (turnId: string, text: string, options?: QueuedMessageEditOptions) => Promise<unknown>;
+	/** Which queued human messages onEditQueuedTurn can edit; every one when absent. */
+	canEditQueuedMessage?: (message: ConversationMessage) => boolean;
 	onCancelQueuedTurn?: (turnId: string) => Promise<unknown>;
+	/** Which queued messages onCancelQueuedTurn can delete; every one when absent. */
+	canCancelQueuedMessage?: (message: ConversationMessage) => boolean;
 	onReorderQueuedTurns?: (turnIds: string[]) => Promise<unknown>;
 	promoteQueuedTurnPendingTurnId?: string;
 	cancelQueuedTurnPendingTurnId?: string;
@@ -658,6 +663,8 @@ export interface ChatWorkspaceProps {
 	/** Keep files the workspace cannot take yet in the composer, sent with the message. */
 	holdAttachments?: boolean;
 	onHeldAttachmentsChange?: ComponentProps<typeof ChatComposer>["onHeldAttachmentsChange"];
+	/** Why this chat takes no files, for a draft that brought some (ChatComposer). */
+	attachmentsRefusal?: string;
 }
 
 type ChatWorkspaceActivation =
@@ -867,7 +874,9 @@ function ChatWorkspaceContent({
 	steerRefusal,
 	onPromoteQueuedTurn,
 	onEditQueuedTurn,
+	canEditQueuedMessage,
 	onCancelQueuedTurn,
+	canCancelQueuedMessage,
 	onReorderQueuedTurns,
 	promoteQueuedTurnPendingTurnId,
 	cancelQueuedTurnPendingTurnId,
@@ -881,6 +890,7 @@ function ChatWorkspaceContent({
 	showSetupStep = true,
 	holdAttachments,
 	onHeldAttachmentsChange,
+	attachmentsRefusal,
 	draftScope,
 	draftPersistenceAvailable,
 	onRetryDraftPersistence,
@@ -1301,7 +1311,7 @@ function ChatWorkspaceContent({
 			const current = queueEditRef.current;
 			if (current?.turnId === turnId && !current.clientMessageId) updateQueueDraft(undefined, current.revision);
 		},
-		[queueEdit, stableCancelQueuedTurn, updateQueueDraft],
+		[onCancelQueuedTurn, queueEdit, stableCancelQueuedTurn, updateQueueDraft],
 	);
 	// Keep the dispatch target with this composer instance while attachment staging
 	// awaits. A newer queue editor must not redirect an older ordinary send.
@@ -1334,12 +1344,14 @@ function ChatWorkspaceContent({
 					});
 				} catch (error) {
 					// These outcomes follow the daemon's atomic receipt lookup, so even
-					// a recovered retry proves this exact edit was never accepted.
+					// a recovered retry proves this exact edit was never accepted. A
+					// Cloud control plane's refusal of the edit proves it too.
 					if ([
 						"CHAT_TURN_NOT_QUEUED",
 						"CHAT_QUEUED_EDIT_CONFLICT",
 						"CHAT_QUEUED_CONTENT_INVALID",
 						"CHAT_QUEUED_TEXT_REQUIRED",
+						"CHAT_QUEUED_EDIT_REFUSED",
 					].includes(apiErrorCode(error) ?? "")) {
 						updateQueueDraft({
 							...prepared.draft.queuedEdit,
@@ -1376,6 +1388,12 @@ function ChatWorkspaceContent({
 			(message.content ?? []).forEach((item, index) => {
 				attachments.push({ id: `content-${index}`, contentIndex: index, contentType: item.type,
 					name: item.name || (item.type === "image" ? `Image ${index + 1}` : item.uri || "Attachment") });
+			});
+			// A cloud message's files are kept by their reference, as the composer
+			// stages a new one, so saving lists them with any file added.
+			(message.cloudAttachments ?? []).forEach((attachment) => {
+				const path = cloudAttachmentReference(attachment);
+				attachments.push({ id: path, name: attachment.fileName, path });
 			});
 			updateQueueDraft({ turnId, ownerId: crypto.randomUUID(), text: parts.body, expectedRevision: message.revision, attachments, stagedAttachments: [] });
 		},
@@ -1791,7 +1809,11 @@ function ChatWorkspaceContent({
 					onBeginQueuedEdit={
 						newWorkDisabled || !draftPersistenceAvailable || !onEditQueuedTurn ? undefined : beginQueuedEdit
 					}
-					onCancelQueuedTurn={newWorkDisabled ? undefined : handleCancelQueuedTurn}
+					canEditMessage={canEditQueuedMessage}
+					// Delete only where the chat can stop the message's turn: without
+					// that it would do nothing.
+					onCancelQueuedTurn={newWorkDisabled || !onCancelQueuedTurn ? undefined : handleCancelQueuedTurn}
+					canCancelMessage={canCancelQueuedMessage}
 					onReorderQueuedTurns={newWorkDisabled || !onReorderQueuedTurns ? undefined : reorderQueuedTurns}
 					promotePendingTurnId={promoteQueuedTurnPendingTurnId}
 					cancelPendingTurnId={cancelQueuedTurnPendingTurnId}
@@ -1800,11 +1822,14 @@ function ChatWorkspaceContent({
 			) : null,
 		[
 			beginQueuedEdit,
+			canCancelQueuedMessage,
+			canEditQueuedMessage,
 			canSteerQueuedMessage,
 			cancelQueuedTurnPendingTurnId,
 			draftPersistenceAvailable,
 			handleCancelQueuedTurn,
 			newWorkDisabled,
+			onCancelQueuedTurn,
 			onEditQueuedTurn,
 			onReorderQueuedTurns,
 			reorderQueuedTurns,
@@ -2319,6 +2344,7 @@ function ChatWorkspaceContent({
 										cloudAttachments={cloudAttachments}
 										holdAttachments={newWorkDisabled ? undefined : holdAttachments}
 										onHeldAttachmentsChange={onHeldAttachmentsChange}
+										attachmentsRefusal={attachmentsRefusal}
 										nativeImages={queueEdit?.clientMessageId ? queueEdit.nativeImages ?? nativeImages : nativeImages}
 										autoFocus={!reviewerActive}
 										autoFocusKey={draftScope.sessionId}
@@ -6200,8 +6226,11 @@ type TimelineGroup = {
 	anchor: number;
 	items: ConversationItem[];
 	outcome?: {
-		/** `unknown`: the controller stopped while the turn ran, so nothing reported how it ended. */
-		state: "completed" | "recovered" | "interrupted" | "failed" | "unknown";
+		/**
+		 * `unknown`: the controller stopped while the turn ran, so nothing reported how it ended.
+		 * `not_run`: it ended before the agent started on it (ConversationTurn.notRun).
+		 */
+		state: "completed" | "recovered" | "interrupted" | "failed" | "unknown" | "not_run";
 		durationMs?: number;
 		error?: string;
 		usageLimit?: ConversationUsageLimit;
@@ -6447,9 +6476,11 @@ function groupByTurn(snapshot: ConversationSnapshot, { controllerStopped = false
 		group.rollbackable = Boolean(turn.providerTurnId);
 		group.accountSwitched = group.items.some((item) => item.kind === "activity" && item.detail?.event === "account.switched");
 		group.outcome = {
-			state: turn.state,
+			state: turn.notRun ? "not_run" : turn.state,
 			usageLimit: turn.usageLimit,
-			durationMs: settledTurnDuration(turn),
+			// A turn that never started did no work to time: one refused, or a
+			// queued one a Stop or a switch ended before it was sent.
+			durationMs: turn.notRun || (turn.state === "interrupted" && !turn.startedAt) ? undefined : settledTurnDuration(turn),
 			error: turn.errorMessage || (turn.state === "failed"
 				? [...group.items].reverse().find(
 					(item): item is ConversationActivity => item.kind === "activity" && item.activityKind === "error",
