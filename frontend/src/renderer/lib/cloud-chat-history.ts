@@ -17,6 +17,13 @@ export const CLOUD_CHAT_LATEST_PAGE = 150;
 export const CLOUD_CHAT_RECENT_MS = 30 * 60_000;
 /** Events in a page read on demand, as the reader scrolls up. */
 export const CLOUD_CHAT_OLDER_PAGE = 200;
+/**
+ * How long a closed chat keeps its events: reopened within it, the
+ * conversation shows at once and only what is newer is read. React Query's
+ * default (5 min) made a chat reopened after a short break read its whole
+ * history again behind a blank screen.
+ */
+export const CHAT_EVENTS_CACHE_MS = 60 * 60_000;
 /** Events a read after the newest cached one, or of the recent half hour, takes at most. */
 const CLOUD_CHAT_WIDE_PAGE = 500;
 

@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { useParams } from "@tanstack/react-router";
 import {
 	ArrowUpRight,
+	AtSign,
 	Bell,
 	BellRing,
 	CheckCheck,
@@ -57,6 +58,9 @@ import { TooltipProvider } from "./ui/tooltip";
 import { useCloudNotifications } from "../hooks/useCloudNotifications";
 import { clearRemoteNotification, clearRemoteNotifications, connectRemoteNotificationStreams, fetchRemoteNotificationsPage, markRemoteNotificationsRead, remoteNotificationsQueryKey, useRemoteNotificationHosts } from "../hooks/useRemoteNotifications";
 import type { CloudCpNotification } from "../lib/cloud-cp/types";
+import { mentionMetadata } from "../lib/cloud-notifications";
+import { mentionOpenTarget } from "../lib/cloud-mention-open";
+import { CloudMentionRuntime, useOpenMention } from "./CloudMentionRuntime";
 
 type SessionMeta = { projectId: string; projectName: string; sessionName: string };
 
@@ -275,7 +279,8 @@ export function NotificationRuntime() {
 		});
 	}, [openPrimary, queryClient]);
 
-	return null;
+	// Cloud mentions: read into the cache as they arrive, and alerted on the desktop.
+	return <CloudMentionRuntime />;
 }
 
 export function NotificationCenter({ style }: NotificationCenterProps) {
@@ -555,10 +560,13 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 		navigateToSession(projectId, sessionId);
 	}, [navigateToSession]);
 
-	const openCloudSessionAndDismiss = useCallback((projectId: string, sessionId: string) => {
-		openCloudSession(projectId, sessionId);
+	// A mention opens at its message, drawn from the cache its arrival filled.
+	const openMention = useOpenMention();
+	const openCloudSessionAndDismiss = useCallback((projectId: string, sessionId: string, notification: CloudCpNotification) => {
+		const mention = mentionOpenTarget(notification);
+		if (!mention || !openMention(mention, projectId)) openCloudSession(projectId, sessionId);
 		setPanelOpen(false);
-	}, [openCloudSession, setPanelOpen]);
+	}, [openCloudSession, openMention, setPanelOpen]);
 
 	const restoreCloudAndOpen = useCallback((projectId: string, sessionId: string) => {
 		void restoreThenOpen(sessionId, undefined, cloudRowKey(sessionId), () => openCloudSession(projectId, sessionId));
@@ -820,6 +828,9 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 								const cloudTerminated = Boolean(cloudMeta) && Boolean(cloudSessionKey && terminatedIds.has(cloudSessionKey));
 								const cloudOfferRestore = cloudTerminated && cloud.type === "needs_input";
 								const clearingKey = cloudRowKey(cloud.id);
+								// A mention names its own session and project, so it opens (and reads)
+								// before the session lists have it: a guest's session in another workspace.
+								const mention = mentionMetadata(cloud);
 								return (
 									<CloudNotificationItem
 										highlighted={highlightedIds.has(clearingKey) || cloud.status === "unread"}
@@ -832,10 +843,10 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 										clearDisabled={clearingNotificationIds.has(clearingKey) || clearingAll || clearAll.isPending}
 										restoring={Boolean(cloudSessionId) && restoringSessionId === cloudRowKey(cloudSessionId)}
 										restoreDisabled={restoringSessionId !== undefined}
-										projectId={cloudMeta?.projectId}
-										projectName={cloudMeta?.projectName}
-										sessionName={cloudMeta?.sessionName}
-										sessionsReady={sessionsReady}
+										projectId={cloudMeta?.projectId ?? (mention ? cloud.projectId : undefined)}
+										projectName={cloudMeta?.projectName ?? mention?.projectName}
+										sessionName={cloudMeta?.sessionName ?? mention?.sessionTitle}
+										sessionsReady={sessionsReady || Boolean(mention)}
 										terminated={cloudTerminated}
 										offerRestore={cloudOfferRestore}
 									/>
@@ -1158,7 +1169,7 @@ const CloudNotificationItem = memo(function CloudNotificationItem({
 	highlighted: boolean;
 	notification: CloudCpNotification;
 	offerRestore: boolean;
-	onOpenSession: (projectId: string, sessionId: string) => void;
+	onOpenSession: (projectId: string, sessionId: string, notification: CloudCpNotification) => void;
 	onRestore: (projectId: string, sessionId: string) => void;
 	onClear: (notification: CloudCpNotification) => Promise<boolean>;
 	projectId?: string;
@@ -1177,7 +1188,7 @@ const CloudNotificationItem = memo(function CloudNotificationItem({
 	const canOpenSession = Boolean(sessionId && projectId) && sessionsReady && (!terminated || !offerRestore);
 	const showSessionMeta = Boolean(sessionName) && !notificationMentions(notification, sessionName ?? "");
 	const openRow = () => {
-		if (canOpenSession && projectId) onOpenSession(projectId, sessionId);
+		if (canOpenSession && projectId) onOpenSession(projectId, sessionId, notification);
 	};
 	const rowRef = useRef<HTMLDivElement>(null);
 	useSwipeToDismiss(rowRef, () => onClear(notification), !clearDisabled);
@@ -1356,6 +1367,8 @@ function notificationMentions(notification: NotificationCopy, value: string): bo
 
 function notificationIcon(type: string) {
 	switch (type) {
+		case "mentioned":
+			return AtSign;
 		case "needs_input":
 			return MessageSquareDot;
 		case "review_feedback":
@@ -1383,6 +1396,8 @@ function notificationIcon(type: string) {
 // Match the semantic status colors used by the board and inspector.
 function notificationIconClass(type: string): string {
 	switch (type) {
+		case "mentioned":
+			return "text-status-needs-you";
 		case "needs_input":
 		case "review_feedback":
 		case "review_changes_requested":

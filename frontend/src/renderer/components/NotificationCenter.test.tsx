@@ -11,6 +11,7 @@ import {
 } from "../lib/notifications";
 import { useUiStore } from "../stores/ui-store";
 import { NotificationCenter, NotificationRuntime } from "./NotificationCenter";
+import { clearMentionFocus, peekMentionFocus } from "../lib/cloud-mention-open";
 import { TooltipProvider } from "./ui/tooltip";
 
 const {
@@ -1153,5 +1154,52 @@ describe("NotificationCenter cloud rows", () => {
 		expect(screen.getByText("acme/cloud#8 is ready to merge.")).toBeInTheDocument();
 		await userEvent.click(screen.getByRole("button", { name: "Retry" }));
 		expect(refetch).toHaveBeenCalledTimes(1);
+	});
+});
+
+describe("NotificationCenter mention rows", () => {
+	const mention: CloudCpNotification = {
+		id: "n-mention",
+		source: "cloud",
+		orgId: "org-guest",
+		projectId: "cproj-guest",
+		sessionId: "csess-guest",
+		type: "mentioned",
+		title: "Chen Li mentioned you",
+		body: "Can you check the retry backoff before we merge? @Priya Shah",
+		status: "unread",
+		metadata: { authorUserId: "u-chen", authorName: "Chen Li", sequence: 42, turnId: "turn-2", sessionTitle: "Fix flaky payment retry test", projectName: "checkout-service" },
+		createdAt: "2026-07-21T12:30:00Z",
+		updatedAt: "2026-07-21T12:30:00Z",
+	};
+
+	beforeEach(() => {
+		const pending = peekMentionFocus();
+		if (pending) clearMentionFocus(pending.sessionId, pending.nonce);
+		cloudNotificationsMock.mockReturnValue(cloudNotificationsResult([mention]));
+	});
+
+	it("lists a mention beside the other kinds, with who, the line, and its session and project", async () => {
+		renderNotificationCenter();
+		await clickOpen();
+		const row = screen.getByText("Chen Li mentioned you").closest<HTMLElement>("[data-notification-source=cloud]")!;
+		expect(within(row).getByText("Can you check the retry backoff before we merge? @Priya Shah")).toBeInTheDocument();
+		// A guest's session in another workspace: the row names it from its own metadata.
+		expect(within(row).getByText("checkout-service")).toBeInTheDocument();
+		expect(within(row).getByText("Fix flaky payment retry test")).toBeInTheDocument();
+		const icon = row.querySelector(".icon-at-sign");
+		expect(icon).not.toBeNull();
+		expect(icon?.parentElement).toHaveClass("text-status-needs-you");
+	});
+
+	it("opens the session at the message, before the session lists have it", async () => {
+		renderNotificationCenter();
+		await clickOpen();
+		await userEvent.click(screen.getByText("Chen Li mentioned you"));
+		expect(navigateMock).toHaveBeenCalledWith({
+			to: "/projects/$projectId/sessions/$sessionId",
+			params: { projectId: "cproj-guest", sessionId: "csess-guest" },
+		});
+		expect(peekMentionFocus()).toMatchObject({ sessionId: "csess-guest", sequence: 42, body: mention.body, authorName: "Chen Li" });
 	});
 });

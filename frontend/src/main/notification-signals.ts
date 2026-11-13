@@ -87,3 +87,30 @@ export function toastSilent(
 export function dockBounceType(type: string | undefined): "critical" | "informational" {
 	return type === "needs_input" ? "critical" : "informational";
 }
+
+/**
+ * The OS toasts showing now, one per tag. A toast with a tag replaces the one
+ * already showing under it (a cloud mention tags by session, so a repeated
+ * mention in a session replaces its alert instead of stacking); untagged
+ * toasts stack as they always have. Toasts forget themselves when closed, and
+ * the oldest tag is dropped past `max` so the map cannot grow without bound.
+ */
+export function createTaggedToasts<Toast extends { close(): void }>(max = 64) {
+	const byTag = new Map<string, Toast>();
+	return {
+		show(tag: string | undefined, toast: Toast): void {
+			if (!tag) return;
+			const previous = byTag.get(tag);
+			byTag.delete(tag);
+			if (previous && previous !== toast) previous.close();
+			byTag.set(tag, toast);
+			if (byTag.size > max) byTag.delete(byTag.keys().next().value!);
+		},
+		forget(tag: string | undefined, toast: Toast): void {
+			if (tag && byTag.get(tag) === toast) byTag.delete(tag);
+		},
+		get size(): number {
+			return byTag.size;
+		},
+	};
+}

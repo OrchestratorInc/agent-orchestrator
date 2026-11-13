@@ -66,6 +66,11 @@ import type {
 	CloudCpPutAgentConnectionRequest,
 	CloudCpPutGitHubPATRequest,
 	CloudCpSendMessageRequest,
+	CloudCpSteerTurnRequest,
+	CloudCpMentionCandidates,
+	CloudCpMentionCandidatesQuery,
+	CloudCpMyNotificationStateChange,
+	CloudCpNotificationPreferences,
 	CloudCpSendMessageResponse,
 	CloudCpSteerTurnResponse,
 	CloudCpEditQueuedMessageRequest,
@@ -484,7 +489,7 @@ export interface CloudCpClient {
 		orgId: string,
 		sessionId: string,
 		turnId: string,
-		body: CloudCpSendMessageRequest,
+		body: CloudCpSteerTurnRequest,
 		options?: CloudCpMutationOptions,
 	): Promise<CloudCpSteerTurnResponse>;
 	/** Replace a queued message's text and files before the agent starts on it; 409 TURN_NOT_QUEUED once it has. */
@@ -578,6 +583,16 @@ export interface CloudCpClient {
 	listNotificationEvents(orgId: string, after?: number, options?: CloudCpRequestOptions): Promise<CloudCpNotificationEventsResponse>;
 	markNotificationsRead(orgId: string, notificationIds?: string[], options?: CloudCpRequestOptions): Promise<{ updated: number }>;
 	subscribeNotificationEvents(orgId: string, options: CloudCpNotificationEventsOptions): Promise<void>;
+	/** The caller's notifications from every organization, a mentioned guest's included. */
+	listMyNotifications(query?: CloudCpNotificationListQuery, options?: CloudCpRequestOptions): Promise<CloudCpNotificationListResponse>;
+	/** Marks some of the caller's notifications read, in any organization: ids, all, or one session's mentions. */
+	changeMyNotificationState(change: CloudCpMyNotificationStateChange, options?: CloudCpRequestOptions): Promise<{ updated: number }>;
+	/** Which notifications alert the caller on the desktop and the phone. */
+	getMyNotificationPreferences(options?: CloudCpRequestOptions): Promise<CloudCpNotificationPreferences>;
+	/** Changes some of them; answers every preference after the change. */
+	setMyNotificationPreferences(change: Partial<CloudCpNotificationPreferences>, options?: CloudCpRequestOptions): Promise<CloudCpNotificationPreferences>;
+	/** The people and teams a session's @ menu offers; names only, and only people who can open the session. */
+	listMentionCandidates(orgId: string, sessionId: string, query?: CloudCpMentionCandidatesQuery, options?: CloudCpRequestOptions): Promise<CloudCpMentionCandidates>;
 
 	createTerminalTicket(
 		orgId: string,
@@ -713,6 +728,7 @@ async function errorFromResponse(response: Response): Promise<CloudCpError> {
 	let message = `Cloud control plane request failed with status ${response.status}.`;
 	let code: string | undefined;
 	let requestId: string | undefined;
+	let details: Record<string, unknown> | undefined;
 	try {
 		const body = (await response.json()) as Partial<CloudCpErrorEnvelope> | null;
 		if (typeof body?.message === "string" && body.message !== "") {
@@ -722,10 +738,12 @@ async function errorFromResponse(response: Response): Promise<CloudCpError> {
 		}
 		if (typeof body?.code === "string" && body.code !== "") code = body.code;
 		if (typeof body?.requestId === "string" && body.requestId !== "") requestId = body.requestId;
+		const envelopeDetails = (body as { details?: unknown } | null)?.details;
+		if (envelopeDetails && typeof envelopeDetails === "object" && !Array.isArray(envelopeDetails)) details = envelopeDetails as Record<string, unknown>;
 	} catch {
 		// Non-JSON or empty body: keep the status-derived message.
 	}
-	const options = { status: response.status, code, requestId, retryAfterMs: retryAfterMs(response.headers.get("retry-after")) };
+	const options = { status: response.status, code, requestId, retryAfterMs: retryAfterMs(response.headers.get("retry-after")), ...(details ? { details } : {}) };
 	return response.status === 401 ? new CloudCpAuthError(message, options) : new CloudCpError(message, options);
 }
 
@@ -1281,6 +1299,12 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 			? requestJson("POST", `/orgs/${seg(orgId)}/notifications/read-all`, { signal: o?.signal })
 			: Promise.all(notificationIds.map((id) => requestJson<{ updated: number }>("PATCH", `/orgs/${seg(orgId)}/notifications/${seg(id)}`, { body: { status: "read" }, signal: o?.signal }))).then((rows) => ({ updated: rows.reduce((total, row) => total + row.updated, 0) })),
 		subscribeNotificationEvents,
+		listMyNotifications: (query, o) => requestJson("GET", "/me/notifications", { query: { status: query?.status, limit: query?.limit, cursor: query?.cursor }, signal: o?.signal }),
+		changeMyNotificationState: (change, o) => requestJson("POST", "/me/notifications/state", { body: change, signal: o?.signal }),
+		getMyNotificationPreferences: (o) => requestJson("GET", "/me/notification-preferences", { signal: o?.signal }),
+		setMyNotificationPreferences: (change, o) => requestJson("PUT", "/me/notification-preferences", { body: change, signal: o?.signal }),
+		listMentionCandidates: (orgId, sessionId, query, o) =>
+			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/mention-candidates`, { query: { q: query?.q, limit: query?.limit }, signal: o?.signal }),
 
 		createTerminalTicket: (orgId, sessionId, body, o) =>
 			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/terminal-ticket`, {

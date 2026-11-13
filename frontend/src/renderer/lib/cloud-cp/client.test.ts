@@ -641,3 +641,44 @@ describe("Cloud control-plane share links", () => {
 		await expect(cp.revokeShareLink(ORG, "project", LINK)).rejects.toMatchObject({ status: 404 });
 	});
 });
+
+describe("mentions and the personal inbox", () => {
+	function recording(body: unknown = {}, status = 200) {
+		const fetchImpl = vi.fn().mockImplementation(async () => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } }));
+		const client = createCloudCpClient({ baseUrl: "https://cloud.example.test", getToken: async () => "token", fetchImpl });
+		const calls = () => fetchImpl.mock.calls as Array<[string, RequestInit]>;
+		return { client, calls };
+	}
+
+	it("reads and marks the caller's notifications across organizations", async () => {
+		const { client, calls } = recording({ items: [], page: { hasMore: false }, unreadCount: 0, latestSequence: 0, updated: 1 });
+		await client.listMyNotifications({ status: "unread", limit: 20 });
+		await client.changeMyNotificationState({ ids: ["n-1"], read: true });
+		await client.changeMyNotificationState({ orgId: "org", sessionId: "session", read: true });
+		expect(calls()[0][0]).toBe("https://cloud.example.test/api/cloud/v1/me/notifications?status=unread&limit=20");
+		expect(calls()[1][0]).toBe("https://cloud.example.test/api/cloud/v1/me/notifications/state");
+		expect(JSON.parse(calls()[1][1].body as string)).toEqual({ ids: ["n-1"], read: true });
+		expect(JSON.parse(calls()[2][1].body as string)).toEqual({ orgId: "org", sessionId: "session", read: true });
+	});
+
+	it("reads and changes the two mention switches", async () => {
+		const { client, calls } = recording({ mentions: true, teamMentions: false });
+		await expect(client.getMyNotificationPreferences()).resolves.toEqual({ mentions: true, teamMentions: false });
+		await client.setMyNotificationPreferences({ teamMentions: false });
+		expect(calls()[1][0]).toBe("https://cloud.example.test/api/cloud/v1/me/notification-preferences");
+		expect(calls()[1][1].method).toBe("PUT");
+		expect(JSON.parse(calls()[1][1].body as string)).toEqual({ teamMentions: false });
+	});
+
+	it("asks a session's @ menu by name", async () => {
+		const { client, calls } = recording({ people: [], teams: [] });
+		await client.listMentionCandidates("org", "session", { q: "pri", limit: 20 });
+		expect(calls()[0][0]).toBe("https://cloud.example.test/api/cloud/v1/orgs/org/sessions/session/mention-candidates?q=pri&limit=20");
+	});
+
+	it("keeps a validation error's details, so a refused mention says why", async () => {
+		const { client } = recording({ error: "validation_error", code: "validation_error", message: "mentions", requestId: "r", details: { field: "mentions", reason: "outside_session" } }, 422);
+		await expect(client.sendSessionMessage("org", "session", { text: "@Ana hi", mentions: [{ kind: "person", userId: "u-ana" }] }, { idempotencyKey: "k" }))
+			.rejects.toMatchObject({ status: 422, code: "validation_error", details: { field: "mentions", reason: "outside_session" } });
+	});
+});

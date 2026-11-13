@@ -196,14 +196,31 @@ export async function subscribeSessionEventsBridged(options: SubscribeSessionEve
 /** The org-level durable notification stream, kept on the Electron proxy so
  * renderer code never sees the cloud bearer credential. */
 export async function subscribeNotificationEventsBridged(options: SubscribeNotificationEventsBridgedOptions): Promise<void> {
-	const { baseUrl, orgId, after, onEvent, onError, signal } = options;
+	const { orgId, ...stream } = options;
+	await subscribeNotificationStream(`/api/cloud/v1/orgs/${encodeURIComponent(orgId)}/notification-events`, stream);
+}
+
+export type SubscribeMyNotificationEventsBridgedOptions = Omit<SubscribeNotificationEventsBridgedOptions, "orgId">;
+
+/**
+ * The caller's notification events from every organization (a mentioned
+ * guest's in other workspaces included), as the org stream delivers one
+ * organization's. A control plane without the route answers 404, 405 or 501
+ * through onError.
+ */
+export async function subscribeMyNotificationEventsBridged(options: SubscribeMyNotificationEventsBridgedOptions): Promise<void> {
+	await subscribeNotificationStream("/api/cloud/v1/me/notification-events", options);
+}
+
+async function subscribeNotificationStream(basePath: string, options: SubscribeMyNotificationEventsBridgedOptions): Promise<void> {
+	const { baseUrl, after, onEvent, onError, signal } = options;
 	const bridge = options.bridge ?? aoBridge.cloudCp;
 	if (isAborted(signal)) return;
 	const fail = (error: CloudCpError): void => { if (!isAborted(signal)) onError?.(error); };
 	const query = after === undefined ? "" : `?after=${encodeURIComponent(String(after))}`;
 	let streamId: string;
 	try {
-		({ streamId } = await bridge.openStream({ baseUrl: baseUrl.replace(/\/+$/, ""), path: `/api/cloud/v1/orgs/${encodeURIComponent(orgId)}/notification-events${query}`, method: "GET", headers: { Accept: "text/event-stream" } }));
+		({ streamId } = await bridge.openStream({ baseUrl: baseUrl.replace(/\/+$/, ""), path: `${basePath}${query}`, method: "GET", headers: { Accept: "text/event-stream" } }));
 	} catch (error) { fail(errorFromOpenFailure(error)); return; }
 	if (isAborted(signal)) { bridge.closeStream(streamId); return; }
 	const parser = createSseFrameParser();

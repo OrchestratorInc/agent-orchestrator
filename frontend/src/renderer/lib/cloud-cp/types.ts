@@ -181,9 +181,86 @@ export interface CloudCpNotification {
 	title: string;
 	body: string;
 	status: "unread" | "read";
+	/** Kind-specific detail; a `mentioned` row's is a CloudCpMentionNotificationMetadata. */
+	metadata?: Record<string, unknown>;
 	resolvedAt?: string;
 	createdAt: string;
 	updatedAt: string;
+}
+
+/**
+ * A `mentioned` notification's metadata: who wrote it, the message's event,
+ * the team that named the recipient (when only a team did), and what to show
+ * on the row's "session · project · time" line.
+ */
+export interface CloudCpMentionNotificationMetadata {
+	authorUserId?: string;
+	authorName?: string;
+	/** The session event (the message or steer) that named them. */
+	sequence?: number;
+	turnId?: string;
+	teamId?: string;
+	teamName?: string;
+	sessionTitle?: string;
+	projectName?: string;
+}
+
+/**
+ * POST /me/notifications/state: marks some of the caller's notifications read.
+ * Exactly one target: ids, all, or orgId with sessionId (the session's mentions).
+ */
+export type CloudCpMyNotificationStateChange =
+	| { ids: string[]; read: true }
+	| { all: true; read: true }
+	| { orgId: string; sessionId: string; read: true };
+
+/** GET/PUT /me/notification-preferences: which notifications alert on the desktop and the phone. */
+export interface CloudCpNotificationPreferences {
+	/** Someone mentions me. */
+	mentions: boolean;
+	/** Someone mentions a team I'm in. */
+	teamMentions: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Mentions
+// ---------------------------------------------------------------------------
+
+/** A person or team named in a message or steer, as the composer sends it. */
+export type CloudCpMentionToken =
+	| { kind: "person"; userId: string }
+	| { kind: "team"; teamId: string };
+
+/** A mention as a message's or steer's event records it, with the name it had then. */
+export interface CloudCpEventMention {
+	kind: "person" | "team";
+	id: string;
+	name: string;
+}
+
+export interface CloudCpMentionPerson {
+	userId: string;
+	name: string;
+	/** Has the session open now ("Here now"). */
+	present: boolean;
+	/** In the session (In this session); false for the workspace's other people who can open it. */
+	inSession: boolean;
+}
+
+export interface CloudCpMentionTeam {
+	teamId: string;
+	name: string;
+}
+
+/** GET /orgs/{orgId}/sessions/{sessionId}/mention-candidates: only people who can open the session, never the caller. */
+export interface CloudCpMentionCandidates {
+	people: CloudCpMentionPerson[];
+	teams: CloudCpMentionTeam[];
+}
+
+export interface CloudCpMentionCandidatesQuery {
+	q?: string;
+	limit?: number;
 }
 
 export interface CloudCpNotificationEvent {
@@ -1429,6 +1506,16 @@ export interface CloudCpSendMessageRequest {
 	displayText?: string;
 	/** The quotes and file captures the message attaches, as the transcript shows them (at most 64 blocks). */
 	content?: Array<{ type: string }>;
+	/** The people and teams the message notifies (at most 20); the agent reads only `text`. */
+	mentions?: CloudCpMentionToken[];
+}
+
+/** POST /orgs/{orgId}/sessions/{sessionId}/turns/{turnId}/steer. */
+export interface CloudCpSteerTurnRequest {
+	text: string;
+	composerEpoch?: number;
+	/** The people and teams the guidance notifies (at most 20); the agent reads only `text`. */
+	mentions?: CloudCpMentionToken[];
 }
 
 export interface CloudCpChatModelsResponse {

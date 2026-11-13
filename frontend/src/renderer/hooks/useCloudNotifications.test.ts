@@ -4,18 +4,23 @@ import { createElement, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CloudCpNotification } from "../lib/cloud-cp/types";
 import { CloudCpError } from "../lib/cloud-cp/errors";
-import { isCleared, useCloudNotifications } from "./useCloudNotifications";
+import { cloudInboxQueryKey, resetCloudInboxSupport, subscribeLiveCloudNotificationEvents } from "../lib/cloud-notifications";
+import { isCleared, readCloudSessionMentions, useCloudNotifications } from "./useCloudNotifications";
 
-const { cloudCpMock, subscribeNotificationsMock } = vi.hoisted(() => ({
+const { cloudCpMock, subscribeNotificationsMock, subscribeMyNotificationsMock } = vi.hoisted(() => ({
 	cloudCpMock: vi.fn(),
 	subscribeNotificationsMock: vi.fn(async (_options?: { onEvent: (event: { sequence: number }) => void; after?: number }): Promise<void> => undefined),
+	subscribeMyNotificationsMock: vi.fn(async (_options?: { onEvent: (event: unknown) => void; after?: number; signal?: AbortSignal }): Promise<void> => undefined),
 }));
+
+/** A control plane from before mentions: it has no /me inbox route. */
+const noInbox = () => vi.fn().mockRejectedValue(new CloudCpError("Not found.", { status: 404 }));
 
 vi.mock("./useCloudCp", () => ({ useCloudCp: () => cloudCpMock() }));
 vi.mock("./useCloudOrg", () => ({ useCloudOrg: () => ({ org: { id: "org-1" } }) }));
-vi.mock("./useWorkspaceQuery", () => ({ cloudSessionsQueryKey: ["cloud-sessions"] }));
+vi.mock("./useWorkspaceQuery", () => ({ cloudSessionsQueryKey: ["cloud-sessions"], sharedCloudWorkspacesQueryKey: ["cloud-shared-workspaces"] }));
 vi.mock("./useOrchestratorChildren", () => ({ orchestratorChildrenQueryKey: ["orchestrator-children"] }));
-vi.mock("../lib/cloud-cp/stream-bridge", () => ({ subscribeNotificationEventsBridged: subscribeNotificationsMock }));
+vi.mock("../lib/cloud-cp/stream-bridge", () => ({ subscribeNotificationEventsBridged: subscribeNotificationsMock, subscribeMyNotificationEventsBridged: subscribeMyNotificationsMock }));
 vi.mock("../lib/cloud-notification-hints", () => ({ subscribeCloudNotificationHints: () => () => undefined }));
 
 const at = (value: string) => Date.parse(value);
@@ -91,7 +96,7 @@ describe("useCloudNotifications clearing", () => {
 		queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } }),
 	) {
 		cloudCpMock.mockReturnValue({
-			client: { listNotifications, markNotificationsRead },
+			client: { listNotifications, markNotificationsRead, listMyNotifications: noInbox() },
 			ready: true,
 			baseUrl: "https://cloud.test",
 			userId,
@@ -102,6 +107,7 @@ describe("useCloudNotifications clearing", () => {
 
 	beforeEach(() => {
 		window.localStorage.clear();
+		resetCloudInboxSupport();
 		items = [cloudRow()];
 		listNotifications.mockReset().mockImplementation(async () => ({
 			items,
@@ -212,8 +218,9 @@ describe("useCloudNotifications clearing", () => {
 });
 
 it("reconnects the notification stream after it closes and resumes after the last event", async () => {
+	resetCloudInboxSupport();
 	const listNotifications = vi.fn(async () => ({ items: [], unreadCount: 0, page: { hasMore: false }, latestSequence: 0 }));
-	cloudCpMock.mockReturnValue({ client: { listNotifications }, ready: true, baseUrl: "https://cloud.test", userId: "user-1" });
+	cloudCpMock.mockReturnValue({ client: { listNotifications, listMyNotifications: noInbox() }, ready: true, baseUrl: "https://cloud.test", userId: "user-1" });
 	subscribeNotificationsMock.mockReset().mockImplementation(async (options?: { onEvent: (event: { sequence: number }) => void }) => {
 		if (subscribeNotificationsMock.mock.calls.length === 1) options?.onEvent({ sequence: 42 });
 	});
@@ -223,4 +230,114 @@ it("reconnects the notification stream after it closes and resumes after the las
 	await waitFor(() => expect(subscribeNotificationsMock).toHaveBeenCalledTimes(2), { timeout: 2500 });
 	expect(subscribeNotificationsMock.mock.calls[1]?.[0]).toMatchObject({ after: 42 });
 	hook.unmount();
+});
+
+describe("the personal inbox (/me)", () => {
+	const page = (rows: CloudCpNotification[], latestSequence = 7) => ({
+		items: rows,
+		unreadCount: rows.filter((row) => row.status === "unread").length,
+		page: { hasMore: false },
+		latestSequence,
+	});
+	const mention = (overrides: Partial<CloudCpNotification> = {}) => cloudRow({
+		id: "cntf_mention",
+		orgId: "org-guest",
+		sessionId: "session-9",
+		projectId: "project-9",
+		type: "mentioned",
+		title: "Chen Li mentioned you",
+		body: "Can you check the retry backoff before we merge? @Priya Shah",
+		status: "unread",
+		metadata: { authorUserId: "u-chen", authorName: "Chen Li", sequence: 42, turnId: "turn-1" },
+		...overrides,
+	});
+
+	function renderInbox(client: Record<string, unknown>, options: { live?: boolean } = {}) {
+		cloudCpMock.mockReturnValue({ client, ready: true, baseUrl: "https://cloud.test", userId: "user-1" });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const wrapper = ({ children }: { children: ReactNode }) => createElement(QueryClientProvider, { client: queryClient }, children);
+		return { queryClient, ...renderHook(() => useCloudNotifications("all", { live: options.live ?? false }), { wrapper }) };
+	}
+
+	beforeEach(() => {
+		window.localStorage.clear();
+		resetCloudInboxSupport();
+		subscribeMyNotificationsMock.mockReset().mockResolvedValue(undefined);
+		subscribeNotificationsMock.mockClear();
+	});
+
+	it("lists the caller's notifications from every organization, a guest's mention included", async () => {
+		const listMyNotifications = vi.fn(async () => page([mention()]));
+		const listNotifications = vi.fn();
+		const { result } = renderInbox({ listMyNotifications, listNotifications });
+		await waitFor(() => expect(result.current.mode).toBe("inbox"));
+		expect(result.current.items.map((row) => row.id)).toEqual(["cntf_mention"]);
+		expect(result.current.data?.unreadCount).toBe(1);
+		expect(listNotifications).not.toHaveBeenCalled();
+	});
+
+	it.each([404, 405, 501])("falls back to the organization's list when /me answers %i", async (status) => {
+		const listMyNotifications = vi.fn().mockRejectedValue(new CloudCpError("No such route.", { status }));
+		const listNotifications = vi.fn(async () => page([cloudRow()]));
+		const { result } = renderInbox({ listMyNotifications, listNotifications });
+		await waitFor(() => expect(result.current.mode).toBe("legacy"));
+		await waitFor(() => expect(result.current.items.map((row) => row.id)).toEqual(["cntf_1"]));
+		expect(listNotifications).toHaveBeenCalledWith("org-1", { status: "all" });
+	});
+
+	it("does not fall back for a 404 that names what was not found, or an outage", async () => {
+		const listMyNotifications = vi.fn().mockRejectedValue(new CloudCpError("Gone.", { status: 404, code: "not_found" }));
+		const listNotifications = vi.fn(async () => page([cloudRow()]));
+		const { result } = renderInbox({ listMyNotifications, listNotifications });
+		await waitFor(() => expect(listMyNotifications).toHaveBeenCalled());
+		await act(async () => undefined);
+		expect(result.current.mode).toBe("pending");
+		expect(listNotifications).not.toHaveBeenCalled();
+	});
+
+	it("marks rows read by id, and all of them, through /me/notifications/state", async () => {
+		const listMyNotifications = vi.fn(async () => page([mention()]));
+		const changeMyNotificationState = vi.fn(async () => ({ updated: 1 }));
+		const { result } = renderInbox({ listMyNotifications, changeMyNotificationState });
+		await waitFor(() => expect(result.current.mode).toBe("inbox"));
+		await act(() => result.current.markRead(["cntf_mention"]));
+		expect(changeMyNotificationState).toHaveBeenCalledWith({ ids: ["cntf_mention"], read: true });
+		await act(() => result.current.markAllRead());
+		expect(changeMyNotificationState).toHaveBeenLastCalledWith({ all: true, read: true });
+	});
+
+	it("reads a session's mentions at once in the cache, then on the control plane", async () => {
+		const listMyNotifications = vi.fn(async () => page([mention(), cloudRow({ id: "other", sessionId: "session-9", orgId: "org-guest", status: "unread" })]));
+		let finish!: () => void;
+		const changeMyNotificationState = vi.fn(() => new Promise<{ updated: number }>((resolve) => { finish = () => resolve({ updated: 1 }); }));
+		const { result, queryClient } = renderInbox({ listMyNotifications, changeMyNotificationState });
+		await waitFor(() => expect(result.current.mode).toBe("inbox"));
+		const reading = readCloudSessionMentions(queryClient, { changeMyNotificationState }, "https://cloud.test", "user-1", "org-guest", "session-9");
+		// Read before the control plane answers: no badge while the person is looking.
+		const cached = queryClient.getQueryData<{ items: CloudCpNotification[]; unreadCount: number }>(cloudInboxQueryKey("https://cloud.test", "user-1"));
+		expect(cached?.items.find((row) => row.id === "cntf_mention")?.status).toBe("read");
+		// Only mentions: other kinds in the session keep their state.
+		expect(cached?.items.find((row) => row.id === "other")?.status).toBe("unread");
+		expect(cached?.unreadCount).toBe(1);
+		expect(changeMyNotificationState).toHaveBeenCalledWith({ orgId: "org-guest", sessionId: "session-9", read: true });
+		finish();
+		await reading;
+	});
+
+	it("streams /me events after the inbox's sequence and publishes them for alerts", async () => {
+		const listMyNotifications = vi.fn(async () => page([], 41));
+		const event = { sequence: 42, orgId: "org-guest", recipientUserId: "user-1", kind: "notification_created", notification: mention(), createdAt: "2026-07-21T10:00:00Z" };
+		subscribeMyNotificationsMock.mockImplementation(async (options) => {
+			options?.onEvent(event);
+			await new Promise<void>((resolve) => options?.signal?.addEventListener("abort", () => resolve()));
+		});
+		const heard = vi.fn();
+		const stop = subscribeLiveCloudNotificationEvents(heard);
+		const hook = renderInbox({ listMyNotifications }, { live: true });
+		await waitFor(() => expect(heard).toHaveBeenCalledWith(event));
+		expect(subscribeMyNotificationsMock.mock.calls[0]?.[0]).toMatchObject({ baseUrl: "https://cloud.test", after: 41 });
+		expect(subscribeNotificationsMock).not.toHaveBeenCalled();
+		stop();
+		hook.unmount();
+	});
 });

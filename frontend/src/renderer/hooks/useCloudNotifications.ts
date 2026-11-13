@@ -1,22 +1,55 @@
 import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { subscribeCloudNotificationHints } from "../lib/cloud-notification-hints";
-import { cloudNotificationsQueryKey } from "../lib/cloud-notifications";
+import {
+	cloudInboxQueryKey,
+	cloudInboxSupport,
+	cloudInboxSupportConfirmed,
+	cloudInboxUnavailable,
+	cloudNotificationsQueryKey,
+	MENTIONED,
+	probeCloudInbox,
+	publishLiveCloudNotificationEvent,
+	subscribeCloudInboxSupport,
+} from "../lib/cloud-notifications";
 import { CloudCpError } from "../lib/cloud-cp/errors";
-import { subscribeNotificationEventsBridged } from "../lib/cloud-cp/stream-bridge";
+import { subscribeMyNotificationEventsBridged, subscribeNotificationEventsBridged } from "../lib/cloud-cp/stream-bridge";
+import type { CloudCpClient } from "../lib/cloud-cp/client";
+import type { CloudCpNotification, CloudCpNotificationListResponse } from "../lib/cloud-cp/types";
 import { useCloudCp } from "./useCloudCp";
 import { useCloudOrg } from "./useCloudOrg";
-import { cloudSessionsQueryKey } from "./useWorkspaceQuery";
+import { cloudSessionsQueryKey, sharedCloudWorkspacesQueryKey } from "./useWorkspaceQuery";
 import { orchestratorChildrenQueryKey } from "./useOrchestratorChildren";
 
 type UseCloudNotificationsOptions = {
 	/**
 	 * Open this instance's own live stream. The shell's CloudNotificationRuntime
-	 * already keeps the "all" list live, so readers of that list pass false
-	 * rather than holding a duplicate stream.
+	 * already keeps the list live, so readers of that list pass false rather
+	 * than holding a duplicate stream.
 	 */
 	live?: boolean;
 };
+
+/**
+ * Which list the bell shows: "inbox" is the caller's notifications from every
+ * organization (/me/notifications, so a mentioned guest gets theirs too);
+ * "legacy" is the active organization's list, on a control plane from before
+ * mentions (its /me route answers 404, 405 or 501); "pending" until the first
+ * answer.
+ */
+export type CloudNotificationsMode = "pending" | "inbox" | "legacy";
+
+// Reconnect pacing for the live stream: quick after a clean close, backing off
+// while the control plane keeps failing so an outage isn't hammered.
+const STREAM_RETRY_MS = 1000;
+const STREAM_RETRY_MAX_MS = 30_000;
+// An inbox read this fresh is still a safe cursor for a new stream: the probe
+// that found the inbox has usually just made it.
+const STREAM_CURSOR_MAX_AGE_MS = 5000;
+/** At most this many ids go in one state change (the contract's cap). */
+const MAX_STATE_CHANGE_IDS = 200;
+
+const EMPTY: CloudCpNotification[] = [];
 
 export function useCloudNotifications(
 	status: "all" | "unread" | "read" = "all",
@@ -29,16 +62,272 @@ export function useCloudNotifications(
 	// A trailing slash otherwise makes the invalidation key miss the query key,
 	// so live updates would only land on mount/focus.
 	const base = baseUrl.replace(/\/+$/, "");
-	const key = cloudNotificationsQueryKey(base, orgId, userId, status);
 	const queryClient = useQueryClient();
-	const query = useQuery({ queryKey: key, enabled: ready && orgId !== "" && userId !== "", queryFn: async () => client.listNotifications(orgId, { status }) });
+	const support = useCloudInboxSupport(base);
+	const confirmed = useSyncExternalStore(subscribeCloudInboxSupport, () => cloudInboxSupportConfirmed(base));
+	const signedIn = ready && base !== "" && userId !== "";
+	const mode: CloudNotificationsMode = !signedIn ? "pending" : support === "supported" ? "inbox" : support === "unsupported" ? "legacy" : "pending";
+
+	// The inbox read doubles as the probe that tells the two lists apart. A
+	// remembered "unsupported" still asks once this run: the control plane may
+	// have been upgraded since.
+	const inboxKey = cloudInboxQueryKey(base, userId);
+	const inboxQuery = useQuery({
+		queryKey: inboxKey,
+		enabled: signedIn && (support !== "unsupported" || !confirmed),
+		retry: retryInboxRead,
+		queryFn: () => probeCloudInbox(base, () => client.listMyNotifications({ status: "all" })),
+	});
+	const legacyKey = cloudNotificationsQueryKey(base, orgId, userId, status);
+	const legacyQuery = useQuery({
+		queryKey: legacyKey,
+		enabled: signedIn && orgId !== "" && mode === "legacy",
+		queryFn: async () => client.listNotifications(orgId, { status }),
+	});
+
+	useInboxStream(live && mode === "inbox", client, base, userId, queryClient);
+	useLegacyStream(live && mode === "legacy" && orgId !== "", base, orgId, userId, status, queryClient);
+
+	const active = mode === "legacy" ? legacyQuery : inboxQuery;
+	// Cleared rows are hidden per signed-in user: notifications belong to one
+	// recipient, and an org can be shared by several accounts on this device.
+	// The inbox has no delete either, so its rows clear the same way, under "me".
+	const storageKey = clearStorageKey(base, mode === "legacy" ? orgId : "me", userId);
+	const loaded = mode === "pending" ? undefined : active.data?.items;
+	const clears = useSyncExternalStore(subscribeClears, () => readClearsRaw(storageKey));
+	const items = useMemo(() => {
+		const state = parseClears(clears);
+		return (loaded ?? EMPTY).filter((item) => !isCleared(item, state));
+	}, [clears, loaded]);
+
+	// A cleared row the control plane re-raises (in place: status back to unread,
+	// updated_at bumped, as a repeated mention does) is revived for good, so
+	// marking it read later cannot hide it again.
 	useEffect(() => {
-		if (!live || !ready || orgId === "" || userId === "") return;
+		const state = parseClears(readClearsRaw(storageKey));
+		const revived = (loaded ?? EMPTY).filter((item) => isRevived(item, state));
+		if (revived.length === 0) return;
+		const ids = { ...state.ids };
+		for (const item of revived) ids[item.id] = null;
+		writeClears(storageKey, { ...state, ids });
+	}, [loaded, storageKey]);
+
+	const invalidateAll = useCallback(async () => {
+		if (mode === "inbox") await queryClient.invalidateQueries({ queryKey: cloudInboxQueryKey(base, userId) });
+		else await queryClient.invalidateQueries({ queryKey: ["cloud-notifications", base, orgId, userId] });
+	}, [base, mode, orgId, queryClient, userId]);
+	const markAllRead = useCallback(async () => {
+		if (mode === "inbox") {
+			await client.changeMyNotificationState({ all: true, read: true });
+			await invalidateAll();
+			return;
+		}
+		if (mode !== "legacy" || orgId === "") return;
+		await client.markNotificationsRead(orgId);
+		await invalidateAll();
+	}, [client, invalidateAll, mode, orgId]);
+	// Acknowledge concrete ids only. On the org list the control plane answers
+	// 404 for a row that is already read, which is the goal, so that is not a
+	// failure here; the inbox changes nothing for such an id.
+	const markRead = useCallback(async (notificationIds: string[]) => {
+		const ids = [...new Set(notificationIds)];
+		if (ids.length === 0) return;
+		if (mode === "inbox") {
+			markReadInCache(queryClient, inboxKey, (row) => ids.includes(row.id));
+			try {
+				for (let start = 0; start < ids.length; start += MAX_STATE_CHANGE_IDS) {
+					await client.changeMyNotificationState({ ids: ids.slice(start, start + MAX_STATE_CHANGE_IDS), read: true });
+				}
+			} finally {
+				await invalidateAll();
+			}
+			return;
+		}
+		if (mode !== "legacy" || orgId === "") return;
+		try {
+			await Promise.all(ids.map((id) => client.markNotificationsRead(orgId, [id]).catch(ignoreAlreadyRead)));
+		} finally {
+			await invalidateAll();
+		}
+	}, [client, inboxKey, invalidateAll, mode, orgId, queryClient]);
+	// There is no delete: clearing marks rows read on the control plane and
+	// hides them on this device. Markers are the server's own timestamps, so
+	// local clock skew cannot hide a newer notification.
+	const clearAll = useCallback(async () => {
+		if (mode === "pending" || (mode === "legacy" && orgId === "")) return;
+		const rows = loaded ?? EMPTY;
+		const previous = readClearsRaw(storageKey);
+		const state = parseClears(previous);
+		const newest = rows.reduce((max, item) => Math.max(max, timestamp(item.createdAt)), state.before);
+		const ids: CloudClears["ids"] = {};
+		for (const [id, marker] of Object.entries(state.ids)) if (marker !== null) ids[id] = marker;
+		for (const item of rows) ids[item.id] = timestamp(item.updatedAt);
+		writeClears(storageKey, { before: newest, ids });
+		try {
+			await markAllRead();
+		} catch (error) {
+			restoreClears(storageKey, previous);
+			throw error;
+		}
+	}, [loaded, markAllRead, mode, orgId, storageKey]);
+	const clearOne = useCallback(async (notification: CloudNotificationRow) => {
+		if (mode === "pending" || (mode === "legacy" && orgId === "")) return;
+		const previous = readClearsRaw(storageKey);
+		const state = parseClears(previous);
+		writeClears(storageKey, { ...state, ids: { ...state.ids, [notification.id]: timestamp(notification.updatedAt) } });
+		try {
+			if (notification.status === "unread") await markRead([notification.id]);
+		} catch (error) {
+			// Put the row back so the list agrees with the error it reports.
+			restoreClears(storageKey, previous);
+			throw error;
+		}
+	}, [markRead, mode, orgId, storageKey]);
+	return {
+		...active,
+		data: mode === "pending" ? undefined : active.data,
+		isLoading: signedIn && (mode === "pending" ? inboxQuery.isLoading : active.isLoading),
+		mode,
+		items,
+		markAllRead,
+		markRead,
+		clearAll,
+		clearOne,
+	};
+}
+
+export type CloudNotifications = ReturnType<typeof useCloudNotifications>;
+
+/**
+ * Whether the signed-in control plane has mentions and the personal inbox, as
+ * the inbox probe learned it (or the last run did): "unknown" until then.
+ */
+export function useCloudInboxSupport(baseUrl: string) {
+	return useSyncExternalStore(subscribeCloudInboxSupport, () => cloudInboxSupport(baseUrl));
+}
+
+/**
+ * Reads the mentions a session raised for this person (opening the session
+ * reads them). The rows read at once in the cache, so no badge shows while
+ * the person is looking; the inbox is read again after the control plane
+ * answers.
+ */
+export async function readCloudSessionMentions(
+	queryClient: QueryClient,
+	client: Pick<CloudCpClient, "changeMyNotificationState">,
+	baseUrl: string,
+	userId: string,
+	orgId: string,
+	sessionId: string,
+): Promise<void> {
+	const key = cloudInboxQueryKey(baseUrl, userId);
+	const unread = (row: CloudCpNotification) => row.sessionId === sessionId && row.orgId === orgId && row.type === MENTIONED && row.status === "unread";
+	if (!orgId || !sessionId || !(queryClient.getQueryData<CloudCpNotificationListResponse>(key)?.items ?? []).some(unread)) return;
+	markReadInCache(queryClient, key, unread);
+	try {
+		await client.changeMyNotificationState({ orgId, sessionId, read: true });
+	} finally {
+		await queryClient.invalidateQueries({ queryKey: key });
+	}
+}
+
+function retryInboxRead(failureCount: number, error: unknown): boolean {
+	return !cloudInboxUnavailable(error) && failureCount < 3;
+}
+
+function markReadInCache(queryClient: QueryClient, key: readonly unknown[], match: (row: CloudCpNotification) => boolean): void {
+	queryClient.setQueryData<CloudCpNotificationListResponse>(key, (page) => {
+		if (!page) return page;
+		let read = 0;
+		const items = page.items.map((row) => {
+			if (row.status !== "unread" || !match(row)) return row;
+			read += 1;
+			return { ...row, status: "read" as const };
+		});
+		return read === 0 ? page : { ...page, items, unreadCount: Math.max(0, page.unreadCount - read) };
+	});
+}
+
+/** Resolves after `ms`, or at once when the signal aborts. */
+function pause(ms: number, signal: AbortSignal): Promise<void> {
+	return new Promise<void>((resolve) => {
+		const onAbort = () => { clearTimeout(timer); resolve(); };
+		const timer = setTimeout(() => {
+			signal.removeEventListener("abort", onAbort);
+			resolve();
+		}, ms);
+		signal.addEventListener("abort", onAbort, { once: true });
+	});
+}
+
+/**
+ * Keeps the inbox live from the caller's /me stream. Each connection resumes
+ * from the sequence of a fresh inbox read, so it carries only events newer
+ * than what the list shows: neither the first load nor a reconnect replays
+ * old events, and every event it delivers is published for desktop alerts and
+ * for prefetching the session a mention points at.
+ */
+function useInboxStream(enabled: boolean, client: CloudCpClient, base: string, userId: string, queryClient: QueryClient): void {
+	useEffect(() => {
+		if (!enabled) return;
+		const controller = new AbortController();
+		const key = cloudInboxQueryKey(base, userId);
+		// The control plane owns the authoritative list, unread count, and
+		// sequence, so a durable event or a pre-durable hint refreshes from the
+		// source rather than being patched into the cache.
+		const refresh = () => { void queryClient.invalidateQueries({ queryKey: key }); };
+		const stopHints = subscribeCloudNotificationHints(refresh);
+		const run = async () => {
+			let delay = STREAM_RETRY_MS;
+			while (!controller.signal.aborted) {
+				let after: number | undefined;
+				try {
+					const page = await queryClient.fetchQuery({
+						queryKey: key,
+						queryFn: () => probeCloudInbox(base, () => client.listMyNotifications({ status: "all" })),
+						staleTime: STREAM_CURSOR_MAX_AGE_MS,
+					});
+					after = page.latestSequence;
+				} catch {
+					// Read again after the pause below.
+				}
+				if (controller.signal.aborted) return;
+				let failed = after === undefined;
+				if (after !== undefined) {
+					await subscribeMyNotificationEventsBridged({
+						baseUrl: base,
+						after,
+						signal: controller.signal,
+						onEvent: (event) => {
+							refresh();
+							void queryClient.invalidateQueries({ queryKey: cloudSessionsQueryKey });
+							void queryClient.invalidateQueries({ queryKey: sharedCloudWorkspacesQueryKey });
+							void queryClient.invalidateQueries({ queryKey: orchestratorChildrenQueryKey });
+							publishLiveCloudNotificationEvent(event);
+						},
+						onError: () => { failed = true; },
+					});
+				}
+				if (controller.signal.aborted) return;
+				refresh();
+				delay = failed ? Math.min(delay * 2, STREAM_RETRY_MAX_MS) : STREAM_RETRY_MS;
+				await pause(delay, controller.signal);
+			}
+		};
+		void run();
+		return () => { stopHints(); controller.abort(); };
+	}, [base, client, enabled, queryClient, userId]);
+}
+
+/** The active organization's stream, on a control plane from before mentions. */
+function useLegacyStream(enabled: boolean, base: string, orgId: string, userId: string, status: "all" | "unread" | "read", queryClient: QueryClient): void {
+	useEffect(() => {
+		if (!enabled) return;
 		const notificationsKey = cloudNotificationsQueryKey(base, orgId, userId, status);
 		const controller = new AbortController();
 		// The control plane owns the authoritative list, unread count, and sequence
 		// (all paginated/server-computed), so a durable event or a pre-durable hint
-		// refreshes from the source rather than being patched into the cache — which
+		// refreshes from the source rather than being patched into the cache, which
 		// would drift the unread badge and can't render a hint that carries no
 		// title/body. A hint arrives over the terminal WebSocket before the durable
 		// inbox row commits, so it acts as a low-latency refetch trigger; REST/SSE
@@ -56,94 +345,12 @@ export function useCloudNotifications(
 				}, onError: refresh });
 				if (controller.signal.aborted) return;
 				refresh();
-				await new Promise<void>((resolve) => {
-					const onAbort = () => { clearTimeout(timer); resolve(); };
-					const timer = setTimeout(() => {
-						controller.signal.removeEventListener("abort", onAbort);
-						resolve();
-					}, 1000);
-					controller.signal.addEventListener("abort", onAbort, { once: true });
-				});
+				await pause(STREAM_RETRY_MS, controller.signal);
 			}
 		};
 		void reconnect();
 		return () => { stopHints(); controller.abort(); };
-	}, [base, live, orgId, queryClient, ready, status, userId]);
-
-	// Cleared rows are hidden per signed-in user: notifications belong to one
-	// recipient, and an org can be shared by several accounts on this device.
-	const storageKey = clearStorageKey(base, orgId, userId);
-	const clears = useSyncExternalStore(subscribeClears, () => readClearsRaw(storageKey));
-	const items = useMemo(() => {
-		const state = parseClears(clears);
-		return (query.data?.items ?? []).filter((item) => !isCleared(item, state));
-	}, [clears, query.data?.items]);
-
-	// A cleared row the control plane re-raises (in place: status back to unread,
-	// updated_at bumped) is revived for good, so marking it read later cannot
-	// hide it again.
-	useEffect(() => {
-		const state = parseClears(readClearsRaw(storageKey));
-		const revived = (query.data?.items ?? []).filter((item) => isRevived(item, state));
-		if (revived.length === 0) return;
-		const ids = { ...state.ids };
-		for (const item of revived) ids[item.id] = null;
-		writeClears(storageKey, { ...state, ids });
-	}, [query.data?.items, storageKey]);
-
-	const invalidateAll = useCallback(
-		() => queryClient.invalidateQueries({ queryKey: ["cloud-notifications", base, orgId, userId] }),
-		[base, orgId, queryClient, userId],
-	);
-	const markAllRead = useCallback(async () => {
-		if (!ready || orgId === "") return;
-		await client.markNotificationsRead(orgId);
-		await invalidateAll();
-	}, [client, invalidateAll, orgId, ready]);
-	// Acknowledge concrete ids only. The control plane answers 404 for a row that
-	// is already read, which is the goal, so that is not a failure here.
-	const markRead = useCallback(async (notificationIds: string[]) => {
-		if (!ready || orgId === "" || notificationIds.length === 0) return;
-		try {
-			await Promise.all(notificationIds.map((id) => client.markNotificationsRead(orgId, [id]).catch(ignoreAlreadyRead)));
-		} finally {
-			await invalidateAll();
-		}
-	}, [client, invalidateAll, orgId, ready]);
-	// The control plane has no delete endpoint, so clearing marks rows read
-	// server-side and hides them on this device. Markers are the server's own
-	// timestamps, so local clock skew cannot hide a newer notification.
-	const clearAll = useCallback(async () => {
-		if (!ready || orgId === "") return;
-		const loaded = query.data?.items ?? [];
-		const previous = readClearsRaw(storageKey);
-		const state = parseClears(previous);
-		const newest = loaded.reduce((max, item) => Math.max(max, timestamp(item.createdAt)), state.before);
-		const ids: CloudClears["ids"] = {};
-		for (const [id, marker] of Object.entries(state.ids)) if (marker !== null) ids[id] = marker;
-		for (const item of loaded) ids[item.id] = timestamp(item.updatedAt);
-		writeClears(storageKey, { before: newest, ids });
-		try {
-			await markAllRead();
-		} catch (error) {
-			restoreClears(storageKey, previous);
-			throw error;
-		}
-	}, [markAllRead, orgId, query.data?.items, ready, storageKey]);
-	const clearOne = useCallback(async (notification: CloudNotificationRow) => {
-		if (!ready || orgId === "") return;
-		const previous = readClearsRaw(storageKey);
-		const state = parseClears(previous);
-		writeClears(storageKey, { ...state, ids: { ...state.ids, [notification.id]: timestamp(notification.updatedAt) } });
-		try {
-			if (notification.status === "unread") await markRead([notification.id]);
-		} catch (error) {
-			// Put the row back so the list agrees with the error it reports.
-			restoreClears(storageKey, previous);
-			throw error;
-		}
-	}, [markRead, orgId, ready, storageKey]);
-	return { ...query, items, markAllRead, markRead, clearAll, clearOne };
+	}, [base, enabled, orgId, queryClient, status, userId]);
 }
 
 /**

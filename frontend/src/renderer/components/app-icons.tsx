@@ -11,6 +11,7 @@ import { forwardRef, type ForwardRefExoticComponent, type RefAttributes, type SV
 import {
 	Activity as MynaActivity,
 	Archive as MynaArchive,
+	At as MynaAt,
 	ArrowDown as MynaArrowDown,
 	ArrowLeft as MynaArrowLeft,
 	ArrowLeftRight as MynaArrowLeftRight,
@@ -279,6 +280,7 @@ export const ArrowRightLeft = fromMyna(MynaArrowLeftRight, "arrow-right-left");
 export const ArrowUp = fromMyna(MynaArrowUp, "arrow-up", "full");
 export const ArrowUpFromLine = fromMyna(MynaUpload, "arrow-up-from-line");
 export const ArrowUpRight = fromMyna(MynaArrowUpRight, "arrow-up-right", "full");
+export const AtSign = fromMyna(MynaAt, "at-sign");
 export const BadgeCheck = fromMyna(MynaCheckWaves, "badge-check", "full");
 export const Ban = fromMyna(MynaBan, "ban");
 export const Bell = fromMyna(MynaBell, "bell");

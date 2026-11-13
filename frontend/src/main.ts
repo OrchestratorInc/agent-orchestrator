@@ -256,6 +256,7 @@ import { isAllowedAppExternalURL, openAllowedAppExternalURL } from "./main/exter
 import { coercePrivacyGuideRequest, CUA_DRIVER_APP_PATH, PRIVACY_GUIDE_HEIGHT, PrivacyGuide, type PrivacyPane } from "./main/privacy-guide";
 import { watchSettingsWindow } from "./main/settings-window-watch";
 import {
+	createTaggedToasts,
 	dockBounceType,
 	shouldReplaceBounce,
 	shouldSignalAttention,
@@ -4047,9 +4048,12 @@ function cancelDockBounce(): void {
 	app.dock?.cancelBounce(id);
 }
 
+// One OS toast per tag (a cloud session's mention): a newer one replaces it.
+const taggedToasts = createTaggedToasts<ElectronNotification>();
+
 ipcMain.handle(
 	"notifications:show",
-	(_event, notification: { id: string; title: string; body?: string; type?: string; watched?: boolean }) => {
+	(_event, notification: { id: string; title: string; body?: string; type?: string; watched?: boolean; tag?: string }) => {
 		if (!notification.id || !mainWindow) return;
 		// "Already looking" = the window has focus, or the renderer reports the
 		// prompt itself is on screen (`watched`). Visual signals are skipped then.
@@ -4082,12 +4086,15 @@ ipcMain.handle(
 				icon: process.platform === "darwin" ? undefined : windowIconPath(),
 			});
 			toast.on("click", () => {
+				taggedToasts.forget(notification.tag, toast);
 				if (!mainWindow) return;
 				if (mainWindow.isMinimized()) mainWindow.restore();
 				mainWindow.show();
 				mainWindow.focus();
 				getShellWebContents()?.send("notifications:click", notification.id);
 			});
+			toast.on("close", () => taggedToasts.forget(notification.tag, toast));
+			taggedToasts.show(notification.tag, toast);
 			toast.show();
 		}
 
