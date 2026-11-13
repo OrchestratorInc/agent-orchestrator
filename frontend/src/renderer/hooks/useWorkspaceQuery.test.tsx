@@ -522,13 +522,13 @@ describe("useWorkspaceQuery", () => {
 		expect(result.current.data?.map((workspace) => workspace.id)).toEqual(["proj-1", "__standalone__"]);
 		expect(result.current.data?.[1]).toMatchObject({
 			id: "__standalone__",
-			name: "Scratchpad",
+			name: "Sessions",
 			kind: "standalone",
 		});
 		expect(result.current.data?.[1].sessions[0]).toMatchObject({
 			id: "standalone-1",
 			workspaceId: "__standalone__",
-			workspaceName: "Scratchpad",
+			workspaceName: "Sessions",
 			title: "Research",
 			branch: undefined,
 			provisionState: "failed",
@@ -586,8 +586,8 @@ describe("useWorkspaceQuery", () => {
 			const { result } = renderHook(() => useWorkspaceQuery(), { wrapper });
 			await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
-			expect(result.current.data?.[0]).toMatchObject({ name: "草稿区" });
-			expect(result.current.data?.[0].sessions[0]).toMatchObject({ workspaceName: "草稿区" });
+			expect(result.current.data?.[0]).toMatchObject({ name: "会话" });
+			expect(result.current.data?.[0].sessions[0]).toMatchObject({ workspaceName: "会话" });
 		} finally {
 			await appI18n.changeLanguage("en");
 		}
@@ -775,7 +775,7 @@ describe("useWorkspaceQuery", () => {
 			path: "",
 			sessions: [],
 		});
-		expect(result.current.data?.[2]).toMatchObject({ id: "__standalone__", name: "Scratchpad" });
+		expect(result.current.data?.[2]).toMatchObject({ id: "__standalone__", name: "Sessions" });
 		expect(listProjectsMock).toHaveBeenCalledWith("org-1", { limit: 100, standaloneAgents: "exclude" });
 		expect(listStandaloneAgentsMock).toHaveBeenCalledWith("org-1", { limit: 100, standaloneAgents: "only" });
 	});
