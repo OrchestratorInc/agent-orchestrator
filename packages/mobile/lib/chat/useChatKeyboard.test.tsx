@@ -149,6 +149,19 @@ it("leaves the room to the list when keyboard-controller saw the open", async ()
 	expect(latest?.floatingRootStyle).toBeUndefined();
 });
 
+// keyboard-controller can miss a close and then the next open: the root must still make room.
+it("pads for a missed open after a close only React Native saw", async () => {
+	await mount();
+	await fire("controller", "keyboardWillShow", { height: 336 });
+	fixture.visible = false;
+	await fire("platform", "keyboardDidHide");
+	await settle();
+	fixture.visible = true;
+	await fire("platform", "keyboardDidShow", { endCoordinates: { height: 312 } });
+	await settle();
+	expect(latest?.floatingRootStyle).toEqual({ paddingBottom: 312 + 24 });
+});
+
 // Android drives the keyboard's animation on this app's UI thread, and the
 // screen re-rendering as the close began stalled its first frames.
 it("leaves a floating composer's screen alone as the keyboard starts to close", async () => {

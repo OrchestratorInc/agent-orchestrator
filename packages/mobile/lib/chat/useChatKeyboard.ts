@@ -72,6 +72,9 @@ export function useChatKeyboard({ underHeader = false, floating = false }: {
 			settle = setTimeout(() => {
 				settle = undefined;
 				if (Keyboard.isVisible() !== (signal.kind === "platform-shown")) return;
+				// A close only React Native saw ends a reported open too; a newer open
+				// would have made the keyboard visible and dropped this above.
+				if (signal.kind === "platform-hidden") setControllerOpen(false);
 				dispatch(signal);
 			}, PLATFORM_KEYBOARD_SETTLE_MS);
 		};
