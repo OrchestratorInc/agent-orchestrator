@@ -236,6 +236,24 @@ describe("Chat while it switches to Terminal", () => {
 		expect(fixtures.refreshBoard).toHaveBeenCalledTimes(1);
 	});
 
+	it("takes its header title with it when the route swaps to Terminal", async () => {
+		fixtures.navigation.setOptions.mockClear();
+		fixtures.interfaceSwitch.transition = { id: "t-1", phase: "activating", targetMode: "tui" };
+		await mount();
+		fixtures.interfaceSwitch.transition = { id: "t-1", phase: "completed", targetMode: "tui" };
+		fixtures.conversation.snapshot.controller = { state: "stopped" };
+		await rerender();
+		// The stack merges each call into the route's options, and the route keeps
+		// them when it swaps Chat for Terminal, which sets only `title`. A
+		// `headerTitle` left behind outranks that title and froze the bar on the
+		// stopped Chat controller while the board said Idle (#8283).
+		const merged = () => Object.assign({}, ...fixtures.navigation.setOptions.mock.calls.map(([options]) => options as object)) as { headerTitle?: () => { props: { state?: string } } };
+		expect(merged().headerTitle?.().props.state).toBe("stopped");
+		await act(async () => renderer!.unmount());
+		renderer = undefined;
+		expect(merged().headerTitle).toBeUndefined();
+	});
+
 	it("shows the stopped controller as before for a switch that completed before this visit", async () => {
 		fixtures.interfaceSwitch.transition = { id: "t-0", phase: "completed", targetMode: "tui" };
 		fixtures.conversation.snapshot.controller = { state: "stopped" };
