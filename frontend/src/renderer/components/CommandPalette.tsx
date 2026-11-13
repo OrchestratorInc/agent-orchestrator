@@ -316,10 +316,17 @@ export const CommandPalette = memo(function CommandPalette() {
 				cloudReady,
 				developerMode,
 			}, t),
-			...buildShortcutCommands(t, { splitPanes }),
-			...buildSettingsCommands(t, { developerMode, diagnostics }),
+			...buildShortcutCommands(t, {
+				splitPanes,
+				// A routed session is on screen even when it lives on a remote host
+				// this list does not hold; only a local one has a worktree here.
+				...(params.sessionId
+					? { session: currentSession && !currentSession.cloud && !currentSession.hostId && !params.hostId ? "local" as const : "elsewhere" as const }
+					: {}),
+			}),
+			...buildSettingsCommands(t, { developerMode, diagnostics, mac: isMac }),
 		],
-		[workspaces, currentProjectId, params.hostId, params.sessionId, restartingProjectIds, reviewStatesForCommands, cloudReady, developerMode, diagnostics, splitPanes, t, i18n.resolvedLanguage],
+		[workspaces, currentProjectId, currentSession, params.hostId, params.sessionId, restartingProjectIds, reviewStatesForCommands, cloudReady, developerMode, diagnostics, splitPanes, t, i18n.resolvedLanguage],
 	);
 	const scoped = useMemo(
 		() => (view.mode === "session-actions" ? findSession(workspaces, view.sessionId) : undefined),
@@ -538,6 +545,8 @@ export const CommandPalette = memo(function CommandPalette() {
 			switch (target.to) {
 				case "/":
 				case "/usage":
+				case "/automations":
+				case "/artifacts":
 					void navigate({ to: target.to });
 					break;
 				case "/settings":
@@ -1041,7 +1050,12 @@ export const CommandPalette = memo(function CommandPalette() {
 											: t("command.searchFilesEmpty")
 									: searching
 										? t("command.searching")
-										: t("command.noResults")}
+										: view.mode === "root" ? (
+											<>
+												<span className="block text-foreground">{t("command.noResults")}</span>
+												<span className="mt-1 block text-caption">{t("command.noResultsHint")}</span>
+											</>
+										) : t("command.noResults")}
 							</CommandEmpty>
 							{groups.map((group) => (
 								<CommandGroup key={group.id} heading={group.label || undefined}>
@@ -1190,7 +1204,7 @@ function PaletteRow({
 			{pending ? (
 				<Loader2 className="size-icon-md animate-spin" aria-hidden="true" />
 			) : item.disabled && item.disabledReason ? (
-				<span className="shrink-0 text-caption text-muted-foreground group-data-[selected=true]/command-item:text-foreground/75">{item.disabledReason}</span>
+				<span className="max-w-[45%] shrink-0 truncate text-caption text-muted-foreground group-data-[selected=true]/command-item:text-foreground/75">{item.disabledReason}</span>
 			) : keys ? (
 				<CommandShortcut keys={keys} />
 			) : opensPicker ? (

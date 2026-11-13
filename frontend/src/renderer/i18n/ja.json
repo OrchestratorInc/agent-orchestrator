@@ -561,6 +561,7 @@
 	"command.newProject": "新しいプロジェクト",
 	"command.newTask": "新しいタスク",
 	"command.noResults": "結果がありません。",
+	"command.noResultsHint": "セッション、プロジェクト、設定、コマンドの名前で検索してください。",
 	"command.noCurrentProject": "現在のプロジェクトがありません",
 	"command.notEligibleForReview": "レビュー対象外です",
 	"command.openOrchestrator": "オーケストレーターを開く",

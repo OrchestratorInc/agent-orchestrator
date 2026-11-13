@@ -204,6 +204,7 @@ vi.mock("./CreateProjectFlow", () => ({
 }));
 
 import { CommandPalette } from "./CommandPalette";
+import { onDedicatedShortcut } from "../hooks/useAppShortcut";
 import { appShortcutBus } from "../test/app-shortcut-bus";
 
 function renderPalette() {
@@ -928,22 +929,28 @@ describe("CommandPalette actions", () => {
 		expect(postMock).not.toHaveBeenCalled();
 	});
 
-	it("shows disabled New task reason, skips it for selection, and ignores clicks", async () => {
-		ctx.params = {};
-		renderPalette();
-		act(() => useUiStore.getState().setCommandPaletteOpen(true));
-		const input = await screen.findByPlaceholderText(/search sessions/i);
-		expect(screen.queryByText("No current project")).toBeNull();
-		fireEvent.change(input, { target: { value: "new" } });
-		expect(await screen.findByText("No current project")).toBeInTheDocument();
-		await waitFor(() => {
-			const selected = document.querySelector('[cmdk-item][data-selected="true"]');
-			expect(selected?.textContent).not.toContain("No current project");
-			expect(selected?.getAttribute("aria-disabled")).not.toBe("true");
-		});
-		fireEvent.click(document.querySelector('[cmdk-item][data-value="current-new-task"]')!);
-		expect(navigateMock).not.toHaveBeenCalled();
-		expect(spawnMock).not.toHaveBeenCalled();
+	it("runs New task off a project the way ⌘N does", async () => {
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		const newSession = vi.fn();
+		// The shell's ⌘N handler, as the palette reaches it.
+		const dispose = onDedicatedShortcut("new-session", () => () => {}, newSession);
+		try {
+			ctx.params = {};
+			renderPalette();
+			act(() => useUiStore.getState().setCommandPaletteOpen(true));
+			await screen.findByPlaceholderText(/search sessions/i);
+			const row = document.querySelector('[cmdk-item][data-value="current-new-task"]');
+			expect(row?.getAttribute("aria-disabled")).not.toBe("true");
+			fireEvent.click(row!);
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(1);
+			});
+			expect(newSession).toHaveBeenCalledTimes(1);
+			expect(spawnMock).not.toHaveBeenCalled();
+		} finally {
+			dispose();
+			vi.useRealTimers();
+		}
 	});
 
 	it("does not spawn Open orchestrator while the project is restarting", async () => {

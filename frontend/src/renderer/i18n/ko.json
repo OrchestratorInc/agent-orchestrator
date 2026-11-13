@@ -561,6 +561,7 @@
 	"command.newProject": "새 프로젝트",
 	"command.newTask": "새 작업",
 	"command.noResults": "결과가 없습니다.",
+	"command.noResultsHint": "세션, 프로젝트, 설정 또는 명령 이름으로 검색해 보세요.",
 	"command.noCurrentProject": "현재 프로젝트가 없습니다",
 	"command.notEligibleForReview": "리뷰 대상이 아닙니다",
 	"command.openOrchestrator": "오케스트레이터 열기",

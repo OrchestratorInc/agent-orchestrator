@@ -96,7 +96,7 @@ import { useRemoteUnpinStore } from "../stores/remote-unpin-store";
 import { buildSidebarSessionOrder, sessionWantsAttention, stepSessionNav, type SidebarNavSession } from "../lib/sidebar-order";
 import { useSidebarOrderStore } from "../stores/sidebar-order-store";
 import { useAppMenuAvailable } from "../hooks/useAppMenuCommand";
-import { useAppShortcut } from "../hooks/useAppShortcut";
+import { onDedicatedShortcut, useAppShortcut } from "../hooks/useAppShortcut";
 import { recordManualWorkerOpen, recordSessionSurface } from "../lib/session-management-telemetry";
 
 const SHELL_LOADER_STALE_MS = 2_000;
@@ -1306,7 +1306,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 	// for the in-scope project, or a standalone agent when no project is in scope.
 	useEffect(
 		() =>
-			aoBridge.app.onNewSessionShortcut(() => {
+			onDedicatedShortcut("new-session", (handler) => aoBridge.app.onNewSessionShortcut(handler), () => {
 			// On the new chat page, stay with the project and host it shows.
 			if (newChatHost) {
 				requestNewTask(newChatProject ?? STANDALONE_WORKSPACE_ID, newChatHost);
@@ -1364,7 +1364,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 	// strip, so the shortcut does nothing outside a session (#4772).
 	useEffect(
 		() =>
-			aoBridge.app.onNewShellTerminalShortcut(() => {
+			onDedicatedShortcut("new-shell-terminal", (handler) => aoBridge.app.onNewShellTerminalShortcut(handler), () => {
 				if (routeParams.sessionId) requestNewShellTerminal();
 			}),
 		[requestNewShellTerminal, routeParams.sessionId],
@@ -1407,8 +1407,8 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 	);
 
 	useEffect(() => {
-		const disposePrevious = aoBridge.app.onPreviousSessionShortcut(() => navigateSession(-1));
-		const disposeNext = aoBridge.app.onNextSessionShortcut(() => navigateSession(1));
+		const disposePrevious = onDedicatedShortcut("previous-session", (handler) => aoBridge.app.onPreviousSessionShortcut(handler), () => navigateSession(-1));
+		const disposeNext = onDedicatedShortcut("next-session", (handler) => aoBridge.app.onNextSessionShortcut(handler), () => navigateSession(1));
 		return () => {
 			disposePrevious();
 			disposeNext();

@@ -564,6 +564,7 @@
 	"command.newProject": "Nuevo proyecto",
 	"command.newTask": "Nueva tarea",
 	"command.noResults": "Sin resultados.",
+	"command.noResultsHint": "Prueba con el nombre de una sesión, un proyecto, un ajuste o un comando.",
 	"command.noCurrentProject": "No hay proyecto actual",
 	"command.notEligibleForReview": "No apto para revisión",
 	"command.openOrchestrator": "Abrir orquestador",

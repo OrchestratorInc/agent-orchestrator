@@ -77,11 +77,12 @@ function workspaces(): WorkspaceSummary[] {
 const byId = (items: CommandItem[]) => new Map(items.map((item) => [item.id, item]));
 
 describe("session import commands", () => {
-	it("offers folder import on home and finds it by agent or session history", () => {
+	it("offers folder import by search, found by agent or session history", () => {
 		const items = buildCommands({ workspaces: workspaces() });
 		const command = byId(items).get("global-import-sessions");
 		expect(command?.action).toEqual({ kind: "open-session-import" });
-		expect(filterCommands(items, "")).toContain(command);
+		// A project's Import chats leads the blank palette; one import row is enough there.
+		expect(filterCommands(items, "")).not.toContain(command);
 		for (const query of ["import", "resume claude code", "import codex sessions", "existing terminal chats"]) {
 			expect(filterCommands(items, query)).toContain(command);
 		}
@@ -198,12 +199,12 @@ describe("buildCommands grouping", () => {
 		expect(archive?.action).toEqual({ kind: "open-archive", projectId: "proj-1" });
 	});
 
-	it("disables New task with a reason when the route project is absent from workspaces", () => {
+	it("runs New task off a project through ⌘N, which picks where it starts", () => {
 		const items = buildCommands({ workspaces: workspaces(), currentProjectId: "missing", currentSessionId: undefined });
 		const newTask = byId(items).get("current-new-task");
-		expect(newTask?.disabled).toBe(true);
-		expect(newTask?.disabledReason).toBe("No current project");
-		expect(newTask?.action).toBeUndefined();
+		expect(newTask?.disabled).toBe(false);
+		expect(newTask?.searchOnly).toBeUndefined();
+		expect(newTask?.action).toEqual({ kind: "run-shortcut", shortcut: "new-session" });
 		expect(byId(items).has("current-open-orchestrator")).toBe(false);
 		expect(byId(items).has("current-project-settings")).toBe(false);
 	});
@@ -711,7 +712,8 @@ describe("groupCommands", () => {
 		const items = buildCommands({ workspaces: workspaces(), currentProjectId: "proj-1" });
 		const grouped = groupCommands(items);
 		const order = grouped.map((g) => g.id);
-		expect(order).toEqual(["current", "attention", "projects", "sessions", "prs", "global"]);
+		// Sessions above Projects, as in the sidebar.
+		expect(order).toEqual(["current", "attention", "sessions", "projects", "prs", "global"]);
 		expect(grouped.every((g) => g.items.length > 0)).toBe(true);
 	});
 });
@@ -843,11 +845,16 @@ describe("Report a problem", () => {
 describe("whole keyword matches", () => {
 	const row = (id: string, keywords: string[]): CommandItem => ({ id, group: "global", title: "Unrelated", keywords, action: { kind: "toggle-theme" } });
 
-	it("rank above the same letters inside a longer word", () => {
+	it("never match the same letters inside a longer word", () => {
 		const whole = row("whole", ["bug"]);
 		const inside = row("inside", ["debug"]);
-		expect(matchScore("bug", whole)).toBeGreaterThan(matchScore("bug", inside));
-		expect(filterCommands([inside, whole], "bug").map((item) => item.id)).toEqual(["whole", "inside"]);
+		expect(matchScore("bug", inside)).toBe(0);
+		expect(filterCommands([inside, whole], "bug").map((item) => item.id)).toEqual(["whole"]);
+	});
+
+	it("match the start of a keyword word while typing", () => {
+		expect(matchScore("dar", row("theme", ["dark mode"]))).toBeGreaterThan(0);
+		expect(matchScore("ode", row("theme", ["dark mode"]))).toBe(0);
 	});
 
 	it("still rank below a title match", () => {
@@ -855,20 +862,24 @@ describe("whole keyword matches", () => {
 		expect(matchScore("bug", titled)).toBeGreaterThan(matchScore("bug", row("whole", ["bug"])));
 	});
 
-	it.each([
-		["keys", "shortcut:keyboard-shortcuts"],
-		["review", "shortcut:toggle-diff"],
-	])("send Enter on %s to the row that names it", (query, id) => {
+	it("send Enter on keys to Show keyboard shortcuts", () => {
 		const rows = [...buildShortcutCommands(appI18n.t), ...buildSettingsCommands(appI18n.t, { developerMode: false, diagnostics: false })];
-		expect(displayGroups(rows, query)[0]?.items[0]?.id).toBe(id);
+		expect(displayGroups(rows, "keys")[0]?.items[0]?.id).toBe("shortcut:keyboard-shortcuts");
+	});
+
+	it.each(["bug", "review", "keys", "code"])("keep %s from pulling up a page of unrelated settings", (query) => {
+		const rows = buildSettingsCommands(appI18n.t, { developerMode: true, diagnostics: true, mac: true });
+		expect(filterCommands(rows, query).length).toBeLessThanOrEqual(2);
 	});
 
 	it("rank the code keyword above qr code, below a title that says code", () => {
-		const rows = [...buildShortcutCommands(appI18n.t), ...buildSettingsCommands(appI18n.t, { developerMode: false, diagnostics: false })];
+		const rows = [...buildShortcutCommands(appI18n.t, { session: "local" }), ...buildSettingsCommands(appI18n.t, { developerMode: false, diagnostics: false })];
 		const byId = (id: string) => rows.find((item) => item.id === id)!;
 		// "Pairing code or password" names it in its title, and a title beats a keyword.
 		expect(displayGroups(rows, "code")[0]?.items[0]?.id).toBe("setting:connection-password");
-		expect(matchScore("code", byId("shortcut:open-in-editor"))).toBeGreaterThan(matchScore("code", byId("setting:mobile-devices")));
+		expect(matchScore("code", byId("shortcut:open-in-editor"))).toBeGreaterThan(matchScore("code", byId("setting:mobile")));
+		// Mobile's page words stay on the page row, not on each of its rows.
+		expect(matchScore("code", byId("setting:mobile-devices"))).toBe(0);
 	});
 });
 
@@ -912,5 +923,47 @@ describe("loose keyword matches", () => {
 
 	it("do not match a longer query whose letters are only scattered across keywords", () => {
 		expect(matchScore("side", setting)).toBe(0);
+	});
+});
+
+describe("exact names", () => {
+	it("put a session named exactly what was typed above commands that start with it", () => {
+		const items = [
+			...buildCommands({ workspaces: [{ ...workspaces()[0]!, sessions: [session({ id: "s-theme", title: "theme" })] }] }),
+			...buildSettingsCommands(appI18n.t, { developerMode: false, diagnostics: false }),
+		];
+		expect(displayGroups(items, "theme")[0]?.items[0]?.id).toBe("session:s-theme");
+	});
+});
+
+describe("the blank palette", () => {
+	const many = (count: number) => Array.from({ length: count }, (_, index) =>
+		session({ id: `s${index}`, status: "working", lastInteractionAt: `2026-06-${String(10 + index).padStart(2, "0")}T00:00:00Z` }));
+
+	it("lists the most recently worked-in sessions first, a few of them", () => {
+		const items = buildCommands({ workspaces: [{ id: "proj-1", name: "app", path: "/repos/app", type: "main", sessions: many(10) }] });
+		const sessions = displayGroups(items, "").find((group) => group.id === "sessions")?.items.map((item) => item.id);
+		expect(sessions).toEqual(["session:s9", "session:s8", "session:s7", "session:s6", "session:s5", "session:s4"]);
+		// Typing still searches every one of them.
+		expect(filterCommands(items, "s0").some((item) => item.id === "session:s0")).toBe(true);
+	});
+
+	it("shows a PR only once someone searches for it", () => {
+		const items = buildCommands({ workspaces: workspaces() });
+		expect(filterCommands(items, "").some((item) => item.id === "pr:w-pr:42")).toBe(false);
+		expect(filterCommands(items, "42").some((item) => item.id === "pr:w-pr:42")).toBe(true);
+	});
+
+	it("reaches the sidebar's Automations and Artifacts pages", () => {
+		const items = byId(buildCommands({ workspaces: workspaces() }));
+		expect(items.get("global-automations")?.action).toEqual({ kind: "navigate", target: { to: "/automations" } });
+		expect(items.get("global-artifacts")?.action).toEqual({ kind: "navigate", target: { to: "/artifacts" } });
+	});
+
+	it("marks Cloud sessions and projects", () => {
+		const cloud = { ...workspaces()[0]!, id: "cloud-1", name: "web", kind: CLOUD_PROJECT_KIND, sessions: [session({ id: "c1", workspaceId: "cloud-1" })] } as WorkspaceSummary;
+		const items = byId(buildCommands({ workspaces: [cloud] }));
+		expect(items.get("project:cloud-1")?.subtitle).toBe("Cloud");
+		expect(items.get("session:c1")?.subtitle).toBe("web · Cloud");
 	});
 });

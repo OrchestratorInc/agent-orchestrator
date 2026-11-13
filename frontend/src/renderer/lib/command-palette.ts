@@ -13,6 +13,7 @@ import {
 	type PullRequestFacts,
 	type WorkspaceSession,
 	type WorkspaceSummary,
+	CLOUD_PROJECT_KIND,
 	STANDALONE_WORKSPACE_ID,
 } from "../types/workspace";
 import {
@@ -36,6 +37,8 @@ export type NavigateTarget =
 	| { to: "/" }
 	| { to: "/settings" }
 	| { to: "/usage" }
+	| { to: "/automations" }
+	| { to: "/artifacts" }
 	| { to: "/projects/$projectId"; params: { projectId: string } }
 	| { to: "/projects/$projectId/settings"; params: { projectId: string } }
 	| { to: "/projects/$projectId/sessions/$sessionId"; params: { projectId: string; sessionId: string } }
@@ -124,7 +127,8 @@ export type CommandPaletteContext = {
 	developerMode?: boolean;
 };
 
-export const commandGroupOrder: CommandGroupId[] = ["current", "attention", "files", "content", "messages", "projects", "sessions", "prs", "settings", "global"];
+// Sessions sit above Projects, as in the sidebar.
+export const commandGroupOrder: CommandGroupId[] = ["current", "attention", "files", "content", "messages", "sessions", "projects", "prs", "settings", "global"];
 
 const commandGroupLabelKeys: Record<CommandGroupId, MessageKey> = {
 	current: "command.group.current",
@@ -136,7 +140,8 @@ const commandGroupLabelKeys: Record<CommandGroupId, MessageKey> = {
 	sessions: "command.group.sessions",
 	prs: "command.group.prs",
 	settings: "command.group.settings",
-	global: "command.group.global",
+	// The app's own name for app-wide commands (the shortcut catalog's General).
+	global: "shortcut.category.general",
 };
 
 function isSyntheticBranch(session: WorkspaceSession): boolean {
@@ -301,16 +306,28 @@ export function buildChatSearchCommands(
 	});
 }
 
+/** Where a row lives: its project, marked Cloud when it does not run on this machine. */
+function workspacePlace(workspace: WorkspaceSummary, t: TFunction): string {
+	return workspace.kind === CLOUD_PROJECT_KIND ? `${workspace.name} · ${t("shell.cloudProjectBadge")}` : workspace.name;
+}
+
+/** When the person last worked in a session, as the sidebar's age shows it. */
+function lastInteraction(session: WorkspaceSession): number {
+	const at = session.lastInteractionAt ?? session.lastUserMessageAt;
+	return at ? Date.parse(at) || 0 : 0;
+}
+
 function sessionCommand(
 	workspace: WorkspaceSummary,
 	session: WorkspaceSession,
 	group: SessionCommandGroup,
+	t: TFunction,
 ): CommandItem {
 	return {
 		id: `${SESSION_ID_PREFIX[group]}:${session.id}`,
 		group,
 		title: session.title,
-		subtitle: workspace.name,
+		subtitle: workspacePlace(workspace, t),
 		zone: attentionZone(session),
 		status: getSessionStatusDotView(session),
 		agent: session.provider,
@@ -391,16 +408,13 @@ export function buildCommands(ctx: CommandPaletteContext, t: TFunction = appI18n
 		title: t("command.newTask"),
 		emphasis: currentProject?.name,
 		shortcut: "new-session",
-		keywords: ["worker", "chat", "start", currentProject?.name ?? ""],
-		disabled: !currentProject || isProjectRestarting,
-		// Off a project the row can only explain why it is off, so it waits for a search.
-		searchOnly: !currentProject,
-		disabledReason: !currentProject
-			? t("command.noCurrentProject")
-			: isProjectRestarting
-				? t("command.orchestratorRestarting")
-				: undefined,
-		...(currentProject ? { action: { kind: "open-new-task" as const, projectId: currentProject.id } } : {}),
+		keywords: ["new chat", "new session", "worker", "chat", "start", "agent", currentProject?.name ?? ""],
+		disabled: isProjectRestarting,
+		disabledReason: isProjectRestarting ? t("command.orchestratorRestarting") : undefined,
+		// Off a project it does what ⌘N does there (the last project, else Sessions).
+		action: currentProject
+			? { kind: "open-new-task", projectId: currentProject.id }
+			: { kind: "run-shortcut", shortcut: "new-session" },
 	});
 
 	if (currentProject) {
@@ -503,26 +517,31 @@ export function buildCommands(ctx: CommandPaletteContext, t: TFunction = appI18n
 	const attentionIds = new Set(attentionSessions.map(({ session }) => session.id));
 
 	for (const { workspace, session } of attentionSessions) {
-		items.push(sessionCommand(workspace, session, "attention"));
+		items.push(sessionCommand(workspace, session, "attention", t));
 	}
 
-	// Cloud standalone agents are the Scratchpad's, not projects; their sessions are listed.
+	// Cloud standalone agents belong to Sessions, not projects; their sessions are listed.
 	for (const workspace of workspaces.filter((candidate) => candidate.id !== STANDALONE_WORKSPACE_ID && !candidate.standaloneAgent)) {
 		items.push({
 			id: `project:${workspace.id}`,
 			group: "projects",
 			title: workspace.name,
+			...(workspace.kind === CLOUD_PROJECT_KIND ? { subtitle: t("shell.cloudProjectBadge") } : {}),
 			keywords: [workspace.path],
 			action: { kind: "navigate", target: { to: "/projects/$projectId", params: { projectId: workspace.id } } },
 		});
 	}
 
-	for (const workspace of workspaces) {
-		for (const session of workerSessions(workspace.sessions).filter(
-			(session) => !attentionIds.has(session.id) && session.id !== currentSessionId,
-		)) {
-			items.push({ ...sessionCommand(workspace, session, "sessions"), searchOnly: !sessionIsActive(session) });
-		}
+	// Most recently worked in first, so the blank palette's few rows are the
+	// sessions the person is likely to go back to. Stable for equal times.
+	const sessionRows = workspaces
+		.flatMap((workspace) => workerSessions(workspace.sessions)
+			.filter((session) => !attentionIds.has(session.id) && session.id !== currentSessionId)
+			.map((session) => ({ workspace, session })))
+		.map((entry, index) => ({ ...entry, index, at: lastInteraction(entry.session) }))
+		.sort((a, b) => b.at - a.at || a.index - b.index);
+	for (const { workspace, session } of sessionRows) {
+		items.push({ ...sessionCommand(workspace, session, "sessions", t), searchOnly: !sessionIsActive(session) });
 	}
 
 	for (const workspace of workspaces) {
@@ -546,12 +565,14 @@ export function buildCommands(ctx: CommandPaletteContext, t: TFunction = appI18n
 					workspace.name,
 					pr.state,
 				];
-			items.push({
+				items.push({
 					id: `pr:${session.id}:${pr.number}`,
 					group: "prs",
 					title: `#${pr.number}`,
 					subtitle,
-					keywords: prKeywords,
+					keywords: [...prKeywords, "pr", "pull request"],
+					// The bare number means little until someone searches for it.
+					searchOnly: true,
 					action: { kind: "navigate", target: jumpTarget(workspace, session) },
 				});
 				items.push({
@@ -583,8 +604,22 @@ export function buildCommands(ctx: CommandPaletteContext, t: TFunction = appI18n
 		id: "global-home",
 		group: "global",
 		title: t("shell.goHome"),
-		keywords: ["home", "start", "get started", "clone", "import", "standalone"],
+		keywords: ["home", "start", "get started", "clone"],
 		action: { kind: "navigate", target: { to: "/" } },
+	});
+	items.push({
+		id: "global-automations",
+		group: "global",
+		title: t("automations.title"),
+		keywords: ["schedule", "scheduled", "cron", "recurring"],
+		action: { kind: "navigate", target: { to: "/automations" } },
+	});
+	items.push({
+		id: "global-artifacts",
+		group: "global",
+		title: t("artifacts.title"),
+		keywords: ["deliverables", "outputs", "documents"],
+		action: { kind: "navigate", target: { to: "/artifacts" } },
 	});
 	items.push({
 		id: "global-new-project",
@@ -599,13 +634,15 @@ export function buildCommands(ctx: CommandPaletteContext, t: TFunction = appI18n
 		title: t("sessionImport.foldersTitle"),
 		subtitle: t("settings.harness.thisComputer"),
 		keywords: [...IMPORT_SESSION_KEYWORDS, "folders", "projects"],
+		// A project's own Import chats leads the blank palette; this waits for a search.
+		searchOnly: true,
 		action: { kind: "open-session-import" },
 	});
 	if (ctx.developerMode) {
 		items.push({
 			id: "global-usage",
 			group: "global",
-			title: t("command.openUsage"),
+			title: t("usage.title"),
 			keywords: ["usage", "cost", "tokens", "limits", "spend", "billing", "quota"],
 			action: { kind: "navigate", target: { to: "/usage" } },
 		});
@@ -613,7 +650,7 @@ export function buildCommands(ctx: CommandPaletteContext, t: TFunction = appI18n
 	items.push({
 		id: "global-settings",
 		group: "global",
-		title: t("command.globalSettings"),
+		title: t("shell.settings"),
 		shortcut: "open-settings",
 		keywords: ["settings", "preferences", "config"],
 		action: { kind: "navigate", target: { to: "/settings" } },
@@ -720,6 +757,30 @@ function wordsOf(text: string): string[] {
 	return text.split(/[^\p{L}\p{N}]+/u);
 }
 
+/** Where `q` starts a word of `text` (at its start or after a non-letter), or -1. */
+function wordStartIndex(text: string, q: string): number {
+	let at = text.indexOf(q);
+	while (at > 0 && /[\p{L}\p{N}]/u.test(text[at - 1] ?? "")) at = text.indexOf(q, at + 1);
+	return at;
+}
+
+/** Loose letters in order, starting at the start of one of the title's words. */
+function wordAnchoredSubsequence(q: string, title: string): boolean {
+	for (let at = 0; at < title.length; at++) {
+		const wordStart = at === 0 || !/[\p{L}\p{N}]/u.test(title[at - 1] ?? "");
+		if (wordStart && title[at] === q[0] && isSubsequence(q, title.slice(at))) return true;
+	}
+	return false;
+}
+
+/**
+ * How well a row matches the query, 0 for no match. In order: the row's exact
+ * name; its name starting with the query; a word of its name starting with it;
+ * one of its keywords exactly; a whole word, then a word start, of its
+ * keywords or subtitle; every typed word somewhere; loose letters of its name.
+ * Keywords never match inside a word, so "bug" finds Report a problem but not
+ * Developer mode's "debug", and "keys" no keyword "monkeys".
+ */
 export function matchScore(query: string, item: CommandItem): number {
 	const q = query.trim().toLowerCase();
 	if (!q) return 1;
@@ -727,28 +788,31 @@ export function matchScore(query: string, item: CommandItem): number {
 	const title = item.title.toLowerCase();
 	const extras = [item.subtitle ?? "", ...(item.keywords ?? [])].join(" ").toLowerCase();
 
-	const titleIdx = title.indexOf(q);
 	if (item.group === "files") {
+		const titleIdx = title.indexOf(q);
 		if (title === q) return 1200;
 		if (titleIdx === 0) return 1100;
 		if (titleIdx > 0) return 900 - titleIdx;
 	}
-	if (titleIdx === 0) return 1000;
-	if (titleIdx > 0) return 800 - titleIdx;
-	// The closer a keyword names the row, the higher it ranks: "bug" finds Report
-	// a problem before "debug" finds Developer mode, and "code" finds Open in
-	// editor before "qr code" finds Mobile.
+	// A session, project or command named exactly what was typed comes first.
+	if (title === q) return 1100;
+	if (title.startsWith(q)) return 1000;
+	const wordAt = wordStartIndex(title, q);
+	if (wordAt > 0) return 900 - wordAt;
 	if (item.keywords?.some((keyword) => keyword.toLowerCase() === q)) return 650;
-	if (wordsOf(extras).includes(q)) return 600;
-	if (extras.includes(q)) return 500;
+	const extraWords = wordsOf(extras);
+	if (extraWords.includes(q)) return 600;
+	if (wordStartIndex(extras, q) >= 0) return 500;
+	const titleIdx = title.indexOf(q);
+	if (titleIdx > 0) return 400 - Math.min(titleIdx, 50);
 	// Every word somewhere, in any order: "add codex account", "hide sidebar",
 	// "toggle sidbar".
 	const words = q.split(/\s+/);
 	const inTitle = (word: string) => title.includes(word) || nearMissIn(word, title);
-	if (words.length > 1 && words.every((word) => inTitle(word) || extras.includes(word) || nearMissIn(word, extras))) {
+	if (words.length > 1 && words.every((word) => inTitle(word) || wordStartIndex(extras, word) >= 0 || nearMissIn(word, extras))) {
 		return 300 + Math.round((100 * words.filter(inTitle).length) / words.length);
 	}
-	if (isSubsequence(q, title)) return 200;
+	if (wordAnchoredSubsequence(q, title)) return 200;
 	// Loose letters scattered across every keyword match almost anything ("side"
 	// in "subscriptions"), so only a short query may match them.
 	if (q.length <= 2 && isSubsequence(q, extras)) return 100;
@@ -826,6 +890,24 @@ export function isSearchGroup(group: CommandGroupId): boolean {
 /** Rows each search group shows beside commands; the file view shows them all. */
 export const SEARCH_GROUP_ROWS = 6;
 
+/**
+ * Rows the blank palette lists per navigation group: a short start (the most
+ * recent sessions, the first projects in sidebar order) rather than every one.
+ * Typing searches them all.
+ */
+export const BLANK_GROUP_ROWS: Partial<Record<CommandGroupId, number>> = { attention: 5, sessions: 6, projects: 5 };
+
+function capBlankGroups(items: CommandItem[]): CommandItem[] {
+	const seen = new Map<CommandGroupId, number>();
+	return items.filter((item) => {
+		const cap = BLANK_GROUP_ROWS[item.group];
+		if (cap === undefined) return true;
+		const count = seen.get(item.group) ?? 0;
+		seen.set(item.group, count + 1);
+		return count < cap;
+	});
+}
+
 export function displayGroups(
 	items: CommandItem[],
 	query: string,
@@ -841,8 +923,8 @@ export function displayGroups(
 		.map((entry) => entry.item);
 	const searchGroups = groupCommands(searched, t, searchGroupRows);
 	// Keep matches under their category headings (Cursor-style), including while typing.
+	if (!query.trim()) return [...groupCommands(capBlankGroups(visibleForQuery(local, query)), t), ...searchGroups];
 	const groups = groupCommands(visibleForQuery(local, query), t);
-	if (!query.trim()) return [...groups, ...searchGroups];
 	// The palette runs cmdk with shouldFilter:false and selects the first item in DOM
 	// order, so Enter follows category order. Rank categories by their best match to
 	// keep the highest-scoring hit — and therefore the Enter target — first.
