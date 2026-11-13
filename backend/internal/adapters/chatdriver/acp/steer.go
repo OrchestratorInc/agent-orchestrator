@@ -414,6 +414,10 @@ type promptSteer struct {
 	seq     int
 	result  chan error
 	settled bool
+	// sent is set once the prompt is handed to the connection; until then
+	// Stop can withdraw it, and withdrawn is set so it is never written.
+	sent      bool
+	withdrawn bool
 }
 
 func (w *promptSteer) settle(err error) {
@@ -480,6 +484,23 @@ func (c *conversation) steerByPrompt(
 		messageID = uuid.NewString()
 	}
 	go func() {
+		if c.promptSending != nil {
+			c.promptSending(seq)
+		}
+		c.mu.Lock()
+		if waiter.withdrawn || c.activeTurn != providerTurnID || c.stoppingTurn == providerTurnID {
+			// Stop began before the prompt was written. Sent now, it would reach
+			// the agent after the cancel and run as fresh work.
+			waiter.settle(errSteerTurnStopping)
+			final, done := c.dropUnsentPromptLocked(providerTurnID, seq)
+			c.mu.Unlock()
+			if done {
+				c.finishPrompt(providerTurnID, final.resp, final.err)
+			}
+			return
+		}
+		waiter.sent = true
+		c.mu.Unlock()
 		resp, err := c.conn.Prompt(turnCtx, acpsdk.PromptRequest{
 			SessionId: acpsdk.SessionId(sessionID),
 			MessageId: &messageID,
@@ -534,6 +555,9 @@ func (c *conversation) steerByPrompt(
 // answering with an error is a definite refusal, and so is the host turning it
 // away because the turn had already ended; anything else is uncertain.
 func steerPromptError(err error) error {
+	if errors.Is(err, errSteerTurnStopping) {
+		return err // never sent
+	}
 	if steerTurnEnded(err) {
 		return fmt.Errorf("%w: the turn ended before the steer prompt reached the agent", ports.ErrChatNoSteerableTurn)
 	}
@@ -596,6 +620,7 @@ func (c *conversation) finishTurnPrompt(turnID string, seq int, resp acpsdk.Prom
 	}
 	delete(c.outstanding, seq)
 	answer := promptAnswer{resp: resp, err: err}
+	c.lastAnswer = &answer
 	result := hostResultEventID(resp, err) != ""
 	if result {
 		c.turnResult = &answer
@@ -622,22 +647,45 @@ func (c *conversation) finishTurnPrompt(turnID string, seq int, resp acpsdk.Prom
 			w.settle(nil) // the earlier prompt handed the work on to it
 		}
 	}
-	if len(c.outstanding) > 0 || (c.adoptedPrompt && c.turnResult == nil) {
-		c.mu.Unlock()
+	final, done := c.turnEndLocked(turnID)
+	c.mu.Unlock()
+	if !done {
 		if err != nil {
 			c.log.Debug("ACP prompt returned an error while another prompt keeps the turn",
 				"turn", turnID, "prompt", seq, "error", err)
 		}
 		return
 	}
+	c.finishPrompt(turnID, final.resp, final.err)
+}
+
+// turnEndLocked reports whether every prompt of the turn has returned, and if
+// so the answer the turn ends with: the host's result when it gave one,
+// otherwise the last answer. Callers must hold c.mu and finish the turn with
+// that answer once they release it.
+func (c *conversation) turnEndLocked(turnID string) (promptAnswer, bool) {
+	if len(c.outstanding) > 0 || (c.adoptedPrompt && c.turnResult == nil) || c.lastAnswer == nil {
+		return promptAnswer{}, false
+	}
+	final := *c.lastAnswer
 	if c.turnResult != nil {
-		answer = *c.turnResult
+		final = *c.turnResult
 	}
 	if c.promptSeq > 0 || c.adoptedPrompt {
 		c.steerSettledTurn = turnID
 	}
-	c.mu.Unlock()
-	c.finishPrompt(turnID, answer.resp, answer.err)
+	return final, true
+}
+
+// dropUnsentPromptLocked takes back a steer prompt Stop overtook before it was
+// written. If the turn's other prompts have all returned meanwhile, the turn
+// ends now, since no answer for this one will come. Callers must hold c.mu.
+func (c *conversation) dropUnsentPromptLocked(turnID string, seq int) (promptAnswer, bool) {
+	if c.activeTurn != turnID {
+		return promptAnswer{}, false
+	}
+	delete(c.outstanding, seq)
+	return c.turnEndLocked(turnID)
 }
 
 // adoptedPromptHandoff hears that the prompt an earlier attachment sent
@@ -689,6 +737,7 @@ func (c *conversation) resetPromptSteeringLocked() {
 	c.outstanding = nil
 	c.adoptedPrompt = false
 	c.turnResult = nil
+	c.lastAnswer = nil
 }
 
 // withdrawSteer removes guidance the agent has not collected. It reports false
@@ -756,13 +805,19 @@ func (c *conversation) WithdrawPendingSteers() {
 		pending.withdrawn = true
 	}
 	c.releasePendingSteersLocked()
-	// A steer prompt is already with the agent and cannot be taken back. Its
-	// Steer returns now, so Stop does not wait out the steer's wait; whether
-	// the agent took it is not known.
+	// A steer prompt not written yet never will be. One already with the agent
+	// cannot be taken back: its Steer returns now, so Stop does not wait out
+	// the steer's wait, and whether the agent took it is not known.
 	for _, w := range c.promptSteers {
-		if w.turn == c.activeTurn {
-			w.settle(errSteerStopping)
+		if w.turn != c.activeTurn {
+			continue
 		}
+		if !w.sent {
+			w.withdrawn = true
+			w.settle(errSteerTurnStopping)
+			continue
+		}
+		w.settle(errSteerStopping)
 	}
 }
 

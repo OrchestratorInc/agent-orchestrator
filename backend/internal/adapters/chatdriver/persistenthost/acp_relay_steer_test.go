@@ -244,3 +244,34 @@ func TestACPRelayStalledSteeredTurnSettlesEveryPromptWhenTheCancelIsIgnored(t *t
 		t.Fatalf("abandoned prompts = %v, want both, so their late answers are dropped", relay.abandonedPrompts)
 	}
 }
+
+// Once the turn is being cancelled, by Stop or by the watchdog, a steer prompt
+// is refused at the host: the agent would run it as fresh work after the cancel.
+func TestACPRelayRefusesASteerPromptOnceTheTurnIsBeingCancelled(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		cancel func(t *testing.T, relay *acpRelay)
+	}{
+		{"Stop's cancel", func(t *testing.T, relay *acpRelay) {
+			relayClientFrame(t, relay, []byte(`{"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId":"session-live"}}`+"\n"), 1)
+		}},
+		{"the watchdog's cancel", func(t *testing.T, relay *acpRelay) {
+			if frames := failStalled(t, relay, 1, time.Now().Add(2*promptStallTimeout)); len(frames.provider) == 0 {
+				t.Fatal("watchdog did not cancel the stalled prompt")
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			relay, _ := startStallTestPrompt(t)
+			tc.cancel(t, relay)
+			frames, err := relay.clientFrame(context.Background(), []byte(stalledSteerPrompt), 1)
+			if err != nil || len(frames.provider) != 0 || !strings.Contains(string(frames.client), ACPSteerTurnEndedDataKey) {
+				t.Fatalf("steer after the cancel = provider %q client %q err %v, want refused as too late",
+					frames.provider, frames.client, err)
+			}
+			if len(relay.pending) != 1 {
+				t.Fatalf("pending = %v, want only the turn's own prompt", relay.pending)
+			}
+		})
+	}
+}

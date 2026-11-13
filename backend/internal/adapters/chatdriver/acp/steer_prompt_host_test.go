@@ -499,3 +499,65 @@ func TestACPSteerPromptStopReleasesAWaitingSteer(t *testing.T) {
 		t.Fatalf("turn completions = %+v, want one interrupted", done)
 	}
 }
+
+// Stop can begin after a steer prompt is registered but before it is written.
+// It is then never written: sent after the cancel, the agent would run it as
+// fresh work. Its Steer is a definite refusal, and the turn ends on the turn's
+// own prompt, whether that answers before or after the steer is dropped.
+func TestACPSteerPromptOvertakenByStopIsNeverSent(t *testing.T) {
+	for _, rootFirst := range []bool{false, true} {
+		name := "dropped before the turn's prompt answers"
+		if rootFirst {
+			name = "dropped after the turn's prompt answers"
+		}
+		t.Run(name, func(t *testing.T) {
+			conv, host := startScriptedHostConversation(t, "")
+			_ = nextEvent(t, conv.Events()) // controller.ready
+			turn, root := startScriptedTurn(t, conv, host)
+			registered := make(chan struct{})
+			release := make(chan struct{})
+			conv.promptSending = func(int) {
+				close(registered)
+				<-release
+			}
+			outcome := make(chan error, 1)
+			go func() {
+				_, err := conv.Steer(context.Background(), turn, ports.ChatUserMessage{Text: "edit staging.yaml instead"})
+				outcome <- err
+			}()
+			<-registered
+
+			conv.WithdrawPendingSteers()
+			err := steerOutcome(t, outcome)
+			if !errors.Is(err, ports.ErrChatTurnNotSteerable) || errors.Is(err, errSteerUnconfirmed) {
+				t.Fatalf("Steer overtaken by Stop = %v, want not steerable and not sent", err)
+			}
+			if rootFirst {
+				host.send(`{"jsonrpc":"2.0","id":` + root + `,"result":{"stopReason":"cancelled","_meta":{"` +
+					persistenthost.ACPEventIDMetaKey + `":"acp-host:16"}}}`)
+				// The answer is held until the unsent steer is dropped.
+				if again := turnCompletions(t, conv.Events(), turn, 200*time.Millisecond); len(again) != 0 {
+					t.Fatalf("the turn ended while its steer prompt was still registered: %+v", again)
+				}
+				close(release)
+			} else {
+				close(release)
+				host.send(`{"jsonrpc":"2.0","id":` + root + `,"result":{"stopReason":"cancelled","_meta":{"` +
+					persistenthost.ACPEventIDMetaKey + `":"acp-host:16"}}}`)
+			}
+			done := completionsOf(t, conv, turn)
+			if len(done) != 1 || done[0].TurnState != domain.TurnStateInterrupted || done[0].ProviderEventID != "acp-host:16" {
+				t.Fatalf("turn completions = %+v, want one interrupted with the host's receipt", done)
+			}
+			select {
+			case frame := <-host.frames:
+				var method string
+				_ = json.Unmarshal(frame["method"], &method)
+				if method == "session/prompt" {
+					t.Fatalf("the overtaken steer prompt reached the host: %v", frame)
+				}
+			default:
+			}
+		})
+	}
+}

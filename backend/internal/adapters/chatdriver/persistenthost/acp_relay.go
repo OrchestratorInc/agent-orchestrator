@@ -288,11 +288,14 @@ func (r *acpRelay) clientFrame(ctx context.Context, frame []byte, generation uin
 	steer := false
 	if method == "session/prompt" {
 		steer = isSteerPrompt(envelope["params"])
-		live := r.state.ActivePrompt && r.state.PendingResultEventID == ""
+		// A turn being cancelled, by Stop or by the stall watchdog, takes no more
+		// steers: the agent would run one as fresh work once the cancel lands.
+		live := r.state.ActivePrompt && r.state.PendingResultEventID == "" &&
+			!r.cancelRequested && r.stallCancelledAt.IsZero()
 		switch {
 		case steer && !live:
-			// The turn this steer was meant for has ended. Forwarded, the agent
-			// would start a turn of its own that AO has no row for.
+			// The turn this steer was meant for has ended or is ending. Forwarded,
+			// the agent would start a turn of its own that AO has no row for.
 			return acpClientFrames{client: steerTurnEndedFrame(id)}, nil
 		case !steer && (r.state.ActivePrompt || r.state.PendingResultEventID != ""):
 			return acpClientFrames{client: rpcErrorFrame(id, -32602, "previous ACP prompt is active or not acknowledged", nil)}, nil

@@ -172,6 +172,9 @@ type conversation struct {
 	// turnResult is the host's result for the running turn, the answer that
 	// carries its receipt, once one of the turn's prompts has returned it.
 	turnResult *promptAnswer
+	// lastAnswer is the latest answer any of the running turn's prompts gave.
+	// Without a host receipt the turn ends with it.
+	lastAnswer *promptAnswer
 	// promptSteers are SteerPrompt steers waiting to learn whether they took.
 	promptSteers []*promptSteer
 	// steerSettledTurn is the last turn a steer prompt settled. An earlier
@@ -181,7 +184,10 @@ type conversation struct {
 	// returns and before its answer is routed, to fix the order in which
 	// overlapping answers are handled.
 	promptReturned func(seq int)
-	legacyModel    bool
+	// promptSending, when set by a test, runs before a steer prompt checks
+	// whether it may still be written, to let Stop overtake it.
+	promptSending func(seq int)
+	legacyModel   bool
 	// The agent lists model among its own config options, as well as the older model list.
 	modelConfigOption  bool
 	legacyMode         bool
