@@ -44,6 +44,7 @@ import { pollResultIsCurrent, sameServerConfig } from "./sameConfig";
 import { shouldShowLoading } from "./configLoading";
 import { isDesktopUnreachable, shouldKeepPolling, userFacingError } from "./connectionError";
 import {
+	ANSWER_TRUSTED_FOR_MS,
 	classifyLink,
 	EMPTY_LINK_TRACKER,
 	failedPollOutcome,
@@ -442,9 +443,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	const phoneNetworkRef = useRef<PhoneNetwork & { type?: string }>(UNKNOWN_PHONE_NETWORK);
 	const phoneNetworkReportedAtRef = useRef(0);
 	const trustedNetwork = useCallback(
-		() => trustedPhoneNetwork(phoneNetworkRef.current, phoneNetworkReportedAtRef.current, lastAnsweredRequestAt()),
+		() => trustedPhoneNetwork(phoneNetworkRef.current, phoneNetworkReportedAtRef.current, lastAnsweredRequestAt(), Date.now()),
 		[],
 	);
+	// Wakes publishLink when the answer overruling the OS stops counting, in
+	// case no poll or answer comes along to do it.
+	const answerExpiryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const [linkHealth, setLinkHealth] = useState<LinkHealth>("ok");
 	const [phoneNetwork, setPhoneNetwork] = useState<PhoneNetwork>(UNKNOWN_PHONE_NETWORK);
 	const phoneOffline = isPhoneOffline(phoneNetwork);
@@ -452,6 +456,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
 		const trusted = trustedNetwork();
 		setPhoneNetwork((current) => current.connected === trusted.connected && current.internet === trusted.internet ? current : trusted);
 		setLinkHealth(classifyLink(linkTrackerRef.current, trusted, Date.now()));
+		if (answerExpiryRef.current) clearTimeout(answerExpiryRef.current);
+		answerExpiryRef.current = null;
+		const os = phoneNetworkRef.current;
+		if (trusted.connected !== os.connected || trusted.internet !== os.internet) {
+			const left = lastAnsweredRequestAt() + ANSWER_TRUSTED_FOR_MS - Date.now();
+			answerExpiryRef.current = setTimeout(() => { if (mountedRef.current) publishLink(); }, Math.max(0, left));
+		}
 	}, [trustedNetwork]);
 	const recordLink = useCallback((outcome: PollOutcome) => {
 		linkTrackerRef.current = recordPoll(linkTrackerRef.current, outcome, Date.now());
@@ -1071,6 +1082,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			live = false;
 			sub.remove();
 			unsubscribeAnswered();
+			if (answerExpiryRef.current) clearTimeout(answerExpiryRef.current);
 		};
 	}, [publishLink, reloadConfig, restartLoad]);
 

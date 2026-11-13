@@ -6,6 +6,7 @@ import {
 	EMPTY_LINK_TRACKER,
 	failedPollOutcome,
 	networkChangeNeedsRace,
+	ANSWER_TRUSTED_FOR_MS,
 	recordPoll,
 	trustedPhoneNetwork,
 	UNKNOWN_PHONE_NETWORK,
@@ -83,27 +84,34 @@ describe("trustedPhoneNetwork", () => {
 	const offline = { connected: false, internet: false };
 
 	it("believes the OS while nothing has answered since its report", () => {
-		expect(trustedPhoneNetwork(offline, 1_000, 0)).toEqual(offline);
+		expect(trustedPhoneNetwork(offline, 1_000, 0, 0)).toEqual(offline);
 		// Answered before the report: that was the network the phone just left.
-		expect(trustedPhoneNetwork(offline, 1_000, 999)).toEqual(offline);
-		expect(trustedPhoneNetwork(offline, 1_000, 1_000)).toEqual(offline);
+		expect(trustedPhoneNetwork(offline, 1_000, 999, 999)).toEqual(offline);
+		expect(trustedPhoneNetwork(offline, 1_000, 1_000, 1_000)).toEqual(offline);
 	});
 
 	it("lets a request answered after the report overrule an OS that says offline", () => {
-		const trusted = trustedPhoneNetwork(offline, 1_000, 1_001);
+		const trusted = trustedPhoneNetwork(offline, 1_000, 1_001, 1_001);
 		expect(trusted).toEqual(UNKNOWN_PHONE_NETWORK);
 		expect(classifyLink(track(["ok"]), trusted, 0)).toBe("ok");
 	});
 
 	it("overrules only the OS's no, never its yes", () => {
-		expect(trustedPhoneNetwork({ connected: true, internet: false }, 0, 5)).toEqual({ connected: true, internet: undefined });
-		expect(trustedPhoneNetwork(online, 0, 5)).toBe(online);
+		expect(trustedPhoneNetwork({ connected: true, internet: false }, 0, 5, 5)).toEqual({ connected: true, internet: undefined });
+		expect(trustedPhoneNetwork(online, 0, 5, 5)).toBe(online);
+	});
+
+	// On the Pixel, airplane mode did not change a report that already said
+	// offline, so an answer has to stop counting on its own.
+	it("believes the OS again once the last answer is old", () => {
+		expect(trustedPhoneNetwork(offline, 0, 5, 5 + ANSWER_TRUSTED_FOR_MS - 1)).toEqual(UNKNOWN_PHONE_NETWORK);
+		expect(trustedPhoneNetwork(offline, 0, 5, 5 + ANSWER_TRUSTED_FOR_MS)).toEqual(offline);
 	});
 
 	// With Cloud answering, a machine that stops answering is the machine's
 	// problem, not the phone's.
 	it("blames the machine, not the phone, when other requests still answer", () => {
-		const trusted = trustedPhoneNetwork(offline, 0, 5);
+		const trusted = trustedPhoneNetwork(offline, 0, 5, 5);
 		const failures: PollOutcome[] = Array(UNREACHABLE_AFTER_FAILURES).fill("no-answer");
 		expect(classifyLink(track(failures, 0, 100), trusted, 200)).toBe("reconnecting");
 		expect(classifyLink(track(failures, 0, 100), trusted, UNREACHABLE_AFTER_MS)).toBe("unreachable");

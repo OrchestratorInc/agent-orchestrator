@@ -79,6 +79,13 @@ export function recordPoll(tracker: LinkTracker, outcome: PollOutcome, now: numb
 	};
 }
 
+/**
+ * How long an answered request outweighs an OS that says the phone is offline.
+ * Longer than Cloud's 30-second machine sync, so a machine that stops answering
+ * while Cloud still does is not called "Phone offline" between syncs.
+ */
+export const ANSWER_TRUSTED_FOR_MS = 45_000;
+
 /** True only when the OS says so. An unknown state is not offline. */
 export function isPhoneOffline(phone: PhoneNetwork): boolean {
 	return phone.connected === false;
@@ -92,14 +99,17 @@ export function isPhoneOffline(phone: PhoneNetwork): boolean {
  * (#8282). A request sent after the OS made its report, and answered, outweighs
  * that report, so its "no" becomes "not known". Its "yes" stands.
  *
- * A real disconnect still shows at once: the OS changes its report, and every
- * request answered before that change no longer counts.
+ * A real disconnect usually shows at once: the OS changes its report, and every
+ * request answered before that change no longer counts. On a network the OS
+ * already called offline, a disconnect may not change the report at all (seen
+ * on the Pixel in airplane mode), so an answer also stops counting once it is
+ * ANSWER_TRUSTED_FOR_MS old.
  *
  * @param reportedAt when the OS last changed its report, epoch ms
  * @param answeredAt when the newest answered request was sent, epoch ms (0 if none)
  */
-export function trustedPhoneNetwork(os: PhoneNetwork, reportedAt: number, answeredAt: number): PhoneNetwork {
-	if (answeredAt <= reportedAt) return os;
+export function trustedPhoneNetwork(os: PhoneNetwork, reportedAt: number, answeredAt: number, now: number): PhoneNetwork {
+	if (answeredAt <= reportedAt || now - answeredAt >= ANSWER_TRUSTED_FOR_MS) return os;
 	if (os.connected !== false && os.internet !== false) return os;
 	return {
 		connected: os.connected === false ? undefined : os.connected,

@@ -212,14 +212,31 @@ it("does not call the phone offline while its requests are answered", async () =
 	expect(current.unreachable).toBe(false);
 });
 
+// Airplane mode on that network did not change the OS's report: it already
+// said offline. Once nothing has answered for a while, the OS is right.
+it("calls the phone offline when answers stop and the OS report never changes", async () => {
+	state.sessions.mockImplementation(async () => { noteRequestAnswered(Date.now()); return board("Live"); });
+	await mount();
+	await act(async () => { state.onNetwork!({ isConnected: false, isInternetReachable: false, type: "WIFI" }); });
+	await act(async () => { await vi.advanceTimersByTimeAsync(8_000); });
+	expect(current.linkHealth).toBe("ok");
+	state.sessions.mockRejectedValue(new UnreachableError("offline"));
+	await act(async () => { await vi.advanceTimersByTimeAsync(20_000); });
+	expect(current.phoneOffline).toBe(false);
+	await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+	expect(current.phoneOffline).toBe(true);
+	expect(current.linkHealth).toBe("phone-offline");
+});
+
 it("blames the machine, not the phone, when Cloud still answers on that network", async () => {
 	await mount();
 	await act(async () => { state.onNetwork!({ isConnected: false, isInternetReachable: false, type: "WIFI" }); });
 	state.sessions.mockRejectedValue(new UnreachableError("offline"));
-	// Cloud's account sync answers while the machine has stopped.
-	await act(async () => { await vi.advanceTimersByTimeAsync(1_000); noteRequestAnswered(Date.now()); });
-	expect(current.phoneOffline).toBe(false);
-	await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+	// Cloud's account sync answers every 30 seconds while the machine has stopped.
+	for (let i = 0; i < 3; i++) {
+		await act(async () => { await vi.advanceTimersByTimeAsync(i === 0 ? 1_000 : 30_000); noteRequestAnswered(Date.now()); });
+		expect(current.phoneOffline).toBe(false);
+	}
 	expect(current.linkHealth).toBe("unreachable");
 	expect(current.unreachable).toBe(true);
 });
