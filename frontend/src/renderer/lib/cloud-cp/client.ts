@@ -12,6 +12,11 @@ import { createSseFrameParser } from "./sse";
 import type {
 	CloudCpOffering,
 	CloudCpAgentProvider,
+	CloudCpAddAgentAccountRequest,
+	CloudCpAgentAccountResponse,
+	CloudCpAgentAccountsResponse,
+	CloudCpSessionAgentAccount,
+	CloudCpSwitchSessionAgentAccountRequest,
 	CloudCpCancelTurnResponse,
 	CloudCpChatEventsQuery,
 	CloudCpChatEventsResponse,
@@ -577,6 +582,24 @@ export interface CloudCpClient {
 		body: CloudCpPutAgentConnectionRequest,
 		options?: CloudCpRequestOptions,
 	): Promise<CloudCpProviderConnectionResponse>;
+	/** The caller's accounts for every coding agent (when /me reports agentAccounts). */
+	listAgentAccounts(options?: CloudCpRequestOptions): Promise<CloudCpAgentAccountsResponse>;
+	/** Saves a login or key as another account; the agent's first account becomes its default. 409 AGENT_ACCOUNT_DUPLICATE: already saved. */
+	addAgentAccount(body: CloudCpAddAgentAccountRequest, options?: CloudCpRequestOptions): Promise<CloudCpAgentAccountResponse>;
+	renameAgentAccount(accountId: string, name: string, options?: CloudCpRequestOptions): Promise<CloudCpAgentAccountResponse>;
+	/** 409 AGENT_ACCOUNT_IN_USE: a live session runs on it. */
+	removeAgentAccount(accountId: string, options?: CloudCpRequestOptions): Promise<void>;
+	makeAgentAccountDefault(accountId: string, options?: CloudCpRequestOptions): Promise<CloudCpAgentAccountResponse>;
+	/** Signs an account in again: the login must be the same one, of the same kind. */
+	replaceAgentAccountCredential(accountId: string, body: CloudCpPutAgentConnectionRequest, options?: CloudCpRequestOptions): Promise<CloudCpAgentAccountResponse>;
+	getSessionAgentAccount(orgId: string, sessionId: string, options?: CloudCpRequestOptions): Promise<CloudCpSessionAgentAccount>;
+	/** Moves the session's agent to another of its creator's accounts: an interface transition in the session's current interface. */
+	switchSessionAgentAccount(
+		orgId: string,
+		sessionId: string,
+		body: CloudCpSwitchSessionAgentAccountRequest,
+		options?: CloudCpRequestOptions,
+	): Promise<CloudCpStartInterfaceTransitionResponse>;
 	putGitHubPAT(body: CloudCpPutGitHubPATRequest, options?: CloudCpRequestOptions): Promise<CloudCpProviderConnectionResponse>;
 	deleteGitHubPAT(options?: CloudCpRequestOptions): Promise<void>;
 	listGitHubRepos(options?: CloudCpRequestOptions): Promise<CloudCpGitHubReposResponse>;
@@ -1267,6 +1290,19 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 			requestJson("GET", `/orgs/${seg(orgId)}/providers/${seg(agent)}/models`, { signal: o?.signal }),
 		putUserAgentConnection: (agent, body, o) =>
 			requestJson("PUT", `/me/providers/${seg(agent)}`, { body, signal: o?.signal }),
+		listAgentAccounts: (o) => requestJson("GET", "/me/agent-accounts", { signal: o?.signal }),
+		addAgentAccount: (body, o) => requestJson("POST", "/me/agent-accounts", { body, signal: o?.signal }),
+		renameAgentAccount: (accountId, name, o) =>
+			requestJson("PATCH", `/me/agent-accounts/${seg(accountId)}`, { body: { name }, signal: o?.signal }),
+		removeAgentAccount: (accountId, o) => requestVoid("DELETE", `/me/agent-accounts/${seg(accountId)}`, { signal: o?.signal }),
+		makeAgentAccountDefault: (accountId, o) =>
+			requestJson("POST", `/me/agent-accounts/${seg(accountId)}/default`, { signal: o?.signal }),
+		replaceAgentAccountCredential: (accountId, body, o) =>
+			requestJson("PUT", `/me/agent-accounts/${seg(accountId)}/credential`, { body, signal: o?.signal }),
+		getSessionAgentAccount: (orgId, sessionId, o) =>
+			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/agent-account`, { signal: o?.signal }),
+		switchSessionAgentAccount: (orgId, sessionId, body, o) =>
+			requestJson("PUT", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/agent-account`, { body, signal: o?.signal }),
 		putGitHubPAT: (body, o) => requestJson("PUT", "/me/github-pat", { body, signal: o?.signal }),
 		deleteGitHubPAT: (o) => requestVoid("DELETE", "/me/github-pat", { signal: o?.signal }),
 		listGitHubRepos: (o) => requestJson("GET", "/me/github/repos", { signal: o?.signal }),

@@ -401,6 +401,43 @@ describe("native WorkOS authentication", () => {
     });
   });
 
+  describe("Cloud agent accounts", () => {
+    const connect = (account: unknown) => {
+      const handler = mocks.ipcHandle.mock.calls.find(
+        ([channel]) => channel === "cloud:connectProviderAuth",
+      )?.[1] as (event: unknown, input: unknown) => Promise<void>;
+      return handler({}, { baseUrl: "https://cloud.example", provider: "codex", account });
+    };
+    const accountId = "33333333-3333-4333-8333-333333333333";
+
+    beforeEach(async () => {
+      await beginCloudSignIn(dataDir);
+      await handleCloudDeepLink("ao-app://callback?code=code_123&state=state_123", dataDir);
+      mocks.providerAuthenticate.mockResolvedValue({ provider: "codex", credentialType: "auth_json", secret: "{\"tokens\":{}}" });
+    });
+
+    it("saves a login as another account, or signs an account in again", async () => {
+      const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}", { status: 201 }));
+      await connect("new");
+      await connect(accountId);
+      const requests = fetchMock.mock.calls.map(([url, init]) => ({ url: String(url), method: init?.method, body: JSON.parse(String(init?.body)) }));
+      expect(requests).toEqual([
+        { url: "https://cloud.example/api/cloud/v1/me/agent-accounts", method: "POST", body: { agent: "codex", credentialType: "auth_json", secret: "{\"tokens\":{}}" } },
+        { url: `https://cloud.example/api/cloud/v1/me/agent-accounts/${accountId}/credential`, method: "PUT", body: { credentialType: "auth_json", secret: "{\"tokens\":{}}" } },
+      ]);
+    });
+
+    it("refuses an account that is not an id before the login starts", async () => {
+      await expect(connect("../providers/codex")).rejects.toThrow("Invalid Cloud provider login request.");
+      expect(mocks.providerAuthenticate).not.toHaveBeenCalled();
+    });
+
+    it("shows why the control plane refused the login", async () => {
+      vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ code: "AGENT_ACCOUNT_DUPLICATE", message: "That login is already saved." }), { status: 409 }));
+      await expect(connect("new")).rejects.toThrow("That login is already saved.");
+    });
+  });
+
   it("rejects callbacks whose OAuth state does not match", async () => {
     await beginCloudSignIn(dataDir);
     await expect(
