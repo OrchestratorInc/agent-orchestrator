@@ -3975,7 +3975,7 @@
 	"settings.agentAccounts.extraUsage": "追加使用量 {{used}} / {{limit}}",
 	"settings.agentAccounts.sessionAccount": "アカウント",
 	"settings.agentAccounts.handoff": "使用上限に達したら別のアカウントに移動",
-	"settings.agentAccounts.handoffDescription": "Claude Code と Codex に適用されます。Chat セッションが使用上限に達すると、AO は余裕のある別のサインイン済みアカウントに移動し、プロンプトを 1 回だけ再試行します。余裕のあるアカウントがない場合、プロバイダーがリセット時刻を報告していれば、AO はその時刻にセッションを再開します。",
+	"settings.agentAccounts.handoffDescription": "Claude Code と Codex に適用されます。Chat セッションが使用上限に達すると、Orchestrator は余裕のある別のサインイン済みアカウントに移動し、プロンプトを 1 回だけ再試行します。余裕のあるアカウントがない場合、プロバイダーがリセット時刻を報告していれば、Orchestrator はその時刻にセッションを再開します。",
 	"settings.agentAccounts.stayOnAccount": "このアカウントのままにする",
 	"settings.agentAccounts.moved": "{{from}} から {{to}} に移動しました",
 	"settings.agentAccounts.loading": "アカウントを読み込み中…",

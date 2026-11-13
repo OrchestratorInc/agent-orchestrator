@@ -4050,7 +4050,7 @@
 	"settings.agentAccounts.extraUsage": "Uso adicional {{used}} de {{limit}}",
 	"settings.agentAccounts.sessionAccount": "Cuenta",
 	"settings.agentAccounts.handoff": "Pasar a otra cuenta al llegar a un límite de uso",
-	"settings.agentAccounts.handoffDescription": "Se aplica a Claude Code y Codex. Cuando una sesión de Chat llega a un límite de uso, AO la mueve a otra cuenta iniciada con margen y reintenta la indicación una vez. Si ninguna cuenta tiene margen, AO reanuda la sesión en el restablecimiento cuando el proveedor lo indica.",
+	"settings.agentAccounts.handoffDescription": "Se aplica a Claude Code y Codex. Cuando una sesión de Chat llega a un límite de uso, Orchestrator la mueve a otra cuenta iniciada con margen y reintenta la indicación una vez. Si ninguna cuenta tiene margen, Orchestrator reanuda la sesión en el restablecimiento cuando el proveedor lo indica.",
 	"settings.agentAccounts.stayOnAccount": "Quedarse en esta cuenta",
 	"settings.agentAccounts.moved": "Se movió de {{from}} a {{to}}",
 	"settings.agentAccounts.loading": "Cargando cuentas…",

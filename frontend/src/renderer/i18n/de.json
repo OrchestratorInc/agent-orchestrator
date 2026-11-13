@@ -3975,7 +3975,7 @@
 	"settings.agentAccounts.extraUsage": "Zusätzliche Nutzung {{used}} von {{limit}}",
 	"settings.agentAccounts.sessionAccount": "Konto",
 	"settings.agentAccounts.handoff": "Bei einem Nutzungslimit zu einem anderen Konto wechseln",
-	"settings.agentAccounts.handoffDescription": "Gilt für Claude Code und Codex. Erreicht eine Chat-Sitzung ein Nutzungslimit, verschiebt AO sie zu einem anderen angemeldeten Konto mit Spielraum und sendet den Prompt einmal erneut. Hat kein Konto Spielraum, setzt AO die Sitzung beim Zurücksetzen fort, wenn der Anbieter den Zeitpunkt meldet.",
+	"settings.agentAccounts.handoffDescription": "Gilt für Claude Code und Codex. Erreicht eine Chat-Sitzung ein Nutzungslimit, verschiebt Orchestrator sie zu einem anderen angemeldeten Konto mit Spielraum und sendet den Prompt einmal erneut. Hat kein Konto Spielraum, setzt Orchestrator die Sitzung beim Zurücksetzen fort, wenn der Anbieter den Zeitpunkt meldet.",
 	"settings.agentAccounts.stayOnAccount": "Bei diesem Konto bleiben",
 	"settings.agentAccounts.moved": "Von {{from}} zu {{to}} verschoben",
 	"settings.agentAccounts.loading": "Konten werden geladen…",
