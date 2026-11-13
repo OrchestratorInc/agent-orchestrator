@@ -209,7 +209,7 @@ function originReportPreview(text: string): string {
  * at once. The settle time follows how far apart the bursts arrive: a stream that
  * lands every ~50ms settles in STREAM_SETTLE_MS, while one that lands a second at a
  * time (a slow link, a polled transcript) is spread over most of that second rather
- * than revealed in a fraction of it and then left still. Updates are capped at ~15 Hz:
+ * than revealed in a fraction of it and then left still. Updates are capped at ~30 Hz:
  * every one re-parses the message's markdown.
  */
 const STREAM_SETTLE_MS = 140;
@@ -218,7 +218,7 @@ const STREAM_MAX_SETTLE_MS = 700;
 // so text stays close behind the stream instead of trailing a whole burst.
 const STREAM_SETTLE_GAP_SHARE = 0.6;
 const STREAM_MAX_GAP_MS = 1_500;
-const STREAM_MIN_FRAME_MS = 64;
+const STREAM_MIN_FRAME_MS = 32;
 const STREAM_MAX_FRAME_DELTA_MS = 100;
 // Long open Markdown blocks are reparsed on each reveal. Beyond this size,
 // coalesce provider snapshots rather than adding intermediate renders.
