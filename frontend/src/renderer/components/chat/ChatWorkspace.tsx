@@ -184,7 +184,8 @@ import { ChatImageSourceProvider } from "./chat-image-source";
 import type { AgentSwitchProps } from "./AgentSwitchPicker";
 import type { ComposerPromptSuggestion } from "./ComposerEditor";
 import { ChatTokenSkills } from "./sentComposerTokens";
-import { ChatComposer, type ChatComposerHandle, type StoredComposerAttachment } from "./ChatComposer";
+import { ChatComposer, type ChatComposerHandle, type ComposerMentionSource, type StoredComposerAttachment } from "./ChatComposer";
+import type { ComposerMention } from "../../lib/cloud-mentions";
 import { ContextMeter } from "./ContextMeter";
 import { stagedAttachmentParts, attachmentName } from "./messageAttachments";
 import type { QueuedMessageEditOptions } from "../../types/conversation";
@@ -468,7 +469,18 @@ export interface ChatWorkspaceProps {
 		fileReferences?: ChatFileReference[],
 		/** With text delivery, the message as typed, before its file captures were inlined into `text`. */
 		displayText?: string,
+		/** The people and teams the message mentions. */
+		mentions?: ComposerMention[],
 	) => void | Promise<unknown>;
+	/** People and teams in the composer's @ menu (a shared Cloud session). */
+	composerMentions?: ComposerMentionSource;
+	/**
+	 * Open the chat at this message: scroll to it and give it a brief glow
+	 * (opening a mention). A new key asks again; onFocusMessageDone reports
+	 * that it was shown, or could not be.
+	 */
+	focusMessage?: { messageId: string; key: string | number };
+	onFocusMessageDone?: (key: string | number) => void;
 	onDecide?: (requestId: string, decisionId: string) => void;
 	onResolveInput?: (
 		requestId: string,
@@ -631,6 +643,8 @@ export interface ChatWorkspaceProps {
 		attachments?: { mimeType: string; data: string }[],
 		clientMessageId?: string,
 		recoverOnly?: boolean,
+		/** The people and teams the steer mentions. */
+		mentions?: ComposerMention[],
 	) => Promise<ChatSteerOutcome | void>;
 	showSteerButton?: boolean;
 	sendPending?: boolean;
@@ -835,6 +849,9 @@ function ChatWorkspaceContent({
 	importBlock,
 	settingsLocked = false,
 	onComposerInput,
+	composerMentions,
+	focusMessage,
+	onFocusMessageDone,
 	onChooseSettings,
 	onRememberPermissions,
 	showApprovalMode,
@@ -1324,7 +1341,7 @@ function ChatWorkspaceContent({
 	// Keep the dispatch target with this composer instance while attachment staging
 	// awaits. A newer queue editor must not redirect an older ordinary send.
 	const handleComposerSend = useCallback(
-		async (text: string, attachments?: Parameters<NonNullable<typeof onSend>>[1], clientMessageId?: string, retainedContent?: number[], excerpts?: ChatDraftExcerptReference[], fileReferences?: ChatFileReference[], displayText?: string) => {
+		async (text: string, attachments?: Parameters<NonNullable<typeof onSend>>[1], clientMessageId?: string, retainedContent?: number[], excerpts?: ChatDraftExcerptReference[], fileReferences?: ChatFileReference[], displayText?: string, mentions?: ComposerMention[]) => {
 			if (queueEdit) {
 				if (!onEditQueuedTurn) {
 					throw new Error("chat.draft.queueUnavailable");
@@ -1347,6 +1364,7 @@ function ChatWorkspaceContent({
 					await onEditQueuedTurn(queueEdit.turnId, text, {
 						clientMessageId: prepared.draft.queuedEdit.clientMessageId,
 						...(attachments?.length ? { attachments } : {}),
+						...(mentions?.length ? { mentions } : {}),
 						retainedContent: queueEdit.attachments === undefined ? undefined : retainedContent,
 						expectedRevision: queueEdit.expectedRevision,
 					});
@@ -1377,7 +1395,7 @@ function ChatWorkspaceContent({
 			if (wasConversationEmpty.current && composerBoxRef.current) {
 				composerCenteredTopRef.current = composerBoxRef.current.getBoundingClientRect().top;
 			}
-			return onSend?.(text, attachments, clientMessageId, excerpts, fileReferences, displayText);
+			return onSend?.(text, attachments, clientMessageId, excerpts, fileReferences, displayText, mentions);
 		},
 		[draftScope, onEditQueuedTurn, onSend, nativeImages, queueEdit, queuedMessages, updateQueueDraft],
 	);
@@ -1440,6 +1458,7 @@ function ChatWorkspaceContent({
 			attachments?: { mimeType: string; data: string }[],
 			clientMessageId?: string,
 			recoverOnly?: boolean,
+			mentions?: ComposerMention[],
 		) => {
 			const id = clientMessageId ?? crypto.randomUUID();
 			// A recovery re-asks about a steer sent before; the daemon may already have it.
@@ -1452,7 +1471,7 @@ function ChatWorkspaceContent({
 			}
 			const dropEcho = () => setSteerEchoes((current) => current.filter((echo) => echo.clientMessageId !== id));
 			try {
-				const outcome = await stableSteer(text, attachments, id, recoverOnly);
+				const outcome = await stableSteer(text, attachments, id, recoverOnly, mentions);
 				// A refused steer stays in the composer, so its echo goes.
 				if (outcome?.status === "not-accepted") dropEcho();
 				else {
@@ -2172,6 +2191,9 @@ function ChatWorkspaceContent({
 									hasOlder={hasOlder}
 									loadingOlder={loadingOlder}
 									onLoadOlder={onLoadOlder}
+									focusMessage={focusMessage}
+									onFocusMessageDone={onFocusMessageDone}
+									historyPending={historyPending}
 									excerptsEnabled={excerptsEnabled}
 									onDecide={onDecide}
 									busy={busy}
@@ -2267,6 +2289,7 @@ function ChatWorkspaceContent({
 										approval={composerApproval}
 										elicitation={composerElicitation}
 										onSend={handleComposerSend}
+										mentions={composerMentions}
 						fileReferencesEnabled={fileReferencesEnabled && Boolean(snapshot.supportsFileReferences)}
 						fileReferenceDelivery={fileReferenceDelivery}
 						messageByteLimit={messageByteLimit}
@@ -3055,6 +3078,8 @@ function ControllerBanner({
  * an unbounded history in every snapshot response.
  */
 const CHAT_VIRTUALIZE_THRESHOLD = 20;
+/** How long an opened mention's message glows. */
+const MENTION_FOCUS_GLOW_MS = 2000;
 /** How long the welcome heading takes to fade out on the first send. */
 const WELCOME_FADE_MS = 150;
 /** Opening a chat snaps to the end for this long while rows measure and history arrives. */
@@ -3116,6 +3141,9 @@ export function Timeline({
 	hasOlder,
 	loadingOlder,
 	onLoadOlder,
+	focusMessage,
+	onFocusMessageDone,
+	historyPending: timelineHistoryPending = false,
 	excerptsEnabled,
 	onDecide,
 	busy,
@@ -3165,6 +3193,11 @@ export function Timeline({
 	hasOlder?: boolean;
 	loadingOlder?: boolean;
 	onLoadOlder?: () => void;
+	/** Scroll to this message and give it a brief glow (see ChatWorkspaceProps). */
+	focusMessage?: { messageId: string; key: string | number };
+	onFocusMessageDone?: (key: string | number) => void;
+	/** The history is still loading: a message not in it yet may still arrive. */
+	historyPending?: boolean;
 	excerptsEnabled?: boolean;
 	onDecide?: (requestId: string, decisionId: string) => void;
 	busy?: boolean;
@@ -4909,6 +4942,74 @@ export function Timeline({
 		if (scrollContent.current) observer.observe(scrollContent.current);
 		return () => observer.disconnect();
 	}, [groups.length, captureViewportResize, virtualizer]);
+
+	// Opening a mention lands on its message, before the first paint when the
+	// message is already here (the cache its arrival filled), and gives it a
+	// brief glow. The view stops following the end there; it follows again once
+	// the reader scrolls back down. Each request key lands once; one the history
+	// can't reach (gone, or past the pages it reads) opens the chat as usual.
+	const focusRequest = useRef<{ key: string | number; landed: boolean; tries: number; olderAt?: number }>(undefined);
+	const focusGlow = useRef<{ element: HTMLElement; timer: number } | undefined>(undefined);
+	const [focusRetry, setFocusRetry] = useState(0);
+	useLayoutEffect(() => {
+		if (!focusMessage) return undefined;
+		if (focusRequest.current?.key !== focusMessage.key) focusRequest.current = { key: focusMessage.key, landed: false, tries: 0 };
+		const request = focusRequest.current;
+		if (request.landed) return undefined;
+		const done = () => {
+			request.landed = true;
+			onFocusMessageDone?.(focusMessage.key);
+		};
+		const index = groups.findIndex((group) => group.items.some((item) => item.id === focusMessage.messageId));
+		if (index < 0) {
+			if (timelineHistoryPending || loadingOlder) return undefined;
+			if (hasOlder && onLoadOlder && request.olderAt !== groups.length) {
+				request.olderAt = groups.length;
+				onLoadOlder();
+				return undefined;
+			}
+			done();
+			return undefined;
+		}
+		const node = scroller.current;
+		const source = Array.from(scrollContent.current?.querySelectorAll<HTMLElement>("[data-chat-focus-id]") ?? [])
+			.find((element) => element.dataset.chatFocusId === focusMessage.messageId);
+		if (!source || !node) {
+			if (virtualized) virtualizer.scrollToIndex(index, { align: "center" });
+			if (request.tries++ >= 20) {
+				done();
+				return undefined;
+			}
+			const timer = window.setTimeout(() => setFocusRetry((value) => value + 1), 50);
+			return () => window.clearTimeout(timer);
+		}
+		pendingReading.current = undefined;
+		releaseFollow();
+		const sourceRect = source.getBoundingClientRect();
+		const viewport = node.getBoundingClientRect();
+		const inset = sourceRect.height > viewport.height - 24 ? 12 : (viewport.height - sourceRect.height) / 2;
+		node.scrollTop = Math.max(0, node.scrollTop + sourceRect.top - viewport.top - inset);
+		markWritten(node.scrollTop);
+		lastScrollTop.current = node.scrollTop;
+		if (focusGlow.current) {
+			window.clearTimeout(focusGlow.current.timer);
+			delete focusGlow.current.element.dataset.mentionFocus;
+		}
+		source.dataset.mentionFocus = "";
+		const glowing = source;
+		focusGlow.current = {
+			element: glowing,
+			timer: window.setTimeout(() => {
+				delete glowing.dataset.mentionFocus;
+				focusGlow.current = undefined;
+			}, MENTION_FOCUS_GLOW_MS),
+		};
+		done();
+		return undefined;
+	}, [focusMessage, focusRetry, groups, hasOlder, loadingOlder, onFocusMessageDone, onLoadOlder, releaseFollow, markWritten, timelineHistoryPending, virtualRows, virtualized, virtualizer]);
+	useEffect(() => () => {
+		if (focusGlow.current) window.clearTimeout(focusGlow.current.timer);
+	}, []);
 
 	// The pause-then-resume for a reader who only nudged up a little: armed by their
 	// scroll, re-armed by each further scroll, dropped once they go past the band or

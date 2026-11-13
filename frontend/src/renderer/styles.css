@@ -3001,6 +3001,30 @@ html.sidebar-reordering * {
 	border-top-right-radius: 0;
 }
 
+/* Opening a mention: its message glows briefly, so the eye lands on it. */
+[data-mention-focus] .cursor-chat-human-message,
+[data-mention-focus] [data-chat-focus-bubble] {
+	animation: mention-focus 2s ease-out;
+}
+
+@keyframes mention-focus {
+	0%,
+	35% {
+		box-shadow: 0 0 0 1px var(--color-accent), 0 0 0 5px var(--color-accent-weak);
+	}
+	100% {
+		box-shadow: 0 0 0 1px transparent, 0 0 0 5px transparent;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	[data-mention-focus] .cursor-chat-human-message,
+	[data-mention-focus] [data-chat-focus-bubble] {
+		animation: none;
+		box-shadow: 0 0 0 1px var(--color-accent);
+	}
+}
+
 /* Dragging remains visible without changing the composer's structural edge. */
 .cursor-chat-composer[data-dragging] {
 	background: color-mix(in oklch, var(--composer-bg) 94%, var(--color-logo-accent));
