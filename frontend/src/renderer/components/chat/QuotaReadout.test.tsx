@@ -20,20 +20,20 @@ describe("QuotaReadout", () => {
 		expect(tightestQuotaWindow(limits({ primaryUsedPercent: -1, secondaryUsedPercent: -1 }))).toBeUndefined();
 	});
 
-	it("names the window and the percentage, amber then red past 90%", () => {
+	it("warns without a percentage once close", () => {
 		const { rerender } = render(<QuotaReadout quota={{ percent: 82, kind: "session", resetsIn: 8_100 }} />);
-		expect(screen.getByText("Session")).toBeInTheDocument();
-		expect(screen.getByText("82%").className).toContain("text-status-in-review");
+		expect(screen.getByText("Approaching limit")).toBeInTheDocument();
+		expect(screen.queryByText(/%/)).not.toBeInTheDocument();
 
 		rerender(<QuotaReadout quota={{ percent: 94, kind: "weekly" }} />);
-		expect(screen.getByText("Weekly")).toBeInTheDocument();
-		expect(screen.getByText("94%").className).toContain("text-status-exited");
+		expect(screen.getByText("Approaching weekly limit")).toBeInTheDocument();
+		expect(screen.queryByText(/%/)).not.toBeInTheDocument();
 	});
 
 	it("is a clock and the time left once full", () => {
 		render(<QuotaReadout quota={{ percent: 100, kind: "session", resetsIn: 8_100 }} />);
 		expect(screen.getByLabelText("Resets in 2h 15m")).toHaveTextContent(/^2h 15m$/);
-		expect(screen.queryByText("Session")).not.toBeInTheDocument();
+		expect(screen.queryByText("Approaching limit")).not.toBeInTheDocument();
 		expect(screen.queryByText("100%")).not.toBeInTheDocument();
 	});
 

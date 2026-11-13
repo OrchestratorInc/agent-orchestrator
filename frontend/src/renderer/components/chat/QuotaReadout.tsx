@@ -6,19 +6,18 @@
  * because that has become the thing most likely to stop the next turn. The
  * picker still opens on click and names the model in its hover title.
  *
- * It reads as the window's name and the percentage used, amber then red. Once
- * the window is full, it is a clock and the time until it resets.
+ * Close to the limit it is a warning; once the window is full, a clock and the
+ * time until it resets. Only the icon carries colour.
  */
 
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
-import { Clock } from "@/components/app-icons";
+import { AlertTriangle, Clock } from "@/components/app-icons";
 import { cn } from "../../lib/utils";
 import type { ConversationRateLimits } from "../../types/conversation";
 
-/** Where the readout replaces the model name, and where it turns red. */
+/** Where the warning replaces the model name. */
 export const QUOTA_WARN = 75;
-export const QUOTA_CRITICAL = 90;
 
 export type QuotaWindow = { percent: number; resetsIn?: number; kind: "session" | "weekly" };
 
@@ -53,17 +52,14 @@ export function formatQuotaReset(seconds: number): string {
 
 export function QuotaReadout({ quota }: { quota: QuotaWindow }) {
 	const { t } = useTranslation();
-	const percent = Math.min(100, Math.max(0, Math.round(quota.percent)));
-	const critical = percent >= QUOTA_CRITICAL;
 	const resets = quota.resetsIn && quota.resetsIn > 0 ? formatQuotaReset(quota.resetsIn) : undefined;
-	const label = t(quota.kind === "session" ? "chat.quota.session" : "chat.quota.weekly");
 	const appear = "animate-[quota-in_150ms_var(--ease-out)] motion-reduce:animate-none";
 
 	// Full: nothing is left to use, so only when it comes back matters.
-	if (percent >= 100) {
+	if (quota.percent >= 100) {
 		return (
-			<span data-quota-readout="" data-severity="full" className={cn("flex min-w-0 items-center gap-1.5 text-status-exited", appear)}>
-				<Clock aria-hidden="true" className="size-3.5 shrink-0" />
+			<span data-quota-readout="" data-severity="full" className={cn("flex min-w-0 items-center gap-1.5 text-foreground", appear)}>
+				<Clock aria-hidden="true" className="size-3.5 shrink-0 text-status-exited" />
 				{resets ? (
 					<span className="tabular-nums" aria-label={t("chat.quota.resetsIn", { time: resets })}>{resets}</span>
 				) : (
@@ -73,10 +69,11 @@ export function QuotaReadout({ quota }: { quota: QuotaWindow }) {
 		);
 	}
 
+	// Close: a warning is enough. The exact share lives in the hover title.
 	return (
-		<span data-quota-readout="" data-severity={critical ? "critical" : "warn"} className={cn("flex min-w-0 items-center gap-1.5", appear)}>
-			<span className="shrink-0 text-muted-foreground">{label}</span>
-			<span className={cn("shrink-0 tabular-nums", critical ? "text-status-exited" : "text-status-in-review")}>{percent}%</span>
+		<span data-quota-readout="" data-severity="warn" className={cn("flex min-w-0 items-center gap-1.5 text-foreground", appear)}>
+			<AlertTriangle aria-hidden="true" className="size-3.5 shrink-0 text-status-in-review" />
+			<span className="truncate">{t(quota.kind === "session" ? "chat.quota.approaching" : "chat.quota.approachingWeekly")}</span>
 		</span>
 	);
 }
