@@ -158,7 +158,11 @@ func TestBugTriageSkillInstallsCleanlyAndUninstalls(t *testing.T) {
 func TestBugTriageSkillRepairsAnInterruptedInstall(t *testing.T) {
 	for name, marker := range map[string]bool{"marker without skill": true, "empty folder": false, "temp file only": false} {
 		t.Run(name, func(t *testing.T) {
-			skillsDir := t.TempDir()
+			workspace := t.TempDir()
+			if out, err := exec.Command("git", "-C", workspace, "init", "-q").CombinedOutput(); err != nil {
+				t.Fatalf("git init: %v: %s", err, out)
+			}
+			skillsDir := filepath.Join(workspace, "skills")
 			skillDir := filepath.Join(skillsDir, "bug-triage")
 			if err := os.MkdirAll(skillDir, 0o750); err != nil {
 				t.Fatal(err)
@@ -182,6 +186,11 @@ func TestBugTriageSkillRepairsAnInterruptedInstall(t *testing.T) {
 			}
 			if managed, err := bugTriageManaged(skillDir); err != nil || !managed {
 				t.Fatalf("repaired skill is not marked as AO's: managed=%v err=%v", managed, err)
+			}
+			// An interrupted write's temp file must not stay behind as dirt.
+			status, err := exec.Command("git", "-C", workspace, "status", "--porcelain", "--untracked-files=all").CombinedOutput()
+			if err != nil || len(status) != 0 {
+				t.Fatalf("repair left untracked files: %v\n%s", err, status)
 			}
 		})
 	}

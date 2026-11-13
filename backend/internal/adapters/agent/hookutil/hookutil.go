@@ -34,7 +34,8 @@ const (
 // folder. Unlike using-ao, the name is generic: a project may have its own
 // bug-triage, so a folder AO does not own stays and the session still starts.
 // An empty folder (an install that stopped before its marker) is nobody's,
-// even if that install left one of AtomicWriteFile's temp files.
+// even if that install left one of AtomicWriteFile's temp files, which the
+// install then removes.
 func InstallBugTriageSkill(skillsDir string) error {
 	skillDir := filepath.Join(skillsDir, skillassets.BugTriageSkillName)
 	if _, err := os.Lstat(skillDir); err == nil {
@@ -60,6 +61,16 @@ func InstallBugTriageSkill(skillsDir string) error {
 	}
 	if err := os.MkdirAll(skillDir, 0o750); err != nil {
 		return fmt.Errorf("create bug-triage skill: %w", err)
+	}
+	// Temp files from an interrupted write would stay untracked in git status.
+	stale, err := filepath.Glob(filepath.Join(skillDir, ".ao-tmp-*"))
+	if err != nil {
+		return fmt.Errorf("find bug-triage temp files: %w", err)
+	}
+	for _, path := range stale {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("remove bug-triage temp file: %w", err)
+		}
 	}
 	if err := AtomicWriteFile(filepath.Join(skillDir, bugTriageMarkerFile), []byte(bugTriageSentinel+"\n"), 0o600); err != nil {
 		return fmt.Errorf("write bug-triage marker: %w", err)
