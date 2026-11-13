@@ -79,8 +79,41 @@ describe("ActivityRail", () => {
 		expect(rows[3]).toContain("fix/dashboard");
 		// Two days, each its own list under its divider.
 		expect(within(rail).getAllByRole("list")).toHaveLength(2);
-		// No profile pictures: every node is a glyph.
+		// No profile pictures: every node is a badge.
 		expect(rail.querySelector("img")).toBeNull();
+	});
+
+	it("keeps colour for what it means on a PR: opened and approved, merged, closed and changes requested", () => {
+		const review = (reviewerId: string, verdict: "approved" | "changes_requested", submittedAt: string) => ({ reviewerId, verdict, submittedAt, autoInjectReview: false, reviewUrl: `https://github.com/acme/repo/pull/7#${reviewerId}` });
+		render(
+			<ActivityRail
+				commits={[{ sha: "aaaaaaa1", subject: "Fix the chart", timestamp: "2026-10-20T09:00:00Z", author: "ada" }]}
+				prs={[
+					pr({
+						state: "merged",
+						createdAt: "2026-10-20T10:00:00Z",
+						stateChangedAt: "2026-10-20T15:00:00Z",
+						conversation: [{ id: "c1", author: "grace", isBot: false, body: "Looks good", createdAt: "2026-10-20T11:00:00Z" }],
+						review: {
+							decision: "approved", hasUnresolvedHumanComments: false, unresolvedBy: [],
+							reviews: [review("linus", "changes_requested", "2026-10-20T12:00:00Z"), review("grace", "approved", "2026-10-20T13:00:00Z")],
+						},
+					}),
+					pr({ url: `${URL}8`, number: 8, state: "closed", createdAt: "2026-10-20T10:30:00Z", stateChangedAt: "2026-10-20T14:00:00Z" }),
+				]}
+				session={session}
+				status={<span>Idle</span>}
+			/>,
+		);
+		const toneOf = (text: string) => screen.getByText((_, node) => node?.tagName === "LI" && (node.textContent ?? "").includes(text)).querySelector("[data-tone]")?.getAttribute("data-tone");
+		expect(toneOf("Merged #7")).toBe("merged");
+		expect(toneOf("Closed #8")).toBe("error");
+		expect(toneOf("grace approved")).toBe("success");
+		expect(toneOf("linus requested changes")).toBe("error");
+		expect(toneOf("ada opened #7")).toBe("success");
+		expect(toneOf("grace commented")).toBe("neutral");
+		expect(toneOf("ada pushed a commit")).toBe("neutral");
+		expect(toneOf("Created workspace")).toBe("neutral");
 	});
 
 	it("lists a row's folded commits when it is opened", async () => {

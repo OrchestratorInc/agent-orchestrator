@@ -1,4 +1,4 @@
-import { Check, ChevronRight, CircleCheck, CircleX, CornerDownRight, Eye, GitCommitHorizontal, GitMerge, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, MessageSquare, Plus, type LucideIcon } from "lucide-react";
+import { Check, ChevronRight, Eye, FileDiff, GitBranch, GitCommitHorizontal, GitMerge, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, MessageSquare, MessageSquareCode, Reply, type LucideIcon } from "lucide-react";
 import { Fragment, useMemo, useState, type ReactNode } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import type { SessionPRSummary } from "../hooks/useSessionScmSummary";
@@ -9,21 +9,31 @@ import { sessionBranchPresentation } from "../lib/session-branch";
 import { cn } from "../lib/utils";
 import { STANDALONE_WORKSPACE_ID, type WorkspaceSession } from "../types/workspace";
 
-// Each kind's glyph. The rail stays monochrome: the glyph and the words say
-// what happened, and the live status above it is its only colour.
-const KIND_ICON: Record<RailKind, LucideIcon> = {
-	created: Plus,
-	commits: GitCommitHorizontal,
-	opened: GitPullRequest,
-	draft: GitPullRequestDraft,
-	merged: GitMerge,
-	closed: GitPullRequestClosed,
-	comment: MessageSquare,
-	reviewNotes: Eye,
-	reply: CornerDownRight,
-	approved: CircleCheck,
-	changes: CircleX,
-	reviewed: Eye,
+type RailTone = "neutral" | "success" | "merged" | "error";
+
+// Each kind's badge: a glyph on a soft disc. Most are neutral; colour is kept
+// for what it already means on a PR: green for opened and approved, purple
+// for merged, red for closed and changes requested.
+const KIND_BADGE: Record<RailKind, { icon: LucideIcon; tone: RailTone }> = {
+	created: { icon: GitBranch, tone: "neutral" },
+	commits: { icon: GitCommitHorizontal, tone: "neutral" },
+	opened: { icon: GitPullRequest, tone: "success" },
+	draft: { icon: GitPullRequestDraft, tone: "neutral" },
+	merged: { icon: GitMerge, tone: "merged" },
+	closed: { icon: GitPullRequestClosed, tone: "error" },
+	comment: { icon: MessageSquare, tone: "neutral" },
+	reviewNotes: { icon: MessageSquareCode, tone: "neutral" },
+	reply: { icon: Reply, tone: "neutral" },
+	approved: { icon: Check, tone: "success" },
+	changes: { icon: FileDiff, tone: "error" },
+	reviewed: { icon: Eye, tone: "neutral" },
+};
+
+const TONE_CLASS: Record<RailTone, string> = {
+	neutral: "bg-muted text-muted-foreground",
+	success: "bg-success/15 text-success",
+	merged: "bg-status-merged/15 text-status-merged",
+	error: "bg-error/15 text-error",
 };
 
 // What people said on a PR: these rows open the PR at its comments.
@@ -34,7 +44,7 @@ const COMMIT_LIST_LIMIT = 10;
 
 /**
  * The session's activity as a rail, newest first, under the live status: a
- * glyph for each thing that happened and who did it, under day dividers. What
+ * badge for each thing that happened and who did it, under day dividers. What
  * people said on the PR is on it too: comments, review notes and replies,
  * approvals and change requests. A row about a PR opens its tab, at the
  * comments when the row is about a comment; a row of commits opens to list them.
@@ -107,19 +117,19 @@ export function ActivityRail({ commits, hostId, prs, session, status, statusAt }
 function RailRow({ event, last, onOpen, standalone, time }: { event: RailEvent; last: boolean; onOpen?: () => void; standalone: boolean; time: string }) {
 	const { t } = useTranslation();
 	const [open, setOpen] = useState(false);
-	const Icon = KIND_ICON[event.kind];
+	const { icon: Icon, tone } = KIND_BADGE[event.kind];
 	const listable = event.kind === "commits" && (event.commits?.length ?? 0) > 1;
 	const title = railTitle(event, t(standalone ? "inspector.timeline.createdSession" : "inspector.timeline.createdWorkspace"));
 	const detail = event.kind === "commits" && event.detail ? <><span className="font-mono">{event.detail.slice(0, 7)}</span>{event.detail.slice(7)}</> : event.detail;
 	const content = (
 		<>
 			<span className="relative flex justify-center pt-px">
-				<span aria-hidden="true" className="inline-flex size-5 items-center justify-center rounded-full border border-border bg-background text-muted-foreground">
-					<Icon className="size-3" strokeWidth={2} />
+				<span aria-hidden="true" className={cn("inline-flex size-6 items-center justify-center rounded-full", TONE_CLASS[tone])} data-tone={tone}>
+					<Icon className="size-3.5" strokeWidth={2.25} />
 				</span>
-				{last ? null : <span aria-hidden="true" className="absolute top-6 -bottom-2 w-px bg-border/60" />}
+				{last ? null : <span aria-hidden="true" className="absolute top-7 -bottom-2 w-px bg-border/60" />}
 			</span>
-			<span className="flex min-w-0 flex-col">
+			<span className="flex min-w-0 flex-col pt-0.5">
 				<span className="flex min-w-0 items-center gap-1 text-sm text-muted-foreground">
 					<span className="truncate">{title}</span>
 					{listable ? <ChevronRight aria-hidden="true" className={cn("size-3 shrink-0 text-passive transition-transform duration-150", open && "rotate-90")} /> : null}
@@ -140,11 +150,11 @@ function RailRow({ event, last, onOpen, standalone, time }: { event: RailEvent; 
 					</span>
 				) : null}
 			</span>
-			<span className="shrink-0 pt-0.5 text-xs text-passive tabular-nums">{time}</span>
+			<span className="shrink-0 pt-1 text-xs text-passive tabular-nums">{time}</span>
 		</>
 	);
 	const action = onOpen ?? (listable ? () => setOpen((value) => !value) : undefined);
-	const rowClass = "grid w-full grid-cols-[20px_minmax(0,1fr)_auto] gap-x-2.5 rounded-md py-1.5 pr-1 text-left";
+	const rowClass = "grid w-full grid-cols-[24px_minmax(0,1fr)_auto] gap-x-2.5 rounded-md py-1.5 pr-1 text-left";
 	return (
 		<li className="min-w-0">
 			{action ? (
