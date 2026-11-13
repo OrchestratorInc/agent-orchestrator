@@ -2512,13 +2512,37 @@ describe("toSnapshot agent switches", () => {
 	it("draws chat.agent_switched as the Switched line a local switch draws", () => {
 		const events = [
 			{ sessionId: session.id, sequence: 1, type: "chat.user_message", payload: { text: "hi", turnId: "turn-1" }, createdAt: session.updatedAt },
-			{ sessionId: session.id, sequence: 2, type: "chat.agent_switched", createdAt: session.updatedAt,
+			{ sessionId: session.id, sequence: 2, type: "chat.turn_started", payload: { turnId: "turn-1" }, createdAt: session.updatedAt },
+			{ sessionId: session.id, sequence: 3, type: "chat.turn_completed", payload: { turnId: "turn-1" }, createdAt: session.updatedAt },
+			{ sessionId: session.id, sequence: 4, type: "chat.agent_switched", createdAt: session.updatedAt,
 				payload: { transitionId: "t-1", sourceHarness: "codex", targetHarness: "claude-code", sourceModel: "gpt-5", targetModel: "claude-opus-4-5", targetReasoningEffort: "high", resumed: false } },
 		] as CloudCpClientEvent[];
 		const marker = toSnapshot(session, events).items.find((item) => item.kind === "activity" && item.detail?.event === "provider_switch");
 		expect(marker).toMatchObject({
-			sequence: 2,
+			sequence: 4,
 			detail: { event: "provider_switch", sourceHarness: "codex", targetHarness: "claude-code", sourceModel: "gpt-5", targetModel: "claude-opus-4-5", targetEffort: "high" },
 		});
+	});
+
+	it("draws the Switched line above the message the switch held for the new agent", () => {
+		const events = [
+			{ sessionId: session.id, sequence: 1, type: "chat.user_message", payload: { text: "first", turnId: "turn-1" }, createdAt: session.updatedAt },
+			{ sessionId: session.id, sequence: 2, type: "chat.turn_started", payload: { turnId: "turn-1" }, createdAt: session.updatedAt },
+			{ sessionId: session.id, sequence: 3, type: "chat.turn_completed", payload: { turnId: "turn-1" }, createdAt: session.updatedAt },
+			// Sent while the switch ran: recorded before the switch commits, answered after.
+			{ sessionId: session.id, sequence: 4, type: "chat.user_message", payload: { text: "held", turnId: "turn-2" }, createdAt: session.updatedAt },
+			{ sessionId: session.id, sequence: 5, type: "chat.agent_switched", createdAt: session.updatedAt,
+				payload: { transitionId: "t-1", sourceHarness: "claude-code", targetHarness: "codex", resumed: false } },
+			{ sessionId: session.id, sequence: 6, type: "chat.turn_started", payload: { turnId: "turn-2" }, createdAt: session.updatedAt },
+			{ sessionId: session.id, sequence: 7, type: "chat.assistant_delta", payload: { turnId: "turn-2", text: "answer" }, createdAt: session.updatedAt },
+			{ sessionId: session.id, sequence: 8, type: "chat.turn_completed", payload: { turnId: "turn-2" }, createdAt: session.updatedAt },
+		] as CloudCpClientEvent[];
+		const items = toSnapshot(session, events).items;
+		const marker = items.findIndex((item) => item.kind === "activity" && item.detail?.event === "provider_switch");
+		const held = items.findIndex((item) => item.kind === "message" && item.role === "user" && item.text === "held");
+		const first = items.findIndex((item) => item.kind === "message" && item.role === "user" && item.text === "first");
+		expect(first).toBeLessThan(marker);
+		expect(marker).toBeLessThan(held);
+		expect(items[marker].sequence).toBeLessThan(items[held].sequence);
 	});
 });

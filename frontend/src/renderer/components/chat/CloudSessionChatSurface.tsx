@@ -896,7 +896,18 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 		}
 		if (event.type === "chat.agent_switched") {
 			const activity = agentSwitchedActivity(event);
-			if (activity) items.push(activity);
+			if (!activity) continue;
+			// A message sent while the switch ran was held for the new agent, which
+			// answers it: the line goes above it, where a local switch (done before
+			// the message is sent) draws it.
+			const held = items.findIndex((item) => item.kind === "message" && item.role === "user" &&
+				item.turnId !== undefined && turns.get(item.turnId)?.state === "queued");
+			if (held >= 0) {
+				activity.sequence = items[held].sequence - 0.5;
+				items.splice(held, 0, activity);
+			} else {
+				items.push(activity);
+			}
 			continue;
 		}
 		if (event.type === "workspace.setup") {
@@ -1271,8 +1282,9 @@ export function CloudSessionChatSurface({
 		// A deleted session has no worker and cannot be resumed (only restored),
 		// so it is not asked. Keying on the worker generation reloads the
 		// catalog for each new worker, including the one a restore starts,
-		// instead of keeping an answer from a worker that is gone.
-		queryKey: ["cloud-chat-models", cloud?.orgId ?? "", session.id, session.terminalGeneration ?? ""],
+		// instead of keeping an answer from a worker that is gone. An agent
+		// switch keeps the worker generation, so the agent keys it too.
+		queryKey: ["cloud-chat-models", cloud?.orgId ?? "", session.id, session.provider, session.terminalGeneration ?? ""],
 		enabled: Boolean(cloud && ready && workerConnected && session.isTerminated !== true &&
 			(session.provider === "codex" || session.provider === "claude-code")),
 		// The TUI may change its native model while Chat is unmounted.
