@@ -17,7 +17,7 @@ ao
 ├── project                       add, ls, get, set-config, rm
 ├── spawn                         Create a worker or orchestrator session
 ├── session                       ls, get, kill, restore, rename, cleanup, delete,
-│                                 claim-pr, auto-fix, exit-agent, resume-agent
+│                                 claim-pr, pr-feedback, exit-agent, resume-agent
 ├── automation                    create, list, get, update, delete, runs
 ├── cue                           create, list
 ├── report                        Report worker progress or artifacts
@@ -130,7 +130,7 @@ Important flags include:
 | `--issue <id>` | Associate a tracker issue. |
 | `--claim-pr <ref>` | Claim an existing pull request after spawning. |
 | `--no-takeover` | Refuse a PR already owned by another active session. |
-| `--no-auto-fix` | Start with automatic CI and review-comment fixing and native auto-review off, before claiming. Use it to review someone else's PR. |
+| `--no-pr-feedback` | Start with automatic CI and review-comment fixing and native auto-review off, before claiming. Use it to review someone else's PR. |
 | `--skip-agent-check` | Skip only the CLI-side install/auth preflight. |
 
 Orchestrator chooses a project in this order: `--project`, `AO_PROJECT_ID`, the project for `AO_SESSION_ID`, then the closest registered project containing the current directory. Before spawning, Orchestrator refreshes the selected agent's readiness unless you use `--skip-agent-check`. Readiness is advisory.
@@ -149,7 +149,7 @@ Orchestrator chooses a project in this order: `--project`, `AO_PROJECT_ID`, the 
 | `ao session cleanup` | Reclaim eligible terminated workspaces; supports `--dry-run`. Workspaces already released are not listed again. |
 | `ao session delete <id>` | Permanently delete a terminated session and its AO history once its worktree is cleaned up; `--cleanup` cleans it up first, never forced. Branches, PRs and agent account usage totals are kept. |
 | `ao session claim-pr [<session-id>] <pr-ref>` | Attach an existing PR; omitting the session uses `AO_SESSION_ID`. |
-| `ao session auto-fix [<session-id>] --ci on\|off --reviews on\|off --auto-review on\|off` | Turn the session's automatic CI and review-comment fixing, or its native auto-review, on or off. `--ci` also covers merge conflicts. |
+| `ao session pr-feedback [<session-id>] --ci on\|off --reviews on\|off --auto-review on\|off` | Turn the session's automatic CI and review-comment fixing, or its native auto-review, on or off. `--ci` also covers merge conflicts. |
 
 Most lookup commands accept `--project` to disambiguate a session ID.
 

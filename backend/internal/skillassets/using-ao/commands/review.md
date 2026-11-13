@@ -9,12 +9,12 @@ the review commands default to the calling session (`AO_SESSION_ID`), so
 the implementation worker's session id.
 
 For a requested review of someone else's PR, spawn a normal worker for that
-review alone with `ao spawn --claim-pr <pr-ref> --no-takeover --no-auto-fix`.
+review alone with `ao spawn --claim-pr <pr-ref> --no-takeover --no-pr-feedback`.
 It claims the PR with automatic CI and review-comment fixing and native
 auto-review off, so Orchestrator never sends it the PR's CI failures, merge
 conflicts, or review comments, and never starts its native reviewer on it. The PR is not the user's: the worker submits the requested provider
 review and comments directly and changes nothing else unless the user asks. To
-take the PR over later, the worker runs `ao session auto-fix --ci on --reviews on`. Do not run `ao review trigger`,
+take the PR over later, the worker runs `ao session pr-feedback --ci on --reviews on`. Do not run `ao review trigger`,
 create an ownership-only placeholder, or require an implementation owner just
 to review the PR.
 

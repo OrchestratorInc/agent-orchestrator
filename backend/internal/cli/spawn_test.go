@@ -139,11 +139,11 @@ func TestSpawnClaimPRWiring(t *testing.T) {
 	}
 }
 
-// TestSpawnNoAutoFixTurnsSwitchesOffBeforeClaim: a reviewer spawned with
-// --no-auto-fix must have every switch off before the PR is claimed, so the
+// TestSpawnNoPRFeedbackTurnsSwitchesOffBeforeClaim: a reviewer spawned with
+// --no-pr-feedback must have every switch off before the PR is claimed, so the
 // claimed PR's CI failures and review comments never reach the agent and the
 // native reviewer never starts on it.
-func TestSpawnNoAutoFixTurnsSwitchesOffBeforeClaim(t *testing.T) {
+func TestSpawnNoPRFeedbackTurnsSwitchesOffBeforeClaim(t *testing.T) {
 	cfg := setConfigEnv(t)
 	var requests []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -183,9 +183,9 @@ func TestSpawnNoAutoFixTurnsSwitchesOffBeforeClaim(t *testing.T) {
 	t.Cleanup(srv.Close)
 	writeRunFileFor(t, cfg, srv)
 
-	_, errOut, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "spawn", "--project", "demo", "--agent", "codex", "--name", "review-pr-142", "--claim-pr", "142", "--no-takeover", "--no-auto-fix")
+	_, errOut, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "spawn", "--project", "demo", "--agent", "codex", "--name", "review-pr-142", "--claim-pr", "142", "--no-takeover", "--no-pr-feedback")
 	if err != nil {
-		t.Fatalf("spawn --no-auto-fix failed: %v stderr=%s", err, errOut)
+		t.Fatalf("spawn --no-pr-feedback failed: %v stderr=%s", err, errOut)
 	}
 	want := []string{
 		"GET /api/v1/projects/demo",

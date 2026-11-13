@@ -52,7 +52,7 @@ type sessionClaimPROptions struct {
 	noTakeover bool
 }
 
-type sessionAutoFixOptions struct {
+type sessionPRFeedbackOptions struct {
 	project    string
 	ci         string
 	reviews    string
@@ -254,7 +254,7 @@ func newSessionCommand(ctx *commandContext) *cobra.Command {
 	cmd.AddCommand(newSessionCleanupCommand(ctx))
 	cmd.AddCommand(newSessionDeleteCommand(ctx))
 	cmd.AddCommand(newSessionClaimPRCommand(ctx))
-	cmd.AddCommand(newSessionAutoFixCommand(ctx))
+	cmd.AddCommand(newSessionPRFeedbackCommand(ctx))
 	cmd.AddCommand(newSessionHistoryCommand(ctx))
 	return cmd
 }
@@ -482,12 +482,13 @@ func newSessionClaimPRCommand(ctx *commandContext) *cobra.Command {
 	return cmd
 }
 
-func newSessionAutoFixCommand(ctx *commandContext) *cobra.Command {
-	var opts sessionAutoFixOptions
+func newSessionPRFeedbackCommand(ctx *commandContext) *cobra.Command {
+	var opts sessionPRFeedbackOptions
 	cmd := &cobra.Command{
-		Use:   "auto-fix [<session-id>] [--ci on|off] [--reviews on|off] [--auto-review on|off]",
-		Short: "Turn a session's automatic CI and review-comment fixing, and native auto-review, on or off",
-		Long: "Turn a session's \"Automatically fix CI failures\" and \"Automatically fix review comments\" switches, and its native auto-review, on or off. " +
+		Use:   "pr-feedback [<session-id>] [--ci on|off] [--reviews on|off] [--auto-review on|off]",
+		Short: "Choose which PR feedback Orchestrator sends a session: CI failures, review comments, native auto-review",
+		Long: "Choose which feedback on its PRs Orchestrator sends a session for the agent to act on. " +
+			"This turns the session's \"Automatically fix CI failures\" and \"Automatically fix review comments\" switches, and its native auto-review, on or off. " +
 			"When session-id is omitted, the current session is read from AO_SESSION_ID.\n\n" +
 			"With --ci off, Orchestrator stops sending the session CI failures and merge conflicts for its PRs. " +
 			"With --reviews off, it stops sending review comments and change requests that arrive after the change. " +
@@ -496,20 +497,20 @@ func newSessionAutoFixCommand(ctx *commandContext) *cobra.Command {
 			"To review someone else's PR, turn all three off before claiming it. To take the PR over later, turn --ci and --reviews back on; " +
 			"review comments posted while the switch was off are not sent, so read them on the PR.",
 		Example: `  # Before claiming a PR to review it
-  ao session auto-fix --ci off --reviews off --auto-review off
+  ao session pr-feedback --ci off --reviews off --auto-review off
   ao session claim-pr 88 --no-takeover
 
   # Take the PR over
-  ao session auto-fix --ci on --reviews on`,
+  ao session pr-feedback --ci on --reviews on`,
 		Args: func(cmd *cobra.Command, args []string) error {
 			if err := cobra.MaximumNArgs(1)(cmd, args); err != nil {
 				return usageError{err}
 			}
-			_, err := resolveSessionAutoFixArg(args)
+			_, err := resolveSessionPRFeedbackArg(args)
 			return err
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			id, err := resolveSessionAutoFixArg(args)
+			id, err := resolveSessionPRFeedbackArg(args)
 			if err != nil {
 				return err
 			}
@@ -531,10 +532,10 @@ func newSessionAutoFixCommand(ctx *commandContext) *cobra.Command {
 			if _, err := ctx.fetchScopedSession(cmd.Context(), id, opts.project); err != nil {
 				return err
 			}
-			if err := ctx.setSessionAutoFix(cmd.Context(), id, ci, reviews, autoReview); err != nil {
+			if err := ctx.setSessionPRFeedback(cmd.Context(), id, ci, reviews, autoReview); err != nil {
 				return err
 			}
-			return writeSessionAutoFix(cmd.OutOrStdout(), id, ci, reviews, autoReview)
+			return writeSessionPRFeedback(cmd.OutOrStdout(), id, ci, reviews, autoReview)
 		},
 	}
 	addSessionProjectFlag(cmd.Flags(), &opts.project, "Project id to scope the lookup")
@@ -544,7 +545,7 @@ func newSessionAutoFixCommand(ctx *commandContext) *cobra.Command {
 	return cmd
 }
 
-func resolveSessionAutoFixArg(args []string) (string, error) {
+func resolveSessionPRFeedbackArg(args []string) (string, error) {
 	if len(args) == 1 {
 		return normalizeSessionID(args[0])
 	}
@@ -583,9 +584,9 @@ type sessionAutoReviewRequest struct {
 	Enabled bool `json:"enabled"`
 }
 
-// setSessionAutoFix sets the session's CI and review-comment switches and its
+// setSessionPRFeedback sets the session's CI and review-comment switches and its
 // native auto-review. A nil value leaves that switch unchanged.
-func (c *commandContext) setSessionAutoFix(ctx context.Context, id string, ci, reviews, autoReview *bool) error {
+func (c *commandContext) setSessionPRFeedback(ctx context.Context, id string, ci, reviews, autoReview *bool) error {
 	base := "sessions/" + url.PathEscape(id)
 	if ci != nil {
 		if err := c.patchJSON(ctx, base+"/auto-inject-ci", sessionAutoInjectCIRequest{AutoInjectCI: *ci}, nil); err != nil {
@@ -605,7 +606,7 @@ func (c *commandContext) setSessionAutoFix(ctx context.Context, id string, ci, r
 	return nil
 }
 
-func writeSessionAutoFix(w io.Writer, id string, ci, reviews, autoReview *bool) error {
+func writeSessionPRFeedback(w io.Writer, id string, ci, reviews, autoReview *bool) error {
 	onOff := func(v bool) string {
 		if v {
 			return "on"
@@ -723,7 +724,7 @@ func writeClaimPRResult(cmd *cobra.Command, res claimPRResponse) error {
 			return err
 		}
 	}
-	_, err := fmt.Fprintf(out, "  Only reviewing someone else's PR? It is not the user's: run `ao session auto-fix %s --ci off --reviews off --auto-review off` and do not change it unless the user asks.\n", res.SessionID)
+	_, err := fmt.Fprintf(out, "  Only reviewing someone else's PR? It is not the user's: run `ao session pr-feedback %s --ci off --reviews off --auto-review off` and do not change it unless the user asks.\n", res.SessionID)
 	return err
 }
 

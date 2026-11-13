@@ -23,11 +23,11 @@ Orchestrator then routes failing checks, requested changes, unresolved comments,
 Each session has two switches in its inspector: "Automatically fix CI failures", which also covers merge conflicts, and "Automatically fix review comments". To review someone else's PR without being sent its feedback, turn both off, along with native auto-review, before claiming it:
 
 ```bash
-ao session auto-fix --ci off --reviews off --auto-review off
+ao session pr-feedback --ci off --reviews off --auto-review off
 ao session claim-pr <pr-number-or-url> --no-takeover
 ```
 
-The session already holds the claim, so taking the PR over needs no second claim: turn the switches back on with `ao session auto-fix --ci on --reviews on`. If the claim was refused because another session owns the PR, a plain `ao session claim-pr <pr-number-or-url>` without `--no-takeover` moves it to this session.
+The session already holds the claim, so taking the PR over needs no second claim: turn the switches back on with `ao session pr-feedback --ci on --reviews on`. If the claim was refused because another session owns the PR, a plain `ao session claim-pr <pr-number-or-url>` without `--no-takeover` moves it to this session.
 
 ## Avoid duplicate nudges
 

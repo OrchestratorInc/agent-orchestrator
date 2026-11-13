@@ -325,7 +325,7 @@ ao session cleanup --dry-run
 
 Attach an existing PR to the current Orchestrator-managed session, or target another session explicitly.
 Use this for authorized implementation continuation. Reviewing someone else's PR
-also claims it, after turning automatic fixing off with `ao session auto-fix`
+also claims it, after turning automatic fixing off with `ao session pr-feedback`
 (see below), so the session gets none of that PR's CI failures, merge
 conflicts, or review comments.
 
@@ -374,15 +374,16 @@ ao session claim-pr 88 --no-takeover
 
 ---
 
-### ao session auto-fix
+### ao session pr-feedback
 
-Turn a session's "Automatically fix CI failures" and "Automatically fix review
-comments" switches, and its native auto-review, on or off. These are the same
-switches the session inspector shows.
+Choose which feedback on its PRs Orchestrator sends a session for the agent to
+act on. It turns the session's "Automatically fix CI failures" and
+"Automatically fix review comments" switches, and its native auto-review, on or
+off. These are the same switches the session inspector shows.
 
 **Syntax:**
 ```
-ao session auto-fix [<session-id>] [--ci on|off] [--reviews on|off] [--auto-review on|off]
+ao session pr-feedback [<session-id>] [--ci on|off] [--reviews on|off] [--auto-review on|off]
 ```
 
 With no session id, `AO_SESSION_ID` supplies the session. Pass at least one of
@@ -414,11 +415,11 @@ it unless the user explicitly asks. To take it over, turn `--ci` and
 
 ```bash
 # Review someone else's PR from the current worker
-ao session auto-fix --ci off --reviews off --auto-review off
+ao session pr-feedback --ci off --reviews off --auto-review off
 ao session claim-pr 88 --no-takeover
 ```
 
 ```bash
 # Take the PR over
-ao session auto-fix --ci on --reviews on
+ao session pr-feedback --ci on --reviews on
 ```

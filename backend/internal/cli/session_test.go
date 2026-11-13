@@ -939,8 +939,8 @@ func TestSessionClaimPR_UsesCurrentSessionFromEnv(t *testing.T) {
 		t.Fatalf("unexpected output: %s", out)
 	}
 	// The reviewer hint names the claimed session, so it works from any shell.
-	if !strings.Contains(out, "`ao session auto-fix demo-1 --ci off --reviews off --auto-review off`") {
-		t.Fatalf("claim output missing session-specific auto-fix hint: %s", out)
+	if !strings.Contains(out, "`ao session pr-feedback demo-1 --ci off --reviews off --auto-review off`") {
+		t.Fatalf("claim output missing session-specific pr-feedback hint: %s", out)
 	}
 	want := []string{
 		"GET /api/v1/sessions/demo-1",
@@ -1229,8 +1229,8 @@ func TestSessionKill_SendsCallerSession(t *testing.T) {
 	}
 }
 
-// autoFixServer is a fake daemon that records each API request with its body.
-func autoFixServer(t *testing.T) (*httptest.Server, func() []string) {
+// prFeedbackServer is a fake daemon that records each API request with its body.
+func prFeedbackServer(t *testing.T) (*httptest.Server, func() []string) {
 	t.Helper()
 	var mu sync.Mutex
 	var got []string
@@ -1260,15 +1260,15 @@ func autoFixServer(t *testing.T) (*httptest.Server, func() []string) {
 	}
 }
 
-func TestSessionAutoFix_TurnsEverySwitchOffForTheCurrentSession(t *testing.T) {
+func TestSessionPRFeedback_TurnsEverySwitchOffForTheCurrentSession(t *testing.T) {
 	t.Setenv("AO_SESSION_ID", "demo-1")
 	cfg := setConfigEnv(t)
-	srv, requests := autoFixServer(t)
+	srv, requests := prFeedbackServer(t)
 	writeRunFileFor(t, cfg, srv)
 
-	out, errOut, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "session", "auto-fix", "--ci", "off", "--reviews", "off", "--auto-review", "off")
+	out, errOut, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "session", "pr-feedback", "--ci", "off", "--reviews", "off", "--auto-review", "off")
 	if err != nil {
-		t.Fatalf("auto-fix failed: %v stderr=%s", err, errOut)
+		t.Fatalf("pr-feedback failed: %v stderr=%s", err, errOut)
 	}
 	want := []string{
 		"GET /api/v1/sessions/demo-1",
@@ -1284,14 +1284,14 @@ func TestSessionAutoFix_TurnsEverySwitchOffForTheCurrentSession(t *testing.T) {
 	}
 }
 
-func TestSessionAutoFix_ChangesOnlyTheSwitchPassed(t *testing.T) {
+func TestSessionPRFeedback_ChangesOnlyTheSwitchPassed(t *testing.T) {
 	cfg := setConfigEnv(t)
-	srv, requests := autoFixServer(t)
+	srv, requests := prFeedbackServer(t)
 	writeRunFileFor(t, cfg, srv)
 
-	out, errOut, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "session", "auto-fix", "demo-1", "--reviews", "on")
+	out, errOut, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "session", "pr-feedback", "demo-1", "--reviews", "on")
 	if err != nil {
-		t.Fatalf("auto-fix failed: %v stderr=%s", err, errOut)
+		t.Fatalf("pr-feedback failed: %v stderr=%s", err, errOut)
 	}
 	want := []string{
 		"GET /api/v1/sessions/demo-1",
@@ -1305,16 +1305,16 @@ func TestSessionAutoFix_ChangesOnlyTheSwitchPassed(t *testing.T) {
 	}
 }
 
-func TestSessionAutoFix_UsageErrors(t *testing.T) {
+func TestSessionPRFeedback_UsageErrors(t *testing.T) {
 	t.Setenv("AO_SESSION_ID", "demo-1")
 	setConfigEnv(t)
 	for _, tc := range []struct {
 		args []string
 		want string
 	}{
-		{args: []string{"session", "auto-fix"}, want: "pass at least one of --ci on|off, --reviews on|off, --auto-review on|off"},
-		{args: []string{"session", "auto-fix", "--auto-review", "yes"}, want: `--auto-review must be on or off, got "yes"`},
-		{args: []string{"session", "auto-fix", "--ci", "maybe"}, want: `--ci must be on or off, got "maybe"`},
+		{args: []string{"session", "pr-feedback"}, want: "pass at least one of --ci on|off, --reviews on|off, --auto-review on|off"},
+		{args: []string{"session", "pr-feedback", "--auto-review", "yes"}, want: `--auto-review must be on or off, got "yes"`},
+		{args: []string{"session", "pr-feedback", "--ci", "maybe"}, want: `--ci must be on or off, got "maybe"`},
 	} {
 		_, _, err := executeCLI(t, Deps{}, tc.args...)
 		if err == nil || ExitCode(err) != 2 || !strings.Contains(err.Error(), tc.want) {
