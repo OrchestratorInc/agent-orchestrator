@@ -1113,46 +1113,18 @@ func (s *Service) HandoffTarget(ctx context.Context, id domain.SessionID, harnes
 		return "", err
 	}
 	headroom := make([]float64, len(accounts))
-	rejected := make([]string, len(accounts))
 	var wg sync.WaitGroup
 	for i, account := range accounts {
-		switch {
-		case account.Provider != p:
-			continue
-		case account.ID == current.ID:
-			rejected[i] = "current"
-			continue
-		case exclude[account.ID] || s.beingRemoved(account.ID):
-			rejected[i] = "excluded"
+		if account.Provider != p || account.ID == current.ID || exclude[account.ID] || s.beingRemoved(account.ID) {
 			continue
 		}
 		wg.Go(func() {
-			r := s.read(ctx, account)
-			switch {
-			case r == nil:
-				rejected[i] = "unreadable"
-			case r.identityErr != "":
-				rejected[i] = "identity: " + r.identityErr
-			case !r.identity.SignedIn:
-				rejected[i] = "signed out"
-			case r.limitsErr != "" || r.limits == nil:
-				rejected[i] = "limits: " + r.limitsErr
-			default:
-				if room, ok := r.limits.HandoffHeadroom(p, model); ok {
-					headroom[i] = room
-				} else {
-					rejected[i] = "no verified room"
-				}
+			if r := s.read(ctx, account); r != nil && r.identityErr == "" && r.identity.SignedIn && r.limitsErr == "" && r.limits != nil {
+				headroom[i], _ = r.limits.HandoffHeadroom(p, model)
 			}
 		})
 	}
 	wg.Wait()
-	reasons := map[string]string{}
-	for i, reason := range rejected {
-		if reason != "" {
-			reasons[accounts[i].ID] = reason
-		}
-	}
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
@@ -1163,10 +1135,10 @@ func (s *Service) HandoffTarget(ctx context.Context, id domain.SessionID, harnes
 		}
 	}
 	if best < 0 {
-		s.log.Info("account handoff: no target", "session", id, "model", model, "rejected", reasons)
+		s.log.Info("account handoff: no target", "session", id, "model", model)
 		return "", nil
 	}
-	s.log.Info("account handoff: target", "session", id, "model", model, "target", accounts[best].ID, "rejected", reasons)
+	s.log.Info("account handoff: target", "session", id, "model", model, "target", accounts[best].ID)
 	return accounts[best].ID, nil
 }
 
