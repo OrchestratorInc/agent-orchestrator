@@ -183,6 +183,36 @@ describe("patchClaudeBackgroundTasks", () => {
 		expect(() => h.handlers.get("_ao/session/background_tasks")({ params: { sessionId: "__proto__" } })).toThrow("invalid session");
 	});
 
+	it("retains ambient classification while native membership survives idle time", () => {
+		vi.useFakeTimers();
+		try {
+			const h = harness();
+			h.emit({ subtype: "task_started", task_id: "ambient", ambient: true });
+			h.emit({ subtype: "background_tasks_changed", tasks: [{ task_id: "ambient", task_type: "local_bash" }] });
+			// The history cap must not evict a current native task's classification.
+			for (let i = 0; i < 512; i++) h.emit({ subtype: "task_started", task_id: `foreground-${i}` });
+			vi.advanceTimersByTime(31_000);
+			expect(h.read().tasks).toEqual([]);
+			h.emit({ subtype: "background_tasks_changed", tasks: [{ task_id: "ambient", task_type: "local_bash" }] });
+			expect(h.read().tasks).toEqual([]);
+			expect(h.session.aoBackgroundKnown.get("ambient").ambient).toBe(true);
+			h.emit({ subtype: "background_tasks_changed", tasks: [] });
+			vi.advanceTimersByTime(31_000);
+			h.read();
+			expect(h.session.aoBackgroundKnown.has("ambient")).toBe(false);
+		} finally { vi.useRealTimers(); }
+	});
+
+	it("keeps the established run when a native snapshot omits it", () => {
+		const h = harness();
+		h.emit({ subtype: "task_started", task_id: "a", run_id: "new" });
+		h.emit({ subtype: "background_tasks_changed", tasks: [{ task_id: "a", task_type: "local_agent" }] });
+		h.emit({ subtype: "task_notification", task_id: "a", run_id: "old", status: "completed" });
+		expect(h.read().tasks).toMatchObject([{ id: "a", runId: "new", state: "running" }]);
+		h.emit({ subtype: "task_notification", task_id: "a", run_id: "new", status: "completed" });
+		expect(h.read().tasks).toMatchObject([{ id: "a", state: "completed" }]);
+	});
+
 	it("reports start times and lets only live background tasks stop", async () => {
 		vi.useFakeTimers();
 		try {

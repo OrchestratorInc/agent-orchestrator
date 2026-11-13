@@ -185,6 +185,24 @@ func TestBackgroundTasksPausedAsyncTaskDefersACPHibernation(t *testing.T) {
 	}
 }
 
+func TestBackgroundTasksAsyncReplaysDoNotBlockHibernation(t *testing.T) {
+	c := &conversation{sessionID: "native"}
+	spawn := []byte(`{"sessionId":"native","update":{"sessionUpdate":"async_task_spawned","asyncTaskId":"job","taskType":"shell"}}`)
+	c.observeAsyncTaskNotification(spawn)
+	c.observeAsyncTaskNotification([]byte(`{"sessionId":"native","update":{"sessionUpdate":"async_task_state_update","asyncTaskId":"job","state":"completed"}}`))
+	for _, state := range []string{"running", "paused"} {
+		c.observeAsyncTaskNotification([]byte(`{"sessionId":"native","update":{"sessionUpdate":"async_task_state_update","asyncTaskId":"job","state":"` + state + `"}}`))
+		if ready, err := c.CanHibernate(context.Background()); !ready || err != nil {
+			t.Fatalf("replayed %s blocked hibernation: %v %v", state, ready, err)
+		}
+	}
+	c.backgroundObserved.Snapshot(time.Now().Add(time.Minute))
+	c.observeAsyncTaskNotification(spawn)
+	if ready, err := c.CanHibernate(context.Background()); !ready || err != nil {
+		t.Fatalf("expired spawn replay blocked hibernation: %v %v", ready, err)
+	}
+}
+
 func TestBackgroundTasksCopilotAsyncShell(t *testing.T) {
 	for _, key := range []string{"task_id", "taskId", "backgroundTaskId", "background_id", "sessionID", "sessionId", "session_id", "processId", "process_id", "shellId", "shell_id"} {
 		t.Run(key, func(t *testing.T) {

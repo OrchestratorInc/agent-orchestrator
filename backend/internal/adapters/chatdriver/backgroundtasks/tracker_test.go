@@ -64,3 +64,53 @@ func TestStartTimeIsFirstObservationAndRestartsWithANewRun(t *testing.T) {
 		t.Fatal("snapshot shared the tracker's start time")
 	}
 }
+
+func TestFinishCannotResurrectTerminalTask(t *testing.T) {
+	var tracker Tracker
+	now := time.Now()
+	tracker.Update(ports.ChatBackgroundTask{ID: "job", State: "paused"}, now)
+	tracker.Finish("job", "running", now.Add(time.Second))
+	if tasks := tracker.Snapshot(now); len(tasks) != 1 || tasks[0].State != "running" || tasks[0].EndedAt != nil {
+		t.Fatalf("paused task did not resume: %+v", tasks)
+	}
+	tracker.Finish("job", "completed", now.Add(2*time.Second))
+	for _, state := range []string{"running", "paused"} {
+		tracker.Finish("job", state, now.Add(3*time.Second))
+		if tasks := tracker.Snapshot(now); len(tasks) != 1 || tasks[0].State != "completed" || !tasks[0].EndedAt.Equal(now.Add(2*time.Second)) {
+			t.Fatalf("terminal task resumed: %+v", tasks)
+		}
+	}
+}
+
+func TestSettledReplayProtectionOutlivesVisibleHistory(t *testing.T) {
+	for _, runID := range []string{"", "first"} {
+		t.Run(runID, func(t *testing.T) {
+			var tracker Tracker
+			now := time.Now()
+			job := ports.ChatBackgroundTask{ID: "job", RunID: runID, State: "running"}
+			tracker.Update(job, now)
+			tracker.Finish("job", "completed", now)
+			later := now.Add(31 * time.Second)
+			if tasks := tracker.Snapshot(later); len(tasks) != 0 {
+				t.Fatal(tasks)
+			}
+			tracker.Update(job, later)
+			if tasks := tracker.Snapshot(later); len(tasks) != 0 {
+				t.Fatalf("expired run resurrected: %+v", tasks)
+			}
+			tracker.Update(ports.ChatBackgroundTask{ID: "job", RunID: "second", State: "running"}, later)
+			tracker.Update(job, later)
+			if tasks := tracker.Snapshot(later); len(tasks) != 1 || tasks[0].RunID != "second" || tasks[0].State != "running" {
+				t.Fatalf("new run was lost: %+v", tasks)
+			}
+			tracker.Finish("job", "completed", later)
+			later = later.Add(31 * time.Second)
+			tracker.Snapshot(later)
+			tracker.Update(job, later)
+			tracker.Update(ports.ChatBackgroundTask{ID: "job", RunID: "second", State: "running"}, later)
+			if tasks := tracker.Snapshot(later); len(tasks) != 0 {
+				t.Fatalf("an older settled run resurrected: %+v", tasks)
+			}
+		})
+	}
+}

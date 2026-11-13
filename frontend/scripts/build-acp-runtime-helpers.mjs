@@ -197,9 +197,10 @@ function aoObserveBackgroundTasks(session, message) {
 	const now = Date.now();
 	const live = session.aoBackgroundLive ??= new Map();
 	const known = session.aoBackgroundKnown ??= new Map();
+	const native = session.aoBackgroundNative ??= new Set();
 	const recent = session.aoBackgroundRecent ??= new Map();
 	for (const [id, task] of known) {
-		if (!live.has(id) && now - task.observedAt > 30000) known.delete(id);
+		if (!native.has(id) && now - task.observedAt > 30000) known.delete(id);
 	}
 	for (const [id, task] of recent) {
 		if (now - Date.parse(task.endedAt) >= 30000) recent.delete(id);
@@ -207,19 +208,24 @@ function aoObserveBackgroundTasks(session, message) {
 	if (message.subtype === "background_tasks_changed") {
 		// A removal level can precede its completion event even after a task
 		// has run for hours. Retain its label for the following bookend.
-		for (const record of live.values()) record.observedAt = now;
+		for (const id of native) {
+			const record = known.get(id);
+			if (record) record.observedAt = now;
+		}
+		native.clear();
 		live.clear();
 		for (const task of message.tasks) {
 			const previous = known.get(task.task_id);
 			const sameRun = !task.run_id || !previous?.runId || task.run_id === previous.runId;
 			const record = {
-				id: task.task_id, runId: task.run_id,
+				id: task.task_id, runId: task.run_id ?? (sameRun ? previous?.runId : undefined),
 				kind: task.task_type === "local_bash" ? "shell" : task.task_type === "local_agent" ? "agent" : "other",
 				description: task.description ?? "", state: "running", observedAt: now, wasBackground: true,
 				ambient: task.ambient === true || (sameRun && previous?.ambient === true),
 				// The run's own start when its task_started was seen, else the first snapshot.
 				startedAt: (sameRun && previous?.startedAt) || new Date(now).toISOString(),
 			};
+			native.add(record.id);
 			known.set(record.id, record);
 			if (!record.ambient) live.set(record.id, record);
 			recent.delete(record.id);
@@ -249,7 +255,10 @@ function aoObserveBackgroundTasks(session, message) {
 		}
 	}
 	// Bound transient history even if a provider emits an unusually large burst.
-	while (known.size > 512) known.delete(known.keys().next().value);
+	for (const id of known.keys()) {
+		if (known.size <= 512) break;
+		if (!native.has(id)) known.delete(id);
+	}
 	while (recent.size > 128) recent.delete(recent.keys().next().value);
 }
 

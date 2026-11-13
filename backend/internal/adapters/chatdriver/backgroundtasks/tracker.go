@@ -18,6 +18,8 @@ import (
 type Tracker struct {
 	mu    sync.Mutex
 	tasks map[string]ports.ChatBackgroundTask
+	// Settled identities outlive the visible outcome, for this conversation only.
+	settled map[string]map[string]struct{}
 }
 
 // Update records an explicit native task transition, deduplicating replay.
@@ -31,6 +33,16 @@ func (t *Tracker) Update(task ports.ChatBackgroundTask, now time.Time) {
 		t.tasks = make(map[string]ports.ChatBackgroundTask)
 	}
 	old, exists := t.tasks[task.ID]
+	runID := task.RunID
+	if runID == "" {
+		runID = old.RunID
+	}
+	settledRuns := t.settled[task.ID]
+	_, settled := settledRuns[runID]
+	if (settled || (!exists && task.RunID == "" && len(settledRuns) > 0)) &&
+		(!exists || task.State == "" || task.State == "running" || task.State == "paused") {
+		return
+	}
 	if exists && old.EndedAt != nil && (task.State == "running" || task.State == "paused") && (task.RunID == "" || task.RunID == old.RunID) {
 		return
 	}
@@ -73,6 +85,9 @@ func (t *Tracker) Update(task ports.ChatBackgroundTask, now time.Time) {
 	if task.State == "running" || task.State == "paused" {
 		task.EndedAt = nil
 	}
+	if task.EndedAt != nil {
+		t.rememberSettled(task)
+	}
 	t.tasks[task.ID] = task
 	t.prune(now)
 }
@@ -86,7 +101,7 @@ func (t *Tracker) Finish(id, state string, now time.Time) {
 	if !exists {
 		return
 	}
-	if state == old.State {
+	if state == old.State || (old.EndedAt != nil && (state == "running" || state == "paused")) {
 		return
 	}
 	old.State = state
@@ -94,6 +109,7 @@ func (t *Tracker) Finish(id, state string, now time.Time) {
 		old.EndedAt = nil
 	} else {
 		old.EndedAt = &now
+		t.rememberSettled(old)
 	}
 	t.tasks[id] = old
 	t.prune(now)
@@ -118,6 +134,17 @@ func (t *Tracker) Snapshot(now time.Time) []ports.ChatBackgroundTask {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out
+}
+
+// Caller holds mu. Keep only identities, not expired labels or timestamps.
+func (t *Tracker) rememberSettled(task ports.ChatBackgroundTask) {
+	if t.settled == nil {
+		t.settled = make(map[string]map[string]struct{})
+	}
+	if t.settled[task.ID] == nil {
+		t.settled[task.ID] = make(map[string]struct{})
+	}
+	t.settled[task.ID][task.RunID] = struct{}{}
 }
 
 func (t *Tracker) prune(now time.Time) {

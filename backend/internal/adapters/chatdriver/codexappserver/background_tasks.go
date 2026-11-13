@@ -44,6 +44,9 @@ func (c *conversation) BackgroundTasks(ctx context.Context) ([]ports.ChatBackgro
 		if err := c.conn.request(ctx, "thread/backgroundTerminals/list", params, &response); err != nil {
 			var rpcErr *rpcError
 			if errors.As(err, &rpcErr) && rpcErr.Code == -32601 {
+				if tasks := c.backgroundObserved.Snapshot(time.Now()); len(tasks) > 0 {
+					return tasks, ports.ErrBackgroundTasksPartial
+				}
 				return nil, ports.ErrBackgroundTasksUnsupported
 			}
 			return nil, err
