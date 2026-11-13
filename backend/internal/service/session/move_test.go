@@ -1,15 +1,20 @@
 package session
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
+	"github.com/aoagents/agent-orchestrator/backend/internal/nativetransfer"
+	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
 	"github.com/aoagents/agent-orchestrator/backend/internal/sessionmove"
 )
 
@@ -76,6 +81,93 @@ func TestMoveRefusalsNameTheFiles(t *testing.T) {
 		var got *apierr.Error
 		if !errors.As(moveAPIError(tc.err), &got) || got.Message != tc.want {
 			t.Errorf("moveAPIError(%v) = %v, want message %q", tc.err, got, tc.want)
+		}
+	}
+}
+
+// transcriptCommander is a manager that reads a session's agent conversation.
+type transcriptCommander struct {
+	*fakeCommander
+	size     int64
+	sizeErr  error
+	id, data string
+	writeErr error
+}
+
+func (c transcriptCommander) CloudTranscriptSize(context.Context, domain.SessionRecord, domain.ProjectRecord) (int64, error) {
+	return c.size, c.sizeErr
+}
+
+func (c transcriptCommander) WriteCloudTranscript(_ context.Context, _ domain.SessionRecord, _ domain.ProjectRecord, w io.Writer, _ int64) (string, error) {
+	if c.writeErr != nil {
+		return "", c.writeErr
+	}
+	_, err := io.WriteString(w, c.data)
+	return c.id, err
+}
+
+func transcriptService(c transcriptCommander, state domain.ActivityState) *Service {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", RepoOriginURL: "https://github.com/acme/app"}
+	st.sessions["mer-2"] = domain.SessionRecord{
+		ID: "mer-2", ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode,
+		Activity: domain.Activity{State: state}, Metadata: domain.SessionMetadata{WorkspacePath: "/wt/mer-2"},
+	}
+	c.fakeCommander = &fakeCommander{}
+	return NewWithDeps(Deps{Manager: c, Store: st})
+}
+
+func TestMoveTranscriptGzipsTheConversation(t *testing.T) {
+	svc := transcriptService(transcriptCommander{id: "aid-1", data: "{\"cwd\":\"/ao-moved/cwd\"}\n"}, domain.ActivityExited)
+	out, err := svc.MoveTranscript(context.Background(), "mer-2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	zr, err := gzip.NewReader(bytes.NewReader(out.Gzip))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := io.ReadAll(zr)
+	if out.AgentSessionID != "aid-1" || string(raw) != "{\"cwd\":\"/ao-moved/cwd\"}\n" {
+		t.Fatalf("MoveTranscript = %q, %q", out.AgentSessionID, raw)
+	}
+}
+
+func TestMoveTranscriptRefusals(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		c     transcriptCommander
+		state domain.ActivityState
+		code  string
+	}{
+		{"running agent", transcriptCommander{}, domain.ActivityIdle, "MOVE_AGENT_RUNNING"},
+		{"another agent", transcriptCommander{writeErr: sessionmanager.ErrCloudTranscriptUnsupported}, domain.ActivityExited, "MOVE_TRANSCRIPT_UNSUPPORTED"},
+		{"too large", transcriptCommander{writeErr: fmt.Errorf("%w: 70 MiB", nativetransfer.ErrTooLarge)}, domain.ActivityExited, "MOVE_TRANSCRIPT_TOO_LARGE"},
+		{"no transcript", transcriptCommander{writeErr: errors.New("no Claude Code transcript")}, domain.ActivityExited, "MOVE_TRANSCRIPT_UNAVAILABLE"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := transcriptService(tc.c, tc.state).MoveTranscript(context.Background(), "mer-2")
+			var got *apierr.Error
+			if !errors.As(err, &got) || got.Code != tc.code {
+				t.Fatalf("err = %v, want %s", err, tc.code)
+			}
+		})
+	}
+}
+
+func TestMoveTranscriptInfoSaysWhyTheConversationStays(t *testing.T) {
+	for _, tc := range []struct {
+		c    transcriptCommander
+		want MoveTranscriptInfo
+	}{
+		{transcriptCommander{size: 2048}, MoveTranscriptInfo{Bytes: 2048}},
+		{transcriptCommander{sizeErr: sessionmanager.ErrCloudTranscriptUnsupported}, MoveTranscriptInfo{Unavailable: "unsupported"}},
+		{transcriptCommander{sizeErr: errors.New("missing")}, MoveTranscriptInfo{Unavailable: "not_found"}},
+		{transcriptCommander{size: CloudTranscriptMaxBytes + 1}, MoveTranscriptInfo{Bytes: CloudTranscriptMaxBytes + 1, Unavailable: "too_large"}},
+	} {
+		svc := transcriptService(tc.c, domain.ActivityIdle)
+		if got := svc.moveTranscriptInfo(context.Background(), domain.SessionRecord{}, domain.ProjectRecord{}); got != tc.want {
+			t.Errorf("moveTranscriptInfo = %+v, want %+v", got, tc.want)
 		}
 	}
 }

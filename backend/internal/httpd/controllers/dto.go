@@ -4712,8 +4712,22 @@ type ForkSessionResponse struct {
 // MovePreviewResponse is what a move to AO Cloud would push now: the branch
 // and the uncommitted paths its WIP commit would carry.
 type MovePreviewResponse struct {
-	Branch  string       `json:"branch"`
-	Changes []MoveChange `json:"changes"`
+	Branch     string             `json:"branch"`
+	Changes    []MoveChange       `json:"changes"`
+	Transcript MoveTranscriptInfo `json:"transcript"`
+}
+
+// MoveTranscriptInfo says whether a move would carry the agent's conversation
+// to AO Cloud, which resumes it, or only the handoff note.
+type MoveTranscriptInfo struct {
+	Bytes       int64  `json:"bytes"`
+	Unavailable string `json:"unavailable,omitempty" enum:"unsupported,not_found,too_large" description:"Why the conversation would not move: an agent AO Cloud cannot resume, no saved conversation, or over 64 MiB."`
+}
+
+// MoveTranscriptResponse is a stopped session's agent conversation for AO Cloud.
+type MoveTranscriptResponse struct {
+	AgentSessionID string `json:"agentSessionId"`
+	TranscriptGzip []byte `json:"transcriptGzip" description:"The transcript, gzipped and base64-encoded, with this machine's working directory and Claude project folder replaced by placeholders AO Cloud's worker fills in."`
 }
 
 // MoveChange is one uncommitted path a move would push.

@@ -458,6 +458,12 @@ export interface CloudCpCreateSessionRequest {
 	 * control plane rejects the whole create.
 	 */
 	branch?: string;
+	/**
+	 * A conversation uploaded to transcript-imports/{id}, which the session
+	 * resumes instead of starting from prompt. Only sent when
+	 * offering.features lists session.transcriptImport.
+	 */
+	transcriptImportId?: string;
 }
 
 export interface CloudCpSessionRepo {

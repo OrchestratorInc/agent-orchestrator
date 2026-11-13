@@ -16,6 +16,7 @@ import (
 type SessionMover interface {
 	PreviewMove(ctx context.Context, id domain.SessionID) (sessionsvc.MovePreview, error)
 	ExportMove(ctx context.Context, id domain.SessionID, in sessionsvc.MoveExportInput) (sessionsvc.MoveExport, error)
+	MoveTranscript(ctx context.Context, id domain.SessionID) (sessionsvc.MoveTranscript, error)
 	ImportMove(ctx context.Context, in sessionsvc.MoveImportInput) (sessionsvc.MoveImportOutcome, error)
 	CompleteMove(ctx context.Context, id domain.SessionID, in sessionsvc.MoveCompleteInput) (domain.Session, error)
 }
@@ -30,6 +31,7 @@ type SessionMovesController struct {
 func (c *SessionMovesController) Register(r chi.Router) {
 	r.Get("/sessions/{sessionId}/move/preview", c.preview)
 	r.Post("/sessions/{sessionId}/move/export", c.export)
+	r.Get("/sessions/{sessionId}/move/transcript", c.transcript)
 	r.Post("/sessions/move/import", c.importMove)
 	r.Post("/sessions/{sessionId}/move/complete", c.complete)
 }
@@ -48,7 +50,23 @@ func (c *SessionMovesController) preview(w http.ResponseWriter, r *http.Request)
 	for _, ch := range out.Changes {
 		changes = append(changes, MoveChange{Path: ch.Path, Status: moveChangeStatus(ch.Status)})
 	}
-	envelope.WriteJSON(w, http.StatusOK, MovePreviewResponse{Branch: out.Branch, Changes: changes})
+	envelope.WriteJSON(w, http.StatusOK, MovePreviewResponse{
+		Branch: out.Branch, Changes: changes,
+		Transcript: MoveTranscriptInfo{Bytes: out.Transcript.Bytes, Unavailable: out.Transcript.Unavailable},
+	})
+}
+
+func (c *SessionMovesController) transcript(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, "GET", "/api/v1/sessions/{sessionId}/move/transcript")
+		return
+	}
+	out, err := c.Svc.MoveTranscript(r.Context(), sessionID(r))
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, MoveTranscriptResponse{AgentSessionID: out.AgentSessionID, TranscriptGzip: out.Gzip})
 }
 
 // moveChangeStatus names git's diff status letter.

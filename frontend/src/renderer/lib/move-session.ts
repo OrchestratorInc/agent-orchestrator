@@ -15,6 +15,8 @@ export type MoveStep = "stop" | "export" | "import" | "complete";
 
 export interface MoveResult {
 	sessionId: string;
+	/** The Cloud agent resumes the conversation, or starts from the handoff note. */
+	conversation: "transcript" | "note";
 	/** Set when the session runs in AO Cloud but this machine did not record it. */
 	completeError?: string;
 }
@@ -58,6 +60,12 @@ export interface MoveDeps {
 	 * same moveId resends this one.
 	 */
 	cloudRequest?: { current?: CloudSessionRequest };
+	/**
+	 * Uploads the agent's conversation, gzipped, under importId for the Cloud
+	 * session to resume. Unset when Cloud cannot resume it, which leaves the
+	 * handoff note.
+	 */
+	uploadTranscript?: (importId: string, agentSessionId: string, gzip: Uint8Array) => Promise<void>;
 }
 
 /**
@@ -95,6 +103,7 @@ export async function moveSession(
 	deps.onStep?.("import");
 	const m = exported.data.manifest;
 	const sameAgent = target.harness === m.harness;
+	const transcriptImportId = deps.cloudRequest?.current ? undefined : await carryTranscript(deps, path, moveId);
 	const request: CloudSessionRequest = deps.cloudRequest?.current ?? {
 		projectId: target.projectId,
 		kind: "worker",
@@ -104,6 +113,7 @@ export async function moveSession(
 		branch: m.branch,
 		...(sameAgent && m.model ? { model: m.model } : {}),
 		...(sameAgent && m.effort ? { reasoningEffort: m.effort } : {}),
+		...(transcriptImportId ? { transcriptImportId } : {}),
 	};
 	if (deps.cloudRequest) deps.cloudRequest.current = request;
 	let cloudSessionId: string;
@@ -124,6 +134,25 @@ export async function moveSession(
 	});
 	return {
 		sessionId: cloudSessionId,
+		conversation: request.transcriptImportId ? "transcript" : "note",
 		...(completed.error ? { completeError: apiErrorMessage(completed.error, "Could not mark the session as moved") } : {}),
 	};
+}
+
+/**
+ * Uploads the stopped agent's conversation for the Cloud session to resume
+ * and returns the id createSession names it by. Any failure returns
+ * undefined: the session then starts from the handoff note.
+ */
+async function carryTranscript(deps: MoveDeps, path: { params: { path: { sessionId: string } } }, moveId: string): Promise<string | undefined> {
+	if (!deps.uploadTranscript) return undefined;
+	const transcript = await deps.source.GET("/api/v1/sessions/{sessionId}/move/transcript", path);
+	if (!transcript.data) return undefined;
+	try {
+		const gzip = Uint8Array.from(atob(transcript.data.transcriptGzip), (c) => c.charCodeAt(0));
+		await deps.uploadTranscript(moveId, transcript.data.agentSessionId, gzip);
+		return moveId;
+	} catch {
+		return undefined;
+	}
 }

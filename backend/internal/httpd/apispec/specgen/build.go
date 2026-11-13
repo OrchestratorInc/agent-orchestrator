@@ -4007,6 +4007,18 @@ func sessionOperations() []operation {
 			},
 		},
 		{
+			method: http.MethodGet, path: "/api/v1/sessions/{sessionId}/move/transcript", id: "getSessionMoveTranscript", tag: "sessions",
+			summary:    "Read a stopped session's agent conversation, with its paths replaced for AO Cloud, so the move resumes it there",
+			pathParams: []any{controllers.SessionIDParam{}},
+			resps: []respUnit{
+				{http.StatusOK, controllers.MoveTranscriptResponse{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusConflict, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
 			method: http.MethodPost, path: "/api/v1/sessions/move/import", id: "importSessionMove", tag: "sessions",
 			summary: "Start a session moved from AO Cloud",
 			reqBody: controllers.MoveImportRequest{},

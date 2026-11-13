@@ -262,7 +262,7 @@ const attachmentUploadHeader = "X-AO-Attachment-Upload"
 // which can outlast the default request budget.
 func moveCaptureRoute(req *http.Request) bool {
 	switch chi.RouteContext(req.Context()).RoutePattern() {
-	case "/api/v1/sessions/{sessionId}/move/export", "/api/v1/sessions/{sessionId}/move/preview":
+	case "/api/v1/sessions/{sessionId}/move/export", "/api/v1/sessions/{sessionId}/move/preview", "/api/v1/sessions/{sessionId}/move/transcript":
 		return true
 	}
 	return false

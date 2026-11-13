@@ -3848,6 +3848,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/sessions/{sessionId}/move/transcript": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read a stopped session's agent conversation, with its paths replaced for AO Cloud, so the move resumes it there */
+        get: operations["getSessionMoveTranscript"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sessions/{sessionId}/pin": {
         parameters: {
             query?: never;
@@ -6244,6 +6261,23 @@ export interface components {
             callerSessionId?: string;
             deleteArtifacts?: boolean;
         };
+        ControllersMoveTranscriptInfo: {
+            /** Format: int64 */
+            bytes: number;
+            /**
+             * @description Why the conversation would not move: an agent AO Cloud cannot resume, no saved conversation, or over 64 MiB.
+             * @enum {string}
+             */
+            unavailable?: "unsupported" | "not_found" | "too_large";
+        };
+        ControllersMoveTranscriptResponse: {
+            agentSessionId: string;
+            /**
+             * Format: base64
+             * @description The transcript, gzipped and base64-encoded, with this machine's working directory and Claude project folder replaced by placeholders AO Cloud's worker fills in.
+             */
+            transcriptGzip: string;
+        };
         ControllersPairDeviceRequest: {
             /** @description Name shown in the host's device list. */
             name?: string;
@@ -7510,6 +7544,7 @@ export interface components {
         MovePreviewResponse: {
             branch: string;
             changes: components["schemas"]["MoveChange"][];
+            transcript: components["schemas"]["ControllersMoveTranscriptInfo"];
         };
         NotificationEnvelope: {
             notification: components["schemas"]["NotificationResponse"];
@@ -23315,6 +23350,65 @@ export interface operations {
             };
             /** @description Internal Server Error */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getSessionMoveTranscript: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ControllersMoveTranscriptResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
                 headers: {
                     [name: string]: unknown;
                 };

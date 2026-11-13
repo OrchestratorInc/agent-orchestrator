@@ -10985,6 +10985,52 @@ paths:
       summary: List what a move to AO Cloud would push, or why it cannot move
       tags:
       - sessions
+  /api/v1/sessions/{sessionId}/move/transcript:
+    get:
+      operationId: getSessionMoveTranscript
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ControllersMoveTranscriptResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Read a stopped session's agent conversation, with its paths replaced
+        for AO Cloud, so the move resumes it there
+      tags:
+      - sessions
   /api/v1/sessions/{sessionId}/pin:
     delete:
       operationId: unpinSession
@@ -18163,6 +18209,36 @@ components:
         deleteArtifacts:
           type: boolean
       type: object
+    ControllersMoveTranscriptInfo:
+      properties:
+        bytes:
+          format: int64
+          type: integer
+        unavailable:
+          description: 'Why the conversation would not move: an agent AO Cloud cannot
+            resume, no saved conversation, or over 64 MiB.'
+          enum:
+          - unsupported
+          - not_found
+          - too_large
+          type: string
+      required:
+      - bytes
+      type: object
+    ControllersMoveTranscriptResponse:
+      properties:
+        agentSessionId:
+          type: string
+        transcriptGzip:
+          description: The transcript, gzipped and base64-encoded, with this machine's
+            working directory and Claude project folder replaced by placeholders AO
+            Cloud's worker fills in.
+          format: base64
+          type: string
+      required:
+      - agentSessionId
+      - transcriptGzip
+      type: object
     ControllersPairDeviceRequest:
       properties:
         name:
@@ -21571,9 +21647,12 @@ components:
           items:
             $ref: '#/components/schemas/MoveChange'
           type: array
+        transcript:
+          $ref: '#/components/schemas/ControllersMoveTranscriptInfo'
       required:
       - branch
       - changes
+      - transcript
       type: object
     NotificationEnvelope:
       properties:
