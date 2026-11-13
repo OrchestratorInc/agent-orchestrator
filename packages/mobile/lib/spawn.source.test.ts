@@ -71,7 +71,15 @@ describe("spawn composer", () => {
 	// The machine's catalog loads before a project is chosen, so a project is
 	// not part of the guard.
 	it("clears model loading when changing to a machine without a ready model request", () => {
-		expect(spawn).toContain('if (!config || !requestedHostId || !harness) { setModelCatalog(undefined); setModelLoading(false); return; }');
+		expect(spawn).toContain('if (!requestedHostId || !harness) { setModelCatalog(undefined); setModelLoading(false); return; }');
+		// A machine whose connection is away (or not up yet) stops loading too, and keeps what it showed.
+		expect(spawn).toContain('if (!config) { setModelLoading(false); return; }');
+	});
+
+	it("keeps the pickers through an app switch, loading once per machine rather than per connection", () => {
+		expect(spawn).toContain("if (loadedFor.current.catalog === wanted) return;");
+		expect(spawn).toContain("if (!config || loadedFor.current.project === wanted) return;");
+		expect(spawn).toContain("}, [cloudSelected, connected, reloadKey, selectedHostId]);");
 	});
 });
 
