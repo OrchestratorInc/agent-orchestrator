@@ -2755,12 +2755,13 @@ func (c *Controller) Interrupt(ctx context.Context) error {
 	// A steer waiting for the agent to collect guidance holds sendMu. Withdraw
 	// it so Stop does not wait for that steer to time out. Withdrawing also
 	// refuses later steers for the turn; a Stop that fails gives them back.
+	var restore func()
 	if withdrawer, ok := c.conv.(ports.ChatSteerWithdrawer); ok {
-		withdrawer.WithdrawPendingSteers()
+		restore = withdrawer.WithdrawPendingSteers()
 	}
 	restoreSteering := func() {
-		if restorer, ok := c.conv.(ports.ChatSteerRestorer); ok {
-			restorer.RestoreSteering()
+		if restore != nil {
+			restore()
 		}
 	}
 	// Commit the current batch before Stop settles the turn. The store keeps any
