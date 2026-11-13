@@ -665,6 +665,22 @@ describe("HarnessLoginPanel", () => {
 			expect(await screen.findByText("Removed, but apps outside AO can still see this key until you log out.")).toBeVisible();
 		});
 
+		// Gemini's own key method also saves GEMINI_API_KEY in AO's store, so it
+		// is removed from here as well, without offering sharing it does not take.
+		it("removes the GEMINI_API_KEY that Gemini's key method saved in AO", async () => {
+			const user = userEvent.setup();
+			const savedGeminiKey = { name: "GEMINI_API_KEY", label: "Gemini API key", configured: true, hint: "wxyz", device: false, deviceAvailable: true, checkable: true, agents: ["gemini", "opencode"] };
+			vi.mocked(removeProviderKey).mockResolvedValue({ ...savedGeminiKey, configured: false, hint: undefined });
+			const onProviderKeysChanged = vi.fn();
+			render(<HarnessLoginPanel agentId="gemini" methods={[{ id: "gemini_api_key", label: "Google AI Studio API key", secret: true }, { id: "native", label: "Other native sign-in", secret: false }]} providerKeys={[savedGeminiKey]} onProviderKeysChanged={onProviderKeysChanged} onVerify={vi.fn().mockResolvedValue("configured")} onClose={vi.fn()} onTerminal={vi.fn()} />);
+			expect(screen.queryByRole("checkbox", { name: "Share with other apps" })).toBeNull();
+			await user.click(await screen.findByRole("button", { name: "Remove" }));
+			await user.click(screen.getByRole("button", { name: "Confirm remove" }));
+			expect(removeProviderKey).toHaveBeenCalledWith("GEMINI_API_KEY", undefined);
+			expect(await screen.findByText("Removed. Copies an agent saved in its own settings stay there.")).toBeVisible();
+			expect(onProviderKeysChanged).toHaveBeenCalled();
+		});
+
 		it("offers no removal while no key is saved", async () => {
 			render(<HarnessLoginPanel agentId="goose" methods={[{ id: "env_OPENAI_API_KEY", label: "OpenAI API key", secret: true }]} providerKeys={[unsavedKey("OPENAI_API_KEY")]} onVerify={vi.fn()} onClose={vi.fn()} onTerminal={vi.fn()} />);
 			expect(await screen.findByLabelText("API key")).toBeVisible();

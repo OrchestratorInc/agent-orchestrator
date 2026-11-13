@@ -98,6 +98,12 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, prov
 	const keyStateUnknown = (id?: string) => Boolean(id && providerKeyName(id) && !providerKeys);
 	const selectedKey = providerKeyFor(selectedMethodId);
 	const savedKey = selectedKey?.configured ? selectedKey : undefined;
+	// The AO-stored key this method can remove. Gemini's own key method also
+	// saves GEMINI_API_KEY in AO's store for its sessions, so it can be removed
+	// here too, though that method takes no device setting and no empty save.
+	const removableKey = savedKey ?? (selectedMethodId === "gemini_api_key"
+		? providerKeys?.find((key) => key.name === "GEMINI_API_KEY" && key.configured)
+		: undefined);
 	// Start from the saved device setting so saving again never withdraws it silently.
 	useEffect(() => { setDevice(selectedKey?.device ?? false); }, [selectedKey?.name, selectedKey?.device]);
 	const needsModel = providerKeyNeedsModel(agentId, selectedMethodId);
@@ -357,7 +363,7 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, prov
 	// environment, so it no longer reaches sessions or other apps. A copy a
 	// harness wrote into its own settings is left alone.
 	const removeSavedKey = async () => {
-		if (!savedKey || pending.current || locked) return;
+		if (!removableKey || pending.current || locked) return;
 		if (!confirmRemove) {
 			setConfirmRemove(true);
 			return;
@@ -366,7 +372,7 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, prov
 		setBusy(true);
 		setError("");
 		try {
-			const result = await removeProviderKey(savedKey.name, hostId);
+			const result = await removeProviderKey(removableKey.name, hostId);
 			if (!mounted.current) return;
 			setSecret("");
 			setDevice(false);
@@ -575,7 +581,7 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, prov
 							</div>
 							: <p role="status" className="col-start-2 flex items-center gap-2 text-xs leading-4 text-settings-muted"><LoaderCircle className="size-3.5 animate-spin" aria-hidden="true" />{t("settings.apiKeys.loading")}</p>)}
 						{selectedKey?.deviceAvailable ? <DeviceEnvToggle className="col-start-2" checked={device} disabled={locked} onChange={setDevice} /> : null}
-						{savedKey ? <div className="col-start-2 flex justify-end">
+						{removableKey ? <div className="col-start-2 flex justify-end">
 							<Button type="button" size="sm" variant="destructive-ghost" disabled={locked} onClick={() => void removeSavedKey()}>
 								{busy && confirmRemove ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : null}
 								{t(confirmRemove ? "settings.apiKeys.confirmRemove" : "settings.apiKeys.remove")}
