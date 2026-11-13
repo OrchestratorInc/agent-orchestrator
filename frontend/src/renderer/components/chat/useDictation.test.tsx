@@ -201,3 +201,40 @@ it("Escape discards dictation and cancels a queued send", async () => {
 	expect(target.onEnd).toHaveBeenLastCalledWith(false);
 	expect(bridge.cancel).toHaveBeenCalled();
 });
+
+describe("handing dictation from one composer to another", () => {
+	it("lets the recording finish and deliver its words before the next composer starts", async () => {
+		const first = record();
+		const secondTarget = { onText: vi.fn(), onEnd: vi.fn() };
+		const second = renderHook(() => useDictation({ ...secondTarget, ownerKey: "chat-b" }));
+		bridge.start.mockClear();
+		act(() => second.result.current.toggle());
+		// The first recording is told to finish; the second waits for it instead of cutting it off.
+		expect(bridge.stop).toHaveBeenCalledTimes(1);
+		expect(bridge.start).not.toHaveBeenCalled();
+		await act(async () => {
+			for (const listener of [...bridge.listeners]) listener({ type: "end", text: "First composer's words." });
+		});
+		expect(first.target.onText).toHaveBeenCalledExactlyOnceWith("First composer's words.");
+		expect(first.target.onEnd).toHaveBeenCalledWith(true);
+		expect(bridge.start).toHaveBeenCalledTimes(1);
+	});
+
+	it("does not wait forever for a recording that never finishes", async () => {
+		vi.useFakeTimers();
+		try {
+			const first = record();
+			const second = renderHook(() => useDictation({ onText: vi.fn(), onEnd: vi.fn(), ownerKey: "chat-b" }));
+			bridge.start.mockClear();
+			act(() => second.result.current.toggle());
+			expect(bridge.start).not.toHaveBeenCalled();
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(8000);
+			});
+			expect(bridge.start).toHaveBeenCalledTimes(1);
+			expect(first.target.onEnd).toHaveBeenCalledWith(true);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+});

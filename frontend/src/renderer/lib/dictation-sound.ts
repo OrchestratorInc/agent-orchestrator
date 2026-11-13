@@ -36,8 +36,11 @@ export type DictationSound = keyof typeof SOUNDS;
 
 const STORAGE_KEY = "ao.dictation.sounds";
 const listeners = new Set<() => void>();
+/** The choice when storage cannot hold it, so the switch still works until reload. */
+let unsaved: boolean | undefined;
 
 export function dictationSoundsEnabled(): boolean {
+	if (unsaved !== undefined) return unsaved;
 	try {
 		return window.localStorage.getItem(STORAGE_KEY) !== "off";
 	} catch {
@@ -48,8 +51,10 @@ export function dictationSoundsEnabled(): boolean {
 export function setDictationSoundsEnabled(enabled: boolean): void {
 	try {
 		window.localStorage.setItem(STORAGE_KEY, enabled ? "on" : "off");
+		unsaved = undefined;
 	} catch {
-		/* Storage can be unavailable in previews; the choice then lasts until reload. */
+		// Storage can be unavailable in previews; the choice then lasts until reload.
+		unsaved = enabled;
 	}
 	listeners.forEach((listener) => listener());
 }

@@ -3780,6 +3780,27 @@ describe("sending a dictated message", () => {
 			view.unmount(); subscription.mockRestore(); start.mockRestore(); stop.mockRestore(); useUiStore.setState({ developerMode: previous });
 		}
 	});
+	it("ignores Enter pressed in another control while dictating, and still sends from the composer", async () => {
+		const listeners = new Set<(event: DictationEvent) => void>();
+		const subscription = vi.spyOn(dictationClient, "onEvent").mockImplementation((listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; });
+		const start = vi.spyOn(dictationClient, "start").mockResolvedValue();
+		const stop = vi.spyOn(dictationClient, "stop").mockResolvedValue();
+		const previous = useUiStore.getState().developerMode;
+		useUiStore.setState({ developerMode: true });
+		const onSend = vi.fn();
+		const view = render(<><input aria-label="Elsewhere" /><ChatComposer onSend={onSend} /></>);
+		try {
+			await userEvent.click(screen.getByRole("button", { name: /^Dictate$/ }));
+			act(() => { for (const listener of listeners) listener({ type: "listening" }); });
+			fireEvent.keyDown(screen.getByLabelText("Elsewhere"), { key: "Enter" });
+			expect(stop).not.toHaveBeenCalled();
+			expect(onSend).not.toHaveBeenCalled();
+			fireEvent.keyDown(window, { key: "Enter" });
+			expect(stop).toHaveBeenCalledTimes(1);
+		} finally {
+			view.unmount(); subscription.mockRestore(); start.mockRestore(); stop.mockRestore(); useUiStore.setState({ developerMode: previous });
+		}
+	});
 	it("waits for final corrections and sends once after repeated submission", async () => {
 		const platform = vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
 		const listeners = new Set<(event: DictationEvent) => void>();

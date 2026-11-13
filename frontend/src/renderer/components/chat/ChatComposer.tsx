@@ -544,10 +544,15 @@ export const ChatComposer = memo(function ChatComposer({
 	 */
 
 	const editor = useRef<ComposerEditorHandle>(null);
+	const composerForm = useRef<HTMLFormElement>(null);
 	const dictationUpgrade = useDictationUpgrade(attachmentScopeKey);
 	const dictation = useDictation({
 		ownerKey: attachmentScopeKey,
 		onSubmit: (event) => {
+			// Enter belongs to whatever else has it: an open dialog or menu, or a control outside this composer.
+			if (isDialogOrMenuOpen()) return false;
+			const origin = event.target;
+			if (origin instanceof Element && origin !== document.body && !composerForm.current?.contains(origin)) return false;
 			if (event.shiftKey || (!enterSends && !event.metaKey && !event.ctrlKey)) return false;
 			void submit(undefined, enterSends && (event.metaKey || event.ctrlKey) && canSteerDraft);
 			return true;
@@ -2304,6 +2309,7 @@ export const ChatComposer = memo(function ChatComposer({
 
 	return withQueueStack(
 		<form
+			ref={composerForm}
 			// Cmd/Ctrl steering remains available as a quiet power-user action.
 			onSubmit={(event) => void submit(event, steersDraft)}
 				onDragOver={(event) => {
