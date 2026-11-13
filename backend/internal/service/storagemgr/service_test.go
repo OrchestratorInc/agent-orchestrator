@@ -170,3 +170,16 @@ func TestAutomaticPassWithAutoCleanOffOnlyLogsDryRun(t *testing.T) {
 		t.Fatalf("kill switch should log the would-be action: %+v", store.snapshotActions())
 	}
 }
+
+func TestMergeOffloadFactsKeepsEarlierPaths(t *testing.T) {
+	prev := domain.SessionStorageFacts{
+		OffloadedPaths: []string{"node_modules"},
+		OffloadedBytes: 100,
+		TemplateKeys:   map[string]string{"node_modules": "k1"},
+	}
+	next := domain.SessionStorageFacts{OffloadedPaths: []string{"dist"}, OffloadedBytes: 20, TemplateKeys: map[string]string{}}
+	merged := mergeOffloadFacts(prev, next)
+	if len(merged.OffloadedPaths) != 2 || merged.OffloadedBytes != 120 || merged.TemplateKeys["node_modules"] != "k1" {
+		t.Fatalf("merged = %+v, want both paths, summed bytes and the earlier template key", merged)
+	}
+}
