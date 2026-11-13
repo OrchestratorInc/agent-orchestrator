@@ -3851,6 +3851,7 @@
 	"remote.loadHostsFailed": "Не удалось загрузить сохранённые хосты.",
 	"remote.hostOffline": "Хост недоступен. Проверьте его адрес и пароль.",
 	"remote.offlineCopy": "Показана последняя сохранённая копия, пока хост не подключится.",
+	"remote.sendWhenConnected": "Хост не в сети. Отправить можно будет после подключения.",
 	"remote.hostIncompatible": "Версии Orchestrator несовместимы. Обновите Orchestrator на этом компьютере и удалённом хосте.",
 	"remote.updateAO": "Обновить Orchestrator",
 	"remote.hostUnauthorized": "Хост отклонил это устройство. Выполните сопряжение заново с новым кодом сопряжения от хоста.",

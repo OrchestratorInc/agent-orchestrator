@@ -3788,6 +3788,7 @@
 	"remote.loadHostsFailed": "Não foi possível carregar as máquinas salvas.",
 	"remote.hostOffline": "A máquina está offline. Confira o endereço e a senha.",
 	"remote.offlineCopy": "Mostrando a última cópia salva até a máquina se conectar.",
+	"remote.sendWhenConnected": "A máquina está offline. Você poderá enviar quando ela se conectar.",
 	"remote.hostIncompatible": "As versões do Orchestrator são incompatíveis. Atualize o Orchestrator neste computador e no host remoto.",
 	"remote.updateAO": "Atualizar Orchestrator",
 	"remote.hostUnauthorized": "O host rejeitou este dispositivo. Pareie novamente com um novo código de pareamento do host.",

@@ -3718,6 +3718,7 @@
 	"remote.loadHostsFailed": "保存済みホストを読み込めませんでした。",
 	"remote.hostOffline": "ホストはオフラインです。アドレスとパスワードを確認してください。",
 	"remote.offlineCopy": "ホストに接続するまで、最後に保存したコピーを表示しています。",
+	"remote.sendWhenConnected": "ホストはオフラインです。接続されると送信できます。",
 	"remote.hostIncompatible": "Orchestrator のバージョンに互換性がありません。このコンピューターとリモートホストの Orchestrator を更新してください。",
 	"remote.updateAO": "Orchestrator を更新",
 	"remote.hostUnauthorized": "ホストがこのデバイスを拒否しました。ホストで新しいペアリングコードを取得して、もう一度ペアリングしてください。",

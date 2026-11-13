@@ -3701,6 +3701,7 @@
 	"remote.loadHostsFailed": "Could not load saved hosts.",
 	"remote.hostOffline": "Host is offline. Check its address and password.",
 	"remote.offlineCopy": "Showing the last saved copy until the host connects.",
+	"remote.sendWhenConnected": "Host is offline. You can send when it connects.",
 	"remote.hostIncompatible": "Orchestrator versions are incompatible. Update Orchestrator on this computer and the remote host.",
 	"remote.updateAO": "Update Orchestrator",
 	"remote.hostUnauthorized": "The host rejected this device. Pair again with a new pairing code from the host.",
