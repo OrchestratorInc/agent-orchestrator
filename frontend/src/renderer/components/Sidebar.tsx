@@ -851,7 +851,7 @@ export const Sidebar = memo(function Sidebar({
 			// button sits on the project row), so it must not open Scratchpad.
 			if (attempts === 0) {
 				if (pinnedSessions.some((session) => session.id === activeSessionKey)) setPinnedOpen(true);
-				if (standaloneWorkspace?.sessions.some((session) => session.id === activeSessionKey)) {
+				if (standaloneWorkspace.sessions.some((session) => session.id === activeSessionKey)) {
 					setScratchpadOpen(true);
 				} else {
 					setProjectsOpen(true);
@@ -918,14 +918,11 @@ export const Sidebar = memo(function Sidebar({
 		const scratchpads = new Set(ownScratchpadWorkspaces(orderedWorkspaces));
 		return orderedWorkspaces.filter((workspace) => !scratchpads.has(workspace));
 	}, [orderedWorkspaces]);
-	const standaloneWorkspace = useMemo((): WorkspaceSummary | undefined => {
+	const standaloneWorkspace = useMemo((): WorkspaceSummary => {
 		const scratchpads = ownScratchpadWorkspaces(workspaces);
 		const local = scratchpads.find((workspace) => workspace.kind === STANDALONE_PROJECT_KIND);
-		// Cloud standalone agents alone make a section only when it has a row for
-		// them: one of their sessions, or the entry to their archived ones. An agent
-		// with no session at all (a refused start) has none.
-		if (!local && !scratchpads.some((workspace) => workspace.sessions.some((session) =>
-			scratchpadListsSession(session) || scratchpadArchivesSession(session)))) return undefined;
+		// Sessions always shows, even with no standalone session yet, so its "+"
+		// is there to start the first one.
 		if (scratchpads.length === 1 && local) return local;
 		return {
 			...(local ?? scratchpadSummary(t("standalone.workspaceName"))),
@@ -1225,7 +1222,7 @@ export const Sidebar = memo(function Sidebar({
 					>
 						{/* Sessions (projectless agents) sit above Projects so standalone
 						    agents are easy to find and start. */}
-						{!workspaceError && standaloneWorkspace ? (
+						{!workspaceError ? (
 							<ScratchpadSection
 								workspace={standaloneWorkspace}
 								selection={selection}

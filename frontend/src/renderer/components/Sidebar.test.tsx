@@ -1336,7 +1336,8 @@ describe("Sidebar", () => {
 		expect(within(local).queryByRole("button", { name: /^Archived sessions, / })).toBeNull();
 	});
 
-	it("shows no Scratchpad section for Cloud standalone agents that hold no session", () => {
+	it("shows the Sessions section with its + before any standalone session exists", async () => {
+		const user = userEvent.setup();
 		renderSidebar({
 			workspaces: [
 				workspace,
@@ -1344,8 +1345,12 @@ describe("Sidebar", () => {
 			],
 		});
 
-		expect(document.querySelector("[data-scratchpad-section]")).toBeNull();
+		const section = document.querySelector("[data-scratchpad-section]") as HTMLElement;
+		expect(within(section).getByRole("button", { name: "Sessions" })).toBeInTheDocument();
+		expect(within(section).queryByText("Refused start")).toBeNull();
 		expect(document.querySelector('li[data-project-id="agent-refused"]')).toBeNull();
+		await user.click(within(section).getByRole("button", { name: "Open a new agent" }));
+		expect(useUiStore.getState().newTaskRequest?.projectId).toBe(STANDALONE_WORKSPACE_ID);
 	});
 
 	it("collapses the Scratchpad section from its header", async () => {
