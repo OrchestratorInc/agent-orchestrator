@@ -21,6 +21,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/sessionimport"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/systemcheck"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/systeminstall"
+	"github.com/aoagents/agent-orchestrator/backend/pkg/contract"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/mobilebridge"
 )
@@ -177,11 +178,71 @@ type StartAgentAuthResponse struct {
 	Terminal      ShellTerminalResponse `json:"terminal"`
 }
 
-// StartAgentUILoginRequest selects a fixed native login method. The optional
-// credential is passed to stdin and never returned in operation responses.
+// StartAgentUILoginRequest selects a reviewed login method. Credentials are
+// never returned in operation responses; model is required by some key flows.
 type StartAgentUILoginRequest struct {
 	Method string `json:"method"`
 	Secret string `json:"secret,omitempty"`
+	Model  string `json:"model,omitempty"`
+	// Device also publishes a provider key to the OS user environment; when
+	// omitted the key keeps its current setting.
+	Device *bool `json:"device,omitempty"`
+	// Provider is the catalog provider a provider_key login configures.
+	Provider string `json:"provider,omitempty"`
+}
+
+// CatalogProviderParam names one provider in a harness's own catalog.
+type CatalogProviderParam struct {
+	Provider string `path:"provider" description:"Provider ID from the harness's catalog."`
+}
+
+// RecordAgentSignInResponse names the AO-saved key the daemon stopped passing
+// the harness after its sign-in, if any.
+type RecordAgentSignInResponse struct {
+	ReleasedKey string `json:"releasedKey,omitempty"`
+}
+
+// ListCatalogProvidersResponse lists the key-only providers in a harness's
+// own provider catalog.
+type ListCatalogProvidersResponse struct {
+	Providers []agentauth.CatalogProvider `json:"providers"`
+}
+
+// ListCatalogModelsResponse lists a catalog provider's model IDs.
+type ListCatalogModelsResponse struct {
+	Models []string `json:"models"`
+}
+
+// ProviderKeyNameParam names one reviewed provider environment variable.
+type ProviderKeyNameParam struct {
+	Name string `path:"name" description:"Provider environment variable, such as ANTHROPIC_API_KEY."`
+}
+
+// ListProviderKeysResponse lists display-safe provider key state.
+type ListProviderKeysResponse struct {
+	Keys []agentauth.ProviderKey `json:"keys"`
+}
+
+// SaveProviderKeyRequest stores a key, or keeps the saved one when secret is
+// omitted, and sets whether it is published to the OS user environment.
+type SaveProviderKeyRequest struct {
+	Secret string `json:"secret,omitempty"`
+	Device bool   `json:"device"`
+}
+
+// CheckProviderKeyRequest checks secret, or the saved key when omitted.
+type CheckProviderKeyRequest struct {
+	Secret string `json:"secret,omitempty"`
+}
+
+// AgentLoginActionRequest selects a fixed navigation action, or a digit 1-9
+// for a recognized numbered native login menu. It never carries terminal
+// bytes or credentials.
+type AgentLoginActionRequest struct {
+	Action string `json:"action" enum:"previous,next,select,1,2,3,4,5,6,7,8,9"`
+	// Option is the label the user chose for a numbered action; the daemon
+	// refuses the action when the menu now offers something else there.
+	Option string `json:"option,omitempty" maxLength:"256"`
 }
 
 // SubmitAgentUILoginCodeRequest supplies a one-time native fallback code.
@@ -621,6 +682,9 @@ type SpawnSessionRequest struct {
 	Kind            domain.SessionKind     `json:"kind,omitempty" enum:"worker,orchestrator"`
 	Harness         domain.AgentHarness    `json:"harness,omitempty" enum:"claude-code,codex,aider,opencode,opencode-v2,grok,droid,amp,agy,crush,cursor,qwen,gemini,copilot,goose,auggie,continue,devin,cline,kimi,muse,kiro,kilocode,vibe,pi,kimchi,omp,fx,prime-agent,autohand,unreal-agent,codewhale,mimo-code,deepseek-harness,openhands,command-code,memcode,hermes"`
 	Branch          string                 `json:"branch,omitempty"`
+	// BaseBranch starts the session's branch from this branch instead of the
+	// project's default, to stack its work on another pull request.
+	BaseBranch string `json:"baseBranch,omitempty" maxLength:"255"`
 	// Mode picks the conversation controller: chat talks to the agent over a
 	// structured connection, tui opens the agent's native terminal interface.
 	// Omitted resolves to the daemon-owned preference, which defaults to Chat for
@@ -1406,12 +1470,15 @@ type SendSessionMessageResponse struct {
 // DelegateTaskRequest is the body of POST /api/v1/orchestrators/delegate.
 // An omitted agent tells the orchestrator to use the project's worker default.
 type DelegateTaskRequest struct {
-	ClientRequestID string              `json:"clientRequestId,omitempty" maxLength:"128"`
-	ProjectID       domain.ProjectID    `json:"projectId"`
-	Brief           string              `json:"brief" maxLength:"102400"`
-	Branch          string              `json:"branch,omitempty" maxLength:"255"`
-	Agent           domain.AgentHarness `json:"agent,omitempty" enum:"claude-code,codex,aider,opencode,opencode-v2,grok,droid,amp,agy,crush,cursor,qwen,gemini,copilot,goose,auggie,continue,devin,cline,kimi,muse,kiro,kilocode,vibe,pi,kimchi,omp,fx,prime-agent,autohand,unreal-agent,codewhale,mimo-code,deepseek-harness,openhands,command-code,memcode,hermes,fake"`
-	Model           string              `json:"model,omitempty" maxLength:"256"`
+	ClientRequestID string           `json:"clientRequestId,omitempty" maxLength:"128"`
+	ProjectID       domain.ProjectID `json:"projectId"`
+	Brief           string           `json:"brief" maxLength:"102400"`
+	Branch          string           `json:"branch,omitempty" maxLength:"255"`
+	// BaseBranch starts the worker from this branch instead of the project's
+	// default, to stack its work on another pull request.
+	BaseBranch string              `json:"baseBranch,omitempty" maxLength:"255"`
+	Agent      domain.AgentHarness `json:"agent,omitempty" enum:"claude-code,codex,aider,opencode,opencode-v2,grok,droid,amp,agy,crush,cursor,qwen,gemini,copilot,goose,auggie,continue,devin,cline,kimi,muse,kiro,kilocode,vibe,pi,kimchi,omp,fx,prime-agent,autohand,unreal-agent,codewhale,mimo-code,deepseek-harness,openhands,command-code,memcode,hermes,fake"`
+	Model      string              `json:"model,omitempty" maxLength:"256"`
 	// Effort is an explicit, provider-advertised model tuning override. Nil
 	// inherits the project default; an empty string selects the provider default.
 	Effort *string `json:"effort,omitempty" maxLength:"64"`
@@ -1485,13 +1552,81 @@ type SessionPRSummary struct {
 	ObservedAt       time.Time                    `json:"observedAt,omitempty"`
 	CIObservedAt     time.Time                    `json:"ciObservedAt,omitempty"`
 	ReviewObservedAt time.Time                    `json:"reviewObservedAt,omitempty"`
+
+	// Description is the PR body as markdown. It is untrusted provider content
+	// and must be sanitized when rendered.
+	Description          string `json:"description,omitempty"`
+	DescriptionTruncated bool   `json:"descriptionTruncated,omitempty"`
+	// Labels, RequestedReviewers and Commits are empty until DetailsObservedAt
+	// is present, and empty afterwards only when the PR has none.
+	Labels             []SessionPRLabel             `json:"labels"`
+	RequestedReviewers []SessionPRRequestedReviewer `json:"requestedReviewers"`
+	// Commits are the newest commits, oldest first; CommitCount is the total.
+	Commits           []SessionPRCommit `json:"commits"`
+	CommitCount       int               `json:"commitCount"`
+	DetailsObservedAt *time.Time        `json:"detailsObservedAt,omitempty"`
+	// Threads are the stored review threads with their comments, threads and
+	// comments oldest first. Bodies are untrusted provider markdown.
+	Threads []SessionPRThread `json:"threads,omitempty"`
+	// Conversation is the newest top-level conversation comments, oldest
+	// first; empty until DetailsObservedAt is present.
+	Conversation []SessionPRComment `json:"conversation,omitempty"`
+}
+
+// SessionPRThread is one review thread on a session PR.
+type SessionPRThread struct {
+	ID       string             `json:"id"`
+	Path     string             `json:"path,omitempty"`
+	Line     int                `json:"line,omitempty"`
+	Resolved bool               `json:"resolved"`
+	Comments []SessionPRComment `json:"comments"`
+}
+
+// SessionPRComment is one review-thread or conversation comment on a session PR.
+type SessionPRComment struct {
+	ID        string     `json:"id"`
+	Author    string     `json:"author"`
+	IsBot     bool       `json:"isBot"`
+	Body      string     `json:"body"`
+	URL       string     `json:"url,omitempty"`
+	CreatedAt *time.Time `json:"createdAt,omitempty"`
+}
+
+// SessionPRLabel is one label on a session PR.
+type SessionPRLabel struct {
+	Name  string `json:"name"`
+	Color string `json:"color,omitempty"`
+}
+
+// SessionPRRequestedReviewer is a user or team whose review is requested.
+type SessionPRRequestedReviewer struct {
+	Login     string `json:"login"`
+	AvatarURL string `json:"avatarUrl,omitempty"`
+	IsTeam    bool   `json:"isTeam,omitempty"`
+}
+
+// SessionPRCommit is one commit on a session PR's branch.
+type SessionPRCommit struct {
+	SHA         string     `json:"sha"`
+	Headline    string     `json:"headline"`
+	Author      string     `json:"author,omitempty"`
+	CommittedAt *time.Time `json:"committedAt,omitempty"`
 }
 
 // SessionPRCISummary is the CI status block for a session PR summary.
 type SessionPRCISummary struct {
 	State         domain.CIState          `json:"state" enum:"unknown,pending,passing,failing"`
 	FailingChecks []SessionPRFailingCheck `json:"failingChecks"`
-	AutoInjectCI  bool                    `json:"autoInjectCI"`
+	// Checks lists every check on the head commit, failing first.
+	Checks       []SessionPRCheck `json:"checks"`
+	AutoInjectCI bool             `json:"autoInjectCI"`
+}
+
+// SessionPRCheck is one CI check on a session PR's head commit.
+type SessionPRCheck struct {
+	Name   string               `json:"name"`
+	Status domain.PRCheckStatus `json:"status" enum:"unknown,queued,in_progress,passed,failed,skipped,cancelled"`
+	URL    string               `json:"url,omitempty"`
 }
 
 // SessionPRFailingCheck is one failed or cancelled CI check for a PR.
@@ -1600,7 +1735,67 @@ func NewSessionPRSummary(in sessionsvc.PRSummary) SessionPRSummary {
 		ObservedAt:       in.ObservedAt,
 		CIObservedAt:     in.CIObservedAt,
 		ReviewObservedAt: in.ReviewObservedAt,
+
+		Description:          in.Description,
+		DescriptionTruncated: in.DescriptionTruncated,
+		Labels:               newSessionPRLabels(in.Labels),
+		RequestedReviewers:   newSessionPRRequestedReviewers(in.RequestedReviewers),
+		Commits:              newSessionPRCommits(in.Commits),
+		CommitCount:          in.CommitCount,
+		DetailsObservedAt:    optionalTime(in.DetailsObservedAt),
+		Threads:              newSessionPRThreads(in.Threads),
+		Conversation:         newSessionPRComments(in.Conversation),
 	}
+}
+
+func newSessionPRThreads(in []contract.PullRequestThread) []SessionPRThread {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]SessionPRThread, 0, len(in))
+	for _, th := range in {
+		comments := newSessionPRComments(th.Comments)
+		if comments == nil {
+			comments = []SessionPRComment{}
+		}
+		out = append(out, SessionPRThread{ID: th.ID, Path: th.Path, Line: th.Line, Resolved: th.Resolved, Comments: comments})
+	}
+	return out
+}
+
+func newSessionPRComments(in []contract.PullRequestCommentEntry) []SessionPRComment {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]SessionPRComment, 0, len(in))
+	for _, c := range in {
+		out = append(out, SessionPRComment{ID: c.ID, Author: c.Author, IsBot: c.IsBot, Body: c.Body, URL: c.URL, CreatedAt: optionalTime(c.CreatedAt)})
+	}
+	return out
+}
+
+func newSessionPRLabels(in []contract.PullRequestLabel) []SessionPRLabel {
+	out := make([]SessionPRLabel, 0, len(in))
+	for _, label := range in {
+		out = append(out, SessionPRLabel{Name: label.Name, Color: label.Color})
+	}
+	return out
+}
+
+func newSessionPRRequestedReviewers(in []contract.PullRequestRequestedReviewer) []SessionPRRequestedReviewer {
+	out := make([]SessionPRRequestedReviewer, 0, len(in))
+	for _, reviewer := range in {
+		out = append(out, SessionPRRequestedReviewer{Login: reviewer.Login, AvatarURL: reviewer.AvatarURL, IsTeam: reviewer.IsTeam})
+	}
+	return out
+}
+
+func newSessionPRCommits(in []contract.PullRequestCommit) []SessionPRCommit {
+	out := make([]SessionPRCommit, 0, len(in))
+	for _, commit := range in {
+		out = append(out, SessionPRCommit{SHA: commit.SHA, Headline: commit.Headline, Author: commit.Author, CommittedAt: optionalTime(commit.CommittedAt)})
+	}
+	return out
 }
 
 func optionalTime(value time.Time) *time.Time {
@@ -1615,7 +1810,11 @@ func newSessionPRCISummary(in sessionsvc.PRCISummary) SessionPRCISummary {
 	for _, ch := range in.FailingChecks {
 		checks = append(checks, SessionPRFailingCheck{Name: ch.Name, Status: ch.Status, Conclusion: ch.Conclusion, URL: ch.URL})
 	}
-	return SessionPRCISummary{State: in.State, FailingChecks: checks, AutoInjectCI: in.AutoInjectCI}
+	all := make([]SessionPRCheck, 0, len(in.Checks))
+	for _, ch := range in.Checks {
+		all = append(all, SessionPRCheck{Name: ch.Name, Status: ch.Status, URL: ch.URL})
+	}
+	return SessionPRCISummary{State: in.State, FailingChecks: checks, Checks: all, AutoInjectCI: in.AutoInjectCI}
 }
 
 func newSessionPRReviewSummary(in sessionsvc.PRReviewSummary) SessionPRReviewSummary {
@@ -2740,6 +2939,12 @@ type PRIDParam struct {
 type MergePRRequest struct {
 	PRURL           string `json:"prUrl" minLength:"1"`
 	ExpectedHeadSHA string `json:"expectedHeadSha" minLength:"40"`
+	// Method is the merge strategy; squash when omitted.
+	Method string `json:"method,omitempty" enum:"squash,merge,rebase"`
+	// AllowNoChecks lets a PR that nothing checks merge, once the provider
+	// confirms nothing has started checking its head for a couple of minutes.
+	// Without it, a PR with no checks waits as it always has.
+	AllowNoChecks bool `json:"allowNoChecks,omitempty"`
 }
 
 // MergePRResponse is the body of POST /api/v1/prs/{id}/merge (200).
@@ -2749,6 +2954,155 @@ type MergePRResponse struct {
 	Method         string         `json:"method"`
 	State          domain.PRState `json:"state" enum:"merged"`
 	StateChangedAt time.Time      `json:"stateChangedAt"`
+}
+
+// ChangePRStateRequest is the body of POST /api/v1/prs/{id}/state.
+type ChangePRStateRequest struct {
+	PRURL  string `json:"prUrl" minLength:"1"`
+	Action string `json:"action" enum:"close,reopen,ready,draft"`
+}
+
+// ChangePRStateResponse is the body of POST /api/v1/prs/{id}/state (200).
+type ChangePRStateResponse struct {
+	OK             bool           `json:"ok"`
+	PRNumber       int            `json:"prNumber"`
+	State          domain.PRState `json:"state" enum:"open,draft,closed"`
+	StateChangedAt time.Time      `json:"stateChangedAt"`
+}
+
+// PRStackLayerResponse is one pull request of a stack.
+type PRStackLayerResponse struct {
+	Number         int            `json:"number"`
+	Title          string         `json:"title"`
+	URL            string         `json:"url"`
+	State          domain.PRState `json:"state" enum:"draft,open,merged,closed"`
+	HeadBranch     string         `json:"headBranch"`
+	HeadSHA        string         `json:"headSha"`
+	CI             string         `json:"ci,omitempty"`
+	ReviewDecision string         `json:"reviewDecision,omitempty"`
+	Mergeability   string         `json:"mergeability,omitempty"`
+	// NoChecks says an unknown ci means nothing checks the layer's head, not
+	// that its checks weren't read.
+	NoChecks bool `json:"noChecks,omitempty"`
+	// SessionID is the AO session tracking this layer, when one does.
+	SessionID domain.SessionID `json:"sessionId,omitempty"`
+}
+
+// LoadPRDetailsRequest names the tracked PR whose details to read.
+type LoadPRDetailsRequest struct {
+	PRURL string `json:"prUrl"`
+}
+
+// PRStackResponse is a provider-native stack, bottom layer first.
+type PRStackResponse struct {
+	Number     int                    `json:"number"`
+	URL        string                 `json:"url"`
+	BaseBranch string                 `json:"baseBranch"`
+	Open       bool                   `json:"open"`
+	Layers     []PRStackLayerResponse `json:"layers"`
+}
+
+// PRStackParentResponse is the open pull request a PR could be stacked on.
+type PRStackParentResponse struct {
+	Number int    `json:"number"`
+	URL    string `json:"url"`
+}
+
+// PRStackQuery is the query of GET /api/v1/prs/{id}/stack.
+type PRStackQuery struct {
+	PRURL string `query:"prUrl" required:"true" description:"The pull request's URL."`
+}
+
+// GetPRStackResponse is the body of GET and POST /api/v1/prs/{id}/stack. Neither
+// field is set for a pull request with no stack and nothing to stack on.
+type GetPRStackResponse struct {
+	Stack  *PRStackResponse       `json:"stack,omitempty"`
+	Parent *PRStackParentResponse `json:"parent,omitempty"`
+}
+
+// AddPRToStackRequest is the body of POST /api/v1/prs/{id}/stack.
+type AddPRToStackRequest struct {
+	PRURL string `json:"prUrl" minLength:"1"`
+}
+
+// PRStackHead pins one layer to the commit the user saw.
+type PRStackHead struct {
+	Number  int    `json:"number"`
+	HeadSHA string `json:"headSha" minLength:"40"`
+}
+
+// MergePRStackRequest is the body of POST /api/v1/prs/{id}/stack/merge. It names
+// every unmerged layer up to this pull request, so a change stops the merge.
+type MergePRStackRequest struct {
+	PRURL         string        `json:"prUrl" minLength:"1"`
+	ExpectedHeads []PRStackHead `json:"expectedHeads" minItems:"1"`
+	// Method is the merge strategy; squash when omitted.
+	Method string `json:"method,omitempty" enum:"squash,merge,rebase"`
+	// AllowNoChecks lets layers that nothing checks land, as MergePRRequest's does.
+	AllowNoChecks bool `json:"allowNoChecks,omitempty"`
+}
+
+// MergePRStackResponse is the body of POST /api/v1/prs/{id}/stack/merge (200).
+type MergePRStackResponse struct {
+	OK       bool   `json:"ok"`
+	PRNumber int    `json:"prNumber"`
+	Numbers  []int  `json:"numbers"`
+	Method   string `json:"method"`
+	// Status says whether the layers landed, joined the merge queue, or are
+	// still landing on the provider.
+	Status         string    `json:"status" enum:"merged,enqueued,pending"`
+	StateChangedAt time.Time `json:"stateChangedAt"`
+}
+
+// PostPRCommentRequest is the body of POST /api/v1/prs/{id}/comments. Without
+// threadId it posts a top-level conversation comment; with it, a reply in that
+// review thread.
+//
+// Attachments are the comment's files. Body links each one by its index, as
+// "![shot.png](attachment:0)" or "[log.txt](attachment:1)", and every file
+// must be linked. They are stored with the PR's provider only when the comment
+// posts, and removed again if it fails; on GitHub that is a commit under
+// refs/ao/attachments/ in the PR's repository, which needs write access.
+type PostPRCommentRequest struct {
+	PRURL       string                `json:"prUrl" minLength:"1"`
+	Body        string                `json:"body" minLength:"1"`
+	ThreadID    string                `json:"threadId,omitempty"`
+	Attachments []PRCommentAttachment `json:"attachments,omitempty" maxItems:"10"`
+}
+
+// PRCommentAttachment is one file of a PR comment. Data is the file's bytes,
+// standard base64-encoded without a "data:" prefix, at most 10 MiB decoded and
+// 25 MiB for all of a comment's files. Allowed types are PNG, JPEG, GIF, WebP,
+// MP4, QuickTime, WebM, PDF, plain text/log, JSON, CSV, and ZIP; the declared
+// type, the name's extension, and the file's content must agree. An empty or
+// application/octet-stream contentType is taken from the extension.
+type PRCommentAttachment struct {
+	Name        string `json:"name" minLength:"1"`
+	ContentType string `json:"contentType"`
+	Data        string `json:"data" minLength:"1"`
+}
+
+// PostPRCommentResponse is the body of POST /api/v1/prs/{id}/comments (200).
+type PostPRCommentResponse struct {
+	OK        bool      `json:"ok"`
+	ID        string    `json:"id"`
+	URL       string    `json:"url"`
+	CreatedAt time.Time `json:"createdAt"`
+}
+
+// PRAttachmentAccessQuery is the query of GET /api/v1/prs/{id}/attachment-access.
+type PRAttachmentAccessQuery struct {
+	PRURL string `query:"prUrl" required:"true" description:"The pull request's URL."`
+}
+
+// PRAttachmentAccessResponse is the body of GET
+// /api/v1/prs/{id}/attachment-access (200): whether files can be attached to
+// the PR's comments, and where they would be stored (on GitHub, the PR's
+// repository). Reason says why not when allowed is false.
+type PRAttachmentAccessResponse struct {
+	Allowed  bool   `json:"allowed"`
+	Location string `json:"location,omitempty"`
+	Reason   string `json:"reason,omitempty" enum:"no_write_access,unsupported"`
 }
 
 // ResolveCommentsRequest is the optional body of POST /api/v1/prs/{id}/resolve-comments.
@@ -4142,8 +4496,11 @@ type AgentAccountResponse struct {
 	LoggedIn  bool       `json:"loggedIn"`
 	CreatedAt *time.Time `json:"createdAt,omitempty"`
 	// Problem says why identity or limits could not be read.
-	Problem string                     `json:"problem,omitempty"`
-	Limits  *domain.AgentAccountLimits `json:"limits,omitempty"`
+	Problem     string                     `json:"problem,omitempty"`
+	Limits      *domain.AgentAccountLimits `json:"limits,omitempty"`
+	SameLoginAs string                     `json:"sameLoginAs,omitempty"`
+	OrgID       string                     `json:"orgId,omitempty"`
+	OrgName     string                     `json:"orgName,omitempty"`
 }
 
 // AgentAccountsResponse is the body of GET /agents/accounts.
@@ -4166,7 +4523,7 @@ type StartAgentAccountLoginResponse struct {
 // VerifyAgentAccountLoginResponse is how a sign-in stands. A duplicate login
 // is refused and its account names the existing one.
 type VerifyAgentAccountLoginResponse struct {
-	Status  agentaccounts.LoginStatus `json:"status" enum:"waiting,complete,duplicate,mismatch"`
+	Status  agentaccounts.LoginStatus `json:"status" enum:"waiting,complete,duplicate,mismatch,not_subscription"`
 	Account *AgentAccountResponse     `json:"account,omitempty"`
 }
 

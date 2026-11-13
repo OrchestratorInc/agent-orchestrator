@@ -251,8 +251,8 @@ describe("auto review", () => {
 });
 
 describe("system events", () => {
-	it("names what actually answered when the provider rerouted", () => {
-		render(
+	it("draws nothing when the provider rerouted the model", () => {
+		const { container } = render(
 			<ActivityRow
 				activity={activity({
 					activityKind: "system",
@@ -266,9 +266,7 @@ describe("system events", () => {
 				})}
 			/>,
 		);
-		expect(screen.getByText("gpt-5.6-terra-mini")).toBeInTheDocument();
-		expect(screen.getByText("gpt-5.6-terra")).toBeInTheDocument();
-		expect(screen.getByText("at capacity")).toBeInTheDocument();
+		expect(container).toBeEmptyDOMElement();
 	});
 
 	it("records where the provider demanded credentials", () => {

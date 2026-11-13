@@ -21,6 +21,7 @@ const mocks = vi.hoisted(() => ({
 	fallbackAmp: false,
 	workerTuning: {} as { model?: string; mode?: string; effort?: string },
 	baseTuning: {} as { model?: string; mode?: string; effort?: string },
+	workspaces: [] as Array<Record<string, unknown>>,
 }));
 
 vi.mock("../lib/telemetry", async (importOriginal) => ({
@@ -38,7 +39,7 @@ const ampSnapshot = { ...codexSnapshot, id: "amp", label: "Amp" };
 const cursorSnapshot = { id: "cursor", label: "Cursor", installation: { state: "not_installed", freshness: "fresh" }, authentication: { state: "unknown", freshness: "stale" }, effectiveReadiness: "not_ready", usageCount: 0, lastUsedAt: null };
 vi.mock("../hooks/useAgentReadinessQuery", () => ({ useAgentReadinessQuery: () => ({ data: { agents: [mocks.fallbackAmp ? { ...codexSnapshot, effectiveReadiness: "not_ready" } : codexSnapshot, cursorSnapshot, ampSnapshot] } }) }));
 vi.mock("../hooks/useProjectDefaultWorker", () => ({ useProjectWorkerDefaults: () => ({ loaded: mocks.defaultsLoaded, harness: mocks.defaultWorker, agentConfig: mocks.baseTuning, worker: { agent: mocks.defaultWorker, agentConfig: mocks.workerTuning } }) }));
-vi.mock("../hooks/useWorkspaceQuery", () => ({ useWorkspaceQuery: () => ({ data: [{ id: "demo", name: "Demo" }] }) }));
+vi.mock("../hooks/useWorkspaceQuery", () => ({ useWorkspaceQuery: () => ({ data: mocks.workspaces }) }));
 vi.mock("../hooks/useAgentModelsQuery", () => ({
 	agentModelsQueryKey: (agentId: string, projectId: string) => ["agent-models", agentId, projectId],
 	agentModelsQueryOptions: (agentId: string, projectId: string) => ({
@@ -77,7 +78,7 @@ async function openBlankCreate(user: Pick<typeof userEvent, "click">) {
 }
 
 describe("AutomationsView", () => {
-	beforeEach(() => { mocks.defaultWorker = "codex"; mocks.defaultsLoaded = true; mocks.fallbackAmp = false; mocks.workerTuning = {}; mocks.baseTuning = {}; mocks.automations = []; mocks.runsError = null; mocks.create.mockReset(); mocks.update.mockReset(); mocks.capture.mockReset(); });
+	beforeEach(() => { mocks.workspaces = [{ id: "demo", name: "Demo" }]; mocks.defaultWorker = "codex"; mocks.defaultsLoaded = true; mocks.fallbackAmp = false; mocks.workerTuning = {}; mocks.baseTuning = {}; mocks.automations = []; mocks.runsError = null; mocks.create.mockReset(); mocks.update.mockReset(); mocks.capture.mockReset(); });
 
 	it("shows a discoverable empty state and create action", () => {
 		renderView();
@@ -150,6 +151,20 @@ describe("AutomationsView", () => {
 		expect(await within(dialog).findByRole("button", { name: "Model" })).toHaveTextContent("GPT-5");
 		expect(screen.queryByRole("option", { name: "Project default" })).not.toBeInTheDocument();
 		expect(screen.queryByRole("combobox", { name: "Session kind" })).not.toBeInTheDocument();
+	});
+
+	it("offers no Cloud standalone agent as an automation's project", async () => {
+		mocks.workspaces = [
+			{ id: "demo", name: "Demo" },
+			{ id: "agent-1", name: "Fix the flaky test", kind: "cloud", standaloneAgent: true, sessions: [] },
+		];
+		const user = userEvent.setup();
+		renderView();
+		await openBlankCreate(user);
+		const dialog = screen.getByRole("dialog", { name: "Create automation" });
+		await user.click(within(dialog).getByRole("combobox", { name: "Project" }));
+		expect(await screen.findByRole("option", { name: "Demo" })).toBeInTheDocument();
+		expect(screen.queryByRole("option", { name: "Fix the flaky test" })).not.toBeInTheDocument();
 	});
 
 	it("edits an automation from its card action", async () => {

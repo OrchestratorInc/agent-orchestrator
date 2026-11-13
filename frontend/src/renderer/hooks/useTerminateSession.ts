@@ -288,15 +288,25 @@ function reportArchiveCleanup(queryClient: QueryClient, session: WorkspaceSessio
 	const timer = window.setTimeout(stop, CLEANUP_REPORT_WINDOW_MS);
 }
 
-function useCachedWorkspaces(hostId?: string) {
+const noSubscription = () => () => {};
+
+function useCachedWorkspaces(hostId?: string, enabled = true) {
 	const queryClient = useQueryClient();
 	const subscribe = useCallback((notify: () => void) => queryClient.getQueryCache().subscribe(notify), [queryClient]);
-	return useSyncExternalStore(subscribe, () => queryClient.getQueryData<WorkspaceSummary[]>(workspaceQueryKeyForHost(hostId)));
+	return useSyncExternalStore(
+		enabled ? subscribe : noSubscription,
+		() => (enabled ? queryClient.getQueryData<WorkspaceSummary[]>(workspaceQueryKeyForHost(hostId)) : undefined),
+	);
 }
 
-export function useTerminateSessionState(sessionId: string, hostId?: string) {
+/**
+ * `enabled` false skips watching the board data (every card watching the whole
+ * query cache re-renders on every fetch anywhere); only this session's own
+ * archive mutations are then followed.
+ */
+export function useTerminateSessionState(sessionId: string, hostId?: string, enabled = true) {
 	// Observe existing board data; this does not start another network request.
-	const data = useCachedWorkspaces(hostId);
+	const data = useCachedWorkspaces(hostId, enabled);
 	const session = data?.flatMap((workspace) => workspace.sessions).find((session) => session.id === sessionId);
 	const summary = summarizeBySession(useTerminateSessionMutations()).find(({ session }) =>
 		session.id === sessionId && session.hostId === hostId);

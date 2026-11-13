@@ -306,8 +306,9 @@ export function ProjectSetupFormView({
 	setupNotice,
 }: {
 	actions: ReactNode;
-	agentControls: { worker: ReactNode; orchestrator: ReactNode };
-	agents: {
+	// Left out when the project starts on its default agents without asking.
+	agentControls?: { worker: ReactNode; orchestrator: ReactNode };
+	agents?: {
 		cacheMessage?: string;
 		error?: string | null;
 		loading: boolean;
@@ -328,24 +329,26 @@ export function ProjectSetupFormView({
 	};
 	return (
 		<form className="space-y-5 p-4" onSubmit={submit}>
-			<div className="grid gap-4 sm:grid-cols-2">
-				{agentControls.worker}
-				{agentControls.orchestrator}
-			</div>
+			{agentControls && (
+				<div className="grid gap-4 sm:grid-cols-2">
+					{agentControls.worker}
+					{agentControls.orchestrator}
+				</div>
+			)}
 
-			{agents.loading && (
+			{agents?.loading && (
 				<p className="text-xs leading-row text-[var(--color-text-agents-sheet-description)]" role="status">
 					{agents.loadingMessage}
 				</p>
 			)}
 
-			{agents.cacheMessage ? (
+			{agents?.cacheMessage ? (
 				<p className="text-xs leading-row text-[var(--color-text-agents-sheet-description)]">
 					{agents.cacheMessage}
 				</p>
 			) : null}
 
-			{agents.error && (
+			{agents?.error && (
 				<div
 					className="flex items-center justify-between gap-3 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs leading-row text-destructive"
 					role="alert"

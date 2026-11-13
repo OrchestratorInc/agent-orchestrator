@@ -275,8 +275,13 @@ export default function CloudAgentScreen() {
 			}
 			// Left or cancelled while the listener started: it stops, and nothing opens.
 			if (!owns(mine)) { session.cancel(); return; }
+			// Ending the attempt makes run() leave busy alone once its step
+			// settles, so cancelling clears it here, as cancelCodex does.
 			const cancel = () => {
-				if (owns(mine)) endAttempt();
+				if (owns(mine)) {
+					endAttempt();
+					setBusy(false);
+				}
 				session.cancel();
 			};
 			// Cancelled before the browser opened, or while the credential was
@@ -304,6 +309,10 @@ export default function CloudAgentScreen() {
 				stillWanted();
 				await save(method.credentialType, secretValue);
 			} catch (cause) {
+				// A failure before the browser opened leaves the listener up: only
+				// run() stops it. A newer sign-in owns the listener, so only the
+				// current one stops it here.
+				if (owns(mine)) session.cancel();
 				// Back to the choices, unless the page already moved on (Use a code instead).
 				setFlow((current) => (current.kind === "browser" && current.cancel === cancel ? { kind: "choose" } : current));
 				throw cause;

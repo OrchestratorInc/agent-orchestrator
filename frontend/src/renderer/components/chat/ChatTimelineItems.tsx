@@ -26,6 +26,7 @@ import { ArtifactThumbnail } from "../ArtifactThumbnail";
 import { splitTurnArtifacts, type TurnArtifact } from "../../lib/turn-artifacts";
 import type { ArtifactRow } from "../../lib/artifacts";
 import { useChatEntrance } from "./chat-entrance";
+import { pageHidden } from "../../lib/page-hidden";
 import { fetchActivityOutput } from "../../hooks/useConversation";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
@@ -71,7 +72,6 @@ import {
 	Plug,
 	RotateCw,
 	Search,
-	Shuffle,
 	ShieldCheck,
 	ShieldQuestion,
 	ShieldX,
@@ -134,6 +134,7 @@ import { isWebLink, openLinkInSystemBrowser } from "../../lib/external-link-poli
 import { useComposerTokenRenderer } from "./sentComposerTokens";
 import { ActivityTitle, ChatMarkdown, OriginPreviewMarkdown, SessionLabelLink, SessionLinkedText, UserMarkdown } from "./ChatMarkdown";
 import { HighlightedCode } from "./HighlightedCode";
+import { ProviderMark } from "./ProviderMark";
 import { CopyButton } from "./CopyButton";
 import { CollapsibleHumanBody } from "./CollapsibleHumanBody";
 import { LatticeLoader } from "./LatticeLoader";
@@ -380,7 +381,9 @@ function useSmoothStreamingText(message: ConversationMessage): string {
 		const grew = message.text !== targetRef.current && message.text.startsWith(targetRef.current);
 		targetRef.current = message.text;
 		targetGraphemesRef.current = targetGraphemes;
-		if (reducedMotion) {
+		// A hidden window draws no frames, so a reveal would stall and replay once the
+		// reader is back. Show what arrived now; the fade treats it as settled too.
+		if (reducedMotion || pageHidden()) {
 			showWhole();
 			return;
 		}
@@ -503,7 +506,7 @@ export function CompactionMarker({ activity }: { activity: ConversationActivity 
 /** The remote host a chat's session runs on, whose catalogs name its models. */
 export const ChatHostId = createContext<string | undefined>(undefined);
 
-/** One side of a handoff: its model by name when one was recorded, else the agent's name. */
+/** One side of a handoff: the agent's mark, then its model by name when one was recorded, else the agent's name. */
 function HandoffSide({ harness, model, effort, compactWindow, bright }: { harness: string; model?: string; effort?: string; compactWindow?: string; bright?: boolean }) {
 	const { t } = useTranslation();
 	// The marker stores the model id. Its name comes from the agent's catalog on the session's host.
@@ -512,6 +515,7 @@ function HandoffSide({ harness, model, effort, compactWindow, bright }: { harnes
 	const name = model ? recordedModelName(harness, model, catalog?.models ?? []) : agentLabel(harness);
 	return (
 		<span className={cn("flex min-w-0 items-center gap-1.5", bright ? "text-foreground" : undefined)}>
+			<ProviderMark provider={harness} />
 			<span className="truncate">{name.replace(/\s*\b1M\b/g, "")}</span>
 			{effort ? <span className="shrink-0 text-muted-foreground">{formatEffortLabel(effort, t)}</span> : null}
 			{compactWindow ? <span className="shrink-0 text-muted-foreground" title="Compacts on its own at this size">· {compactWindow.toUpperCase()}</span> : null}
@@ -927,13 +931,22 @@ function formatDecisionDuration(ms: number): string {
 }
 
 /**
+ * The step rows' icon column (ACTIVITY_SUMMARY_BUTTON_CLASS: a 12px icon at the
+ * turn's edge, then a 6px gap). The live row, its setup checklist and their marks
+ * use the same box, so a mark sits on the step icons' left edge and the label
+ * starts where the step labels do. The lattice is 13px across, a pixel wider than
+ * the slot: it starts at the slot's left edge and overhangs into the gap. Centred,
+ * it would sit half a pixel outside the column, where the live row clips it.
+ */
+export const STEP_MARK_SLOT_CLASS = "flex size-3 shrink-0 items-center justify-start";
+
+/**
  * A running setup step's mark: the live row's lattice, so setup and work share one
- * "working" signal. It sits in the step icons' 12px slot and overhangs it by half a
- * pixel each side, so the step labels stay aligned with the done and pending marks.
+ * "working" signal, in the step icons' slot (STEP_MARK_SLOT_CLASS).
  */
 export function ResponseSpinner() {
 	return (
-		<span aria-hidden="true" data-testid="response-spinner" className="flex size-3 shrink-0 items-center justify-center text-muted-foreground">
+		<span aria-hidden="true" data-testid="response-spinner" className={cn(STEP_MARK_SLOT_CLASS, "text-muted-foreground")}>
 			<LatticeLoader />
 		</span>
 	);
@@ -941,15 +954,11 @@ export function ResponseSpinner() {
 
 /**
  * The live turn's working mark: a lattice of dots with a trail running round it
- * (see LatticeLoader). Decorative here, since the label and timer beside it carry
- * the meaning.
+ * (see LatticeLoader), in the step icons' slot (STEP_MARK_SLOT_CLASS). Decorative
+ * here, since the label and timer beside it carry the meaning.
  */
 export function LiveWorkingMark() {
-	return (
-		<span aria-hidden="true" data-testid="response-spinner" className="flex size-5 shrink-0 items-center justify-center text-muted-foreground">
-			<LatticeLoader />
-		</span>
-	);
+	return <ResponseSpinner />;
 }
 
 export function formatTime(iso: string): string {
@@ -1088,7 +1097,7 @@ export function HumanMessage({
 	// Hover-only actions float under the bubble instead of reserving a blank row;
 	// a branch navigator is always visible, so it keeps its place in the flow.
 	const inFlowActions = Boolean(branchPoint && onActivateBranch);
-	const actionRowClass = cn("flex h-7 items-center gap-1", inFlowActions ? "mt-1" : "absolute right-0 top-full z-10");
+	const actionRowClass = cn("flex h-7 items-center gap-1", inFlowActions ? "mt-1" : "absolute right-0 top-full z-10 mt-1");
 	// The editor's Cancel and Send float too, so starting an edit moves nothing. They
 	// sit on the "Worked for" line the turn reserves one row gap (10px) under the bubble.
 	const editActionRowClass = cn("flex h-7 items-center gap-1", inFlowActions ? "mt-1" : "absolute right-0 top-[calc(100%+0.625rem)] z-10");
@@ -1172,7 +1181,7 @@ export function HumanMessage({
 			)}
 			{editing ? null : (
 				<div className={actionRowClass}>
-					<div className="flex items-center gap-1 opacity-0 transition-opacity duration-150 ease-out focus-within:opacity-100 group-hover/message:opacity-100 motion-reduce:transition-none">
+					<div className="flex items-center gap-2 opacity-0 transition-opacity duration-150 ease-out focus-within:opacity-100 group-hover/message:opacity-100 motion-reduce:transition-none">
 						<MessageTimestamp createdAt={message.createdAt} />
 						{onEdit && onEditStart && message.turnId ? (
 							<Button
@@ -1462,10 +1471,13 @@ export function LiveResponseStatus({ entranceKey, startedAt, startupLabel, faile
 	const quietLabelKind = useRef<string | null | undefined>(labelEnters ? null : labelKind);
 	if (quietLabelKind.current !== null && quietLabelKind.current !== labelKind) quietLabelKind.current = null;
 	const labelEntrance = quietLabelKind.current === null;
-	const rowClass = "-mx-1 flex h-7 select-none items-center gap-2 px-1 py-0";
+	// The mark takes the step rows' icon slot and gap (STEP_MARK_SLOT_CLASS), so the
+	// dots sit on the step icons' left edge and the label starts where theirs do: a
+	// step that moves up from here into its own row keeps both edges.
+	const rowClass = "-mx-1 flex h-7 select-none items-center gap-1.5 px-1 py-0";
 	const row = (
 		<>
-			<span aria-hidden="true" className="flex size-5 shrink-0 items-center justify-center">
+			<span aria-hidden="true" className={STEP_MARK_SLOT_CLASS}>
 				{failed ? <X className="size-3 text-destructive" /> : <LiveWorkingMark />}
 			</span>
 			<span
@@ -1550,7 +1562,7 @@ export function LiveResponseStatus({ entranceKey, startedAt, startupLabel, faile
 			</AnimatePresence>
 			{reconnect?.detail && !startupLabel ? (
 				<p
-					className="truncate pl-7 text-xs leading-5 text-muted-foreground"
+					className="truncate pl-4.5 text-xs leading-5 text-muted-foreground"
 					title={reconnect.detail}
 					data-testid="live-turn-status"
 				>
@@ -1640,7 +1652,8 @@ export function ActivityRow({
 	else if (activity.activityKind === "reasoning") content = <ReasoningBlock activity={activity} />;
 	else if (activity.activityKind === "error") content = <ErrorActivityRow activity={activity} />;
 	else if (activity.activityKind === "ao_action") content = <AOActionRow activity={activity} />;
-	else if (activity.detail?.event === "model.rerouted") content = <RerouteRow activity={activity} />;
+	// The model picker already names the model that answered.
+	else if (isModelReroute(activity)) return null;
 	else if (activity.detail?.event === "auth.reauth_required") content = <ReauthRow activity={activity} />;
 	else if (activity.detail?.event === "workspace.script.run" && activity.detail.scriptRun) content = <ScriptRunPanel collapsible run={activity.detail.scriptRun} />;
 	else if (activity.detail?.event === "workspace.setup") content = <ProjectSetupRow activity={activity} />;
@@ -1676,6 +1689,8 @@ export function ActivityTransition({
 	useEffect(() => {
 		if (previousValue.current === value) return;
 		previousValue.current = value;
+		// A change made while the window is hidden would dip on the reader's return.
+		if (pageHidden()) return;
 		setSettling(true);
 	}, [value]);
 
@@ -3053,35 +3068,9 @@ function AutoReviewRow({ activity }: { activity: ConversationActivity }) {
 /* system events                                                               */
 /* -------------------------------------------------------------------------- */
 
-/**
- * Where the provider swapped the model out.
- *
- * On the timeline as well as in the composer because it happened at a point in the
- * conversation: everything after this row was answered by a different model than
- * everything before it, and only a timeline entry can say where the line is.
- */
-function RerouteRow({ activity }: { activity: ConversationActivity }) {
-	const detail = activity.detail;
-	return (
-		<div className="flex items-start gap-2.5 rounded-md border border-border bg-surface/60 px-3 py-2">
-			<Shuffle aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
-			<div className="flex min-w-0 flex-col gap-0.5">
-				<span className="text-xs text-foreground">
-					Answered by{" "}
-					<strong className="font-medium">{detail?.toModel ?? "another model"}</strong>
-					{detail?.fromModel ? (
-						<>
-							{" "}
-							instead of <span className="text-muted-foreground">{detail.fromModel}</span>
-						</>
-					) : null}
-				</span>
-				{detail?.reason ? (
-					<span className="text-xs leading-snug text-muted-foreground">{detail.reason}</span>
-				) : null}
-			</div>
-		</div>
-	);
+/** A provider's note that another model answered. Never drawn: the model picker already names that model. */
+export function isModelReroute(item: ConversationItem): boolean {
+	return item.kind === "activity" && item.detail?.event === "model.rerouted";
 }
 
 /**

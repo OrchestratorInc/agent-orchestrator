@@ -51,7 +51,7 @@ type Claude struct {
 	// DeviceEnv returns the credential AO adds to sessions that run on the
 	// computer's own login (a setup token saved through AO's login menu), so
 	// checks of that account see what its sessions use. Nil adds nothing.
-	DeviceEnv func() map[string]string
+	DeviceEnv func(context.Context) map[string]string
 }
 
 var _ ports.AgentAccountProviderCLI = (*Claude)(nil)
@@ -102,6 +102,8 @@ func (c *Claude) Identity(ctx context.Context, home string) (domain.AgentAccount
 		AuthMethod       string `json:"authMethod"`
 		Email            string `json:"email"`
 		SubscriptionType string `json:"subscriptionType"`
+		OrgID            string `json:"orgId"`
+		OrgName          string `json:"orgName"`
 	}
 	if err := json.Unmarshal(bytes.TrimSpace(out), &report); err != nil {
 		if runErr != nil {
@@ -118,6 +120,8 @@ func (c *Claude) Identity(ctx context.Context, home string) (domain.AgentAccount
 		LoggedIn: report.LoggedIn,
 		Email:    report.Email,
 		Plan:     report.SubscriptionType,
+		OrgID:    report.OrgID,
+		OrgName:  report.OrgName,
 	}, nil
 }
 
@@ -423,7 +427,7 @@ func (c *Claude) command(ctx context.Context, bin, home string, args ...string) 
 		cmd.Env = append(cmd.Env, key+"="+value)
 	}
 	if home == "" && c.DeviceEnv != nil {
-		for key, value := range c.DeviceEnv() {
+		for key, value := range c.DeviceEnv(ctx) {
 			cmd.Env = append(cmd.Env, key+"="+value)
 		}
 	}

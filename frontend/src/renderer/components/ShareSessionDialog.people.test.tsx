@@ -93,12 +93,12 @@ const entry = (grantId: string, subject: CloudCpShareEntry["subject"], extra: Pa
 	grantId, subject, scope: "session", sessionId: "sess", projectId: "proj", projectName: "storefront", role: "viewer", modeCap: "read-only", deniedCommands: [], source: "direct", createdAt: "2026-10-30T00:00:00Z", ...extra,
 });
 
-function renderDialog(props: { onOpenChange?: (open: boolean) => void } = {}) {
+function renderDialog(props: { onOpenChange?: (open: boolean) => void; standaloneAgent?: boolean } = {}) {
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	const view = (open: boolean) => (
 		<QueryClientProvider client={client}>
 			<TooltipProvider>
-				<ShareSessionDialog open={open} onOpenChange={props.onOpenChange ?? (() => undefined)} orgId="org" projectId="proj" sessionId="sess" />
+				<ShareSessionDialog open={open} onOpenChange={props.onOpenChange ?? (() => undefined)} orgId="org" projectId="proj" sessionId="sess" standaloneAgent={props.standaloneAgent} />
 				<GlobalToast />
 			</TooltipProvider>
 		</QueryClientProvider>
@@ -269,6 +269,19 @@ describe("ShareSessionDialog people and teams", () => {
 		expect(mocks.calls.find((call) => call[0] === "createShareGrants")).toEqual([
 			"createShareGrants", "org", "proj", { sessionId: "sess", subjects: [{ teamId: "t-checkout" }], role: "editor", modeCap: "standard" },
 		]);
+	});
+
+	it("names workspace members a team share of a Cloud standalone agent reaches as getting access", async () => {
+		// The control plane weighs a workspace member by what is shared with
+		// them in another person's agent, so Farah has nothing yet.
+		mocks.teamMembers["t-checkout"] = mocks.teamMembers["t-checkout"]!.map((entry) =>
+			entry.member.name === "Farah Nasser" ? { ...entry, access: {} } : entry);
+		renderDialog({ standaloneAgent: true });
+		await screen.findByText("Platform");
+		await stageCheckout();
+		const summary = await screen.findByText(/Farah Nasser get Can watch\./);
+		expect(summary.textContent).toContain("Dana Kim");
+		expect(summary.textContent).not.toContain("workspace member");
 	});
 
 	it("shows a share in the list at once, then as the grant the control plane made", async () => {

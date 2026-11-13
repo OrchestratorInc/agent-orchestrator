@@ -7,7 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
+	"mime/multipart"
 	"net/http"
+	"net/textproto"
 	"net/url"
 	"strconv"
 	"strings"
@@ -189,6 +192,16 @@ func (c *Client) doRESTWithETag(ctx context.Context, path string, q url.Values, 
 // methods must not replay cached responses). The response body and status code
 // are returned for caller-side interpretation.
 func (c *Client) doMERGE(ctx context.Context, path string, q url.Values, body any) (RESTResponse, error) {
+	return c.doWrite(ctx, http.MethodPut, path, q, body)
+}
+
+// doPOST performs a POST request with an optional JSON body. Like doMERGE it
+// bypasses the ETag cache.
+func (c *Client) doPOST(ctx context.Context, path string, q url.Values, body any) (RESTResponse, error) {
+	return c.doWrite(ctx, http.MethodPost, path, q, body)
+}
+
+func (c *Client) doWrite(ctx context.Context, method, path string, q url.Values, body any) (RESTResponse, error) {
 	var rdr io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
@@ -199,7 +212,7 @@ func (c *Client) doMERGE(ctx context.Context, path string, q url.Values, body an
 	}
 
 	u := c.restURL(path, q)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, u, rdr)
+	req, err := http.NewRequestWithContext(ctx, method, u, rdr)
 	if err != nil {
 		return RESTResponse{}, fmt.Errorf("gitlab scm: build %s request: %w", path, err)
 	}
@@ -213,7 +226,54 @@ func (c *Client) doMERGE(ctx context.Context, path string, q url.Values, body an
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return RESTResponse{}, fmt.Errorf("gitlab scm: PUT %s: %w", path, err)
+		return RESTResponse{}, fmt.Errorf("gitlab scm: %s %s: %w", method, path, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	b, err := readResponseBody(resp, path)
+	if err != nil {
+		return RESTResponse{StatusCode: resp.StatusCode}, err
+	}
+	if resp.StatusCode >= 400 {
+		return RESTResponse{StatusCode: resp.StatusCode, Body: b}, classifyError(resp, b)
+	}
+	return RESTResponse{StatusCode: resp.StatusCode, Body: b}, nil
+}
+
+// doPOSTFile performs a multipart/form-data POST carrying one file in the
+// form field "file", as GitLab's upload endpoints expect. Like doPOST it
+// bypasses the ETag cache.
+func (c *Client) doPOSTFile(ctx context.Context, path, fileName, contentType string, data []byte) (RESTResponse, error) {
+	var buf bytes.Buffer
+	form := multipart.NewWriter(&buf)
+	header := make(textproto.MIMEHeader)
+	header.Set("Content-Disposition", mime.FormatMediaType("form-data", map[string]string{"name": "file", "filename": fileName}))
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+	header.Set("Content-Type", contentType)
+	part, err := form.CreatePart(header)
+	if err != nil {
+		return RESTResponse{}, fmt.Errorf("gitlab scm: build %s form: %w", path, err)
+	}
+	if _, err := part.Write(data); err != nil {
+		return RESTResponse{}, fmt.Errorf("gitlab scm: build %s form: %w", path, err)
+	}
+	if err := form.Close(); err != nil {
+		return RESTResponse{}, fmt.Errorf("gitlab scm: build %s form: %w", path, err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.restURL(path, nil), &buf)
+	if err != nil {
+		return RESTResponse{}, fmt.Errorf("gitlab scm: build %s request: %w", path, err)
+	}
+	req.Header.Set("Content-Type", form.FormDataContentType())
+	req.Header.Set("User-Agent", c.userAgent)
+	if err := c.authorize(ctx, req); err != nil {
+		return RESTResponse{}, err
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return RESTResponse{}, fmt.Errorf("gitlab scm: POST %s: %w", path, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	b, err := readResponseBody(resp, path)

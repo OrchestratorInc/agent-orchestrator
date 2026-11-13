@@ -2,30 +2,24 @@ import { MenuView, type MenuAction, type MenuComponentRef, type NativeActionEven
 import * as Clipboard from "expo-clipboard";
 import { useRouter } from "expo-router";
 import { memo, useRef, useState } from "react";
+import { AppSymbol } from "./AppSymbol";
 import { Feather } from "./icons";
 import { useOpenPage } from "./pageNavigation";
 import { Platform, Pressable, StyleSheet, Text, View, type AccessibilityActionEvent, type GestureResponderEvent } from "react-native";
 import { sessionTitle, type DashboardPR, type DashboardSession, type SessionPRSummary } from "./api";
 import { rowDividerWidth } from "./divider";
+import { endsGroupedSection, groupedRowCorners, type GroupedRowPosition } from "./groupedRow";
 import { haptics } from "./haptics";
+import { relativeTime } from "./notificationView";
 import { openGitHub } from "./openGitHub";
 import { prCardMenuIcons } from "./pr-card-menu-icons";
 import { usePressFeedback } from "./pressFeedback";
 import type { Theme } from "./theme";
-import {
-	prBlockerLine,
-	prStateVisual,
-	prStatusAtoms,
-	prSummaryLine,
-	prTitle,
-	stateVisualOf,
-	toneColor,
-	type PRLifecycle,
-} from "./prView";
+import { prRowLifecycle, prRowStatus, prRowTitle, prTitle, stateVisualOf, toneColor } from "./prView";
 import { reviewRouteForPR, workerRouteForSession } from "./reviewView";
 import { useTheme, useThemeState, useThemedStyles } from "./ThemeProvider";
 import { useMenuRowWidth } from "./useMenuRowWidth";
-import { iconSize, space, type } from "./tokens";
+import { fontScaleCap, groupedCorner, gutter, iconSize, space, type } from "./tokens";
 
 type PRCardAction = "openWorker" | "openInGitHub" | "copyLink";
 
@@ -36,8 +30,14 @@ const ACTION_TITLES: Record<PRCardAction, string> = {
 };
 
 /**
- * A pull-request row with the same hierarchy as WorkerListRow: an eyebrow, the
- * title, then metadata, none of it smaller than footnote.
+ * A pull-request row in an inset-grouped list: the state glyph, the title over
+ * up to two lines, and one line under it with the number and only the status
+ * that needs you. The age sits at the trailing edge, with iOS's disclosure
+ * chevron since the row opens a page.
+ *
+ * `position` says where the row sits in its section, so it draws its slice of
+ * the section's card: the rounded ends, and a hairline (iOS) or gap (Android)
+ * between rows.
  *
  * A tap opens the review; the long press reaches the worker too. Everything else about the pull request is in the
  * row's long-press menu — a SwiftUI context menu on iOS, a Material dropdown on
@@ -50,6 +50,9 @@ export const PRCard = memo(function PRCard({
 	summary,
 	hostId,
 	hostName,
+	showProject = false,
+	position = "only",
+	now,
 	onLinkCopied,
 }: {
 	pr: DashboardPR;
@@ -57,6 +60,11 @@ export const PRCard = memo(function PRCard({
 	summary?: SessionPRSummary;
 	hostId: string;
 	hostName?: string;
+	/** Name the repository on the row: on when the list spans more than one. */
+	showProject?: boolean;
+	position?: GroupedRowPosition;
+	/** The current time, passed so the row's age re-renders as it changes. */
+	now?: number;
 	/** Called once the pull request's link is on the clipboard. */
 	onLinkCopied?: () => void;
 }) {
@@ -71,22 +79,18 @@ export const PRCard = memo(function PRCard({
 	// Android: where the finger came down, and the menu's anchor placed there.
 	const touch = useRef({ x: 0, y: 0 });
 	const [anchor, setAnchor] = useState({ x: 0, y: 0 });
-	const state = summary ? stateVisualOf(t, summary.state as PRLifecycle) : prStateVisual(t, pr);
-	const title = summary?.title?.trim() || prTitle(pr, sessionTitle(session));
-	// The repository's own name, without its owner: the line ends in an
-	// ellipsis if it still runs long, rather than losing its middle.
+	// From the board, as the row's section is: see prRowLifecycle.
+	const state = stateVisualOf(t, prRowLifecycle(pr, summary));
+	const { title, scope } = prRowTitle(summary?.title?.trim() || prTitle(pr, sessionTitle(session)));
+	// The repository's own name, without its owner.
 	const project = (summary?.repo || session.projectId || "Standalone").split("/").pop() || "Standalone";
-	const projectLabel = hostName ? `${hostName} · ${project}` : project;
-	const branches = summary
-		? [summary.sourceBranch, summary.targetBranch].filter(Boolean).join(" → ")
-		: session.branch || "";
-	const diff = summary && (summary.changedFiles > 0 || summary.additions > 0 || summary.deletions > 0)
-		? `${summary.changedFiles} ${summary.changedFiles === 1 ? "file" : "files"}  +${summary.additions} −${summary.deletions}`
-		: "";
-	const detail = [`#${pr.number}`, branches, diff].filter(Boolean).join(" · ");
-	const atoms = summary ? prStatusAtoms(summary) : [prSummaryLine(pr)];
-	const status = atoms[0] ?? { text: state.label, tone: "passive" as const };
-	const blockers = summary ? prBlockerLine(summary) : null;
+	const place = [hostName, showProject || hostName ? project : undefined].filter(Boolean).join(" · ");
+	const status = prRowStatus(pr, summary);
+	// Where the pull request is, then what kind of change it is: the scope only
+	// fills the line when no status needs it.
+	const context = place || (status ? "" : scope ?? "");
+	const age = summary?.updatedAt ? relativeTime(summary.updatedAt, now) : "";
+	const ends = endsGroupedSection(position);
 	const link = summary?.htmlUrl || summary?.url || pr.url;
 
 	const run = (action: string) => {
@@ -104,7 +108,13 @@ export const PRCard = memo(function PRCard({
 	const row = (
 		<Pressable
 			accessibilityRole="button"
-			accessibilityLabel={`${title}. ${projectLabel}. Pull request ${pr.number}. ${status.text}.`}
+			accessibilityLabel={[
+				title,
+				context,
+				`Pull request ${pr.number}`,
+				status?.text ?? state.label,
+				age ? (age === "now" ? "Updated just now" : `Updated ${age} ago`) : "",
+			].filter(Boolean).join(". ") + "."}
 			accessibilityActions={actions.map((name) => ({ name, label: ACTION_TITLES[name] }))}
 			onAccessibilityAction={(event: AccessibilityActionEvent) => run(event.nativeEvent.actionName)}
 			android_ripple={feedback.android_ripple}
@@ -119,20 +129,26 @@ export const PRCard = memo(function PRCard({
 				// Opened once the anchor has moved under the finger.
 				requestAnimationFrame(() => menu.current?.show());
 			} : undefined}
-			style={({ pressed }) => [styles.row, menuWidth.style, pressed && feedback.pressed]}
+			style={({ pressed }) => [styles.row, groupedRowCorners(position), menuWidth.style, pressed && feedback.pressed]}
 		>
-			<View style={styles.eyebrow}>
-				<Feather name="git-pull-request" size={iconSize.sm} color={state.color} />
-				<Text style={styles.project} numberOfLines={1}>{projectLabel}</Text>
-				<Text style={[styles.status, { color: toneColor(t, status.tone) }]} numberOfLines={1}>{status.text}</Text>
+			<View style={styles.glyph}>
+				<Feather name="git-pull-request" size={iconSize.lg} color={state.color} />
 			</View>
-
-			<View style={styles.copy}>
-				<Text style={styles.title} numberOfLines={1}>{title}</Text>
-				<Text style={styles.details} numberOfLines={1}>{detail}</Text>
+			<View style={[styles.content, !ends && styles.divided]}>
+				<View style={styles.copy}>
+					<Text style={styles.title} numberOfLines={2}>{title}</Text>
+					<Text style={styles.subtitle} numberOfLines={1}>
+						{`#${pr.number}`}
+						{status ? " · " : null}
+						{status ? <Text style={{ color: status.tone === "neutral" ? t.textSecondary : toneColor(t, status.tone) }}>{status.text}</Text> : null}
+						{context ? ` · ${context}` : null}
+					</Text>
+				</View>
+				<View style={styles.trailing}>
+					{age ? <Text style={styles.age}>{age}</Text> : null}
+					{Platform.OS === "ios" ? <AppSymbol name="chevronForward" size={iconSize.xs} color={t.textFaint} weight="semibold" /> : null}
+				</View>
 			</View>
-
-			{blockers ? <Text style={styles.blockers} numberOfLines={1}>{blockers}</Text> : null}
 		</Pressable>
 	);
 
@@ -141,7 +157,7 @@ export const PRCard = memo(function PRCard({
 	// eyebrow out past the row's right padding and clipped the status.
 	if (Platform.OS === "android") {
 		return (
-			<View>
+			<View style={[styles.slot, !ends && styles.joined]}>
 				{row}
 				<MenuView
 					ref={menu}
@@ -158,7 +174,7 @@ export const PRCard = memo(function PRCard({
 	}
 
 	return (
-		<View onLayout={menuWidth.onLayout}>
+		<View ref={menuWidth.ref} style={styles.slot} onLayout={menuWidth.onLayout}>
 			<MenuView
 				ref={menu}
 				colorScheme={scheme}
@@ -173,27 +189,50 @@ export const PRCard = memo(function PRCard({
 	);
 });
 
+/** A section's heading over its card, in line with the rows' text, with its count. */
+export function PRSectionHeader({ label, count }: { label: string; count: number }) {
+	const styles = useThemedStyles(makeStyles);
+	return (
+		<View accessible accessibilityRole="header" accessibilityLabel={`${label}, ${count}`} style={styles.sectionHeader}>
+			<Text maxFontSizeMultiplier={fontScaleCap.chrome} style={styles.sectionLabel}>{label}</Text>
+			<Text maxFontSizeMultiplier={fontScaleCap.chrome} style={styles.sectionCount}>{count}</Text>
+		</View>
+	);
+}
+
 const makeStyles = (t: Theme) =>
 	StyleSheet.create({
-		// Opaque, so the row iOS lifts out for its context menu is not see-through.
+		// Inset from the screen's edges, as an inset-grouped section is. Rows in
+		// a section meet flush on iOS and keep a small gap on Android.
+		slot: { marginHorizontal: gutter },
+		joined: { marginBottom: groupedCorner.gap },
+		// Opaque, so the row iOS lifts out for its context menu is not
+		// see-through; clipped, so the press highlight and ripple keep its corners.
 		row: {
-			minHeight: 76,
-			justifyContent: "center",
-			paddingHorizontal: space.lg,
-			paddingVertical: space.sm,
-			gap: space.hair,
-			backgroundColor: t.bgBase,
+			flexDirection: "row",
+			paddingLeft: gutter,
+			backgroundColor: t.bgElevated,
+			overflow: "hidden",
+			borderCurve: "continuous",
 		},
-		// Inset to the text, as a worker row's is.
-		divider: { position: "absolute", left: space.lg, right: 0, bottom: 0, height: rowDividerWidth, backgroundColor: t.borderSubtle },
-		eyebrow: { flexDirection: "row", alignItems: "center", gap: space.xs, minHeight: 17 },
-		project: { fontFamily: "DMSans_500Medium", flex: 1, color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "500" },
-		status: { fontFamily: "DMSans_500Medium", flexShrink: 0, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "500" },
-		copy: { gap: space.hair },
-		title: { fontFamily: "DMSans_600SemiBold", color: t.textPrimary, fontSize: 16, lineHeight: 21, fontWeight: "600", letterSpacing: -0.15 },
-		details: { color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontFamily: t.fontMono },
+		// Centred on the title's first line.
+		glyph: { width: iconSize.lg, paddingTop: space.md + (type.headline.lineHeight - iconSize.lg) / 2, marginRight: space.md },
+		// Explicit grow, shrink and zero basis: inside the context menu's SwiftUI
+		// host a bare `flex: 1` kept the text's intrinsic width, and the title ran
+		// off the card on one line instead of wrapping.
+		content: { flexGrow: 1, flexShrink: 1, flexBasis: 0, minWidth: 0, flexDirection: "row", gap: space.sm, paddingVertical: space.md, paddingRight: gutter },
+		// iOS divides a section's rows with a hairline inset to the text; Android's
+		// connected list separates them with the gap instead.
+		divided: Platform.OS === "ios" ? { borderBottomWidth: rowDividerWidth, borderBottomColor: t.borderSubtle } : {},
+		copy: { flexGrow: 1, flexShrink: 1, flexBasis: 0, minWidth: 0, gap: space.hair },
+		title: { ...type.headline, color: t.textPrimary },
+		subtitle: { ...type.footnote, color: t.textSecondary },
+		trailing: { flexDirection: "row", alignItems: "center", gap: space.xs, alignSelf: "flex-start", minHeight: type.headline.lineHeight },
+		age: { ...type.footnote, color: t.textTertiary, fontVariant: ["tabular-nums"] },
+		sectionHeader: { flexDirection: "row", alignItems: "baseline", gap: space.xs, paddingHorizontal: gutter * 2, paddingTop: space.xl, paddingBottom: space.sm },
+		sectionLabel: { ...type.subheadline, fontFamily: type.headline.fontFamily, fontWeight: type.headline.fontWeight, color: t.textPrimary },
+		sectionCount: { ...type.subheadline, color: t.textTertiary, fontVariant: ["tabular-nums"] },
 		// Takes no touches: the row under it has them all.
 		menuAnchor: { position: "absolute", pointerEvents: "none" },
 		menuPoint: { width: 1, height: 1 },
-		blockers: { fontFamily: "DMSans_400Regular", color: t.amber, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, marginTop: space.hair },
 	});

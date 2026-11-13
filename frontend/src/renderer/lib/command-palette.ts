@@ -28,6 +28,7 @@ import type { AppShortcutId } from "../../shared/shortcuts";
 import type { GlobalSettingsSection } from "../stores/ui-store";
 import { renderedSnippetText } from "./chat-annotation-navigation";
 import { getSessionStatusDotView } from "./session-presentation";
+import { importableProject } from "./session-import";
 
 export type CommandGroupId = "current" | "attention" | "files" | "content" | "messages" | "projects" | "sessions" | "prs" | "settings" | "global";
 
@@ -59,6 +60,7 @@ export type CommandAction =
 	| { kind: "navigate"; target: NavigateTarget }
 	| { kind: "open-new-task"; projectId: string }
 	| { kind: "open-new-project" }
+	| { kind: "open-session-import"; projectId?: string }
 	| { kind: "open-orchestrator"; projectId: string }
 	| { kind: "open-archive"; projectId: string }
 	| { kind: "open-session-actions"; sessionId: string }
@@ -366,6 +368,8 @@ export function findSession(workspaces: WorkspaceSummary[], sessionId: string): 
 	return undefined;
 }
 
+const IMPORT_SESSION_KEYWORDS = ["import", "chats", "sessions", "conversations", "history", "existing", "resume", "continue", "claude code", "codex", "terminal"];
+
 export function buildCommands(ctx: CommandPaletteContext, t: TFunction = appI18n.t): CommandItem[] {
 	const { workspaces, currentProjectId, currentSessionId, currentHostId, restartingProjectIds, reviewStatesBySessionId } = ctx;
 	const items: CommandItem[] = [];
@@ -399,7 +403,18 @@ export function buildCommands(ctx: CommandPaletteContext, t: TFunction = appI18n
 	});
 
 	if (currentProject) {
-		if (currentProject.id !== STANDALONE_WORKSPACE_ID) {
+		if (importableProject(currentProject)) {
+			items.push({
+				id: "current-import-sessions",
+				group: "current",
+				title: t("sessionImport.menuItem"),
+				emphasis: currentProject.name,
+				keywords: [...IMPORT_SESSION_KEYWORDS, currentProject.name],
+				action: { kind: "open-session-import", projectId: currentProject.id },
+			});
+		}
+		// A Cloud standalone agent has no orchestrator either.
+		if (currentProject.id !== STANDALONE_WORKSPACE_ID && !currentProject.standaloneAgent) {
 			items.push({
 				id: "current-open-orchestrator",
 				group: "current",
@@ -416,7 +431,7 @@ export function buildCommands(ctx: CommandPaletteContext, t: TFunction = appI18n
 				items.push({
 					id: "current-open-archive",
 					group: "current",
-					title: t("command.openArchive"),
+					title: t("command.archivedSessions"),
 					emphasis: currentProject.name,
 					subtitle: t("command.archivedCount", { count: archivedCount }),
 					keywords: ["archive", "archived", "ended", "terminated", "restore", "history", currentProject.name],
@@ -490,7 +505,8 @@ export function buildCommands(ctx: CommandPaletteContext, t: TFunction = appI18n
 		items.push(sessionCommand(workspace, session, "attention"));
 	}
 
-	for (const workspace of workspaces.filter((candidate) => candidate.id !== STANDALONE_WORKSPACE_ID)) {
+	// Cloud standalone agents are the Scratchpad's, not projects; their sessions are listed.
+	for (const workspace of workspaces.filter((candidate) => candidate.id !== STANDALONE_WORKSPACE_ID && !candidate.standaloneAgent)) {
 		items.push({
 			id: `project:${workspace.id}`,
 			group: "projects",
@@ -575,6 +591,14 @@ export function buildCommands(ctx: CommandPaletteContext, t: TFunction = appI18n
 		title: t("command.newProject"),
 		keywords: ["add", "import", "repo", "workspace"],
 		action: { kind: "open-new-project" },
+	});
+	items.push({
+		id: "global-import-sessions",
+		group: "global",
+		title: t("sessionImport.foldersTitle"),
+		subtitle: t("settings.harness.thisComputer"),
+		keywords: [...IMPORT_SESSION_KEYWORDS, "folders", "projects"],
+		action: { kind: "open-session-import" },
 	});
 	if (ctx.developerMode) {
 		items.push({
