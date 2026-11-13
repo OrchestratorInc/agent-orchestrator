@@ -82,6 +82,7 @@ var lanControlBlockedPrefixes = []string{
 	"/api/v1/side-chats/launch",
 	"/api/v1/system/install",
 	"/api/v1/computer-use",
+	"/api/v1/dictation",
 	"/api/v1/settings/computer-use",
 	"/api/v1/agents/codex/accounts",
 	"/api/v1/agents/codex/account-switches",

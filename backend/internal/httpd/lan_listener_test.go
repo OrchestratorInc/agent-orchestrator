@@ -305,6 +305,8 @@ func TestLANManagerBlocksLoopbackOnlyControlRoutes(t *testing.T) {
 		"/api/v1/system/install/tmux",
 		"/api/v1/system/install/cua-driver",
 		"/api/v1/computer-use/status",
+		"/api/v1/dictation",
+		"/api/v1/dictation/stream",
 		"/api/v1/computer-use/call",
 		"/api/v1/settings/computer-use",
 		"/api/v1/sessions/ao-1/preview/server",
