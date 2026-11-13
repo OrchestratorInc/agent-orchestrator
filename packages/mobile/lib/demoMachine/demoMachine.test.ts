@@ -104,6 +104,31 @@ describe("demo machine", () => {
 		expect(expoFetch).not.toHaveBeenCalled();
 	});
 
+	it("serves a worktree to the Files screens through the app's own readers", async () => {
+		const { getWorkspaceFile, getWorkspaceManifest, getWorkspaceTree, searchWorkspaceFiles } = await import("../files/api");
+		const manifest = await getWorkspaceManifest(cfg, "web-1");
+		expect(manifest.files.length).toBeGreaterThan(0);
+		const changed = manifest.files[0];
+		const file = await getWorkspaceFile(cfg, "web-1", changed.path);
+		expect(file.content.split("\n").length).toBeGreaterThan(40);
+		expect(file.diff).toContain(`+++ b/${changed.path}`);
+		const root = await getWorkspaceTree(cfg, "web-1");
+		expect(root.entries.some((entry) => entry.type === "dir")).toBe(true);
+		expect((await searchWorkspaceFiles(cfg, "web-1", "README")).results.map((result) => result.path)).toEqual(["README.md"]);
+	});
+
+	it("serves artifacts, a preview and a worktree shell", async () => {
+		const { getArtifactText, getPreview } = await import("../api");
+		const { openSessionShell } = await import("../chat/api");
+		const board = await getSessions(cfg, "all");
+		const worker = board.sessions.find((session) => session.id === "web-1")!;
+		expect((worker.artifacts ?? []).map((artifact) => artifact.path)).toContain("report.md");
+		expect(await getArtifactText(cfg, "web-1", "report.md")).toContain("# web-1 report");
+		expect(await getPreview(cfg, "web-1")).toMatchObject({ url: "https://example.com/", authenticated: false });
+		const shell = await openSessionShell(cfg, "web-1", "web-app");
+		expect(await openSessionShell(cfg, "web-1", "web-app")).toEqual(shell);
+	});
+
 	it("fails like an unreachable machine when switched off", async () => {
 		setDemoNetwork("offline");
 		await expect(getSessions(cfg, "all")).rejects.toBeInstanceOf(UnreachableError);

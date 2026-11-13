@@ -4,6 +4,8 @@
 // "replying" so the live-update path runs the way it does against a real agent.
 // See ./transport.ts for how requests reach it and ./index.ts for the switch.
 
+import { demoArtifacts, demoArtifactText, demoFile, demoManifest, demoSearch, demoTree } from "./workspace";
+
 export const DEMO_HOST_ID = "demo-machine";
 export const DEMO_HOSTNAME = "demo.ao.invalid";
 export const DEMO_PORT = 3011;
@@ -14,7 +16,8 @@ const REPLY_CHARS_PER_TICK = 24;
 const AUTOPILOT_PAUSE_MS = 5_000;
 const ARCHIVE_PAGE_DEFAULT = 25;
 
-export type DemoResponse = { status: number; body: unknown };
+/** `text` answers with that body as is (an artifact's file) instead of `body` as JSON. */
+export type DemoResponse = { status: number; body: unknown; text?: string; contentType?: string };
 export type DemoEvent = { seq: number; projectId: string; sessionId: string; type: string; payload: { conversationId: string }; createdAt: string };
 
 type Project = { id: string; name: string; kind: "single_repo" | "workspace" | "scratch"; sessionPrefix: string };
@@ -37,6 +40,8 @@ type WireSession = {
 	updatedAt: string;
 	isPinned: boolean;
 	prs: WirePR[];
+	previewUrl?: string;
+	artifactFiles?: unknown[];
 };
 type Message = {
 	kind: "message"; id: string; turnId: string; sequence: number; revision: number;
@@ -220,6 +225,9 @@ export class DemoServer {
 			prs: archived
 				? (index % 3 === 0 ? [] : [pr({ state: "merged", ci: "passing", review: "approved", mergeability: "mergeable" })])
 				: stage!.pr ? [pr(stage!.pr)] : [],
+			// A page to open in Preview (any reachable page: a WebView loads it natively).
+			...(archived || index % 2 ? {} : { previewUrl: "https://example.com/" }),
+			artifactFiles: archived ? [] : demoArtifacts(id, iso(updated)),
 		};
 	}
 
@@ -384,6 +392,8 @@ export class DemoServer {
 			if (!session) return notFound();
 			if (get && segments.length === 2) return ok({ session });
 			if (segments[2] === "conversation") return this.handleConversation(method, id, segments.slice(3), q, body, now);
+			const files = this.handleFiles(method, id, segments.slice(2), q, session);
+			if (files) return files;
 		}
 		if (get && path === "/notifications") return ok(this.notifications(q));
 		if (get && path === "/settings") return ok({ defaultSessionMode: "chat", chatHarnesses: HARNESSES });
@@ -391,10 +401,82 @@ export class DemoServer {
 			const agents = HARNESSES.map((id) => ({ id, label: id, authStatus: "authorized" }));
 			return ok({ supported: agents, installed: agents, authorized: agents });
 		}
+		if (path === "/shell-terminals") return this.handleShells(method, body, now);
+		if (get && segments[0] === "agents" && segments[2] === "models") {
+			return ok({
+				agentId: segments[1],
+				selectionMode: "catalog",
+				allowCustom: false,
+				source: "demo",
+				stale: false,
+				fetchedAt: iso(now),
+				models: [
+					{ id: "demo-large", label: "Demo Large", isDefault: true, efforts: ["low", "medium", "high"], defaultEffort: "medium" },
+					{ id: "demo-small", label: "Demo Small" },
+				],
+			});
+		}
 		// Push registration and unpairing succeed, so forgetting the demo machine
 		// from Settings works like forgetting a real one.
 		if (segments[0] === "push" && (method === "POST" || method === "DELETE")) return ok({});
 		return notFound();
+	}
+
+	/** The Files, artifact and preview routes under /sessions/:id. */
+	private handleFiles(method: string, sessionId: string, rest: string[], q: URLSearchParams, session: WireSession): DemoResponse | undefined {
+		const route = rest.join("/");
+		if (method === "GET") {
+			if (route === "workspace/manifest") return ok(demoManifest(sessionId));
+			if (route === "workspace/file") {
+				const file = demoFile(sessionId, q.get("path") ?? "");
+				return file ? ok(file) : notFound();
+			}
+			if (route === "workspace/tree") return ok(demoTree(sessionId, q.get("path") ?? ""));
+			if (route === "workspace/search") return ok(demoSearch(sessionId, q.get("query") ?? ""));
+			if (route === "workspace/branches") {
+				return ok({
+					branches: [
+						{ kind: "local", name: session.branch, checkedOut: true, isDefault: false },
+						{ kind: "local", name: "main", checkedOut: false, isDefault: true },
+					],
+					supported: true,
+					truncated: false,
+				});
+			}
+			if (route === "workspace/history") return ok({ commits: [], commitsTruncated: false, view: { kind: "checked_out", name: session.branch, baseRef: "main", rangeMode: "since_base" } });
+			if (route === "preview") return ok(session.previewUrl ? { previewUrl: session.previewUrl } : {});
+			if (route === "artifact-versions") return ok({ versions: [] });
+			// The artifact's own route, and the preview route the viewer reads HTML through.
+			const artifact = rest[0] === "artifact-files" ? rest.slice(1).join("/")
+				: rest[0] === "preview" && rest[1] === "files" && rest[2] === "__ao_artifacts__" ? rest.slice(3).join("/")
+				: undefined;
+			if (artifact !== undefined) {
+				const text = demoArtifactText(sessionId, artifact);
+				return text === undefined ? notFound() : { status: 200, body: null, text, contentType: "text/plain; charset=utf-8" };
+			}
+		}
+		// Review comments from the file viewer reach the agent.
+		if (method === "POST" && route === "send") return ok({});
+		return undefined;
+	}
+
+	private readonly shells: { handleId: string; projectId: string; sessionId: string; workingDir: string; title: string; createdAt: string }[] = [];
+
+	/** Worktree shells: one per session, reused, as the daemon does. The mux socket answers their I/O. */
+	private handleShells(method: string, body: string | undefined, now: number): DemoResponse {
+		if (method === "GET") return ok({ shellTerminals: this.shells });
+		let wanted: { projectId?: string; sessionId?: string } = {};
+		try { wanted = JSON.parse(body ?? "{}") as typeof wanted; } catch { /* empty */ }
+		const shell = {
+			handleId: `shell-${wanted.sessionId ?? this.shells.length + 1}`,
+			projectId: wanted.projectId ?? "",
+			sessionId: wanted.sessionId ?? "",
+			workingDir: `/work/${wanted.projectId ?? "demo"}`,
+			title: "zsh",
+			createdAt: iso(now),
+		};
+		this.shells.push(shell);
+		return ok({ shellTerminal: shell });
 	}
 
 	private listSessions(q: URLSearchParams): unknown {

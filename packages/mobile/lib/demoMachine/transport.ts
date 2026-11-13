@@ -115,10 +115,10 @@ export async function demoFetch(input: unknown, init?: RequestInit): Promise<Res
 	try {
 		await travel(init?.signal);
 		const answer = demoServer().handle(method, url, typeof init?.body === "string" ? init.body : undefined);
-		return new Response(JSON.stringify(answer.body), {
+		return new Response(answer.text ?? JSON.stringify(answer.body), {
 			status: answer.status,
 			statusText: answer.status === 200 ? "OK" : "Error",
-			headers: { "Content-Type": "application/json" },
+			headers: { "Content-Type": answer.contentType ?? "application/json" },
 		});
 	} finally {
 		if (isChatPage) chatPagesInFlight--;
