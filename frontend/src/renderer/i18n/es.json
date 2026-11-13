@@ -3788,6 +3788,7 @@
 	"settings.agentAccounts.loginTitle": "Iniciar sesión en {{provider}}",
 	"settings.agentAccounts.checkSignIn": "Comprobar inicio de sesión",
 	"settings.agentAccounts.loginWaiting": "Aún no has iniciado sesión. Termina en la terminal y vuelve a comprobar.",
+	"settings.agentAccounts.loginNotSubscription": "Esto es una clave de API, no una suscripción. Inicia sesión con tu cuenta de suscripción.",
 	"settings.agentAccounts.loginDuplicate": "{{email}} ya está añadida.",
 	"settings.agentAccounts.loginMismatch": "Esta cuenta es {{email}}. Inicia sesión de nuevo con ese acceso.",
 	"settings.agentAccounts.signInAgain": "Iniciar sesión de nuevo",

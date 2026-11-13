@@ -3847,6 +3847,7 @@
 	"settings.agentAccounts.loginTitle": "Войти в {{provider}}",
 	"settings.agentAccounts.checkSignIn": "Проверить вход",
 	"settings.agentAccounts.loginWaiting": "Вход ещё не выполнен. Завершите его в терминале, затем проверьте снова.",
+	"settings.agentAccounts.loginNotSubscription": "Это API-ключ, а не подписка. Войдите в аккаунт с подпиской.",
 	"settings.agentAccounts.loginDuplicate": "{{email}} уже добавлен.",
 	"settings.agentAccounts.loginMismatch": "Этот аккаунт: {{email}}. Войдите снова с этим логином.",
 	"settings.agentAccounts.signInAgain": "Войти снова",

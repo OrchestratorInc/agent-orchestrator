@@ -251,3 +251,18 @@ it("names the organization when signing in again lands in another one", async ()
 	await user.click(await screen.findByRole("button", { name: "Check sign-in" }));
 	await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("This account is b@example.com · Acme. Sign in again with that login."));
 });
+
+it("says an API key is not a subscription sign-in and keeps the sign-in open", async () => {
+	const user = userEvent.setup();
+	postMock.mockImplementation((path: string) => {
+		if (path === "/api/v1/agents/accounts/{accountId}/login") return Promise.resolve({ data: login });
+		if (path === "/api/v1/agents/accounts/login/{operationId}/verify") return Promise.resolve({ data: { status: "not_subscription" } });
+		return Promise.resolve({ data: {} });
+	});
+	renderPanel();
+	await user.click(await screen.findByRole("button", { name: "Sign in again" }));
+	await user.click(await screen.findByRole("button", { name: "Check sign-in" }));
+	await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("This is an API key, not a subscription. Sign in with your subscription account."));
+	expect(screen.getByTestId("agent-account-login-terminal")).toBeInTheDocument();
+	expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+});

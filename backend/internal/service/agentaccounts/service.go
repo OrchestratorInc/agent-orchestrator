@@ -690,7 +690,8 @@ const (
 	LoginComplete  LoginStatus = "complete"
 	LoginDuplicate LoginStatus = "duplicate"
 	// LoginMismatch is a sign-in again with another login than the account's.
-	LoginMismatch LoginStatus = "mismatch"
+	LoginMismatch        LoginStatus = "mismatch"
+	LoginNotSubscription LoginStatus = "not_subscription"
 )
 
 // VerifyLogin checks whether the sign-in finished, and saves the account when
@@ -709,6 +710,9 @@ func (s *Service) VerifyLogin(ctx context.Context, operationID string) (LoginSta
 		return "", nil, fmt.Errorf("check sign-in: %w", err)
 	}
 	if !identity.SignedIn {
+		if identity.LoggedIn {
+			return LoginNotSubscription, nil, nil
+		}
 		return LoginWaiting, nil, nil
 	}
 	s.read(ctx, domain.AgentAccount{ID: domain.DeviceAgentAccountID(op.provider), Provider: op.provider})

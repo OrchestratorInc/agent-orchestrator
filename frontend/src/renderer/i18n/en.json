@@ -3703,6 +3703,7 @@
 	"settings.agentAccounts.loginTitle": "Sign in to {{provider}}",
 	"settings.agentAccounts.checkSignIn": "Check sign-in",
 	"settings.agentAccounts.loginWaiting": "Not signed in yet. Finish in the terminal, then check again.",
+	"settings.agentAccounts.loginNotSubscription": "This is an API key, not a subscription. Sign in with your subscription account.",
 	"settings.agentAccounts.loginDuplicate": "{{email}} is already added.",
 	"settings.agentAccounts.loginMismatch": "This account is {{email}}. Sign in again with that login.",
 	"settings.agentAccounts.signInAgain": "Sign in again",

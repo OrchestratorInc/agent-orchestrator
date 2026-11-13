@@ -79,6 +79,7 @@ export function AgentAccountsPanel({ provider, cliLogin }: { provider: AgentAcco
 		verifying.current = true;
 		const result = await actions.verifyLogin(current.operationId).finally(() => { verifying.current = false; });
 		if (result.status === "waiting") setLoginNote(t("settings.agentAccounts.loginWaiting"));
+		else if (result.status === "not_subscription") setLoginNote(t("settings.agentAccounts.loginNotSubscription"));
 		else {
 			setLogin(undefined);
 			if (result.status === "duplicate") setError(t("settings.agentAccounts.loginDuplicate", { email: result.account?.email ?? "" }));

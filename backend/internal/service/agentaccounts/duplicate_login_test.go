@@ -472,3 +472,27 @@ func TestSignInAgainIsNotRefusedOverTheCLIHoldingTheSameLogin(t *testing.T) {
 		t.Fatalf("the CLI login should fold into the restored account: %+v", device)
 	}
 }
+
+func TestSignInWithAnAPIKeyIsNotTakenAsWaiting(t *testing.T) {
+	ctx := context.Background()
+	svc, claude, store, root := newDuplicateFixture(t, "")
+	claude.apiKey = map[string]bool{}
+	start, err := svc.StartLogin(ctx, domain.AgentAccountProviderClaude)
+	if err != nil {
+		t.Fatal(err)
+	}
+	home := filepath.Join(root, "claude", start.OperationID)
+	claude.signedInAs[home] = ""
+	claude.apiKey[home] = true
+	if status, view, err := svc.VerifyLogin(ctx, start.OperationID); err != nil || status != LoginNotSubscription || view != nil {
+		t.Fatalf("add with an API key = %q %+v %v", status, view, err)
+	}
+	if len(store.accounts) != 0 {
+		t.Fatalf("an API key was saved as an account: %+v", store.accounts)
+	}
+	delete(claude.apiKey, home)
+	claude.signedInAs[home] = "a@example.com"
+	if status, view, err := svc.VerifyLogin(ctx, start.OperationID); err != nil || status != LoginComplete || view == nil {
+		t.Fatalf("the same sign-in, finished with a subscription = %q %+v %v", status, view, err)
+	}
+}

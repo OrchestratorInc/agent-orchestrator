@@ -8553,7 +8553,7 @@ export interface components {
         VerifyAgentAccountLoginResponse: {
             account?: components["schemas"]["AgentAccountResponse"];
             /** @enum {string} */
-            status: "waiting" | "complete" | "duplicate" | "mismatch";
+            status: "waiting" | "complete" | "duplicate" | "mismatch" | "not_subscription";
         };
         WorkspaceBranchResponse: {
             checkedOut: boolean;

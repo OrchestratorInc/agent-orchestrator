@@ -23968,6 +23968,7 @@ components:
           - complete
           - duplicate
           - mismatch
+          - not_subscription
           type: string
       required:
       - status
