@@ -139,6 +139,60 @@ func TestSpawnClaimPRWiring(t *testing.T) {
 	}
 }
 
+// TestSpawnNoAutoFixTurnsSwitchesOffBeforeClaim: a reviewer spawned with
+// --no-auto-fix must have both switches off before the PR is claimed, so the
+// claimed PR's CI failures and review comments never reach the agent.
+func TestSpawnNoAutoFixTurnsSwitchesOffBeforeClaim(t *testing.T) {
+	cfg := setConfigEnv(t)
+	var requests []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		appendPrimaryRequest(&requests, r)
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/projects/demo":
+			_, _ = io.WriteString(w, `{"status":"ok","project":{"id":"demo","name":"Demo","path":"/repo/demo","repo":"https://github.com/aoagents/agent-orchestrator","defaultBranch":"main"}}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/agents/readiness/ensure":
+			_, _ = io.WriteString(w, authorizedAgentsJSON("codex"))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/sessions":
+			_, _ = io.WriteString(w, `{"session":{"id":"demo-9","status":"idle"}}`)
+		case r.Method == http.MethodPatch && r.URL.Path == "/api/v1/sessions/demo-9/auto-inject-ci":
+			var req sessionAutoInjectCIRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.AutoInjectCI {
+				t.Errorf("auto-inject-ci request = %#v err=%v, want off", req, err)
+			}
+			_, _ = io.WriteString(w, `{"ok":true}`)
+		case r.Method == http.MethodPatch && r.URL.Path == "/api/v1/sessions/demo-9/auto-inject-review":
+			var req sessionAutoInjectReviewRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.AutoInjectReview {
+				t.Errorf("auto-inject-review request = %#v err=%v, want off", req, err)
+			}
+			_, _ = io.WriteString(w, `{"ok":true}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/sessions/demo-9/pr/claim":
+			_, _ = io.WriteString(w, `{"ok":true,"sessionId":"demo-9","prs":[{"url":"https://github.com/aoagents/agent-orchestrator/pull/142","number":142,"state":"open","ci":"failing","review":"review_required","mergeability":"mergeable","reviewComments":false,"updatedAt":"2026-06-04T12:00:00Z"}],"branchChanged":false,"takenOverFrom":[]}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	writeRunFileFor(t, cfg, srv)
+
+	_, errOut, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "spawn", "--project", "demo", "--agent", "codex", "--name", "review-pr-142", "--claim-pr", "142", "--no-takeover", "--no-auto-fix")
+	if err != nil {
+		t.Fatalf("spawn --no-auto-fix failed: %v stderr=%s", err, errOut)
+	}
+	want := []string{
+		"GET /api/v1/projects/demo",
+		"POST /api/v1/agents/readiness/ensure",
+		"POST /api/v1/sessions",
+		"PATCH /api/v1/sessions/demo-9/auto-inject-ci",
+		"PATCH /api/v1/sessions/demo-9/auto-inject-review",
+		"POST /api/v1/sessions/demo-9/pr/claim",
+	}
+	if !reflect.DeepEqual(requests, want) {
+		t.Fatalf("requests=%#v want %#v", requests, want)
+	}
+}
+
 // TestSpawnClaimPR_Draft covers #4171: `ao spawn --claim-pr` on a draft PR must
 // keep the spawned session instead of rolling it back with PR_NOT_OPEN.
 func TestSpawnClaimPR_Draft(t *testing.T) {
