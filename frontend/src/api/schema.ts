@@ -3494,9 +3494,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /** List the worktree files rolling back to a turn would restore */
+        get: operations["previewSessionConversationRollback"];
         put?: never;
-        /** Discard a turn and everything after it from the agent's memory */
+        /** Discard a turn and everything after it from the agent's memory, optionally restoring its files */
         post: operations["rollbackSessionConversation"];
         delete?: never;
         options?: never;
@@ -7597,8 +7598,25 @@ export interface components {
             agent?: string;
             agentConfig?: components["schemas"]["AgentConfig"];
         };
+        RollbackConversationRequest: {
+            planId?: string;
+            restoreFiles?: boolean;
+        };
         RollbackConversationResponse: {
             turnsDiscarded: number;
+        };
+        RollbackFileChange: {
+            /** @enum {string} */
+            change: "restored" | "reverted" | "removed";
+            path: string;
+        };
+        RollbackPreviewResponse: {
+            commitsSince: number;
+            files: components["schemas"]["RollbackFileChange"][];
+            filesRestorable: boolean;
+            planId?: string;
+            reason?: string;
+            totalFiles: number;
         };
         RollbackSessionResponse: {
             deleted?: boolean;
@@ -21428,7 +21446,7 @@ export interface operations {
             };
         };
     };
-    rollbackSessionConversation: {
+    previewSessionConversationRollback: {
         parameters: {
             query?: never;
             header?: never;
@@ -21448,7 +21466,81 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
+                    "application/json": components["schemas"]["RollbackPreviewResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    rollbackSessionConversation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+                /** @description AO conversation turn identifier, from the snapshot's turns array. */
+                turnId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["RollbackConversationRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
                     "application/json": components["schemas"]["RollbackConversationResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
                 };
             };
             /** @description Not Found */
