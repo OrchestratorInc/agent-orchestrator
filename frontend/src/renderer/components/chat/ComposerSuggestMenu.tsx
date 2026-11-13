@@ -69,7 +69,7 @@ export function ComposerSuggestMenu({
 				ref={list}
 				id={id}
 				role="listbox"
-				// Rows are 28px, so the edge fade is short enough to leave a row readable.
+				// Rows are 32px, so the edge fade is short enough to leave a row readable.
 				// The scroll padding keeps a keyboard-highlighted row clear of it.
 				className="model-menu-scroll edge-fade flex max-h-64 scroll-py-4 flex-col overflow-y-auto overscroll-contain [--edge-fade-size:16px]"
 			>
@@ -86,7 +86,7 @@ export function ComposerSuggestMenu({
 								aria-selected={active}
 								onClick={() => onPick(item.value)}
 								className={cn(
-									"flex h-7 w-full items-center gap-2 rounded-sm px-2 text-left text-xs text-muted-foreground outline-none !transition-none",
+									"flex h-8 w-full items-center gap-2 rounded-sm px-2 text-left text-xs text-muted-foreground outline-none !transition-none",
 									active
 										? "bg-interactive-active text-foreground"
 										: "bg-transparent hover:bg-interactive-hover hover:text-foreground",
