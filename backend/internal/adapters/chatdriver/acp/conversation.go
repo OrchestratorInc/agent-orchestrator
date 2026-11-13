@@ -19,6 +19,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/persistenthost"
+	"github.com/aoagents/agent-orchestrator/backend/internal/diskspace"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -30,11 +31,13 @@ const (
 	// terminated (quickSessionCloseWait for a QuickStop provider).
 	sessionCloseWait      = 2 * time.Second
 	quickSessionCloseWait = 500 * time.Millisecond
+	lowDiskSpaceBytes     = 512 << 20
 )
 
 var (
 	errConversationClosed = errors.New("ACP conversation closed")
 	errClientCapability   = errors.New("ACP client capability not advertised")
+	diskFree              = diskspace.Free
 
 	// ErrACPSetterUnsupported is returned by applyTurnSettings when the agent
 	// does not implement session/set_mode or session/set_config_option
@@ -1504,6 +1507,8 @@ func (c *conversation) watchConnection() {
 	detaching := c.detaching
 	preserve := !c.closed && c.proc.terminate != nil
 	c.mu.Unlock()
+	hostExited := preserve && c.proc.hostExited != nil && c.proc.hostExited()
+	preserve = preserve && !hostExited
 	// SDK Done cancels only its logical connection. Release both the forwarding
 	// pipe and the actual socket, including a host blocked writing replay under
 	// its ownership lock. Stopping this transport must not terminate the host.
@@ -1513,22 +1518,50 @@ func (c *conversation) watchConnection() {
 		c.failPendingPermissions()
 		c.failPendingInputs()
 	}
-	event := ports.ChatEvent{Kind: ports.ChatEventControllerState, ControllerState: ports.ChatControllerStopped}
-	if preserve {
-		event.Err = ports.ErrChatRecoveryInconclusive
+	var events []ports.ChatEvent
+	if hostExited {
+		if failed, ok := c.hostExitedTurn(); ok {
+			events = append(events, failed)
+		}
 	}
+	stopped := ports.ChatEvent{Kind: ports.ChatEventControllerState, ControllerState: ports.ChatControllerStopped}
+	if preserve {
+		stopped.Err = ports.ErrChatRecoveryInconclusive
+	}
+	events = append(events, stopped)
 	c.eventMu.Lock()
 	if !c.eventsClosed {
 		// Deliver the recovery boundary even though conn.Done is already closed;
 		// emit's disconnect select could otherwise drop this ownership signal.
-		select {
-		case c.events <- event:
-		case <-c.closing:
+		for _, event := range events {
+			select {
+			case c.events <- event:
+			case <-c.closing:
+			}
 		}
 		c.eventsClosed = true
 		close(c.events)
 	}
 	c.eventMu.Unlock()
+}
+
+func (c *conversation) hostExitedTurn() (ports.ChatEvent, bool) {
+	c.mu.Lock()
+	turnID := c.activeTurn
+	c.mu.Unlock()
+	if turnID == "" {
+		return ports.ChatEvent{}, false
+	}
+	c.log.Warn("chat: persistent ACP host exited during a turn", "turn", turnID)
+	event := ports.ChatEvent{
+		Kind: ports.ChatEventTurnCompleted, ProviderTurnID: turnID, TurnState: domain.TurnStateFailed,
+		Err: errors.New("the agent's process exited before this turn finished"),
+	}
+	if free, err := diskFree(c.proc.dataDir); err == nil && free < lowDiskSpaceBytes {
+		event.FailureCode = domain.ConversationFailureDiskFull
+		event.Err = fmt.Errorf("the agent's process exited while the disk was nearly full (%d MB free)", free>>20)
+	}
+	return event, true
 }
 
 func (c *conversation) emit(event ports.ChatEvent) {

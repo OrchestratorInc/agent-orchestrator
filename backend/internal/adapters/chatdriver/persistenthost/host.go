@@ -40,6 +40,7 @@ const (
 	providerStdinGrace   = time.Second
 	providerQuickGrace   = 300 * time.Millisecond
 	providerStopDeadline = 3 * time.Second
+	hostExitWait         = 2 * time.Second
 )
 
 // Protocol selects the provider-wire behavior owned by the host.
@@ -156,6 +157,7 @@ type Transport struct {
 	Reconnected   bool
 	NextRequestID int64
 	ACPState      *ACPState
+	PID           int
 }
 
 type hello struct {
@@ -505,7 +507,7 @@ func attach(ctx context.Context, d Descriptor, reconnected bool) (*Transport, er
 	}
 	return &Transport{
 		Stdin: conn, Stdout: reader, Reconnected: reconnected,
-		NextRequestID: response.NextRequestID, ACPState: response.ACPState,
+		NextRequestID: response.NextRequestID, ACPState: response.ACPState, PID: d.PID,
 	}, nil
 }
 
@@ -530,6 +532,22 @@ func HostPID(dataDir, sessionID string) (int, bool) {
 		return 0, false
 	}
 	return d.PID, true
+}
+
+// HostExited reports whether the host process pid has ended, waiting briefly
+// for a host that is still exiting.
+func HostExited(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	deadline := time.Now().Add(hostExitWait)
+	for processalive.Alive(pid) {
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return true
 }
 
 // Shutdown terminates current session ownership and waits for it to end.
@@ -1038,8 +1056,8 @@ func (h *host) watchPromptStall(ctx context.Context) {
 			return
 		case <-ticker.C:
 			h.mu.Lock()
-			frames, err := h.acp.failStalledPrompt(ctx, h.clientGeneration, h.client != nil, time.Now())
-			if err == nil && len(frames.client) > 0 {
+			frames := h.acp.failStalledPrompt(ctx, h.clientGeneration, h.client != nil, time.Now())
+			if len(frames.client) > 0 {
 				h.deliverProviderFrameLocked(frames.client, true)
 			}
 			h.mu.Unlock()
@@ -1060,14 +1078,9 @@ func (h *host) forwardProvider(stdout io.Reader) error {
 			h.mu.Lock()
 			retainedByACP := false
 			if h.acp != nil {
-				var relayErr error
-				frame, retainedByACP, relayErr = h.acp.providerFrame(
+				frame, retainedByACP = h.acp.providerFrame(
 					h.ctx, frame, h.clientGeneration, h.client != nil,
 				)
-				if relayErr != nil {
-					h.mu.Unlock()
-					return relayErr
-				}
 			}
 			if len(frame) == 0 {
 				h.mu.Unlock()
