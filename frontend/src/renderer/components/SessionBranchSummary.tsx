@@ -1,7 +1,7 @@
 import { apiErrorException } from "../lib/api-error-exception";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useEffect, useId, useState, type ReactNode } from "react";
-import { InspectorSection } from "@aoagents/product-ui";
+import { branchTopic, InspectorSection } from "@aoagents/product-ui";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import {
@@ -241,7 +241,7 @@ function BranchLine({ base, branch, naming }: { base?: string; branch?: string; 
 		<div className="flex min-w-0 items-center gap-1.5 pb-3 font-mono last:pb-0 text-xs text-muted-foreground">
 			<GitBranch aria-hidden="true" className="size-icon-2xs shrink-0" />
 			{naming ? <BranchNamingLabel /> : <span className="min-w-0 truncate" title={branch}>
-				{branch}
+				{branch ? branchTopic(branch) : branch}
 			</span>}
 			{base && !naming ? <span className="shrink-0 text-passive">→ {base}</span> : null}
 		</div>

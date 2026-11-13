@@ -22,6 +22,7 @@ import {
 	type ProductUITranslator,
 } from "./session-presentation";
 import type { KanbanColumn, SessionActivity, SessionStatus } from "./session-models";
+import { branchTopic } from "./formatting";
 import { UserAvatar } from "./UserAvatar";
 import { cn } from "./utils";
 
@@ -292,7 +293,8 @@ export function SessionCardView({
 				? "text-success"
 				: (session.statusPresentation?.className ?? column.titleClassName);
 	const branch = session.branch ?? "";
-	const showBranch = Boolean(branchLabel) || (branch !== "" && !sameLabel(branch, session.title) && !sameLabel(branch, session.id));
+	const topic = branchTopic(branch);
+	const showBranch = Boolean(branchLabel) || (branch !== "" && !sameLabel(topic, session.title) && !sameLabel(topic, session.id));
 	const renderedStatusLabel =
 		session.statusReadiness === "checking"
 			? translateStatus("session.statusChecking")
@@ -373,7 +375,7 @@ export function SessionCardView({
 	const branchRow = showBranch ? (
 		<>
 			{branchIcon ?? <GitBranchIcon aria-hidden="true" className="size-icon-2xs shrink-0" />}
-			{branchLabel ?? <span className="truncate text-muted-foreground">{branch}</span>}
+			{branchLabel ?? <span className="truncate text-muted-foreground" title={branch}>{topic}</span>}
 			{branchAction}
 		</>
 	) : null;
