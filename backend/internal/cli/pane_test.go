@@ -269,3 +269,43 @@ func TestPaneNeedsTheSessionCapability(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func TestPaneRunReturnsAReadErrorThatIsNotATimeout(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "aa-47")
+	t.Setenv("AO_BROWSER_CAPABILITY", "cap-aa-47")
+	cfg := setConfigEnv(t)
+	reads := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/internal/") {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		switch r.URL.Path {
+		case "/api/v1/sessions/aa-47/panes/input":
+			w.WriteHeader(http.StatusNoContent)
+		case "/api/v1/sessions/aa-47/panes/output":
+			reads++
+			if reads > 1 {
+				http.Error(w, "boom", http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]string{"sessionId": "aa-47", "tab": "sh-1", "output": "$ "})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	writeRunFileFor(t, cfg, srv)
+	previous := paneSettleInterval
+	paneSettleInterval = 20 * time.Millisecond
+	t.Cleanup(func() { paneSettleInterval = previous })
+
+	out, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "pane", "run", "sh-1", "ls")
+	if err == nil {
+		t.Fatalf("a failing read passed as success; output = %q", out)
+	}
+	if strings.Contains(out, "timed out") {
+		t.Fatalf("a read error was reported as a timeout: %q", out)
+	}
+}
