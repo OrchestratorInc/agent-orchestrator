@@ -6,6 +6,7 @@ import { useChatModelChoices } from "../../hooks/useChatModelChoices";
 import { useCloudCp } from "../../hooks/useCloudCp";
 import { invalidateCloudModelCatalogs } from "../../hooks/useCloudModelCatalog";
 import { useCloudOffering } from "../../hooks/useCloudOffering";
+import { QUEUED_DELETE_FEATURE, QUEUED_EDIT_FEATURE } from "../../lib/cloud-offering";
 import type { ShellTerminal } from "../../hooks/useShellTerminals";
 import { useChatMessageFocus, useChatNavigationRequest, type ChatMessageFocusTarget } from "../../hooks/useChatMessageFocus";
 import { useCloudPromptSuggestion } from "../../hooks/useCloudPromptSuggestion";
@@ -14,7 +15,9 @@ import { useCloudSessionLive } from "../../hooks/useCloudSessionLive";
 import { useSessionBrowserLink } from "../../hooks/useSessionBrowserLink";
 import { useCloudSessionEventStream } from "../../hooks/useCloudSessionEvents";
 import { useComposerLease } from "../../hooks/useComposerLease";
-import { cloudSessionsQueryKey, refreshCloudSessionLifecycle } from "../../hooks/useWorkspaceQuery";
+import { cloudSessionsQueryKey, refreshCloudSessionLifecycle, sharedCloudWorkspacesQueryKey } from "../../hooks/useWorkspaceQuery";
+import { useUiStore } from "../../stores/ui-store";
+import { sessionArtifactPath } from "../../lib/session-links";
 import { appI18n } from "../../i18n";
 import { CLOUD_AGENT_PROVIDERS } from "../../lib/cloud-agents";
 import type { CloudCpAgentProvider, CloudCpClientEvent, CloudCpSessionChatSettings } from "../../lib/cloud-cp";
@@ -41,9 +44,16 @@ import { CloudAttachmentSourceProvider } from "./CloudMessageAttachments";
 import { cloudAttachmentReference, cloudMessageAttachments, uploadCloudAttachment, type CloudAttachment } from "../../lib/cloud-attachments";
 import type { ApprovalModeLimits } from "./TurnSettingsBar";
 import { SharedComposerNotice } from "./SharedComposerNotice";
+import { artifactAtPath } from "../../../../../packages/shared/artifacts/deliverables";
 
 type EventPayload = {
 	attempt?: unknown;
+	/**
+	 * chat.turn_interrupted: why a turn ended before it started (deleted,
+	 * interface_switch); chat.turn_aborted: author_cannot_write for a message
+	 * the control plane did not run.
+	 */
+	reason?: unknown;
 	/** chat.user_message: the files the message carries. */
 	attachments?: unknown;
 	/** workspace.setup */
@@ -243,6 +253,44 @@ export function lastChosenChatSettings(events: readonly CloudCpClientEvent[] | u
 function eventTurnID(event: CloudCpClientEvent): string | undefined {
 	const turnID = eventPayload(event).turnId;
 	return typeof turnID === "string" && turnID !== "" ? turnID : undefined;
+}
+
+/**
+ * The turns of the messages this viewer sent: the ones a queued edit
+ * (editQueuedMessage) may change, which the control plane allows only their
+ * author. A message an orchestrator or automation sent has no author.
+ */
+export function ownMessageTurns(events: readonly CloudCpClientEvent[] | undefined, viewerUserId: string | undefined): Set<string> {
+	const turns = new Set<string>();
+	if (!viewerUserId) return turns;
+	for (const event of events ?? []) {
+		const turnID = eventTurnID(event);
+		if (event.type === "chat.user_message" && turnID && eventPayload(event).authorUserId === viewerUserId) turns.add(turnID);
+	}
+	return turns;
+}
+
+/**
+ * What a refused delete of a queued message says (cancelTurn), or undefined
+ * when there is nothing left to delete: the agent already ran it, and the
+ * dock lets it go with the next read.
+ */
+function queuedDeleteRefusal(error: unknown): Error | undefined {
+	if (!(error instanceof CloudCpError)) return error instanceof Error ? error : new Error("The message could not be deleted. Try again.");
+	switch (error.code) {
+		case "TURN_FINISHED":
+			return undefined;
+		case "TURN_NOT_QUEUED":
+			// deleteQueuedMessage left the turn as it was: the agent took it, or it
+			// was stopped or ended otherwise.
+			return new Error("This message is no longer queued, so it was not deleted. If the agent started on it, stop that turn instead.");
+		case "SESSION_TERMINATED":
+			return new Error("This session has ended, so this message can no longer be deleted.");
+		case "forbidden":
+			return new Error("Only the person who sent this message, whoever started the session, or a workspace admin can delete it.");
+		default:
+			return error;
+	}
 }
 
 export function appendCloudEvents(existing: CloudCpClientEvent[], incoming: CloudCpClientEvent[]): CloudCpClientEvent[] {
@@ -660,6 +708,14 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 	const turnPatches = new Map<string, (DiffFile & { patch: string })[]>();
 	const steerableTurns = new Set<string>();
 	const items: ConversationItem[] = [];
+	// A person's message by its turn, for an edit made while it was queued.
+	const humanMessages = new Map<string, ConversationMessage>();
+	// Which turns' prompts and starts are loaded, to tell a turn that ended
+	// before the agent started on it from one that ran.
+	const promptedTurns = new Set<string>();
+	const startedTurns = new Set<string>();
+	// Queued messages the person deleted (turn_interrupted of reason deleted).
+	const withdrawnTurns = new Set<string>();
 	let usage: ConversationUsage | undefined;
 	// Live Setup and Cleanup logs. A run with step events replaces the older
 	// one-line workspace.setup summary the worker still sends after it; workers
@@ -682,6 +738,22 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 		run.phase === "setup" && firstPrompt !== undefined && firstPrompt < run.firstSequence && run.firstSequence < firstTurnStart
 			? firstPrompt - 0.5 : run.firstSequence;
 	for (const event of events) {
+		if (event.type === "chat.user_message_edited") {
+			// The edit of a message still queued: it reads as edited, in place,
+			// and starts nothing of its own. One whose message is not loaded has
+			// it rewritten already when that page loads.
+			const edited = humanMessages.get(eventTurnID(event) ?? "");
+			const text = eventPayload(event).text;
+			if (edited && typeof text === "string") {
+				const attachments = eventAttachments(event);
+				edited.text = text;
+				delete edited.content;
+				if (attachments.length > 0) edited.cloudAttachments = attachments;
+				else delete edited.cloudAttachments;
+				edited.revision += 1;
+			}
+			continue;
+		}
 		const turnID = eventTurnID(event);
 		if (turnID && !turns.has(turnID)) {
 			// A turn starts with its prompt. One whose first event here is any
@@ -700,10 +772,12 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 				...(promptAbove ? { anchorSequence: windowStart - 1 + (event.sequence - windowStart + 1) / windowSpan } : {}),
 			});
 		}
+		if (turnID && event.type === "chat.user_message") promptedTurns.add(turnID);
 		if (turnID && event.type === "chat.turn_started") {
 			const turn = turns.get(turnID)!;
 			turn.state = "running";
 			turn.startedAt = event.createdAt;
+			startedTurns.add(turnID);
 		}
 		if (turnID && event.type === "chat.turn_capabilities" && eventPayload(event).steering === true) {
 			steerableTurns.add(turnID);
@@ -714,6 +788,36 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 			turn.completedAt = event.createdAt;
 			const error = eventPayload(event).error;
 			turn.errorMessage = typeof error === "string" ? error : undefined;
+			// No agent started on it: its prompt is loaded with no start after it
+			// (a turn starts after its prompt), or it ended at attempt 0, never
+			// claimed, which holds on a page without its prompt too.
+			// The control plane marks a message it did not run (reason
+			// author_cannot_write), which holds on a page holding only its end.
+			const notRun = event.type === "chat.turn_aborted" && eventPayload(event).reason === "author_cannot_write";
+			const neverStarted = notRun || (!startedTurns.has(turnID) && (promptedTurns.has(turnID) || eventPayload(event).attempt === 0));
+			if (event.type === "chat.turn_interrupted" && eventPayload(event).reason === "deleted") {
+				// The person took the queued message back: it leaves the
+				// conversation, as a local chat drops a queued message deleted from
+				// its dock. Any other ending (a switch to the terminal, an older
+				// event, a reason this desktop does not know) keeps the person's
+				// text, shown interrupted as local shows a queue its Stop ended.
+				turn.state = "cancelled";
+				delete turn.startedAt;
+				withdrawnTurns.add(turnID);
+			} else if (neverStarted) {
+				// Ended before it ran: it did no work to time (a page without its
+				// prompt took its first event for its start).
+				delete turn.startedAt;
+				if (event.type === "chat.turn_aborted") {
+					// Refused when its turn came: not run, with the reason, rather than
+					// a run that failed.
+					turn.notRun = true;
+					if (turn.errorMessage) {
+						const reason = turn.errorMessage.replace(/^Not run:\s*/i, "");
+						turn.errorMessage = reason.charAt(0).toUpperCase() + reason.slice(1);
+					}
+				}
+			}
 		}
 		if (event.type === "chat.approval_requested") {
 			const payload = eventPayload(event);
@@ -864,7 +968,7 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 			const senderSessionId = automation && typeof payload.senderSessionId === "string" ? payload.senderSessionId : undefined;
 			const senderProjectId = automation && typeof payload.senderProjectId === "string" ? payload.senderProjectId : undefined;
 			const senderDisplayName = automation && typeof payload.senderDisplayName === "string" ? payload.senderDisplayName : undefined;
-			items.push({
+			const message: ConversationMessage = {
 				kind: "message", id: `cloud-event-${event.sequence}`, sequence: event.sequence, revision: 1,
 				turnId: turnID, role: "user", origin: automation ? "automation" : "human",
 				authorName: automation ? undefined : promptAuthorName(payload, viewerUserId),
@@ -877,7 +981,9 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 				senderSessionId, senderProjectId, senderDisplayName,
 				...(attachments.length > 0 ? { cloudAttachments: attachments } : {}),
 				streaming: false, delivery: "accepted", createdAt: event.createdAt,
-			});
+			};
+			items.push(message);
+			if (!automation && turnID) humanMessages.set(turnID, message);
 			continue;
 		}
 		if (!text) continue;
@@ -937,6 +1043,8 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 			approval.revision += 1;
 		}
 	}
+	// A withdrawn message shows nowhere: not its bubble, its files or its edits.
+	const shownItems = withdrawnTurns.size > 0 ? items.filter((item) => !item.turnId || !withdrawnTurns.has(item.turnId)) : items;
 	const orderedTurns = [...turns.values()];
 	// The first durable send may wait briefly for the worker to claim it. It is
 	// the active request; only later messages should appear in the queue. While
@@ -957,7 +1065,7 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 	const activeTurn = orderedTurns.find((turn) => turn.state === "running");
 	return {
 		conversationId: `cloud:${session.id}`, sessionId: session.id, harness: session.provider, mode: "chat",
-		controller: { state: hasRunningTurn ? "busy" : "ready" }, turns: orderedTurns, items,
+		controller: { state: hasRunningTurn ? "busy" : "ready" }, turns: orderedTurns, items: shownItems,
 		latestSequence: events.at(-1)?.sequence ?? 0, oldestSequence: events[0]?.sequence ?? 1,
 		hasMoreBefore: partial, settings: {}, capabilities: activeTurn && steerableTurns.has(activeTurn.id) ? ["steer"] : [],
 		...(usage ? { usage } : {}),
@@ -1026,6 +1134,7 @@ export function CloudSessionChatSurface({
 	session,
 	headerActions,
 	sessionTabAction,
+	sessionTabActionPinned = false,
 	onOpenFiles,
 	onOpenFile,
 	onOpenArtifact,
@@ -1070,6 +1179,8 @@ export function CloudSessionChatSurface({
 	workspaceFileActive?: boolean;
 	headerActions?: ReactNode;
 	sessionTabAction?: ReactNode;
+	/** Keep the session tab's action showing at rest, while an interface switch is in flight. */
+	sessionTabActionPinned?: boolean;
 	/** The Cloud reviewer terminal, shown as its own tab beside the chat as in local sessions. */
 	reviewerTerminal?: { handleId: string; harness: string };
 	onOpenReviewerTerminal?: (target: { handleId: string; harness: string }) => void;
@@ -1457,6 +1568,78 @@ export function CloudSessionChatSurface({
 			void invalidate();
 		},
 	});
+	// A queued message is edited in place while the agent has not started on
+	// it. The composer hands over the message with its kept and added files
+	// listed by reference, as it sends one; the files go as attachment ids.
+	const editQueued = useMutation({
+		mutationFn: async ({ turnId, text }: { turnId: string; text: string }) => {
+			if (!cloud) throw new Error("Cloud session context is unavailable.");
+			const message = cloudMessageAttachments(text, undefined, []);
+			try {
+				return await client.editQueuedMessage(cloud.orgId, session.id, turnId, {
+					text: message.text,
+					...(message.attachmentIds.length ? { attachmentIds: message.attachmentIds } : {}),
+				});
+			} catch (error) {
+				// The agent took the message, it was stopped, or its session ended
+				// meanwhile: the queue editor lets go of it, keeping the edit's text,
+				// as it does for a local turn that is no longer queued.
+				if (error instanceof CloudCpError && (error.code === "TURN_NOT_QUEUED" || error.code === "SESSION_TERMINATED")) {
+					const reason = error.code === "SESSION_TERMINATED"
+						? "This session has ended, so this message can no longer be edited." : error.message;
+					throw Object.assign(new Error(reason), { code: "CHAT_TURN_NOT_QUEUED" });
+				}
+				// Any other refusal (a text too long, files the worker cannot take)
+				// left the message as it was, so the editor gets the edit back with
+				// the reason. A server error, a rate limit or no answer stays
+				// pending for the editor to retry.
+				if (error instanceof CloudCpError && error.status >= 400 && error.status < 500 && error.status !== 408 && error.status !== 429) {
+					throw Object.assign(new Error(error.message), { code: "CHAT_QUEUED_EDIT_REFUSED" });
+				}
+				throw error;
+			}
+		},
+		onSuccess: () => void invalidate(),
+	});
+	const queuedEditOffered = offering.features.includes(QUEUED_EDIT_FEATURE) && !readOnly && session.isTerminated !== true;
+	const ownTurns = useMemo(() => ownMessageTurns(eventsQuery.data, me), [eventsQuery.data, me]);
+	// Only the author's own message, and only one whose text alone is what the
+	// agent receives. The control plane takes an edit of a message with quotes
+	// or captures but drops them, and they are inlined in the text the agent
+	// gets, which the composer cannot rebuild, so such a message offers no Edit.
+	const canEditQueuedMessage = useCallback(
+		(message: ConversationMessage) => Boolean(message.turnId && ownTurns.has(message.turnId) && !message.content?.length),
+		[ownTurns],
+	);
+	// A queued message is taken back before the agent starts on it. Where the
+	// control plane offers queued-delete, that never stops a turn the agent
+	// took meanwhile (deleteQueuedMessage, 409 TURN_NOT_QUEUED), as a local
+	// chat's Delete does; an older one only stops turns (cancelTurn). It lets
+	// whoever may direct the turn do it: the message's author, whoever
+	// started the session, the organization's owners and admins, and the
+	// composer lease holder.
+	const queuedDeleteOffered = offering.features.includes(QUEUED_DELETE_FEATURE);
+	const cancelQueued = useMutation({
+		mutationFn: async (turnId: string) => {
+			if (!cloud) throw new Error("Cloud session context is unavailable.");
+			try {
+				if (queuedDeleteOffered) await client.deleteQueuedMessage(cloud.orgId, session.id, turnId);
+				else await client.cancelTurn(cloud.orgId, session.id, turnId);
+			} catch (error) {
+				const refusal = queuedDeleteRefusal(error);
+				if (refusal) throw refusal;
+			}
+		},
+		onSettled: () => void invalidate(),
+	});
+	const directsEveryTurn = Boolean(cloud && (
+		(me && cloud.createdByUserId === me) || lease.holding ||
+		(!cloud.shared && offering.org?.id === cloud.orgId && (offering.org.role === "owner" || offering.org.role === "admin"))
+	));
+	const canCancelQueuedMessage = useCallback(
+		(message: ConversationMessage) => Boolean(message.turnId && (directsEveryTurn || ownTurns.has(message.turnId))),
+		[directsEveryTurn, ownTurns],
+	);
 	// A pick the session no longer allows (its mode dropped while Chat was
 	// open) is neither sent nor shown. One the selected model cannot run shows
 	// as the mode that runs instead, the one the worker would step down to.
@@ -1608,10 +1791,23 @@ export function CloudSessionChatSurface({
 			: []),
 	] : [];
 	const providerOptions = [...(planOptions ?? []), ...claudeOptions];
+	const requestWorkspaceFileOpen = useUiStore((state) => state.requestWorkspaceFileOpen);
 	// A file link in the transcript opens the file it names in the workspace, as
-	// the same file from the Files tab does (one tab for both).
+	// the same file from the Files tab does (one tab for both). A file the agent
+	// wrote to this session's artifact directory opens in Artifacts instead, since
+	// the file view cannot read outside the checkout (HTTP 422). Artifacts shows
+	// it once the session lists it, so one written moments ago opens too; the list
+	// is read again now rather than at its next poll.
 	const openFileFromChat = useCallback((path: string) => {
 		if (!onOpenFile) return;
+		const artifact = sessionArtifactPath(path, session.id);
+		if (artifact) {
+			if (!artifactAtPath(session.artifactFiles, artifact)) {
+				void queryClient.invalidateQueries({ queryKey: cloud?.shared ? sharedCloudWorkspacesQueryKey : cloudSessionsQueryKey });
+			}
+			requestWorkspaceFileOpen(session.id, artifact, undefined, "artifact");
+			return;
+		}
 		if (!path.startsWith("/") || !cloud) {
 			onOpenFile(path);
 			return;
@@ -1619,7 +1815,7 @@ export function CloudSessionChatSurface({
 		void cloudWorkspaceFilePath(path, async (query) =>
 			(await client.searchWorkspaceReview(cloud.orgId, session.id, { query, limit: 100 })).results.map((result) => result.path),
 		).then((relative) => onOpenFile(relative ?? path));
-	}, [client, cloud, onOpenFile, session.id]);
+	}, [client, cloud, onOpenFile, queryClient, requestWorkspaceFileOpen, session.artifactFiles, session.id]);
 	// "@" offers the workspace's files as a local chat does. A Cloud workspace is
 	// searched rather than listed, so what follows "@" is asked of the worker
 	// (shortly after typing stops), and an empty query lists its top level.
@@ -1760,6 +1956,12 @@ export function CloudSessionChatSurface({
 				return steer.mutateAsync({ text, clientMessageId });
 			} : undefined}
 			steerPending={steer.isPending}
+			onEditQueuedTurn={queuedEditOffered ? (turnId, text) => editQueued.mutateAsync({ turnId, text }) : undefined}
+			canEditQueuedMessage={canEditQueuedMessage}
+			editQueuedTurnPendingTurnId={editQueued.isPending ? editQueued.variables?.turnId : undefined}
+			onCancelQueuedTurn={readOnly || session.isTerminated === true ? undefined : (turnId) => cancelQueued.mutateAsync(turnId)}
+			canCancelQueuedMessage={canCancelQueuedMessage}
+			cancelQueuedTurnPendingTurnId={cancelQueued.isPending ? cancelQueued.variables : undefined}
 			showSteerButton
 			excerptsEnabled
 			fileReferencesEnabled
@@ -1796,6 +1998,7 @@ export function CloudSessionChatSurface({
 			resumeError={retryStart.error instanceof Error ? retryStart.error.message : undefined}
 			sessionRole={session.kind}
 			sessionTabAction={sessionTabAction}
+			sessionTabActionPinned={sessionTabActionPinned}
 			sessionTitle={session.title}
 			// The chat tab renames the session as a local one does; the rename
 			// updates the cached session lists itself, and this catches up the rest.

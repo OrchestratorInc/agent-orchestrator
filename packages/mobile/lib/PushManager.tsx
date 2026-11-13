@@ -7,7 +7,7 @@ import * as Notifications from "expo-notifications";
 import { useRootNavigationState, useRouter, type Href } from "expo-router";
 import { useOpenPage } from "./pageNavigation";
 import { useEffect, useRef } from "react";
-import { AppState, Platform } from "react-native";
+import { Alert, AppState, Platform } from "react-native";
 import { markNotificationRead } from "./api";
 import { shouldPoll } from "./appStatePoll";
 import { getInstallId } from "./installId";
@@ -15,6 +15,8 @@ import { findHost } from "./hosts";
 import { notificationTarget } from "./notificationView";
 import { announcePairedDevice, configurePushHandler, ensureAndroidChannel, onManualPushRegistration, registerForPush, retryPendingUnpairs } from "./push";
 import { useApp } from "./store";
+import { useCloud } from "./cloud/CloudProvider";
+import { cloudPushTarget, foreignCloudPushOrganization } from "./cloud/pushTarget";
 import { MOBILE_EVENTS } from "./telemetry/events";
 import { mobileTelemetry } from "./telemetry/runtime";
 
@@ -28,6 +30,9 @@ type PushData = {
 	projectId?: string;
 	prUrl?: string;
 	notificationId?: string;
+	/** "cloud" for a notification Orchestrator Cloud sent rather than a paired machine. */
+	source?: string;
+	orgId?: string;
 };
 
 export function PushManager(): null {
@@ -39,6 +44,9 @@ export function PushManager(): null {
 	const handledColdStart = useRef(false);
 	const hostsRef = useRef(hostStates);
 	hostsRef.current = hostStates;
+	const cloud = useCloud();
+	const cloudRef = useRef(cloud);
+	cloudRef.current = cloud;
 	const connected = shouldPoll(AppState.currentState)
 		? hostStates.flatMap(({ config, connection }) => config && connection === "open" ? [config] : [])
 		: [];
@@ -111,6 +119,21 @@ export function PushManager(): null {
 	}, [navState?.key]);
 
 	async function route(data: PushData, coldStart = false) {
+		const cloudTarget = cloudPushTarget(data);
+		if (cloudTarget) {
+			mobileTelemetry()?.capture(MOBILE_EVENTS.notificationOpened, { target: "cloud", cold_start: coldStart });
+			const { client, org, me } = cloudRef.current;
+			// From an organization the phone isn't working in: its page can't load
+			// here, so say where it came from rather than open one that fails.
+			const elsewhere = foreignCloudPushOrganization(data, org?.id, me?.organizations ?? []);
+			if (elsewhere && org) {
+				Alert.alert(`From ${elsewhere}`, `The app is working in ${org.displayName}, so this notification can't open here.`);
+				return;
+			}
+			if (org && data.notificationId && (!data.orgId || data.orgId === org.id)) void client.markNotificationRead(org.id, data.notificationId).catch(() => {});
+			router.navigate(cloudTarget);
+			return;
+		}
 		// A cold-start tap can arrive before the host runtimes are hydrated. The
 		// saved pairing is the authority for whether this host may be opened.
 		const paired = data.hostId ? await findHost(data.hostId).catch(() => null) : null;

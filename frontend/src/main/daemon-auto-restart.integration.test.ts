@@ -64,9 +64,14 @@ function setup() {
 	const establishSupervisorLink = vi.fn();
 	const daemonEnv = vi.fn((keep: boolean) => ({ AO_OWNER: keep ? "persistent" : "app" }));
 	const env: Record<string, string | undefined> = {};
+	const lifecycleLog = vi.fn();
+	const planDaemonSpawnIsolation = vi.fn(async (): Promise<unknown> => ({ kind: "unchanged", reason: "disabled" }));
+	const applyDaemonOomScoreAdj = vi.fn(() => 300);
+	const openSync = vi.fn(() => 73);
 	const context = vm.createContext({
+		lifecycleLog, planDaemonSpawnIsolation, applyDaemonOomScoreAdj,
 		console, Date, setTimeout, clearTimeout, setInterval, clearInterval, Buffer, path,
-		openSync: vi.fn(() => 73), closeSync: vi.fn(),
+		openSync, closeSync: vi.fn(),
 		process: { env, platform: "linux", resourcesPath: "/owned/lab", kill: vi.fn() },
 		os: { homedir: () => "/owned/home" }, app, ipcMain: { handle: (name: string, handler: () => unknown) => ipc.set(name, handler) },
 		browserQuitRequested: false, daemonOutput: "", supervisorLink: { dispose: supervisorDisposed }, appRunId: "test-app",
@@ -91,11 +96,13 @@ function setup() {
 	});
 	vm.runInContext(`${controller}\nfunction setDaemonStatus(status) { daemonStatus = status; }`, context);
 	return {
-		read, unlink, spawn, children, replace, inspect, direct, stage, supervisorDisposed, establishSupervisorLink, daemonEnv, env,
+		read, unlink, spawn, children, replace, lifecycleLog, planDaemonSpawnIsolation, applyDaemonOomScoreAdj, openSync, inspect, direct, stage, supervisorDisposed, establishSupervisorLink, daemonEnv, env,
 		setMarker(value: string | Error) { marker = value; },
 		start: () => ipc.get("daemon:start")!(), stop: () => ipc.get("daemon:stop")!(), restart: () => ipc.get("daemon:restart")!(),
 		status: () => vm.runInContext("daemonStatus", context),
 		refresh: () => ipc.get("daemon:getStatus")!(),
+		markQuitPastPointOfNoReturn: () => vm.runInContext("browserQuitRequested = true", context),
+		scopeLaunchFailed: () => vm.runInContext("daemonScopeLaunchFailed", context),
 		rejectRuntime: () => vm.runInContext('handleBrowserRuntimeRejection("invalid-token")', context),
 		quit: () => app.emit("before-quit", { preventDefault: vi.fn() }),
 		crash(code: number | null = 1, signal: string | null = null) { children.at(-1)!.emit("exit", code, signal); },
@@ -156,6 +163,195 @@ describe("main.ts daemon lifecycle wiring with controlled I/O", () => {
 		expect(h.spawn).toHaveBeenCalledTimes(1);
 		expect(h.unlink).not.toHaveBeenCalled();
 		expect(h.status()).toEqual({ state: "stopped" });
+	});
+
+	it("records the observed exit and the restart decision before respawning", async () => {
+		const h = setup();
+		await h.start();
+		h.crash(null, "SIGBUS");
+		await vi.advanceTimersByTimeAsync(1000);
+		expect(h.spawn).toHaveBeenCalledTimes(2);
+		const calls = h.lifecycleLog.mock.calls;
+		const exitIndex = calls.findIndex(([event]) => event === "daemon_exit");
+		const decisionIndex = calls.findIndex(([event]) => event === "daemon_restart_decision");
+		expect(calls[exitIndex][1]).toMatchObject({ daemonPid: 42, code: null, signal: "SIGBUS", current: true, requestedStop: false });
+		expect(calls[decisionIndex][1]).toMatchObject({
+			daemonPid: 42, signal: "SIGBUS", runFilePresent: true, runFilePid: 42,
+			cause: "ungraceful_exit", decision: "restart", attempt: 1, delayMs: 1000,
+		});
+		const decisionOrder = h.lifecycleLog.mock.invocationCallOrder[decisionIndex];
+		expect(decisionOrder).toBeLessThan(h.spawn.mock.invocationCallOrder[1]);
+		const respawn = calls.findIndex(([event, fields], index) => index > decisionIndex && event === "daemon_spawn" && fields.trigger === "auto_restart");
+		expect(calls[respawn][1]).toMatchObject({ crashedPid: 42 });
+		expect(h.lifecycleLog.mock.invocationCallOrder[respawn]).toBeLessThan(h.spawn.mock.invocationCallOrder[1]);
+	});
+
+	it("spawns through the isolation plan and records it", async () => {
+		const h = setup();
+		h.planDaemonSpawnIsolation.mockResolvedValueOnce({
+			kind: "scope", unit: "ao-daemon-1-x", slice: "app-ao.slice",
+			launch: { command: "/usr/bin/systemd-run", args: ["--user", "--scope", "--", "/owned/ao"], cwd: "/owned/data", source: "override", shell: false },
+		});
+		await h.start();
+		expect(h.spawn.mock.calls[0][0]).toBe("/usr/bin/systemd-run");
+		expect(h.spawn.mock.calls[0][1]).toEqual(["--user", "--scope", "--", "/owned/ao"]);
+		expect(h.lifecycleLog).toHaveBeenCalledWith("daemon_spawn", expect.objectContaining({ isolation: "scope", scopeUnit: "ao-daemon-1-x" }));
+		expect(h.applyDaemonOomScoreAdj).not.toHaveBeenCalled();
+		h.planDaemonSpawnIsolation.mockResolvedValueOnce({ kind: "oom_score_adj", reason: "user_manager_unavailable", adjustment: 300 });
+		h.crash(null, "SIGKILL");
+		await vi.advanceTimersByTimeAsync(1000);
+		expect(h.spawn.mock.calls[1][0]).toBe("/owned/ao");
+		expect(h.applyDaemonOomScoreAdj).toHaveBeenCalledWith(43, 300);
+		expect(h.lifecycleLog).toHaveBeenCalledWith("daemon_spawned", expect.objectContaining({ daemonPid: 43, oomScoreAdj: 300 }));
+	});
+
+	it("opens no keep-alive log descriptor when a stop lands during isolation planning", async () => {
+		const h = setup();
+		h.env.AO_KEEP_DAEMON = "1";
+		const held = deferred<unknown>();
+		h.planDaemonSpawnIsolation.mockImplementationOnce(() => held.promise);
+		const starting = h.start();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(h.planDaemonSpawnIsolation).toHaveBeenCalledTimes(1);
+		h.stop();
+		held.resolve({ kind: "unchanged", reason: "disabled" });
+		await starting;
+		expect(h.openSync).not.toHaveBeenCalled();
+		expect(h.spawn).not.toHaveBeenCalled();
+	});
+
+	it("does not spawn from a normal start when quit proceeds during isolation planning", async () => {
+		const h = setup();
+		const held = deferred<unknown>();
+		h.planDaemonSpawnIsolation.mockImplementationOnce(() => held.promise);
+		const starting = h.start();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(h.planDaemonSpawnIsolation).toHaveBeenCalledTimes(1);
+		h.markQuitPastPointOfNoReturn();
+		held.resolve({ kind: "unchanged", reason: "disabled" });
+		await starting;
+		expect(h.spawn).not.toHaveBeenCalled();
+	});
+
+	it("does not respawn when a successor writes the marker during isolation planning", async () => {
+		const h = setup();
+		await h.start();
+		const held = deferred<unknown>();
+		h.planDaemonSpawnIsolation.mockImplementationOnce(() => held.promise);
+		h.crash(null, "SIGKILL");
+		await vi.advanceTimersByTimeAsync(1000);
+		expect(h.planDaemonSpawnIsolation).toHaveBeenCalledTimes(2);
+		h.setMarker(JSON.stringify({ pid: 99, port: 3001 }));
+		held.resolve({ kind: "unchanged", reason: "disabled" });
+		await vi.advanceTimersByTimeAsync(2000);
+		expect(h.spawn).toHaveBeenCalledTimes(1);
+	});
+
+	it("retries once without the scope when a scoped launch exits before it is ready", async () => {
+		const h = setup();
+		const scopePlan = {
+			kind: "scope", unit: "ao-daemon-1-x", slice: "app-ao.slice",
+			launch: { command: "/usr/bin/systemd-run", args: ["--user", "--scope", "--", "/owned/ao"], cwd: "/owned/data", source: "override", shell: false },
+		};
+		h.planDaemonSpawnIsolation.mockResolvedValueOnce(scopePlan);
+		await h.start();
+		h.setMarker(Object.assign(new Error("missing"), { code: "ENOENT" }));
+		h.crash(1, null);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(h.scopeLaunchFailed()).toBe(true);
+		expect(h.spawn).toHaveBeenCalledTimes(2);
+		expect(h.lifecycleLog).toHaveBeenCalledWith("daemon_restart_decision", expect.objectContaining({ code: 1, decision: "restart", cause: "scope_launch_failed", fallback: "oom_score_adj" }));
+		expect(h.lifecycleLog).toHaveBeenCalledWith("daemon_spawn", expect.objectContaining({ trigger: "scope_fallback" }));
+		// The retry is not a scoped launch, so a second early exit is an ordinary failure.
+		h.crash(1, null);
+		await vi.advanceTimersByTimeAsync(5000);
+		expect(h.spawn).toHaveBeenCalledTimes(2);
+	});
+
+	it("keeps an automatic restart's intent when its scoped launch falls back", async () => {
+		const h = setup();
+		const scopePlan = {
+			kind: "scope", unit: "u", slice: "app-ao.slice",
+			launch: { command: "/usr/bin/systemd-run", args: ["--", "/owned/ao"], cwd: "/owned/data", source: "override", shell: false },
+		};
+		await h.start();
+		h.planDaemonSpawnIsolation.mockResolvedValueOnce(scopePlan);
+		h.crash(null, "SIGKILL");
+		await vi.advanceTimersByTimeAsync(1000);
+		expect(h.spawn).toHaveBeenCalledTimes(2);
+		expect(h.spawn.mock.calls[1][0]).toBe("/usr/bin/systemd-run");
+		// A successor daemon now owns running.json, so automatic recovery must decline.
+		h.setMarker(JSON.stringify({ pid: 99, port: 3001 }));
+		h.crash(1, null);
+		await vi.advanceTimersByTimeAsync(2000);
+		expect(h.lifecycleLog).toHaveBeenCalledWith("daemon_restart_decision", expect.objectContaining({ cause: "scope_launch_failed" }));
+		expect(h.spawn).toHaveBeenCalledTimes(2);
+	});
+
+	it("keeps the failed launch's keep-alive choice in the scope fallback", async () => {
+		const h = setup();
+		h.env.AO_KEEP_DAEMON = "1";
+		h.planDaemonSpawnIsolation.mockResolvedValueOnce({
+			kind: "scope", unit: "u", slice: "app-ao.slice",
+			launch: { command: "/usr/bin/systemd-run", args: ["--", "/owned/ao"], cwd: "/owned/data", source: "override", shell: false },
+		});
+		await h.start();
+		expect(h.daemonEnv).toHaveBeenLastCalledWith(true);
+		delete h.env.AO_KEEP_DAEMON;
+		h.setMarker(Object.assign(new Error("missing"), { code: "ENOENT" }));
+		h.crash(1, null);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(h.spawn).toHaveBeenCalledTimes(2);
+		expect(h.daemonEnv).toHaveBeenLastCalledWith(true);
+		expect(h.lifecycleLog).toHaveBeenCalledWith("daemon_spawn", expect.objectContaining({ trigger: "scope_fallback", keepAlive: true }));
+	});
+
+	it("treats a signal death of a scoped daemon as an ordinary crash", async () => {
+		const h = setup();
+		h.planDaemonSpawnIsolation.mockResolvedValueOnce({
+			kind: "scope", unit: "u", slice: "app-ao.slice",
+			launch: { command: "/usr/bin/systemd-run", args: ["--", "/owned/ao"], cwd: "/owned/data", source: "override", shell: false },
+		});
+		await h.start();
+		h.crash(null, "SIGKILL");
+		await vi.advanceTimersByTimeAsync(1000);
+		expect(h.scopeLaunchFailed()).toBe(false);
+		expect(h.lifecycleLog).toHaveBeenCalledWith("daemon_restart_decision", expect.objectContaining({ cause: "ungraceful_exit", decision: "restart" }));
+	});
+
+	it("labels a nonzero exit without a run file distinctly from a graceful one", async () => {
+		const h = setup();
+		await h.start();
+		h.setMarker(Object.assign(new Error("missing"), { code: "ENOENT" }));
+		h.crash(1, null);
+		await vi.advanceTimersByTimeAsync(2000);
+		expect(h.spawn).toHaveBeenCalledTimes(1);
+		expect(h.lifecycleLog).toHaveBeenCalledWith("daemon_restart_decision", expect.objectContaining({
+			code: 1, decision: "no_restart", cause: "nonzero_exit_without_run_file",
+		}));
+	});
+
+	it("records a graceful exit as no restart", async () => {
+		const h = setup();
+		await h.start();
+		h.setMarker(Object.assign(new Error("missing"), { code: "ENOENT" }));
+		h.crash(0, null);
+		await vi.advanceTimersByTimeAsync(2000);
+		expect(h.spawn).toHaveBeenCalledTimes(1);
+		expect(h.lifecycleLog).toHaveBeenCalledWith("daemon_restart_decision", expect.objectContaining({
+			code: 0, runFilePresent: false, decision: "no_restart", cause: "graceful_exit",
+		}));
+	});
+
+	it("records giving up once the restart window is exhausted", async () => {
+		const h = setup();
+		await h.start();
+		for (let attempt = 0; attempt < 7; attempt++) {
+			h.setMarker(JSON.stringify({ pid: h.children.at(-1)!.pid, port: 3001 }));
+			h.crash(2, null);
+			await vi.advanceTimersByTimeAsync(31_000);
+		}
+		expect(h.lifecycleLog).toHaveBeenCalledWith("daemon_restart_decision", expect.objectContaining({ decision: "give_up", cause: "ungraceful_exit" }));
 	});
 
 	it("recovers a signal crash whose marker was initially absent", async () => {

@@ -1,7 +1,7 @@
 import { Feather } from "../icons";
 import * as Clipboard from "expo-clipboard";
 import * as Linking from "expo-linking";
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, useCallback, useContext, useEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from "react";
 import {
 	FlatList,
 	Image,
@@ -37,7 +37,7 @@ import { artifactRenderRef, notifyRenderViewport, readArtifactRef, readRenderRef
 import { HighlightedCodeText } from "./HighlightedCodeText";
 import { caretNotation, commandOutputText } from "./ansi";
 import { userMessageSurfaceStyle } from "./chatChrome";
-import { useMenuRowWidth } from "../useMenuRowWidth";
+import { MenuRowWidthScope, useMenuRowWidth } from "../useMenuRowWidth";
 import { requestPresentation } from "./chatPresentation";
 import { workingElapsedLabel } from "./conversationChrome";
 import { errorActivityDuplicatesTurn, providerErrorCopy } from "./providerError";
@@ -56,6 +56,7 @@ import {
 import { previewFilePath } from "../api";
 import { ImageViewer } from "../ImageViewer";
 import { attachmentName, attachmentTileSize, editableMessageText, isImageAttachment, isSameAttachmentLoad, stagedAttachmentParts, type AttachmentImageSource } from "./messageAttachments";
+import { isDrawnImageFile, MessageFileGoneError, MessageFileSourceContext } from "./messageFiles";
 import { InlineMessageEditor, type MessageEditDraft } from "./InlineMessageEditor";
 import { JumpToLatest } from "./JumpToLatest";
 import { atTail, openingRow } from "./timelineScroll";
@@ -77,7 +78,9 @@ import type {
 	ConversationPlan,
 	ConversationSnapshot,
 	ConversationTurn,
+	DiffFile,
 	FileChange,
+	MessageFile,
 } from "./types";
 import {
 	activityHierarchy,
@@ -101,6 +104,8 @@ import { useFilesNavigation } from "../files/navigation";
 import { userFacingError } from "../connectionError";
 import { SentResponseQuotes } from "./SentResponseQuotes";
 import { TurnRollbackButton } from "./TurnRollbackButton";
+import { TurnArtifacts, useTurnArtifactSource } from "./TurnArtifacts";
+import { turnResults } from "./turnArtifactsModel";
 import { ConversationHarness, LatestWorkerUpdates, OriginMessageView, WorkerSessionsProvider, WorkerUpdateRows } from "./AutomationMessage";
 import { humanVisibleText, latestWorkerUpdateKeys, piggybackedUpdates } from "./automationMessages";
 import { SessionStartupStatus } from "./SessionStartup";
@@ -113,7 +118,12 @@ type TimelineRow =
 	| { kind: "single"; key: string; items: [ConversationItem] }
 	| { kind: "activities"; key: string; items: ConversationActivity[] };
 
-export const ChatTimeline = memo(function ChatTimeline({
+/** The conversation's rows; its user rows share one width (see `MenuRowWidthScope`). */
+export const ChatTimeline = memo(function ChatTimeline(props: ComponentProps<typeof Timeline>) {
+	return <MenuRowWidthScope><Timeline {...props} /></MenuRowWidthScope>;
+});
+
+function Timeline({
 	snapshot,
 	loadingOlder,
 	onLoadOlder,
@@ -459,7 +469,7 @@ export const ChatTimeline = memo(function ChatTimeline({
 			</ConversationHarness.Provider>
 		</WorkerSessionsProvider>
 	);
-});
+}
 
 function ConversationTurnGroup({ group, snapshot, approvalPending, inputPending, onDecide, onResolveInput, onRollback, editableTurns, onEditMessage, editDraft, onCancelEdit, onSubmitEdit, onEditFocus, answeredBelow, workedOpen, onToggleWorked, startup }: {
 	group: ConversationGroup;
@@ -579,7 +589,7 @@ const TimelineItem = memo(function TimelineItem({
 			return (
 				<>
 				{reports.length > 0 ? <WorkerUpdateRows updates={reports} /> : null}
-				<View style={styles.userRow} onLayout={userRow.onLayout}>
+				<View ref={userRow.ref} style={styles.userRow} onLayout={userRow.onLayout}>
 					<MessageContextMenu canEdit={Boolean(onEdit)} onAction={(action) => {
 						if (action === "edit") onEdit?.(item);
 						else { void Clipboard.setStringAsync(editableMessageText(humanVisibleText(item.text)).body.trim()); haptics.success(); }
@@ -588,6 +598,7 @@ const TimelineItem = memo(function TimelineItem({
 							<SentResponseQuotes content={item.content} />
 							{body ? <Text style={styles.userText}>{body}</Text> : null}
 							{attachments.length > 0 ? <StagedAttachments sessionId={sessionId} paths={attachments} spaced={Boolean(body)} /> : null}
+							{item.files?.length ? <MessageFiles files={item.files} spaced={Boolean(body) || attachments.length > 0} /> : null}
 							{delivery ? <Text style={styles.delivery}>{delivery}</Text> : null}
 						</View>
 					</MessageContextMenu>
@@ -630,7 +641,6 @@ const TimelineItem = memo(function TimelineItem({
 	const artifact = item.activityKind === "system" ? readArtifactRef(item.detail) : undefined;
 	const artifactPage = artifact ? artifactRenderRef(sessionId, artifact) : undefined;
 	if (artifact && artifactPage) return <RenderFrame render={artifactPage} artifact={{ sessionId, path: artifact.path }} />;
-	if (item.detail?.event === "model.rerouted") return <SystemSignal icon="shuffle" title={`Answered by ${item.detail.toModel || "another model"}`} detail={item.detail.fromModel ? `Instead of ${item.detail.fromModel}${item.detail.reason ? ` · ${item.detail.reason}` : ""}` : item.detail.reason} />;
 	if (item.detail?.event === "auth.reauth_required") return <SystemSignal icon="key" danger title="The provider asked you to sign in again" detail={item.detail.reason} />;
 	if (item.activityKind === "error") return <ErrorActivity activity={item} />;
 	return <ActivityRow activity={item} />;
@@ -688,6 +698,58 @@ function StagedAttachments({ sessionId, paths, spaced }: { sessionId: string; pa
 			return <StagedAttachment key={path} name={attachmentName(path)} source={source} tileSize={tileSize} />;
 		})}
 	</View>;
+}
+
+/**
+ * Files a message carries as uploads (a cloud session's attachments). Images
+ * load from a local copy the screen's source provides and open full-screen like
+ * staged ones; anything else is a name chip.
+ */
+function MessageFiles({ files, spaced }: { files: MessageFile[]; spaced: boolean }) {
+	const styles = useThemedStyles(makeStyles);
+	const tileSize = attachmentTileSize(files.filter(isDrawnImageFile).length);
+	return <View style={[styles.attachments, spaced && styles.attachmentsSpaced]}>
+		{files.map((file) => <MessageFileView key={file.id} file={file} tileSize={tileSize} />)}
+	</View>;
+}
+
+function MessageFileView({ file, tileSize }: { file: MessageFile; tileSize: number }) {
+	const t = useTheme();
+	const styles = useThemedStyles(makeStyles);
+	const chipFeedback = usePressFeedback("button");
+	const source = useContext(MessageFileSourceContext);
+	const image = Boolean(source) && isDrawnImageFile(file);
+	const [uri, setUri] = useState<string>();
+	// "gone": the file was deleted (an archived cloud session's are), so there
+	// is nothing to retry; "retry": anything else, which may load next time.
+	const [failed, setFailed] = useState<"retry" | "gone">();
+	const [attempt, setAttempt] = useState(0);
+	useEffect(() => {
+		if (!image || !source) return;
+		let live = true;
+		setFailed(undefined);
+		source(file).then((value) => { if (live) setUri(value); }, (error: unknown) => { if (live) setFailed(error instanceof MessageFileGoneError ? "gone" : "retry"); });
+		return () => { live = false; };
+		// The file's id names its bytes; a retry asks again.
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [file.id, image, source, attempt]);
+	if (!image) return <StagedAttachment name={file.name} tileSize={tileSize} />;
+	if (failed === "gone") {
+		return <View accessibilityLabel={`${file.name}, no longer available`} style={styles.attachmentChip}>
+			<Feather name="file-text" size={iconSize.xs} color={t.textTertiary} />
+			<Text numberOfLines={1} style={styles.attachmentName}>{file.name}</Text>
+			<Text style={styles.attachmentGone}>No longer available</Text>
+		</View>;
+	}
+	if (failed) {
+		return <Pressable accessibilityRole="button" accessibilityLabel={`Retry loading ${file.name}`} hitSlop={space.md} onPress={() => setAttempt((value) => value + 1)} android_ripple={chipFeedback.android_ripple} style={({ pressed }) => [styles.attachmentChip, pressed && chipFeedback.pressed]}>
+			<AppSymbol name="refresh" size={iconSize.xs} color={t.textTertiary} />
+			<Text numberOfLines={1} style={styles.attachmentName}>{file.name}</Text>
+			<Text style={styles.attachmentRetry}>Tap to retry</Text>
+		</Pressable>;
+	}
+	if (!uri) return <View accessibilityLabel={`Loading ${file.name}`} style={[styles.attachmentTile, styles.attachmentLoading, { width: tileSize, height: tileSize }]}><Spinner size={iconSize.sm} color={t.textTertiary} /></View>;
+	return <StagedAttachment name={file.name} source={{ uri, headers: {} }} tileSize={tileSize} />;
 }
 
 function StagedAttachment({ name, source, tileSize }: { name: string; source?: AttachmentImageSource; tileSize: number }) {
@@ -1040,27 +1102,32 @@ function TurnSummary({ turn, plan, onRollback }: { turn: ConversationTurn; plan?
 	const styles = useThemedStyles(makeStyles);
 	const settled = turn.state !== "running" && turn.state !== "queued";
 	const canRollBack = settled && Boolean(turn.providerTurnId) && !turn.rolledBack;
+	// The deliverables a completed turn made show as tiles; every other changed
+	// file stays in the changed-files card, so nothing shows twice or goes
+	// missing (the desktop's TurnResults).
+	const source = useTurnArtifactSource();
+	const results = useMemo(() => turnResults(turn, source), [source, turn]);
 	// Nothing to show draws nothing: an empty one still padded every turn's end,
 	// most of the gap between a reply and the next prompt.
-	if (!plan && !turn.diff?.files.length && !(onRollback && canRollBack) && !turn.errorMessage) return null;
+	if (!plan && !results.artifacts.length && !results.files.length && !(onRollback && canRollBack) && !turn.errorMessage) return null;
 	return (
 		<View style={styles.turnWrap}>
 			{plan ? <TurnPlan plan={plan} live={turn.state === "running"} /> : null}
-			{turn.diff?.files.length ? <ChangedFiles turn={turn} /> : null}
+			{results.artifacts.length && source ? <TurnArtifacts artifacts={results.artifacts} source={source} /> : null}
+			{results.files.length ? <ChangedFiles turn={turn} changed={results.files} /> : null}
 			{onRollback && canRollBack ? <View style={styles.turnLine}><TurnRollbackButton turnId={turn.id} onRollback={onRollback} /></View> : null}
 			{turn.errorMessage ? <Text style={styles.turnError}>{turn.errorMessage}</Text> : null}
 		</View>
 	);
 }
 
-function ChangedFiles({ turn }: { turn: ConversationTurn }) {
+function ChangedFiles({ turn, changed }: { turn: ConversationTurn; changed: DiffFile[] }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const feedback = usePressFeedback("row");
 	const reviewFeedback = usePressFeedback("button");
 	const files = useFilesNavigation();
 	const [open, setOpen] = useState(false);
-	const changed = turn.diff?.files ?? [];
 	const additions = changed.reduce((sum, file) => sum + file.additions, 0);
 	const deletions = changed.reduce((sum, file) => sum + file.deletions, 0);
 	return <View style={styles.planCard}>
@@ -1353,12 +1420,14 @@ const makeStyles = (t: Theme) => {
 		attachments: { flexDirection: "row", flexWrap: "wrap", gap: space.xs },
 		attachmentsSpaced: { marginTop: space.sm },
 		attachmentTile: { overflow: "hidden", borderRadius: radius.sm, backgroundColor: t.bgColumn },
+		attachmentLoading: { alignItems: "center", justifyContent: "center" },
 		attachmentTileImage: { width: "100%", height: "100%" },
 		// alignSelf keeps a chip its own height next to a tile: the row container's
 		// default stretch would otherwise blow it up to the tile's 104/160px.
 		attachmentChip: { alignSelf: "flex-start", flexDirection: "row", alignItems: "center", gap: space.xs, borderRadius: radius.sm, overflow: "hidden", borderWidth: rowDividerWidth, borderColor: t.borderSubtle, paddingHorizontal: space.sm, paddingVertical: space.xs },
 		attachmentName: { fontFamily: "DMSans_400Regular", flexShrink: 1, color: t.textSecondary, fontSize: type.footnote.fontSize },
 		attachmentRetry: { fontFamily: "DMSans_600SemiBold", color: t.accent, fontSize: type.footnote.fontSize, fontWeight: "600" },
+		attachmentGone: { fontFamily: "DMSans_400Regular", color: t.textTertiary, fontSize: type.footnote.fontSize },
 		originMessage: { marginVertical: space.sm, borderLeftWidth: 2, borderLeftColor: t.borderStrong, paddingLeft: space.sm, gap: space.xxs },
 		originHeader: { flexDirection: "row", alignItems: "center", gap: space.xxs },
 		originLabel: { fontFamily: "DMSans_600SemiBold", color: t.textTertiary, fontSize: type.footnote.fontSize, fontWeight: "600" },

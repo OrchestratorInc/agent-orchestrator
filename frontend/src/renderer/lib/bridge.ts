@@ -6,6 +6,9 @@ export type { FeatureBuild } from "../../main/feature-builds";
 export const aoBridge: AoBridge =
 	window.ao ??
 	({
+		triage: {
+			launch: async () => ({ ok: false, error: "report.desktopRequired" as const }),
+		},
 		dictation: {
 			start: async () => undefined,
 			stop: async () => undefined,
@@ -136,6 +139,18 @@ export const aoBridge: AoBridge =
 				throw new Error("Sharing needs the Orchestrator desktop app.");
 			},
 			cancel: async () => undefined,
+			setAccess: async () => {
+				throw new Error("Sharing needs the Orchestrator desktop app.");
+			},
+			grants: async () => {
+				throw new Error("Sharing needs the Orchestrator desktop app.");
+			},
+			invite: async () => {
+				throw new Error("Sharing needs the Orchestrator desktop app.");
+			},
+			removeGrant: async () => {
+				throw new Error("Sharing needs the Orchestrator desktop app.");
+			},
 			unpublish: async () => {
 				throw new Error("Sharing needs the Orchestrator desktop app.");
 			},
@@ -151,6 +166,9 @@ export const aoBridge: AoBridge =
 				throw new Error("Opening a folder needs the desktop app");
 			},
 			onFrameNavigated: () => () => undefined,
+		},
+		artifactSnapshot: {
+			request: async () => false,
 		},
 		daemon: {
 			getStatus: async () => ({
@@ -452,6 +470,8 @@ export const aoBridge: AoBridge =
 			onSessionChanged: () => () => undefined,
 			onOpenShareLink: () => () => undefined,
 			takePendingShareLink: async () => null,
+			pushFolderToRepository: async () => ({ status: "error", code: "invalid_request", message: "Uploading folders requires the desktop app." }),
+			previewFolderUpload: async () => ({ status: "error", code: "invalid_request", message: "Uploading folders requires the desktop app." }),
 			takePendingSignIn: async () => null,
 		},
 		cloudCp: {

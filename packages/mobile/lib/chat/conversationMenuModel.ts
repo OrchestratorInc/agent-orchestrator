@@ -9,7 +9,14 @@ import { ARCHIVE_SESSION_HINT } from "../worker-action-model";
  * session to Terminal UI, and archiving it. Artifacts and PR Review show only once there is something to
  * open: on an empty session they led to an empty page.
  */
-export type ConversationMenuAction = "shell" | "preview" | "artifacts" | "pin" | "pull_requests" | "compact" | "switch_tui" | "delete";
+export type ConversationMenuAction = "shell" | "preview" | "artifacts" | "pin" | "pull_requests" | "compact" | "switch_tui" | "delete" | CloudConversationMenuAction;
+
+/**
+ * What only an Orchestrator Cloud session's sheet offers: its agent's own
+ * terminal (a Terminal UI session's view, beside the chat), its project, and
+ * Restore for an archived one. See lib/cloud/sessionMenu.
+ */
+export type CloudConversationMenuAction = "agent_terminal" | "project" | "restore" | "switch_chat";
 
 export type ConversationMenuSection = {
 	// Switching to Terminal UI and Archive act on the session, not the
@@ -40,6 +47,8 @@ export type ConversationMenuState = {
 	canSwitchToTerminal?: boolean;
 	/** A switch to Terminal UI is starting or under way. */
 	switchingToTerminal?: boolean;
+	/** A switch back to Chat is starting or under way (a cloud Terminal UI session). */
+	switchingToChat?: boolean;
 	/** Something the agent produced is ready to preview. */
 	previewReady?: boolean;
 	/** Files in the session's artifact directory, when known. */
@@ -87,7 +96,7 @@ export function conversationMenuGroups(state: ConversationMenuState): Conversati
 	}));
 }
 
-function conversationMenuItem(action: ConversationMenuAction, state: ConversationMenuState): ConversationMenuItem {
+export function conversationMenuItem(action: ConversationMenuAction, state: ConversationMenuState): ConversationMenuItem {
 	switch (action) {
 		case "shell": return { action, label: state.openingShell ? "Opening shell…" : "Shell", disabled: state.openingShell, icon: { ios: "chevron.left.forwardslash.chevron.right", android: "code" } };
 		case "preview": return { action, label: "Preview", subtitle: state.previewReady ? "Ready to open" : undefined, icon: { ios: "globe", android: "language" } };
@@ -110,6 +119,16 @@ function conversationMenuItem(action: ConversationMenuAction, state: Conversatio
 			icon: { ios: "terminal", android: "terminal" },
 		};
 		case "delete": return { action, label: "Archive", subtitle: ARCHIVE_SESSION_HINT, destructive: true, icon: { ios: "archivebox", android: "archive" } };
+		case "agent_terminal": return { action, label: "Agent terminal", subtitle: "The agent's own Terminal UI", icon: { ios: "terminal", android: "terminal" } };
+		case "project": return { action, label: "Project", icon: { ios: "folder", android: "folder" } };
+		case "restore": return { action, label: "Restore", subtitle: "Start its sandbox again where it left off", icon: { ios: "arrow.uturn.backward", android: "history" } };
+		case "switch_chat": return {
+			action,
+			label: state.switchingToChat ? "Switching to Chat…" : "Switch to Chat",
+			subtitle: "Same session, worktree and conversation",
+			disabled: state.switchingToChat,
+			icon: { ios: "bubble.left", android: "chat_bubble" },
+		};
 	}
 }
 

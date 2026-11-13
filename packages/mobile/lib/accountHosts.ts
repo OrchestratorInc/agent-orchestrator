@@ -2,6 +2,7 @@ import { clearPreviousAccount, getAccountAccessToken, loadAccount, loadPreviousA
 import { ignoredAccountHosts, moveIgnoredAccountHosts, mutateAccountHosts } from "./accountHostPreferences";
 import { isTailscaleHost } from "./connectionError";
 import { forgetPairedHost } from "./disconnect";
+import { noteRequestAnswered } from "./answeredRequests";
 import { endpointBaseUrl, type Endpoint } from "./endpoints";
 import { loadHosts, saveHost, type Host } from "./hosts";
 import { isQuickTunnelHost } from "./staleTunnel";
@@ -64,7 +65,9 @@ async function syncFetch(url: string, init: RequestInit, timeoutMs: number, sign
 	if (signal.aborted) controller.abort();
 	const timer = setTimeout(abort, timeoutMs);
 	try {
+		const startedAt = Date.now();
 		const response = await fetch(url, { ...init, signal: controller.signal });
+		noteRequestAnswered(startedAt);
 		// Keep cancellation and the timeout alive until the body finishes too.
 		const body: unknown = response.ok && init.method !== "PUT" ? await response.json() : undefined;
 		return { ok: response.ok, status: response.status, body };

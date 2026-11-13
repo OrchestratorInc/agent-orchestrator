@@ -11,6 +11,7 @@ import { Platform, View } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import { SafeAreaProvider } from "react-native-safe-area-context";
+import { KeyboardResumeResync } from "../lib/KeyboardResumeResync";
 import { OnboardingGate } from "../lib/OnboardingGate";
 import { TelemetryManager } from "../lib/TelemetryManager";
 import { rootTouchStart } from "../lib/touchOutside";
@@ -20,6 +21,7 @@ import { StoreUpdateManager } from "../lib/StoreUpdateManager";
 import { boardTitle } from "../lib/board-tabs";
 import { GLASS_HEADER_OPTIONS, stackScreenOptions } from "../lib/stackScreenOptions";
 import { AppProvider } from "../lib/store";
+import { CloudProvider } from "../lib/cloud/CloudProvider";
 import { appFonts } from "../lib/appFonts";
 import { symbolFonts } from "../lib/symbolFonts";
 import { ThemeProvider, useTheme, useThemeState } from "../lib/ThemeProvider";
@@ -44,6 +46,7 @@ import { sheetCornerRadius } from "../lib/tokens";
 // from the lower one with an ordinary swipe.
 const SHEET_ROUTES: readonly { name: string; detents: readonly number[] | "fitToContents"; androidDetents?: readonly [number] }[] = [
 	{ name: "sheets/conversation-usage", detents: "fitToContents" },
+	{ name: "sheets/cloud-plan", detents: "fitToContents" },
 	{ name: "sheets/artifact-history", detents: [0.6, 0.95] },
 	{ name: "sheets/review-actions", detents: [0.6, 0.95], androidDetents: [0.6] },
 	{ name: "files/[sessionId]/review", detents: [0.5, 1] },
@@ -55,6 +58,8 @@ const SHEET_ROUTES: readonly { name: string; detents: readonly number[] | "fitTo
 const PICKER_SHEETS = [
 	{ name: "sheets/agent", title: "Agent" },
 	{ name: "sheets/model", title: "Model" },
+	{ name: "sheets/files-branch", title: "Branch" },
+	{ name: "sheets/files-changes", title: "Changes" },
 ] as const;
 
 // iOS's machine-name sheet, the one sheet with a text input: a native bar
@@ -126,11 +131,15 @@ export default function RootLayout() {
 			    Android only fires `keyboardDidShow` once the keyboard has finished
 			    animating, so every dock and composer arrived a beat late. */}
 			<KeyboardProvider>
+				<KeyboardResumeResync />
 				<SafeAreaProvider>
 					<ThemeProvider initial={themeSettings}>
+						{/* Orchestrator Cloud outside the machines' store: the store lists cloud rows beside each machine's. */}
+						<CloudProvider>
 						<AppProvider>
 							<Shell />
 						</AppProvider>
+						</CloudProvider>
 					</ThemeProvider>
 				</SafeAreaProvider>
 			</KeyboardProvider>
@@ -201,6 +210,8 @@ function Shell() {
 				<Stack.Screen name="review/[sessionId]" options={{ title: "Pull request", ...GLASS_HEADER_OPTIONS }} />
 				<Stack.Screen name="reviewer/[reviewId]" options={{ title: "Reviewer", ...GLASS_HEADER_OPTIONS }} />
 				<Stack.Screen name="shell/[handleId]" options={{ title: "Worktree shell", ...GLASS_HEADER_OPTIONS }} />
+				{/* An Orchestrator Cloud session's sandbox shell, the cloud's worktree shell. */}
+				<Stack.Screen name="cloud/terminal" options={{ title: "Shell", ...GLASS_HEADER_OPTIONS }} />
 				<Stack.Screen name="preview/[id]" options={{ title: "Preview", ...GLASS_HEADER_OPTIONS }} />
 				<Stack.Screen name="artifacts/[sessionId]" options={{ title: "Artifacts", ...GLASS_HEADER_OPTIONS }} />
 				<Stack.Screen name="artifact/[sessionId]" options={{ title: "Artifact", ...GLASS_HEADER_OPTIONS }} />
@@ -307,6 +318,23 @@ function Shell() {
 						title: "Insert",
 						headerStyle: { backgroundColor: t.bgSurface },
 						contentStyle: { backgroundColor: t.bgSurface },
+					}}
+				/>
+				{/* A new Orchestrator Cloud project: on iOS a form sheet with a native
+				    bar, Cancel and Create in it, as the machine-name sheet has. On
+				    Android a page under the stack's top app bar, as manual connect
+				    is: in a form sheet the first tap on a Compose field went to the
+				    sheet, and at full height the sheet ran under the status bar. */}
+				<Stack.Screen
+					name="cloud/new-project"
+					options={Platform.OS === "android" ? {
+						title: "New project",
+						contentStyle: { backgroundColor: t.bgBase },
+					} : {
+						...NAME_SHEET_OPTIONS,
+						title: "New project",
+						headerStyle: { backgroundColor: t.bgBase },
+						contentStyle: { backgroundColor: t.bgBase },
 					}}
 				/>
 				<Stack.Screen

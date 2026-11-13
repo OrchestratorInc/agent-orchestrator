@@ -12,8 +12,9 @@
  * rather than a focus move).
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import { CornerDownLeft } from "@/components/app-icons";
+import { useEdgeFade } from "../../hooks/useEdgeFade";
 import { cn } from "../../lib/utils";
 import { Pressable } from "../ui/pressable";
 import { composerFileIcon } from "./composerFileIcon";
@@ -37,34 +38,9 @@ export function ComposerSuggestMenu({
 	truncated?: boolean;
 }) {
 	const list = useRef<HTMLUListElement>(null);
-	const lastScrollTop = useRef(0);
-	const scrollDirection = useRef<"up" | "down" | null>(null);
 	const previousHighlighted = useRef(highlighted);
-	const [scrollIndicators, setScrollIndicators] = useState({
-		top: false,
-		bottom: true,
-	});
-
-	const updateScrollIndicators = useCallback(() => {
-		const node = list.current;
-		if (!node) return;
-		const delta = node.scrollTop - lastScrollTop.current;
-		if (delta > 1) scrollDirection.current = "down";
-		if (delta < -1) scrollDirection.current = "up";
-		lastScrollTop.current = node.scrollTop;
-
-		const top = node.scrollTop > 1;
-		const bottom = node.scrollTop + node.clientHeight < node.scrollHeight - 1;
-		const indicators =
-			scrollDirection.current === "down"
-				? { top, bottom: false }
-				: scrollDirection.current === "up"
-					? { top: false, bottom }
-					: { top: false, bottom };
-		setScrollIndicators((current) =>
-			current.top === indicators.top && current.bottom === indicators.bottom ? current : indicators,
-		);
-	}, []);
+	// The list unmounts while nothing matches, so the fade reattaches when it returns.
+	useEdgeFade(list, "y", [items.length === 0]);
 
 	// Keep the highlighted row visible when it moves by keyboard past the edge of
 	// the scroll area.
@@ -80,113 +56,77 @@ export function ComposerSuggestMenu({
 		row?.scrollIntoView({ block: "nearest" });
 	}, [highlighted, items]);
 
-	useEffect(() => {
-		const node = list.current;
-		scrollDirection.current = null;
-		lastScrollTop.current = node?.scrollTop ?? 0;
-		updateScrollIndicators();
-		if (!node || typeof ResizeObserver === "undefined") return;
-		const observer = new ResizeObserver(updateScrollIndicators);
-		observer.observe(node);
-		return () => observer.disconnect();
-	}, [items, updateScrollIndicators]);
-
 	if (items.length === 0) return null;
 
 	return (
 		<div
-			className="absolute bottom-full left-0 z-overlay mb-1.5 flex w-full max-w-md flex-col gap-px overflow-hidden rounded-lg border border-(--color-border-overlay) bg-overlay p-1 text-popover-foreground shadow-(--shadow-popover)"
+			className="absolute bottom-full left-0 z-overlay mb-1.5 flex w-full max-w-md flex-col overflow-hidden rounded-lg border border-(--color-border-overlay) bg-overlay p-1 text-popover-foreground shadow-(--shadow-popover)"
 			// The composer owns the keyboard; a pointerdown here must not pull focus
 			// out of the textarea on its way to the click.
 			onMouseDown={(event) => event.preventDefault()}
 		>
-			<div className="relative min-h-0">
-				<ul
-					ref={list}
-					id={id}
-					role="listbox"
-					onScroll={updateScrollIndicators}
-					className="scrollbar-none flex max-h-64 flex-col gap-px overflow-y-auto"
-				>
-					{items.map((item, index) => (
+			<ul
+				ref={list}
+				id={id}
+				role="listbox"
+				// Rows are 32px, so the edge fade is short enough to leave a row readable.
+				// The scroll padding keeps a keyboard-highlighted row clear of it.
+				className="model-menu-scroll edge-fade flex max-h-64 scroll-py-4 flex-col overflow-y-auto overscroll-contain [--edge-fade-size:16px]"
+			>
+				{items.map((item, index) => {
+					const active = index === highlighted;
+					const badge = displayBadge(item.badge);
+					const Icon = kind === "file" ? composerFileIcon(item.value) : undefined;
+					return (
 						<li key={item.value} data-index={index}>
 							<Pressable
 								tabIndex={-1}
 								role="option"
 								id={`${id}-option-${index}`}
-								aria-selected={index === highlighted}
+								aria-selected={active}
 								onClick={() => onPick(item.value)}
 								className={cn(
-									"flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left text-sm text-muted-foreground outline-none !transition-none",
-									index === highlighted
+									"flex h-8 w-full items-center gap-2 rounded-sm px-2 text-left text-xs text-muted-foreground outline-none !transition-none",
+									active
 										? "bg-interactive-active text-foreground"
 										: "bg-transparent hover:bg-interactive-hover hover:text-foreground",
 								)}
 							>
-								{kind === "file"
-									? (() => {
-											const Icon = composerFileIcon(item.value);
-											return (
-												<span
-													aria-hidden="true"
-													className="flex h-4 shrink-0 items-center text-muted-foreground"
-												>
-													<Icon className="size-3.5" />
-												</span>
-											);
-										})()
-									: null}
-								<span className="min-w-0 flex-1">
-									<span
-										className={cn(
-											"block truncate text-xs",
-											index === highlighted ? "text-foreground" : "text-muted-foreground",
-										)}
-									>
+								{Icon ? (
+									<Icon aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
+								) : null}
+								{/* Name first, then its description or folder on the same line,
+								    in smaller text, so a row stays one line tall. */}
+								<span className="flex min-w-0 flex-1 items-baseline gap-2">
+									<span className={cn("truncate", item.detail ? "max-w-3/5 shrink-0" : "min-w-0")}>
 										{kind === "skill" ? `/${item.label}` : item.label}
 									</span>
 									{item.detail ? (
-										<span className="block truncate text-caption leading-snug text-muted-foreground">
+										<span className="min-w-0 flex-1 truncate text-caption text-muted-foreground">
 											{item.detail}
 										</span>
 									) : null}
 								</span>
-								{displayBadge(item.badge) ? (
-									<span className="shrink-0 text-micro text-muted-foreground">
-										{displayBadge(item.badge)}
-									</span>
-								) : null}
-								{index === highlighted ? (
+								{badge ? <span className="shrink-0 text-micro text-muted-foreground">{badge}</span> : null}
+								{active ? (
 									<span
 										aria-label="Press Tab or Enter to insert"
-										className="flex shrink-0 items-center gap-1 text-micro text-muted-foreground"
+										className="flex shrink-0 items-center text-muted-foreground"
 									>
 										<CornerDownLeft aria-hidden="true" className="size-3" />
 									</span>
 								) : null}
 							</Pressable>
 						</li>
-					))}
-				</ul>
-				{scrollIndicators.top ? (
-					<div
-						aria-hidden="true"
-						className="pointer-events-none absolute inset-x-0 top-0 z-10 h-5 bg-gradient-to-b from-card to-transparent"
-					/>
-				) : null}
-				{scrollIndicators.bottom ? (
-					<div
-						aria-hidden="true"
-						className="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-5 bg-gradient-to-t from-card to-transparent"
-					/>
-				) : null}
-			</div>
+					);
+				})}
+			</ul>
 
 			{truncated ? (
 				// Said out loud rather than letting a capped list read as the whole
 				// worktree: a file that is missing because of the cap looks identical to
 				// one that does not exist.
-				<p className="border-t border-border px-2 py-1 text-micro text-muted-foreground">
+				<p className="mt-1 border-t border-border px-2 pt-1.5 pb-0.5 text-micro text-muted-foreground">
 					Showing part of a large worktree — type more to narrow it.
 				</p>
 			) : null}
