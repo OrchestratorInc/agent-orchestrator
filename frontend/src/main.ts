@@ -3281,8 +3281,10 @@ const privacyGuide = new PrivacyGuide({
 		});
 		window.setAlwaysOnTop(true, "floating");
 		window.setVisibleOnAllWorkspaces(true);
-		window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
-		privacyGuideContents = window.webContents;
+		// Kept from here: a closed window's webContents getter throws.
+		const contents = window.webContents;
+		contents.setWindowOpenHandler(() => ({ action: "deny" }));
+		privacyGuideContents = contents;
 		return {
 			loadURL: (url) => window.loadURL(url),
 			setBounds: (bounds) => window.setBounds(bounds),
@@ -3292,12 +3294,12 @@ const privacyGuide = new PrivacyGuide({
 			isFocused: () => window.isFocused(),
 			close: () => window.close(),
 			isDestroyed: () => window.isDestroyed(),
-			onNavigate: (handler) => window.webContents.on("will-navigate", (event, url) => {
+			onNavigate: (handler) => contents.on("will-navigate", (event, url) => {
 				event.preventDefault();
 				handler(url);
 			}),
 			onClosed: (handler) => window.on("closed", () => {
-				if (privacyGuideContents === window.webContents) privacyGuideContents = undefined;
+				if (privacyGuideContents === contents) privacyGuideContents = undefined;
 				handler();
 			}),
 		};
