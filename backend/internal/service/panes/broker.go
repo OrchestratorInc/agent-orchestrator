@@ -11,6 +11,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -74,7 +75,10 @@ type report struct {
 type Broker struct {
 	mu      sync.Mutex
 	windows map[*window]struct{}
-	layouts map[string]report
+	// layouts keeps each session's reports per window, the most recent last, so
+	// when the window that reported last goes away another window that still
+	// shows the session is the one asked and heard.
+	layouts map[string][]report
 	pending map[string]*pending
 	seq     uint64
 	timeout time.Duration
@@ -84,7 +88,7 @@ type Broker struct {
 func NewBroker() *Broker {
 	return &Broker{
 		windows: map[*window]struct{}{},
-		layouts: map[string]report{},
+		layouts: map[string][]report{},
 		pending: map[string]*pending{},
 		timeout: DefaultTimeout,
 	}
@@ -117,13 +121,17 @@ func (h *Window) Report(sessionID string, layout json.RawMessage) {
 	if _, ok := h.b.windows[h.w]; !ok {
 		return
 	}
-	if len(layout) == 0 || string(layout) == "null" {
-		if current, ok := h.b.layouts[sessionID]; ok && current.owner == h.w {
-			delete(h.b.layouts, sessionID)
-		}
+	// Only this window's earlier report is replaced; other windows' reports of
+	// the session stay as fallbacks.
+	reports := slices.DeleteFunc(h.b.layouts[sessionID], func(r report) bool { return r.owner == h.w })
+	if len(layout) != 0 && string(layout) != "null" {
+		reports = append(reports, report{owner: h.w, layout: append(json.RawMessage(nil), layout...)})
+	}
+	if len(reports) == 0 {
+		delete(h.b.layouts, sessionID)
 		return
 	}
-	h.b.layouts[sessionID] = report{owner: h.w, layout: append(json.RawMessage(nil), layout...)}
+	h.b.layouts[sessionID] = reports
 }
 
 // Resolve delivers the window's answer to a command it was sent.
@@ -142,9 +150,12 @@ func (h *Window) Close() {
 		return
 	}
 	delete(h.b.windows, h.w)
-	for sessionID, current := range h.b.layouts {
-		if current.owner == h.w {
+	for sessionID, reports := range h.b.layouts {
+		reports = slices.DeleteFunc(reports, func(r report) bool { return r.owner == h.w })
+		if len(reports) == 0 {
 			delete(h.b.layouts, sessionID)
+		} else {
+			h.b.layouts[sessionID] = reports
 		}
 	}
 	for id := range h.b.pending {
@@ -156,11 +167,11 @@ func (h *Window) Close() {
 func (b *Broker) Layout(sessionID string) (json.RawMessage, bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	current, ok := b.layouts[sessionID]
-	if !ok {
+	reports := b.layouts[sessionID]
+	if len(reports) == 0 {
 		return nil, false
 	}
-	return append(json.RawMessage(nil), current.layout...), true
+	return append(json.RawMessage(nil), reports[len(reports)-1].layout...), true
 }
 
 // Connected reports whether any desktop window is connected.
@@ -187,8 +198,8 @@ func (b *Broker) Execute(ctx context.Context, sessionID, action string, args jso
 	// windows are open. With no report, every window is asked and each says
 	// whether it shows the session.
 	var targets []*window
-	if current, ok := b.layouts[sessionID]; ok {
-		targets = []*window{current.owner}
+	if reports := b.layouts[sessionID]; len(reports) > 0 {
+		targets = []*window{reports[len(reports)-1].owner}
 	} else {
 		targets = make([]*window, 0, len(b.windows))
 		for w := range b.windows {

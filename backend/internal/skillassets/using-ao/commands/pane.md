@@ -75,9 +75,13 @@ inside this session's workspace.
   `left`, `right`, `top` and `bottom`.
 - A new terminal from `split terminal` is a normal shell tab; run commands in it
   only if the user asked for that.
-- Every command prints the layout after the change. Add `--json` for the same
-  data as JSON (`selected`, `shown`, `tabs`, `groups` with each pane's `x`,
-  `y`, `width` and `height` as fractions).
+- `ao pane` (also `ls`), `split` (without `--run`), `focus`, `remove` and
+  `ungroup` print the layout after the change. Add `--json` for the same data
+  as JSON (`selected`, `shown`, `tabs`, `groups` with each pane's `x`, `y`,
+  `width` and `height` as fractions). `read` prints the terminal's screen (as
+  JSON with `--json`), and `run` and `split --run` print the terminal's last
+  lines. `close` prints a one-line confirmation, and `send` and `interrupt`
+  print nothing.
 - Errors are final answers: `SPLIT_PANES_OFF`, `SESSION_NOT_ON_SCREEN`,
   `TAB_NOT_FOUND`, `NO_DESKTOP_WINDOW`, `PANE_TERMINAL_NOT_FOUND`,
   `PANE_TERMINAL_EXITED`. Report them to the user instead of looping.

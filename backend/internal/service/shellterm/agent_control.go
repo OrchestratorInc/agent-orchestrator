@@ -99,12 +99,17 @@ func (s *Service) SessionTerminalOutput(ctx context.Context, sessionID domain.Se
 		return "", err
 	}
 	var output string
+	// A rendered screen that reads back empty is a real answer (the terminal
+	// shows nothing); raw output is only for a runtime with no rendered screen,
+	// or one whose rendered read failed.
+	renderedRead := false
 	if styled, ok := s.runtime.(ports.StyledTerminalOutputReader); ok {
 		if rendered, styledErr := styled.GetStyledOutput(ctx, handle, lines); styledErr == nil {
 			output = terminalui.PlainTerminalText(rendered)
+			renderedRead = true
 		}
 	}
-	if output == "" {
+	if !renderedRead {
 		raw, rawErr := s.runtime.GetOutput(ctx, handle, lines)
 		if rawErr != nil {
 			return "", apierr.Unavailable("PANE_TERMINAL_OUTPUT_UNAVAILABLE", "Could not read that terminal's screen")

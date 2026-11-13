@@ -138,3 +138,16 @@ func TestReportIgnoresAnOversizedLayout(t *testing.T) {
 		t.Fatalf("layout = %.40s, %v; want the previous one kept", layout, ok)
 	}
 }
+
+func TestAClosedWindowFallsBackToAnotherWindowsReport(t *testing.T) {
+	b := NewBroker()
+	first := b.Connect(func(Command) {})
+	second := b.Connect(func(Command) {})
+	first.Report("s-1", json.RawMessage(`{"selected":"a"}`))
+	second.Report("s-1", json.RawMessage(`{"selected":"b"}`))
+	second.Close()
+	layout, ok := b.Layout("s-1")
+	if !ok || string(layout) != `{"selected":"a"}` {
+		t.Fatalf("layout = %s, %v; want the remaining window's", layout, ok)
+	}
+}

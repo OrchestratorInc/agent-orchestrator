@@ -40,7 +40,7 @@ func (paneAuth) Get(_ context.Context, id domain.SessionID) (domain.Session, err
 	if id != "s-1" {
 		return domain.Session{}, apierr.NotFound("SESSION_NOT_FOUND", "no such session")
 	}
-	return domain.Session{ID: id}, nil
+	return domain.Session{SessionRecord: domain.SessionRecord{ID: id}}, nil
 }
 
 func (paneAuth) Valid(id domain.SessionID, token, _ string) bool {

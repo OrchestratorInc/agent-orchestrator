@@ -1284,20 +1284,23 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		[sessionId, shellTerminals, setActiveShellTerminal, uiSessionId],
 	);
 
-	const closeShellTerminalByHandle = useCallback(
-		(handleId: string) => {
+	// Closes a terminal and settles when the daemon has, rejecting if it
+	// refused. The tab is removed at once; the strip follows on success.
+	const closeShellTerminalAsync = useCallback(
+		async (handleId: string): Promise<void> => {
 			if (terminalTarget.kind === "shell" && terminalTarget.handleId === handleId) {
 				// Match the visible mixed strip, not the shell-only creation order.
 				activateAuxiliaryTab(adjacentAuxiliaryTab(handleId));
 			} else if (activeShellTerminalHandleId === handleId) {
 				setActiveShellTerminal(null);
 			}
-			closeShellTerminal.mutate(handleId, {
-				onSuccess: () => removeAuxiliaryTab(handleId),
-				onError: (error) => {
-					if (apiErrorCode(error) === "SHELL_TERMINAL_NOT_FOUND") removeAuxiliaryTab(handleId);
-				},
-			});
+			try {
+				await closeShellTerminal.mutateAsync(handleId);
+				removeAuxiliaryTab(handleId);
+			} catch (error) {
+				if (apiErrorCode(error) === "SHELL_TERMINAL_NOT_FOUND") removeAuxiliaryTab(handleId);
+				else throw error;
+			}
 		},
 		[
 			activeShellTerminalHandleId,
@@ -1308,6 +1311,13 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			setActiveShellTerminal,
 			terminalTarget,
 		],
+	);
+	const closeShellTerminalByHandle = useCallback(
+		(handleId: string) => {
+			// A refusal leaves the terminal listed, which is what the user sees.
+			void closeShellTerminalAsync(handleId).catch(() => undefined);
+		},
+		[closeShellTerminalAsync],
 	);
 
 	// Selecting the session's own pane also drops the active shell, so the effect
@@ -1945,8 +1955,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// Closing a pane (⌘W, or the ✕ on its group tab) keeps the rest of the
 	// split on screen. The session's own pane and reviewers are not closable,
 	// so they return to the strip as tabs of their own.
-	const closePaneRef = useRef<(key: string) => void>(() => undefined);
-	closePaneRef.current = (key) => {
+	const closePaneRef = useRef<(key: string) => Promise<void>>(async () => undefined);
+	closePaneRef.current = async (key) => {
 		const group = groupContaining(groups, key);
 		if (!group) return;
 		const members = leafKeys(group.root);
@@ -1964,12 +1974,17 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			removeAuxiliaryTab(key);
 		} else if (shellTerminals.some((shell) => shell.handleId === key)) {
 			if (activeShellTerminalHandleId === key) setActiveShellTerminal(null);
-			closeShellTerminal.mutate(key, {
-				onSuccess: () => removeAuxiliaryTab(key),
-				onError: (error) => {
-					if (apiErrorCode(error) === "SHELL_TERMINAL_NOT_FOUND") removeAuxiliaryTab(key);
-				},
-			});
+			// The rest of the split takes the selection at once; the caller
+			// waits for the daemon to close the terminal.
+			if (sibling) selectTab(sibling);
+			try {
+				await closeShellTerminal.mutateAsync(key);
+				removeAuxiliaryTab(key);
+			} catch (error) {
+				if (apiErrorCode(error) === "SHELL_TERMINAL_NOT_FOUND") removeAuxiliaryTab(key);
+				else throw error;
+			}
+			return;
 		} else {
 			updateGroups((current) => withoutTab(current, key));
 		}
@@ -1977,8 +1992,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	};
 	const selectedTabKeyRef = useRef(selectedTabKey);
 	selectedTabKeyRef.current = selectedTabKey;
-	const closePane = useCallback((key: string) => closePaneRef.current(key), []);
-	const closeFocusedPane = useCallback(() => closePaneRef.current(selectedTabKeyRef.current), []);
+	const closePane = useCallback((key: string) => void closePaneRef.current(key).catch(() => undefined), []);
+	const closeFocusedPane = useCallback(() => void closePaneRef.current(selectedTabKeyRef.current).catch(() => undefined), []);
 
 	// The group tabs only change with the groups, the selection and the
 	// members' names, so the strips do not redo their work on every render.
@@ -2167,15 +2182,24 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 				if (isOrchestrator) throw new PaneCommandError("UNSUPPORTED", "The orchestrator's view does not open split terminals.");
 				const opened = splitNewTerminalRef.current(side, anchor);
 				if (!opened) throw new PaneCommandError("TERMINAL_NOT_OPENED", "The AO window could not open a terminal.");
-				// A new shell is a placeholder until the daemon lists it. Answer with
-				// its real key, which is the one later commands must use.
+				// A new shell is a placeholder until the daemon creates it. Wait for
+				// the real terminal to be listed: its key is the one later commands
+				// must use, and a failed creation must not read as success.
 				let seen = false;
-				for (let waited = 0; waited < 5_000; waited += 100) {
+				let confirmed = false;
+				for (let waited = 0; waited < 15_000 && !confirmed; waited += 100) {
 					await new Promise((resolve) => setTimeout(resolve, 100));
-					const listed = latestPaneLayout(sessionId)?.tabs.some((candidate) => candidate.key === opened) ?? false;
-					if (listed) seen = true;
-					else if (seen || waited >= 1_000) break;
+					const keys = new Set(latestPaneLayout(sessionId)?.tabs.map((candidate) => candidate.key) ?? []);
+					const real = adoptedShellHandle(opened);
+					if (real && keys.has(real)) {
+						confirmed = true;
+					} else if (keys.has(opened)) {
+						seen = true;
+					} else if (!real && (seen || waited >= 1_000)) {
+						throw new PaneCommandError("TERMINAL_NOT_OPENED", "The AO window could not open a terminal.");
+					}
 				}
+				if (!confirmed) throw new PaneCommandError("TERMINAL_TIMEOUT", "The terminal did not open in time.");
 			} else if (tab.startsWith("file:")) {
 				const registration = paneRegistrationRef.current;
 				const path = await resolvePaneFile(tab.slice("file:".length));
@@ -2207,8 +2231,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			if (!shellTerminals.some((shell) => shell.handleId === tab)) {
 				throw new PaneCommandError("TAB_NOT_FOUND", `"${tab}" is not one of this session's terminal tabs.`);
 			}
-			if (groupContaining(groups, tab)) closePaneRef.current(tab);
-			else closeShellTerminalByHandle(tab);
+			// Wait for the daemon, so a refused close is the agent's error and the
+			// layout it gets back no longer lists the terminal.
+			if (groupContaining(groups, tab)) await closePaneRef.current(tab);
+			else await closeShellTerminalAsync(tab);
 		} else if (request.action === "focus") {
 			requireTab(tab);
 			selectTab(tab);
