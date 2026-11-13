@@ -4041,6 +4041,7 @@
 	"settings.agentAccounts.loginTitle": "Se connecter à {{provider}}",
 	"settings.agentAccounts.checkSignIn": "Vérifier la connexion",
 	"settings.agentAccounts.loginWaiting": "Pas encore connecté. Terminez dans le terminal, puis vérifiez à nouveau.",
+	"settings.agentAccounts.loginNotSubscription": "Ceci est une clé d'API, pas un abonnement. Connectez-vous avec votre compte d'abonnement.",
 	"settings.agentAccounts.loginDuplicate": "{{email}} est déjà ajouté.",
 	"settings.agentAccounts.loginMismatch": "Ce compte est {{email}}. Reconnectez-vous avec cet identifiant.",
 	"settings.agentAccounts.signInAgain": "Se reconnecter",

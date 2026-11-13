@@ -4947,10 +4947,13 @@ export interface components {
             id: string;
             limits?: components["schemas"]["AgentAccountLimits"];
             loggedIn: boolean;
+            orgId?: string;
+            orgName?: string;
             plan?: string;
             problem?: string;
             /** @enum {string} */
             provider: "claude" | "codex";
+            sameLoginAs?: string;
             signedIn: boolean;
         };
         AgentAccountUsageByModel: {
@@ -8852,7 +8855,7 @@ export interface components {
         VerifyAgentAccountLoginResponse: {
             account?: components["schemas"]["AgentAccountResponse"];
             /** @enum {string} */
-            status: "waiting" | "complete" | "duplicate" | "mismatch";
+            status: "waiting" | "complete" | "duplicate" | "mismatch" | "not_subscription";
         };
         WorkspaceBranchResponse: {
             checkedOut: boolean;

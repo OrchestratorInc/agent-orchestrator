@@ -4436,8 +4436,11 @@ type AgentAccountResponse struct {
 	LoggedIn  bool       `json:"loggedIn"`
 	CreatedAt *time.Time `json:"createdAt,omitempty"`
 	// Problem says why identity or limits could not be read.
-	Problem string                     `json:"problem,omitempty"`
-	Limits  *domain.AgentAccountLimits `json:"limits,omitempty"`
+	Problem     string                     `json:"problem,omitempty"`
+	Limits      *domain.AgentAccountLimits `json:"limits,omitempty"`
+	SameLoginAs string                     `json:"sameLoginAs,omitempty"`
+	OrgID       string                     `json:"orgId,omitempty"`
+	OrgName     string                     `json:"orgName,omitempty"`
 }
 
 // AgentAccountsResponse is the body of GET /agents/accounts.
@@ -4460,7 +4463,7 @@ type StartAgentAccountLoginResponse struct {
 // VerifyAgentAccountLoginResponse is how a sign-in stands. A duplicate login
 // is refused and its account names the existing one.
 type VerifyAgentAccountLoginResponse struct {
-	Status  agentaccounts.LoginStatus `json:"status" enum:"waiting,complete,duplicate,mismatch"`
+	Status  agentaccounts.LoginStatus `json:"status" enum:"waiting,complete,duplicate,mismatch,not_subscription"`
 	Account *AgentAccountResponse     `json:"account,omitempty"`
 }
 

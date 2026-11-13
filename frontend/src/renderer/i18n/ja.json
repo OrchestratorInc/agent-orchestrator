@@ -3966,6 +3966,7 @@
 	"settings.agentAccounts.loginTitle": "{{provider}} にサインイン",
 	"settings.agentAccounts.checkSignIn": "サインインを確認",
 	"settings.agentAccounts.loginWaiting": "まだサインインしていません。ターミナルで完了してから、もう一度確認してください。",
+	"settings.agentAccounts.loginNotSubscription": "これはサブスクリプションではなく API キーです。サブスクリプションのアカウントでサインインしてください。",
 	"settings.agentAccounts.loginDuplicate": "{{email}} は追加済みです。",
 	"settings.agentAccounts.loginMismatch": "このアカウントは {{email}} です。そのログインでもう一度サインインしてください。",
 	"settings.agentAccounts.signInAgain": "もう一度サインイン",

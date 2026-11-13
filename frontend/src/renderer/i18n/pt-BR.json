@@ -4041,6 +4041,7 @@
 	"settings.agentAccounts.loginTitle": "Entrar no {{provider}}",
 	"settings.agentAccounts.checkSignIn": "Verificar login",
 	"settings.agentAccounts.loginWaiting": "Ainda sem login. Conclua no terminal e verifique de novo.",
+	"settings.agentAccounts.loginNotSubscription": "Isto é uma chave de API, não uma assinatura. Entre com sua conta de assinatura.",
 	"settings.agentAccounts.loginDuplicate": "{{email}} já foi adicionada.",
 	"settings.agentAccounts.loginMismatch": "Esta conta é {{email}}. Entre de novo com esse login.",
 	"settings.agentAccounts.signInAgain": "Entrar de novo",

@@ -102,6 +102,8 @@ func (c *Claude) Identity(ctx context.Context, home string) (domain.AgentAccount
 		AuthMethod       string `json:"authMethod"`
 		Email            string `json:"email"`
 		SubscriptionType string `json:"subscriptionType"`
+		OrgID            string `json:"orgId"`
+		OrgName          string `json:"orgName"`
 	}
 	if err := json.Unmarshal(bytes.TrimSpace(out), &report); err != nil {
 		if runErr != nil {
@@ -118,6 +120,8 @@ func (c *Claude) Identity(ctx context.Context, home string) (domain.AgentAccount
 		LoggedIn: report.LoggedIn,
 		Email:    report.Email,
 		Plan:     report.SubscriptionType,
+		OrgID:    report.OrgID,
+		OrgName:  report.OrgName,
 	}, nil
 }
 
