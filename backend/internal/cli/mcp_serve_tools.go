@@ -28,7 +28,9 @@ const (
 	mcpServeRequestIDDesc = "A unique id you choose for this action, such as a random UUID. Reuse it only to retry the same action after an error or timeout; it then returns the first result instead of acting twice."
 )
 
-func mcpServeTool(name, title, desc string, readOnly, destructive, idempotent, openWorld bool, props map[string]any, required ...string) map[string]any {
+// Every tool is idempotent: reads trivially, writes through their required
+// request_id, and archiving an archived agent is a no-op.
+func mcpServeTool(name, title, desc string, readOnly, destructive, openWorld bool, props map[string]any, required ...string) map[string]any {
 	schema := map[string]any{"type": "object", "properties": props, "additionalProperties": false}
 	if len(required) > 0 {
 		schema["required"] = required
@@ -37,7 +39,7 @@ func mcpServeTool(name, title, desc string, readOnly, destructive, idempotent, o
 		"name": name, "title": title, "description": desc, "inputSchema": schema,
 		"annotations": map[string]any{
 			"title": title, "readOnlyHint": readOnly, "destructiveHint": destructive,
-			"idempotentHint": idempotent, "openWorldHint": openWorld,
+			"idempotentHint": true, "openWorldHint": openWorld,
 		},
 	}
 }
@@ -58,11 +60,11 @@ var (
 // open-world: those agents run code, use the network, and push to GitHub.
 var mcpServeTools = []map[string]any{
 	mcpServeTool("list_machines", "List machines", "List the machines this connector can control. This connector controls one machine: the user's computer.",
-		true, false, true, false, map[string]any{}),
+		true, false, false, map[string]any{}),
 	mcpServeTool("list_projects", "List projects", "List the projects registered in AO on this machine.",
-		true, false, true, false, map[string]any{}),
+		true, false, false, map[string]any{}),
 	mcpServeTool("list_agents", "List agents", "List agents (worker and orchestrator sessions) with status, branch and pull requests. Active agents only unless include_archived is true.",
-		true, false, true, false, map[string]any{
+		true, false, false, map[string]any{
 			"project":          mcpStr("Only agents in this project id."),
 			"kind":             map[string]any{"type": "string", "enum": []string{"worker", "orchestrator"}, "description": "Only this kind of agent."},
 			"include_archived": map[string]any{"type": "boolean", "description": "Also list stopped and archived agents."},
@@ -70,20 +72,20 @@ var mcpServeTools = []map[string]any{
 			"cursor":           mcpStr("next_cursor from the previous page."),
 		}),
 	mcpServeTool("get_agent", "Get agent", "Get one agent: status, branch, pull requests with CI and review state, and its latest progress report.",
-		true, false, true, false, map[string]any{"agent_id": mcpAgentIDProp}, "agent_id"),
+		true, false, false, map[string]any{"agent_id": mcpAgentIDProp}, "agent_id"),
 	mcpServeTool("get_transcript", "Read agent transcript", "Read an agent's recent chat messages, newest last. Page back with before_sequence. Chat-mode agents only.",
-		true, false, true, false, map[string]any{
+		true, false, false, map[string]any{
 			"agent_id":        mcpAgentIDProp,
 			"before_sequence": mcpInt("Return messages older than this sequence (oldest_sequence of the previous page).", 0, 1<<53-1),
 			"limit":           mcpInt("Messages to return, default 10.", 1, 20),
 		}, "agent_id"),
 	mcpServeTool("get_updates", "Get agent updates", "What changed since a cursor: agents with new activity (status, PR, CI, review changes) and new progress reports. Call without a cursor first, then pass back the returned cursor to hear only what is new.",
-		true, false, true, false, map[string]any{
+		true, false, false, map[string]any{
 			"cursor":  mcpStr("cursor from the previous get_updates call. Omit to get the last 24 hours."),
 			"project": mcpStr("Only this project id."),
 		}),
 	mcpServeTool("create_agent", "Start an agent", "Start a new worker agent in a project with a task prompt. It runs on the user's machine in its own git worktree and can edit code, run commands and open pull requests. Returns immediately while the agent starts; follow it with get_agent or get_updates.",
-		false, false, true, true, map[string]any{
+		false, false, true, map[string]any{
 			"request_id": mcpRequestProp,
 			"project":    mcpStr("Project id from list_projects."),
 			"prompt":     mcpStr("The task for the agent."),
@@ -93,19 +95,19 @@ var mcpServeTools = []map[string]any{
 			"branch":     mcpStr("Branch name to create. Defaults to an AO-generated branch."),
 		}, "request_id", "project", "prompt"),
 	mcpServeTool("send_message", "Message an agent", "Send a message to an agent: steers its current turn if it is working, or starts a new turn if it is idle. Works for workers and orchestrators.",
-		false, false, true, true, map[string]any{
+		false, false, true, map[string]any{
 			"request_id": mcpRequestProp,
 			"agent_id":   mcpAgentIDProp,
 			"text":       mcpStr("The message."),
 		}, "request_id", "agent_id", "text"),
 	mcpServeTool("start_orchestrator", "Start project orchestrator", "Give a project's orchestrator a goal. Reuses the project's running orchestrator, or starts one. The orchestrator plans the work and starts its own worker agents.",
-		false, false, true, true, map[string]any{
+		false, false, true, map[string]any{
 			"request_id": mcpRequestProp,
 			"project":    mcpStr("Project id from list_projects."),
 			"goal":       mcpStr("What the orchestrator should get done."),
 		}, "request_id", "project", "goal"),
 	mcpServeTool("archive_agent", "Archive agent", "Stop an agent and archive it. Its workspace is removed (uncommitted changes are preserved) and it can be restored from the AO app.",
-		false, true, true, false, map[string]any{"agent_id": mcpAgentIDProp}, "agent_id"),
+		false, true, false, map[string]any{"agent_id": mcpAgentIDProp}, "agent_id"),
 }
 
 func mcpServeToolExists(name string) bool {
@@ -290,8 +292,12 @@ func (w mcpSessionWire) agent() mcpAgent {
 	if w.ProvisionState != "" && w.ProvisionState != "ready" && !w.IsTerminated {
 		status = "Starting (" + w.ProvisionState + ")"
 	}
+	name := w.DisplayName
+	if name == "" {
+		name = w.ID
+	}
 	a := mcpAgent{
-		AgentID: w.ID, Project: w.ProjectID, Name: w.DisplayName, Kind: w.Kind, Mode: w.Mode, Status: status,
+		AgentID: w.ID, Project: w.ProjectID, Name: name, Kind: w.Kind, Mode: w.Mode, Status: status,
 		Archived: w.IsTerminated, Branch: w.Branch, Harness: w.Harness, LastEventAt: w.LastEventAt,
 	}
 	for _, pr := range w.PRs {
@@ -664,15 +670,16 @@ func (s *mcpServeServer) startOrchestrator(ctx context.Context, raw json.RawMess
 		return nil, err
 	}
 	for _, w := range list.Sessions {
-		if w.Kind == "orchestrator" && !w.IsTerminated {
-			out, err := s.deliver(ctx, w, a.Goal, mcpServeReplayKey("start_orchestrator", requestID))
-			if err != nil {
-				return nil, err
-			}
-			m, _ := out.(map[string]any)
-			m["reused"] = true
-			return m, nil
+		if w.Kind != "orchestrator" || w.IsTerminated {
+			continue
 		}
+		out, err := s.deliver(ctx, w, a.Goal, mcpServeReplayKey("start_orchestrator", requestID))
+		if err != nil {
+			return nil, err
+		}
+		m, _ := out.(map[string]any)
+		m["reused"] = true
+		return m, nil
 	}
 	// Orchestrators take no daemon replay key; the done cache covers retries.
 	req := spawnRequest{ProjectID: project, Kind: "orchestrator", Mode: "chat", Prompt: a.Goal, DisplayName: "Orchestrator", Async: true}

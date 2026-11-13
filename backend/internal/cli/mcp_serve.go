@@ -105,7 +105,7 @@ type mcpServeServer struct {
 	now       func() time.Time
 	http      *http.Client
 
-	googleID, googleSecret                   string
+	googleID, googleSecret                       string
 	googleAuthURL, googleTokenURL, googleUserURL string
 
 	mu      sync.Mutex
@@ -187,6 +187,7 @@ func newMCPServeServer(c *commandContext, opts mcpServeOptions) (*mcpServeServer
 	if err != nil {
 		return nil, err
 	}
+	//nolint:gosec // G101: public Google endpoint URLs, not credentials; secrets come from the environment.
 	s := &mcpServeServer{
 		c: c, public: public, resource: public + "/mcp", allowed: allowed,
 		statePath: filepath.Join(cfg.DataDir, "mcp-remote", "state.json"),
@@ -246,14 +247,14 @@ func (s *mcpServeServer) protectedResource(w http.ResponseWriter, _ *http.Reques
 
 func (s *mcpServeServer) authServerMetadata(w http.ResponseWriter, _ *http.Request) {
 	writeMCPServeJSON(w, http.StatusOK, map[string]any{
-		"issuer":                                s.public,
-		"authorization_endpoint":                s.public + "/authorize",
-		"token_endpoint":                        s.public + "/token",
-		"registration_endpoint":                 s.public + "/register",
-		"response_types_supported":              []string{"code"},
-		"grant_types_supported":                 []string{"authorization_code", "refresh_token"},
-		"code_challenge_methods_supported":      []string{"S256"},
-		"token_endpoint_auth_methods_supported": []string{"none"},
+		"issuer":                                         s.public,
+		"authorization_endpoint":                         s.public + "/authorize",
+		"token_endpoint":                                 s.public + "/token",
+		"registration_endpoint":                          s.public + "/register",
+		"response_types_supported":                       []string{"code"},
+		"grant_types_supported":                          []string{"authorization_code", "refresh_token"},
+		"code_challenge_methods_supported":               []string{"S256"},
+		"token_endpoint_auth_methods_supported":          []string{"none"},
 		"authorization_response_iss_parameter_supported": true,
 	})
 }
@@ -411,7 +412,7 @@ func (s *mcpServeServer) googleEmail(ctx context.Context, code string) (string, 
 	if err := s.doGoogle(req, &tok); err != nil {
 		return "", fmt.Errorf("token: %w", err)
 	}
-	req, err = http.NewRequestWithContext(ctx, http.MethodGet, s.googleUserURL, nil)
+	req, err = http.NewRequestWithContext(ctx, http.MethodGet, s.googleUserURL, http.NoBody)
 	if err != nil {
 		return "", err
 	}
@@ -718,7 +719,8 @@ func redirectOAuthError(w http.ResponseWriter, r *http.Request, redirectURI, sta
 	if state != "" {
 		v.Set("state", state)
 	}
-	http.Redirect(w, r, mcpServeAppendQuery(redirectURI, v), http.StatusFound)
+	// Callers pass only a redirect already matched against the client's registration.
+	http.Redirect(w, r, mcpServeAppendQuery(redirectURI, v), http.StatusFound) //nolint:gosec // G710: see above
 }
 
 func writeOAuthError(w http.ResponseWriter, status int, code, desc string) {
