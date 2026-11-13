@@ -250,23 +250,81 @@ function steerOrigin(payload: ReturnType<typeof eventPayload>): { origin: string
 }
 
 /**
- * Why the agent did not take the steer of each queued message whose last
- * steer failed, by its turn: the message is back in the queue, and its row
- * says so. A steer asked or taken since clears it.
+ * A queued message's steer the control plane has asked of the agent and not
+ * settled after this long is read as failed. The worker answers within 45 s or
+ * the request expires, and the control plane records the expiry the next time
+ * the worker polls; a worker gone silent never does, and the message must not
+ * read as steering forever. The margin covers clock skew.
  */
-export function cloudQueuedSteerErrors(events: readonly CloudCpClientEvent[]): Record<string, string> {
+export const QUEUED_STEER_STALE_MS = 90_000;
+
+/** Whether a queued message's steer request is past the time it can be answered in. */
+function queuedSteerStale(requested: CloudCpClientEvent, now: number | undefined): boolean {
+	return now !== undefined && Date.parse(requested.createdAt) + QUEUED_STEER_STALE_MS <= now;
+}
+
+/** The row's error for a queued message whose steer failed: why, that it is back in the queue, and how to retry. */
+export function couldNotSteer(reason?: string): string {
+	const why = reason?.trim().replace(/\.$/, "");
+	return `Couldn't steer${why ? `: ${why}` : ""}. It's back in the queue; select Steer to try again.`;
+}
+
+/**
+ * Why the agent did not take the steer of each queued message whose last
+ * steer failed, by its turn: the message is back in the queue, in its place,
+ * and its row says so. A steer asked or taken since clears it. With now, a
+ * steer left unanswered past QUEUED_STEER_STALE_MS has failed too.
+ */
+export function cloudQueuedSteerErrors(events: readonly CloudCpClientEvent[], now?: number): Record<string, string> {
 	const errors: Record<string, string> = {};
+	const pending = new Map<string, CloudCpClientEvent>();
 	for (const event of events) {
 		const queuedTurnID = queuedSteerTurnID(event);
 		if (!queuedTurnID) continue;
-		if (event.type !== "chat.turn_steer_failed") {
-			delete errors[queuedTurnID];
-			continue;
-		}
+		delete errors[queuedTurnID];
+		pending.delete(queuedTurnID);
+		if (event.type === "chat.turn_steer_requested") pending.set(queuedTurnID, event);
+		if (event.type !== "chat.turn_steer_failed") continue;
 		const reason = eventPayload(event).error;
-		errors[queuedTurnID] = `Not steered${typeof reason === "string" && reason.trim() ? `: ${reason.trim().replace(/\.$/, "")}` : ""}. It stays in the queue.`;
+		errors[queuedTurnID] = couldNotSteer(typeof reason === "string" ? reason : undefined);
+	}
+	for (const [queuedTurnID, requested] of pending) {
+		if (queuedSteerStale(requested, now)) errors[queuedTurnID] = couldNotSteer("the agent did not answer in time");
 	}
 	return errors;
+}
+
+/** When the oldest unanswered queued-message steer turns stale, or undefined with none waiting. */
+export function nextQueuedSteerDeadline(events: readonly CloudCpClientEvent[]): number | undefined {
+	const pending = new Map<string, CloudCpClientEvent>();
+	for (const event of events) {
+		const queuedTurnID = queuedSteerTurnID(event);
+		if (!queuedTurnID) continue;
+		if (event.type === "chat.turn_steer_requested") pending.set(queuedTurnID, event);
+		else pending.delete(queuedTurnID);
+	}
+	const deadlines = [...pending.values()].map((event) => Date.parse(event.createdAt) + QUEUED_STEER_STALE_MS);
+	return deadlines.length > 0 ? Math.min(...deadlines) : undefined;
+}
+
+/** A refused or unreachable queued steer, as the row's error. */
+function queuedSteerRefusal(error: unknown): Error {
+	if (!(error instanceof CloudCpError)) {
+		return new Error(couldNotSteer(error instanceof TypeError || !(error instanceof Error)
+			? "AO Cloud could not be reached" : error.message));
+	}
+	switch (error.code) {
+		case "TURN_NOT_STEERABLE":
+			return new Error(couldNotSteer("the agent's running turn can't take guidance"));
+		case "STEER_CONTENT_UNSUPPORTED":
+			return new Error(couldNotSteer("a steer carries text alone, and this message has files"));
+		case "TURN_NOT_QUEUED":
+			return new Error("This message is no longer queued: the agent started on it, or it ended.");
+		case "STEER_IN_PROGRESS":
+			return new Error("This message is already being steered into the running turn.");
+		default:
+			return new Error(couldNotSteer(error.message));
+	}
 }
 
 /**
@@ -737,7 +795,7 @@ function eventContent(payload: EventPayload): ConversationContentSummary[] | und
  * newest part of the history (older pages load on demand), so the first of
  * them is not the session's first.
  */
-export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent[], viewerUserId?: string, { partial = false }: { partial?: boolean } = {}): ConversationSnapshot {
+export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent[], viewerUserId?: string, { partial = false, now }: { partial?: boolean; now?: number } = {}): ConversationSnapshot {
 	const turns = new Map<string, ConversationTurn>();
 	const assistant = new Map<string, ConversationMessage>();
 	const approvals = new Map<string, ConversationActivity>();
@@ -1102,7 +1160,8 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 	// (with chat.turn_steer_failed's reason) if the agent does not take it.
 	// It is read from the events, so it reads the same after a remount.
 	for (const [queuedTurnID, requested] of queuedSteers) {
-		if (turns.get(queuedTurnID)?.state !== "queued") continue;
+		// One unanswered too long failed (cloudQueuedSteerErrors): back in the queue.
+		if (turns.get(queuedTurnID)?.state !== "queued" || queuedSteerStale(requested, now)) continue;
 		const message = items.find((item): item is ConversationMessage => item.kind === "message" && item.role === "user" && item.turnId === queuedTurnID);
 		const payload = eventPayload(requested);
 		const text = typeof payload.text === "string" ? payload.text : message?.text ?? "";
@@ -1735,15 +1794,24 @@ export function CloudSessionChatSurface({
 	// The chat is the tab in front: not a file, terminal or reviewer tab.
 	const chatInFront = !workspaceFileActive && !workspaceActiveTabKey && !reviewerTarget && !reviewerChatSelected && !shellTarget;
 	const startStopped = startFailed && !rerunning;
+	// The clock a queued message's unanswered steer is read against, moved on
+	// when the oldest one would turn stale, so it then shows as failed.
+	const [steerClock, setSteerClock] = useState(() => Date.now());
+	const steerDeadline = useMemo(() => nextQueuedSteerDeadline(eventsQuery.data ?? []), [eventsQuery.data]);
+	useEffect(() => {
+		if (steerDeadline === undefined || steerDeadline <= steerClock) return;
+		const timer = window.setTimeout(() => setSteerClock(Date.now()), steerDeadline - Date.now() + 250);
+		return () => window.clearTimeout(timer);
+	}, [steerClock, steerDeadline]);
 	const snapshot = useMemo(() => {
-		const projected = toSnapshot(session, eventsQuery.data ?? [], me, { partial: history?.hasOlder });
+		const projected = toSnapshot(session, eventsQuery.data ?? [], me, { partial: history?.hasOlder, now: steerClock });
 		// A failed Setup is reported by the checklist while the start is failed, as a
 		// failed local start does; once a retry passes, only the Setup that passed stays.
 		const items = withoutFailedSetupAttempts(projected.items, startFailed);
 		// No agent runs until a retry prepares the workspace, as a failed local start reports.
 		const controller = startStopped ? { ...projected.controller, state: "stopped" as const } : projected.controller;
 		return { ...projected, items, controller, settings: { ...shownSettings, approvalMode: shownApprovalMode } };
-	}, [eventsQuery.data, history?.hasOlder, me, session, shownSettings, shownApprovalMode, startFailed, startStopped]);
+	}, [eventsQuery.data, history?.hasOlder, me, session, shownSettings, shownApprovalMode, startFailed, startStopped, steerClock]);
 	// The brief this device started the session with: shown from the first frame,
 	// until the control plane's chat holds the session's first human message, and
 	// timed from when it was sent, so the start reads as one conversation.
@@ -1845,12 +1913,26 @@ export function CloudSessionChatSurface({
 		mutationFn: async (turnId: string) => {
 			if (!cloud) throw new Error("Cloud session context is unavailable.");
 			const composerEpoch = leaseRef.current.epoch;
-			const accepted = await client.steerQueuedMessage(cloud.orgId, session.id, turnId,
-				composerEpoch !== undefined ? { composerEpoch } : {}, { idempotencyKey: crypto.randomUUID() });
+			let after: number;
+			try {
+				const accepted = await client.steerQueuedMessage(cloud.orgId, session.id, turnId,
+					composerEpoch !== undefined ? { composerEpoch } : {}, { idempotencyKey: crypto.randomUUID() });
+				after = accepted.event.sequence;
+			} catch (error) {
+				throw queuedSteerRefusal(error);
+			}
 			leaseRef.current.sent();
-			let after = accepted.event.sequence;
-			for (let attempt = 0; attempt < 100; attempt++) {
-				const page = await client.listChatEvents(cloud.orgId, session.id, { after, limit: 100 });
+			const deadline = Date.now() + QUEUED_STEER_STALE_MS;
+			while (Date.now() < deadline) {
+				let page: Awaited<ReturnType<typeof client.listChatEvents>>;
+				try {
+					page = await client.listChatEvents(cloud.orgId, session.id, { after, limit: 100 });
+				} catch {
+					// The steer is recorded; its outcome reaches the chat's events
+					// once the connection is back. Ask again.
+					await new Promise((resolve) => setTimeout(resolve, 1000));
+					continue;
+				}
 				for (const event of page.events) {
 					if (eventPayload(event).queuedTurnId !== turnId) continue;
 					if (event.type === "chat.turn_steered") return;
@@ -1859,11 +1941,11 @@ export function CloudSessionChatSurface({
 				after = page.nextAfter > after ? page.nextAfter : after;
 				await new Promise((resolve) => setTimeout(resolve, 500));
 			}
-			throw new Error("The agent has not answered the steer yet. The message stays queued until it does.");
+			throw new Error(couldNotSteer("the agent did not answer in time"));
 		},
 		onSettled: () => void invalidate(),
 	});
-	const queuedSteerErrors = useMemo(() => cloudQueuedSteerErrors(eventsQuery.data ?? []), [eventsQuery.data]);
+	const queuedSteerErrors = useMemo(() => cloudQueuedSteerErrors(eventsQuery.data ?? [], steerClock), [eventsQuery.data, steerClock]);
 	const planOptions: ChatConfigOption[] | undefined =
 		session.provider === "claude-code" && modelsQuery.data?.modes?.includes("plan")
 			? [{
