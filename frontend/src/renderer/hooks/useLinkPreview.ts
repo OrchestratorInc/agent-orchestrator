@@ -1,6 +1,6 @@
 import { apiErrorException } from "../lib/api-error-exception";
 import { QueryObserver } from "@tanstack/react-query";
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import type { components } from "../../api/schema";
 import { apiClient } from "../lib/api-client";
 import { queryClient } from "../lib/query-client";
@@ -124,34 +124,29 @@ export function linkOrigin(url: string): string | undefined {
 	}
 }
 
-function cachedFavicons(url: string): LinkPreview | undefined {
-	const read = (key: string) => {
-		const preview = queryClient.getQueryData<LinkPreview>(linkPreviewQueryKey(key));
-		return preview?.faviconUrl ? preview : undefined;
-	};
-	const origin = linkOrigin(url);
-	return read(url) ?? (origin ? read(origin) : undefined);
-}
-
 function subscribeLinkPreviews(onChange: () => void) {
 	return queryClient.getQueryCache().subscribe((event) => {
 		if (event.query.queryKey[0] === "link-preview") onChange();
 	});
 }
 
-/**
- * The preview naming a link's site icons: the link's own (a hover loaded it)
- * or its site root's. Reads the cache only; updates in place when either
- * preview arrives.
- */
-export function useCachedLinkFavicons(url: string): LinkPreview | undefined {
-	return useSyncExternalStore(subscribeLinkPreviews, () => cachedFavicons(url));
+function previewWithFavicon(url: string): LinkPreview | undefined {
+	const preview = queryClient.getQueryData<LinkPreview>(linkPreviewQueryKey(url));
+	return preview?.faviconUrl ? preview : undefined;
 }
 
-/** Whether asking for the link's site root preview failed, so no icon is coming. */
-export function useLinkFaviconFailed(url: string): boolean {
-	return useSyncExternalStore(subscribeLinkPreviews, () => {
-		const origin = linkOrigin(url);
-		return origin ? queryClient.getQueryState(linkPreviewQueryKey(origin))?.status === "error" : false;
-	});
+/**
+ * What the cache knows of a link's site icons: the preview naming them (the
+ * link's own, which a hover loaded, or its site root's), "failed" when asking
+ * for the site root failed so no icon is coming, or undefined while unknown.
+ * Reads the cache only, through one subscription, and updates in place.
+ */
+export function useCachedLinkFavicons(url: string): LinkPreview | "failed" | undefined {
+	const origin = useMemo(() => linkOrigin(url), [url]);
+	const read = useCallback(() => {
+		const preview = previewWithFavicon(url) ?? (origin ? previewWithFavicon(origin) : undefined);
+		if (preview) return preview;
+		return origin && queryClient.getQueryState(linkPreviewQueryKey(origin))?.status === "error" ? "failed" : undefined;
+	}, [origin, url]);
+	return useSyncExternalStore(subscribeLinkPreviews, read);
 }

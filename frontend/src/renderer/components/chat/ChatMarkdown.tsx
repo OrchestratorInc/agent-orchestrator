@@ -67,7 +67,7 @@ import {
 } from "../../lib/external-link-policy";
 import { AppLink } from "../AppLink";
 import { LinkFavicon } from "../LinkPreviewCard";
-import { useCachedLinkFavicons, useLinkFaviconFailed } from "../../hooks/useLinkPreview";
+import { useCachedLinkFavicons } from "../../hooks/useLinkPreview";
 import { canLoadLinkFavicon, preloadLinkFavicon } from "../../lib/link-preload";
 import { ChatPathMenu, ChatPathMenuContext } from "../ChatPathMenu";
 import { ArtifactLinkPreviewCard, SessionLinkPreviewCard } from "../SessionLinkPreviewCard";
@@ -477,12 +477,13 @@ function linksImage(node: HastElement | undefined): boolean {
  * never moves when the icon arrives or fails.
  */
 function InlineLinkFavicon({ href }: { href: string }) {
-	const favicons = useCachedLinkFavicons(href);
-	const failed = useLinkFaviconFailed(href);
+	const cachedState = useCachedLinkFavicons(href);
+	const favicons = cachedState === "failed" ? undefined : cachedState;
 	const cached = Boolean(favicons);
+	const loadable = useMemo(() => canLoadLinkFavicon(href), [href]);
 	useEffect(() => {
-		if (!cached) preloadLinkFavicon(href);
-	}, [cached, href]);
+		if (!cached && loadable) preloadLinkFavicon(href);
+	}, [cached, href, loadable]);
 	return (
 		<span
 			aria-hidden="true"
@@ -492,7 +493,7 @@ function InlineLinkFavicon({ href }: { href: string }) {
 			<LinkFavicon
 				faviconUrl={favicons?.faviconUrl}
 				faviconDarkUrl={favicons?.faviconDarkUrl}
-				pending={!cached && !failed && canLoadLinkFavicon(href)}
+				pending={cachedState === undefined && loadable}
 				className="size-3.5 shrink-0"
 			/>
 		</span>
