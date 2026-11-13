@@ -189,13 +189,6 @@ const COMPOSER_TEXT_INSET = "px-[7px]";
  * nor pushes the text off-centre; overlay scrollbars reserve nothing.
  */
 const COMPOSER_SCROLL_GUTTER = "chat-composer-scrollbar [scrollbar-gutter:stable_both-edges]";
-/**
- * Pulls the composer's trailing send controls in from the right edge. The leading +
- * is a 28px ghost button whose glyph's ink starts ~10px inside it (7px of centring
- * plus the icon's own margin); the filled send circle is its own edge. This inset
- * puts the circle that same ~22px from the right as the + glyph is from the left.
- */
-export const COMPOSER_SEND_INSET = "me-2.5";
 
 /**
  * One letter of a dictation in progress. A letter fades in once, when it first

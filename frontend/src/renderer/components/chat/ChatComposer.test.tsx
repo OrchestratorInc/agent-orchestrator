@@ -458,8 +458,8 @@ describe("send keys", () => {
 		// The placeholder reserves the same gutter, so typing starts where it began.
 		const placeholder = field.parentElement?.querySelector<HTMLElement>(".pointer-events-none.text-muted-foreground");
 		expect(placeholder).toHaveClass("px-[7px]", "overflow-hidden", "chat-composer-scrollbar", "[scrollbar-gutter:stable_both-edges]");
-		// The send circle sits as far in from the right as the + glyph's ink does from the left.
-		expect(screen.getByRole("group", { name: "Send message controls" })).toHaveClass("me-2.5");
+		// The send circle sits on the form padding like the + does, so its right and bottom insets match.
+		expect(screen.getByRole("group", { name: "Send message controls" }).className).not.toMatch(/(^|\s)(me|mr|pe|pr)-/);
 	});
 
 	it("uses a circular primary send control that enables when armed", async () => {
