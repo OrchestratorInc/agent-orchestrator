@@ -28,6 +28,8 @@ func TestSpawn_TUIPiDiscoveredEffort(t *testing.T) {
 				owner, aiName = "prime-agent", "prime-agent-ai"
 			}
 			root := t.TempDir()
+			// Configured-default lookup reads the process home, not the request env.
+			t.Setenv("HOME", root)
 			files := map[string]string{
 				"package.json": `{"name":"` + owner + `","dependencies":{"@earendil-works/pi-ai":"1"}}`,
 				"dist/cli.mjs": "#!/usr/bin/env node\nconsole.log('provider model context\\nfixture reasoning 128k\\nfixture plain 128k');\n",
