@@ -111,14 +111,17 @@ export function useLinkPreview(url: string, enabled: boolean) {
 }
 
 /**
- * The site root of a web link (`https://host/`), whose preview names the site's
- * icon. Carries none of the link's path, query or credentials.
+ * The HTTPS site root of a web link (`https://host/`), whose preview names the
+ * site's icon. An http link is looked up over HTTPS too, unless it names its own
+ * port, which says nothing about where HTTPS is served. Carries none of the
+ * link's path, query or credentials.
  */
 export function linkOrigin(url: string): string | undefined {
 	try {
 		const parsed = new URL(url);
-		if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return undefined;
-		return `${parsed.protocol}//${parsed.host}/`;
+		if (parsed.protocol === "https:") return `https://${parsed.host}/`;
+		if (parsed.protocol === "http:" && !parsed.port) return `https://${parsed.hostname}/`;
+		return undefined;
 	} catch {
 		return undefined;
 	}

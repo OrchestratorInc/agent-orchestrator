@@ -146,11 +146,12 @@ const MACHINE_HOST = /^(\[.*\]|[\d.]+|[^.]+|.+\.(local|localhost|internal|lan|ho
 // rather than waiting behind the hover-card warmers.
 const MAX_CONCURRENT_FAVICONS = 3;
 const DRAFT_SETTLE_MS = 400;
-const DRAFT_URL = /\bhttps:\/\/[^\s<>"'`)\]]+/gi;
+const DRAFT_URL = /\bhttps?:\/\/[^\s<>"'`)\]]+/gi;
 
 /**
- * The site root a link's favicon is read from. Only the root is asked for,
- * never the link: its path and query can carry data or act on a GET, as above.
+ * The HTTPS site root a link's favicon is read from. Only the root is asked
+ * for, never the link: its path and query can carry data or act on a GET, as
+ * above. An http link's root is asked for over HTTPS, never in the clear.
  */
 function faviconOrigin(href: string): string | undefined {
 	let url: URL;
@@ -159,7 +160,7 @@ function faviconOrigin(href: string): string | undefined {
 	} catch {
 		return undefined;
 	}
-	if (url.protocol !== "https:" || url.username || url.password || MACHINE_HOST.test(url.hostname)) return undefined;
+	if (url.username || url.password || MACHINE_HOST.test(url.hostname)) return undefined;
 	return linkOrigin(href);
 }
 
@@ -193,7 +194,7 @@ function queueFavicon(origin: string) {
 	drainFavicons();
 }
 
-/** Whether a link's site icon can be asked for at all (a public https site). */
+/** Whether a link's site icon can be asked for at all (a public web site). */
 export function canLoadLinkFavicon(href: string): boolean {
 	return faviconOrigin(href) !== undefined;
 }
