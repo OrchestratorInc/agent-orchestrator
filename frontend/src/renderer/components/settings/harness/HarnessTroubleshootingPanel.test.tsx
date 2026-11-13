@@ -241,6 +241,18 @@ it("offers the target sign-in page when fresh authentication was rejected", asyn
 	expect(openAccount).toHaveBeenCalledWith("codex");
 });
 
+it("keeps setup reachable when the first check fails without evidence", async () => {
+	const checks = mockChecks();
+	checks.mockRejectedValueOnce(new Error("Installation verification could not start."));
+	setup();
+	expect(screen.queryByRole("button", { name: "Open Codex setup" })).not.toBeInTheDocument();
+	fireEvent.click(screen.getByRole("button", { name: "Check installation and sign-in" }));
+	await screen.findByRole("alert");
+	expect(screen.queryByRole("button", { name: "Copy troubleshooting prompt" })).not.toBeInTheDocument();
+	fireEvent.click(screen.getByRole("button", { name: "Open Codex setup" }));
+	expect(openAccount).toHaveBeenCalledWith("codex");
+});
+
 it("offers setup when a fresh installation check cannot find the agent", async () => {
 	const checks = mockChecks();
 	const snapshot = troubleshooting.troubleshootingSnapshot(agentReadiness("codex", "Codex", { installation: "not_installed" }), "0.13.0", "win32");
