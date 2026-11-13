@@ -24,7 +24,7 @@ vi.mock("expo-network", () => ({
 vi.mock("./api", () => ({ ApiError: class extends Error {}, getSessions: state.sessions, getNotifications: state.notifications }));
 vi.mock("./resolveConfig", () => ({ resolveActiveConfig: state.resolve, runtimeResolveDeps: () => ({}) }));
 vi.mock("./race", () => ({ IncompatibleHostVersionError: class extends Error {} }));
-vi.mock("./connectRuntime", () => ({ rejectedEndpointNeedsRace: () => false }));
+vi.mock("./connectRuntime", () => ({ endpointStillAnswers: async () => false, rejectedEndpointNeedsRace: () => false }));
 vi.mock("./hosts", () => ({
 	activeHost: async () => ({ id: "a", name: "A", endpoints: [], token: "secret" }),
 	loadHosts: async () => [], sameHostConnections: (x: unknown, y: unknown) => JSON.stringify(x) === JSON.stringify(y),
