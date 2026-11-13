@@ -75,8 +75,10 @@ func steerCommand(prompt []acpsdk.ContentBlock) ([]acpsdk.ContentBlock, error) {
 }
 
 // steerAcknowledgement recognises Hermes' reply to `/steer`. "No active turn"
-// means the turn ended just before the command arrived: Hermes runs the text as
-// the next prompt inside the same request, which AO keeps in this turn.
+// means the turn ended just before the command arrived: Hermes then runs the
+// text as its next prompt inside the same `/steer` request. The persistent
+// host keeps AO's turn open until that request answers, so the run is part of
+// this turn and the steer took.
 func steerAcknowledgement(text string) (bool, error) {
 	trimmed := strings.TrimSpace(text)
 	switch {
