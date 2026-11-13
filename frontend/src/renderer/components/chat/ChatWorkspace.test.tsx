@@ -961,7 +961,7 @@ describe("ChatWorkspace timeline", () => {
 		const reported = { ...idleSnapshot(chatFixture), rateLimits: { primaryUsedPercent: 40, secondaryUsedPercent: -1 } };
 		const view = render(<ChatWorkspace snapshot={reported} />);
 		const composer = screen.getByLabelText("Message the agent").closest("form") as HTMLElement;
-		expect(within(composer).queryByText(/^(Session|Weekly) \d+% used$/)).not.toBeInTheDocument();
+		expect(within(composer).queryByText(/% used/)).not.toBeInTheDocument();
 
 		view.rerender(<ChatWorkspace snapshot={{ ...reported, rateLimits: { primaryUsedPercent: 40, secondaryUsedPercent: 82 } }} />);
 		expect(within(composer).getByText("Weekly 82% used")).toBeInTheDocument();
