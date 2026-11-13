@@ -3676,6 +3676,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/sessions/{sessionId}/fork": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Fork a session at a finished turn */
+        post: operations["forkSession"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sessions/{sessionId}/fork-options": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Report whether a session can be forked */
+        get: operations["getSessionForkOptions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sessions/{sessionId}/history": {
         parameters: {
             query?: never;
@@ -6120,6 +6154,14 @@ export interface components {
         ControllersConversationTurnArtifactsResponse: {
             files: components["schemas"]["ControllersConversationTurnArtifactResponse"][];
         };
+        ControllersForkSessionRequest: {
+            clientRequestId: string;
+            turnId?: string;
+        };
+        ControllersForkSessionResponse: {
+            displayName: string;
+            sessionId: string;
+        };
         ControllersKeepAwakeStatus: {
             active: boolean;
             enabled: boolean;
@@ -6189,6 +6231,37 @@ export interface components {
             host: string;
             port: number;
             reason: string;
+        };
+        ControllersSessionForkOptionsResponse: {
+            allowed: boolean;
+            anyTurn?: boolean;
+            forkedFrom?: components["schemas"]["ControllersSessionForkOrigin"];
+            forks?: components["schemas"]["ControllersSessionForkSummary"][];
+            refusal?: components["schemas"]["ControllersSessionForkRefusal"];
+            sourcePRs?: components["schemas"]["ControllersSessionForkSourcePR"][];
+            suggestedName?: string;
+        };
+        ControllersSessionForkOrigin: {
+            sessionId: string;
+            sourceExists: boolean;
+            textHandoff?: boolean;
+            title: string;
+            turnId?: string;
+        };
+        ControllersSessionForkRefusal: {
+            code: string;
+            message: string;
+        };
+        ControllersSessionForkSourcePR: {
+            closed: boolean;
+            merged: boolean;
+            number: number;
+            url: string;
+        };
+        ControllersSessionForkSummary: {
+            exists: boolean;
+            sessionId: string;
+            title: string;
         };
         ControllersSessionView: {
             activity: components["schemas"]["DomainActivity"];
@@ -22396,6 +22469,110 @@ export interface operations {
             };
             /** @description Not Implemented */
             501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    forkSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ControllersForkSessionRequest"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ControllersForkSessionResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getSessionForkOptions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ControllersSessionForkOptionsResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };

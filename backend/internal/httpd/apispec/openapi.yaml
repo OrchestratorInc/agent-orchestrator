@@ -10407,6 +10407,90 @@ paths:
       summary: Exit the agent while preserving its AO session
       tags:
       - sessions
+  /api/v1/sessions/{sessionId}/fork:
+    post:
+      operationId: forkSession
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ControllersForkSessionRequest'
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ControllersForkSessionResponse'
+          description: Created
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+      summary: Fork a session at a finished turn
+      tags:
+      - sessions
+  /api/v1/sessions/{sessionId}/fork-options:
+    get:
+      operationId: getSessionForkOptions
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ControllersSessionForkOptionsResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+      summary: Report whether a session can be forked
+      tags:
+      - sessions
   /api/v1/sessions/{sessionId}/history:
     get:
       operationId: getSessionHistory
@@ -17843,6 +17927,26 @@ components:
       required:
       - files
       type: object
+    ControllersForkSessionRequest:
+      properties:
+        clientRequestId:
+          minLength: 1
+          type: string
+        turnId:
+          type: string
+      required:
+      - clientRequestId
+      type: object
+    ControllersForkSessionResponse:
+      properties:
+        displayName:
+          type: string
+        sessionId:
+          type: string
+      required:
+      - sessionId
+      - displayName
+      type: object
     ControllersKeepAwakeStatus:
       properties:
         active:
@@ -18004,6 +18108,85 @@ components:
       - host
       - port
       - reason
+      type: object
+    ControllersSessionForkOptionsResponse:
+      properties:
+        allowed:
+          type: boolean
+        anyTurn:
+          type: boolean
+        forkedFrom:
+          $ref: '#/components/schemas/ControllersSessionForkOrigin'
+        forks:
+          items:
+            $ref: '#/components/schemas/ControllersSessionForkSummary'
+          type: array
+        refusal:
+          $ref: '#/components/schemas/ControllersSessionForkRefusal'
+        sourcePRs:
+          items:
+            $ref: '#/components/schemas/ControllersSessionForkSourcePR'
+          type: array
+        suggestedName:
+          type: string
+      required:
+      - allowed
+      type: object
+    ControllersSessionForkOrigin:
+      properties:
+        sessionId:
+          type: string
+        sourceExists:
+          type: boolean
+        textHandoff:
+          type: boolean
+        title:
+          type: string
+        turnId:
+          type: string
+      required:
+      - sessionId
+      - title
+      - sourceExists
+      type: object
+    ControllersSessionForkRefusal:
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+      required:
+      - code
+      - message
+      type: object
+    ControllersSessionForkSourcePR:
+      properties:
+        closed:
+          type: boolean
+        merged:
+          type: boolean
+        number:
+          type: integer
+        url:
+          type: string
+      required:
+      - url
+      - number
+      - merged
+      - closed
+      type: object
+    ControllersSessionForkSummary:
+      properties:
+        exists:
+          type: boolean
+        sessionId:
+          type: string
+        title:
+          type: string
+      required:
+      - sessionId
+      - title
+      - exists
       type: object
     ControllersSessionView:
       properties:

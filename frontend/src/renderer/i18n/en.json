@@ -4772,5 +4772,21 @@
 	"chat.find.nextFailed": "Could not load the next matches.",
 	"chat.find.wrappedFirst": "Wrapped to the first match.",
 	"chat.find.wrappedLast": "Wrapped to the last match.",
-	"chat.find.notRevealed": "This match could not be revealed. Retry the search."
+	"chat.find.notRevealed": "This match could not be revealed. Retry the search.",
+	"sessionFork.fork": "Fork",
+	"sessionFork.tooltip": "Fork this session into a new one",
+	"sessionFork.forking": "Forking…",
+	"sessionFork.unavailable": "Fork options are unavailable",
+	"sessionFork.failed": "Couldn't fork this session",
+	"sessionFork.sectionTitle": "Forks",
+	"sessionFork.originalPRs": "Original's PRs",
+	"sessionFork.originalPR": "Original's PR #{{number}}",
+	"sessionFork.forkSession": "Fork session",
+	"sessionFork.forkedFromSentence": "This session was forked from <session>{{title}}</session>.",
+	"sessionFork.originalDeleted": "The original session has since been deleted.",
+	"sessionFork.forkedInto_one": "{{count}} session was forked from this one:",
+	"sessionFork.forkedInto_other": "{{count}} sessions were forked from this one:",
+	"sessionFork.forkDeleted": "{{title}} (deleted)",
+	"sessionFork.textCopy": "Conversation copied as text",
+	"sessionFork.textCopyNotice": "Forked from {{title}}. This agent can't copy its own conversation, so it was given the original's conversation as text."
 }

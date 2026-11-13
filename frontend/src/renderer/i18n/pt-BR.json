@@ -4908,5 +4908,22 @@
 	"chat.find.nextFailed": "Não foi possível carregar as próximas correspondências.",
 	"chat.find.wrappedFirst": "Voltou à primeira correspondência.",
 	"chat.find.wrappedLast": "Voltou à última correspondência.",
-	"chat.find.notRevealed": "Não foi possível mostrar esta correspondência. Repita a pesquisa."
+	"chat.find.notRevealed": "Não foi possível mostrar esta correspondência. Repita a pesquisa.",
+	"sessionFork.fork": "Bifurcar",
+	"sessionFork.tooltip": "Bifurcar esta sessão em uma nova",
+	"sessionFork.forking": "Bifurcando…",
+	"sessionFork.unavailable": "As opções de bifurcação não estão disponíveis",
+	"sessionFork.failed": "Não foi possível bifurcar esta sessão",
+	"sessionFork.sectionTitle": "Bifurcações",
+	"sessionFork.originalPRs": "PRs do original",
+	"sessionFork.originalPR": "PR #{{number}} do original",
+	"sessionFork.forkSession": "Bifurcar sessão",
+	"sessionFork.forkedFromSentence": "Esta sessão foi bifurcada de <session>{{title}}</session>.",
+	"sessionFork.originalDeleted": "A sessão original foi excluída desde então.",
+	"sessionFork.forkedInto_one": "{{count}} sessão foi bifurcada desta:",
+	"sessionFork.forkedInto_many": "{{count}} sessões foram bifurcadas desta:",
+	"sessionFork.forkedInto_other": "{{count}} sessões foram bifurcadas desta:",
+	"sessionFork.forkDeleted": "{{title}} (excluída)",
+	"sessionFork.textCopy": "Conversa copiada como texto",
+	"sessionFork.textCopyNotice": "Bifurcada de {{title}}. Este agente não consegue copiar a própria conversa, então recebeu a conversa do original como texto."
 }

@@ -4792,5 +4792,21 @@
 	"chat.find.nextFailed": "다음 일치 항목을 불러오지 못했습니다.",
 	"chat.find.wrappedFirst": "첫 번째 일치 항목으로 돌아왔습니다.",
 	"chat.find.wrappedLast": "마지막 일치 항목으로 돌아왔습니다.",
-	"chat.find.notRevealed": "이 일치 항목을 표시하지 못했습니다. 다시 검색하세요."
+	"chat.find.notRevealed": "이 일치 항목을 표시하지 못했습니다. 다시 검색하세요.",
+	"sessionFork.fork": "포크",
+	"sessionFork.tooltip": "이 세션을 새 세션으로 포크",
+	"sessionFork.forking": "포크하는 중…",
+	"sessionFork.unavailable": "포크 옵션을 사용할 수 없습니다",
+	"sessionFork.failed": "이 세션을 포크할 수 없습니다",
+	"sessionFork.sectionTitle": "포크",
+	"sessionFork.originalPRs": "원본의 PR",
+	"sessionFork.originalPR": "원본의 PR #{{number}}",
+	"sessionFork.forkSession": "세션 포크",
+	"sessionFork.forkedFromSentence": "이 세션은 <session>{{title}}</session>에서 포크되었습니다.",
+	"sessionFork.originalDeleted": "원본 세션은 이후 삭제되었습니다.",
+	"sessionFork.forkedInto_one": "이 세션에서 {{count}}개의 세션이 포크되었습니다:",
+	"sessionFork.forkedInto_other": "이 세션에서 {{count}}개의 세션이 포크되었습니다:",
+	"sessionFork.forkDeleted": "{{title}} (삭제됨)",
+	"sessionFork.textCopy": "대화를 텍스트로 복사함",
+	"sessionFork.textCopyNotice": "{{title}}에서 포크했습니다. 이 에이전트는 자신의 대화를 복사할 수 없어 원본 세션의 대화를 텍스트로 받았습니다."
 }

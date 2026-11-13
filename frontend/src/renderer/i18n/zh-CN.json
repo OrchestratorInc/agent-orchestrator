@@ -4774,5 +4774,21 @@
 	"chat.find.nextFailed": "无法加载后续匹配项。",
 	"chat.find.wrappedFirst": "已回到第一个匹配项。",
 	"chat.find.wrappedLast": "已回到最后一个匹配项。",
-	"chat.find.notRevealed": "无法显示此匹配项。请重新搜索。"
+	"chat.find.notRevealed": "无法显示此匹配项。请重新搜索。",
+	"sessionFork.fork": "分叉",
+	"sessionFork.tooltip": "将此会话分叉为新会话",
+	"sessionFork.forking": "正在分叉…",
+	"sessionFork.unavailable": "分叉选项不可用",
+	"sessionFork.failed": "无法分叉此会话",
+	"sessionFork.sectionTitle": "分叉",
+	"sessionFork.originalPRs": "原会话的 PR",
+	"sessionFork.originalPR": "原会话的 PR #{{number}}",
+	"sessionFork.forkSession": "分叉会话",
+	"sessionFork.forkedFromSentence": "此会话从 <session>{{title}}</session> 分叉而来。",
+	"sessionFork.originalDeleted": "原会话此后已被删除。",
+	"sessionFork.forkedInto_one": "从此会话分叉出 {{count}} 个会话:",
+	"sessionFork.forkedInto_other": "从此会话分叉出 {{count}} 个会话:",
+	"sessionFork.forkDeleted": "{{title}}(已删除)",
+	"sessionFork.textCopy": "对话已作为文本复制",
+	"sessionFork.textCopyNotice": "从 {{title}} 分叉。此智能体无法复制自己的对话，因此以文本形式获得了原会话的对话。"
 }
