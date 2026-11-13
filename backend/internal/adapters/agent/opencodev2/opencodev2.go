@@ -100,6 +100,17 @@ func command(ctx context.Context, binary string, cfg ports.LaunchConfig, nativeI
 	if err != nil {
 		return nil, fmt.Errorf("opencode-v2: prepare data home: %w", err)
 	}
+	// A Claude Pro/Max login needs its plugin loaded in every session. Inline
+	// plugins are added to the user's global and project plugins, not swapped.
+	if plugins := opencode.ClaudePlanPlugins(ctx, 2, dataHome); len(plugins) > 0 {
+		base := content
+		if base == "" {
+			base = os.Getenv("OPENCODE_CONFIG_CONTENT")
+		}
+		if content, err = opencode.AddConfigPlugins(base, opencode.ClaudePlanPluginKey(2), plugins); err != nil {
+			return nil, err
+		}
+	}
 	var envArgs []string
 	envArgs = append(envArgs, "XDG_DATA_HOME="+dataHome)
 	if content != "" {
