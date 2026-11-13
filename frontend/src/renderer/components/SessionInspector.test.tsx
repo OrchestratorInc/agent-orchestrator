@@ -997,7 +997,7 @@ describe("SessionInspector PR section", () => {
 
     await userEvent.click(await screen.findByRole("button", { name: "Reopen pull request" }));
     await waitFor(() => expect(postCallsFor("/api/v1/prs/{id}/state").map(([, request]) => request.body.action)).toEqual(["reopen"]));
-    expect(screen.queryByRole("button", { name: /and merge/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /(Squash|Rebase) and merge/ })).not.toBeInTheDocument();
   });
 
   it("shows a failed state change under the PR's action button", async () => {
