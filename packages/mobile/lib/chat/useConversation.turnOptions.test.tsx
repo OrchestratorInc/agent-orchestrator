@@ -221,3 +221,22 @@ it("drops a catalog load that was started for the outgoing agent", async () => {
 	await act(async () => { answer([modelOption]); await load; });
 	expect(conversation.configOptions).toEqual([]);
 });
+
+// Reopening a switched chat: the outgoing agent's remembered catalog stays
+// remembered for it, but must not come back for the new agent.
+it("does not bring the outgoing agent's remembered catalog back when a switched chat is reopened", async () => {
+	fixture.options = [modelOption];
+	await open("switch-then-reopen");
+	await act(async () => { await conversation.loadTurnOptions(); });
+	fixture.harness = "codex";
+	await act(async () => { await conversation.refresh(); });
+	await act(async () => renderer!.unmount());
+	renderer = undefined;
+
+	fixture.options = new Error("CHAT_CONTROLLER_NOT_READY");
+	await open("switch-then-reopen");
+	expect(conversation.snapshot?.harness).toBe("codex");
+	expect(conversation.configOptions).toEqual([]);
+	await act(async () => { await expect(conversation.loadTurnOptions({ refresh: true })).rejects.toThrow("CHAT_CONTROLLER_NOT_READY"); });
+	expect(conversation.configOptions).toEqual([]);
+});

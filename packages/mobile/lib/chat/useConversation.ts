@@ -157,8 +157,11 @@ export function useMobileConversation(
 	const [loadingOlder, setLoadingOlder] = useState(false);
 	const [error, setError] = useState<string>();
 	const [unavailable, setUnavailable] = useState<{ code?: string; message: string }>();
-	const [models, setModels] = useState<ChatModel[]>(() => rememberedTurnOptions(cacheKey)?.models ?? []);
-	const [configOptions, setConfigOptions] = useState<ChatConfigOption[]>(() => rememberedTurnOptions(cacheKey)?.configOptions ?? []);
+	// The remembered catalog of the agent this chat last ran, never another's: a
+	// chat that switched agents keeps the outgoing agent's catalog remembered.
+	const [initialCatalog] = useState(() => rememberedTurnOptions(cacheKey, initialState.pages.length ? mergeConversationPages(initialState.pages)?.harness : undefined));
+	const [models, setModels] = useState<ChatModel[]>(() => initialCatalog?.models ?? []);
+	const [configOptions, setConfigOptions] = useState<ChatConfigOption[]>(() => initialCatalog?.configOptions ?? []);
 	const [skills, setSkills] = useState<ChatSkill[]>([]);
 	const [pendingSends, setPendingSends] = useState<PendingSend[]>([]);
 	const [completedRetry, setCompletedRetry] = useState<{ id: string; draftText: string }>();
@@ -191,7 +194,16 @@ export function useMobileConversation(
 		if (!snapshotHarness) return;
 		const previous = harnessShown.current;
 		harnessShown.current = { cacheKey, harness: snapshotHarness };
-		if (previous?.cacheKey !== cacheKey || previous.harness === snapshotHarness) return;
+		if (previous?.cacheKey !== cacheKey) {
+			// The first snapshot names the agent: a remembered catalog shown before
+			// it (no cached snapshot to check against) must be that agent's.
+			if (!turnOptionsLoaded.current && !rememberedTurnOptions(cacheKey, snapshotHarness)) {
+				setModels([]);
+				setConfigOptions([]);
+			}
+			return;
+		}
+		if (previous.harness === snapshotHarness) return;
 		turnOptionsRequest.current++;
 		turnOptionsLoaded.current = false;
 		turnOptionsCache.delete(cacheKey);
