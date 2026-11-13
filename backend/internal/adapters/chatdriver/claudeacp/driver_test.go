@@ -183,6 +183,13 @@ func TestClaudeACPLaunchEnvTurnsArtifactsOffByDefault(t *testing.T) {
 			t.Fatalf("CLAUDE_CODE_ARTIFACT = %q, want the inherited value left alone", got)
 		}
 	})
+	t.Run("blank project value keeps the daemon's choice", func(t *testing.T) {
+		t.Setenv("CLAUDE_CODE_ARTIFACT", "1")
+		env := claudeACPLaunchEnv(map[string]string{"CLAUDE_CODE_ARTIFACT": " "}, "/opt/claude", "", nil)
+		if got, set := env["CLAUDE_CODE_ARTIFACT"]; set {
+			t.Fatalf("CLAUDE_CODE_ARTIFACT = %q, want no overlay so the daemon's value reaches Claude", got)
+		}
+	})
 }
 
 func TestClaudeACPLaunchEnvAdvertisesSelectedModelWithoutProviderCatalog(t *testing.T) {

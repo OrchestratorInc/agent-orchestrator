@@ -399,8 +399,12 @@ func claudeACPLaunchEnv(
 	if strings.TrimSpace(input[claudeEntrypointEnv]) == "" {
 		env[claudeEntrypointEnv] = claudeEntrypoint
 	}
-	if strings.TrimSpace(input[claudeArtifactEnv]) == "" && strings.TrimSpace(os.Getenv(claudeArtifactEnv)) == "" {
-		env[claudeArtifactEnv] = "0"
+	if strings.TrimSpace(input[claudeArtifactEnv]) == "" {
+		if strings.TrimSpace(os.Getenv(claudeArtifactEnv)) == "" {
+			env[claudeArtifactEnv] = "0"
+		} else {
+			delete(env, claudeArtifactEnv)
+		}
 	}
 	selected := strings.TrimSpace(selectedModel)
 	if _, configured := input["ANTHROPIC_CUSTOM_MODEL_OPTION"]; selected != "" &&
