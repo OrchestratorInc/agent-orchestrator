@@ -436,7 +436,7 @@ func TestTerminalLaunchConfigReceivesProjectEnvironment(t *testing.T) {
 			agent := &recordingAgent{}
 			m.agents = singleAgent{agent: agent}
 			project := st.projects["mer"]
-			project.Config.Env = map[string]string{"AO_TEST_LAUNCH_ENV": "present"}
+			project.Config.Env = map[string]string{"TEST_LAUNCH_ENV": "present"}
 			st.projects["mer"] = project
 			deferred := deferredBackground(m)
 			cfg := asyncTerminalConfig("fix it")
@@ -447,7 +447,7 @@ func TestTerminalLaunchConfigReceivesProjectEnvironment(t *testing.T) {
 			if async {
 				(*deferred)[0]()
 			}
-			if agent.lastLaunch.Env["AO_TEST_LAUNCH_ENV"] != "present" {
+			if agent.lastLaunch.Env["TEST_LAUNCH_ENV"] != "present" {
 				t.Fatal("agent launch config lost project environment")
 			}
 		})
