@@ -1,0 +1,24 @@
+# Phone requests to Lab MacBook's bridge (http://127.0.0.1:3749), Origin: http://localhost, as the mobile app sends them
+
+1. GET /agents/accounts without the machine password
+   -> 401  Access-Control-Allow-Origin=None  {"error":"unauthorized","code":"BAD_PASSWORD","message":"missing or invalid connection password"}
+2. GET /agents/accounts with the password
+   -> 200  Access-Control-Allow-Origin=http://localhost
+      device-claude        personal@example.com  default=True  signedIn=True
+      borrowed-untrivial   work@example.com  default=False  signedIn=True
+      lab-signed-out       old-login@example.test  default=False  signedIn=False
+3. GET /agents/accounts/sessions/repo-11  (the chat's account, shown in the chat menu)
+   -> 200  Access-Control-Allow-Origin=http://localhost  {"claude":"borrowed-untrivial","codex":"device-codex"}
+4. PUT /agents/accounts/sessions/repo-11 {accountId: device-claude}  (tap personal@ in the account sheet)
+   -> 202  Access-Control-Allow-Origin=http://localhost  {"ok":true,"sessionId":"repo-11","transition":{"id":"bec88286-96b2-428e-9707-ad6945797bd7","sessionId":"repo-11","sourceMode":"chat","targetMode":"chat","policy":"drain","historyPolicy":"strict","phas
+   binding after 4.0 s: device-claude
+5. POST /sessions {harness: claude-code, accountId: borrowed-untrivial}  (new-session screen, Account = work@)
+   -> 201  Access-Control-Allow-Origin=http://localhost  {"session":{"needsResume":false,"id":"repo-13","projectId":"repo","kind":"worker","harness":"claude-code","reviewerConfi
+   new session repo-13 bound to: borrowed-untrivial
+6. POST /sessions {accountId: no-such-account}
+   -> 404  Access-Control-Allow-Origin=http://localhost  {"error":"not_found","code":"AGENT_ACCOUNT_NOT_FOUND","message":"Unknown agent account","requestId":"lab-host/OUf2GvNHoK-001667"}
+7. POST /sessions {accountId: lab-signed-out}
+   -> 409  Access-Control-Allow-Origin=http://localhost  {"error":"conflict","code":"AGENT_ACCOUNT_SIGNED_OUT","message":"The account is signed out; sign it in again first","requestId":"lab-host/OUf2GvNHoK-001668"}
+8. PUT /agents/accounts/sessions/repo-11 {accountId: lab-signed-out}
+   -> 409  Access-Control-Allow-Origin=http://localhost  {"error":"conflict","code":"AGENT_ACCOUNT_SIGNED_OUT","message":"The account is signed out; sign it in again first","requestId":"lab-host/OUf2GvNHoK-001669","reporting_owner":"http"}
+   sessions created by 6-7: none;  repo-11 still bound to: device-claude
