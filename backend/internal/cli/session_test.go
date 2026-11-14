@@ -1301,6 +1301,24 @@ func TestSessionClaimPRReview_TurnsEverySwitchOffBeforeTheClaim(t *testing.T) {
 	}
 }
 
+// --review alone must never take the PR from another active session: that
+// session would lose the PR's feedback, because the PR follows the reviewer's
+// switches once claimed.
+func TestSessionClaimPRReview_ImpliesNoTakeover(t *testing.T) {
+	cfg := setConfigEnv(t)
+	srv, requests := reviewClaimServer(t, false)
+	writeRunFileFor(t, cfg, srv)
+
+	if _, errOut, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "session", "claim-pr", "demo-1", "142", "--review"); err != nil {
+		t.Fatalf("claim-pr --review failed: %v stderr=%s", err, errOut)
+	}
+	got := requests()
+	claim := `POST /api/v1/sessions/demo-1/pr/claim {"pr":"https://github.com/aoagents/agent-orchestrator/pull/142","allowTakeover":false}`
+	if len(got) == 0 || got[len(got)-1] != claim {
+		t.Fatalf("requests=%#v, want the claim last with allowTakeover false", got)
+	}
+}
+
 func TestSessionClaimPRReviewFalse_TurnsFixingBackOnToTakeOver(t *testing.T) {
 	cfg := setConfigEnv(t)
 	srv, requests := reviewClaimServer(t, false)

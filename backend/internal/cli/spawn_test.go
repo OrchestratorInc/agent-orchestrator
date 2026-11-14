@@ -142,7 +142,7 @@ func TestSpawnClaimPRWiring(t *testing.T) {
 // TestSpawnReviewTurnsSwitchesOffBeforeClaim: a reviewer spawned with
 // --review must have every switch off before the PR is claimed, so the
 // claimed PR's CI failures and review comments never reach the agent and the
-// native reviewer never starts on it.
+// native reviewer never starts on it. --review alone also implies --no-takeover.
 func TestSpawnReviewTurnsSwitchesOffBeforeClaim(t *testing.T) {
 	cfg := setConfigEnv(t)
 	var requests []string
@@ -175,6 +175,10 @@ func TestSpawnReviewTurnsSwitchesOffBeforeClaim(t *testing.T) {
 			}
 			_, _ = io.WriteString(w, `{"session":{"id":"demo-9","status":"idle"}}`)
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/sessions/demo-9/pr/claim":
+			var req claimPRRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.AllowTakeover {
+				t.Errorf("claim request = %#v err=%v, want allowTakeover false (--review implies --no-takeover)", req, err)
+			}
 			_, _ = io.WriteString(w, `{"ok":true,"sessionId":"demo-9","prs":[{"url":"https://github.com/aoagents/agent-orchestrator/pull/142","number":142,"state":"open","ci":"failing","review":"review_required","mergeability":"mergeable","reviewComments":false,"updatedAt":"2026-06-04T12:00:00Z"}],"branchChanged":false,"takenOverFrom":[]}`)
 		default:
 			http.NotFound(w, r)
@@ -183,7 +187,7 @@ func TestSpawnReviewTurnsSwitchesOffBeforeClaim(t *testing.T) {
 	t.Cleanup(srv.Close)
 	writeRunFileFor(t, cfg, srv)
 
-	_, errOut, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "spawn", "--project", "demo", "--agent", "codex", "--name", "review-pr-142", "--claim-pr", "142", "--no-takeover", "--review")
+	_, errOut, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "spawn", "--project", "demo", "--agent", "codex", "--name", "review-pr-142", "--claim-pr", "142", "--review")
 	if err != nil {
 		t.Fatalf("spawn --review failed: %v stderr=%s", err, errOut)
 	}

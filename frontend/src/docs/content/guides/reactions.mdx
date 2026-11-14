@@ -26,7 +26,7 @@ Each session has two switches in its inspector: "Automatically fix CI failures",
 ao session claim-pr <pr-number-or-url> --no-takeover --review
 ```
 
-To take the PR over later, claim it again with `--review=false`, which turns both switches back on. Review comments posted while they were off are not sent, so read them on the PR. If the review claim was refused because another session owns the PR, the switches are left as they were.
+To take the PR over later, claim it again with `--review=false`, which turns both switches back on. Review comments posted while they were off are not sent, so read them on the PR. A review claim never takes the PR from another active session. If it is refused for that reason, the switches are left as they were.
 
 ## Avoid duplicate nudges
 

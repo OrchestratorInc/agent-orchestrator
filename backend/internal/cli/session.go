@@ -452,7 +452,7 @@ func newSessionClaimPRCommand(ctx *commandContext) *cobra.Command {
 		Short: "Attach an existing PR to a session",
 		Long: "Attach an existing PR to a session. When session-id is omitted, the current session is read from AO_SESSION_ID.\n\n" +
 			"Claiming updates PR ownership metadata only; it does not check out the PR branch. Verify the workspace branch and HEAD before editing.\n\n" +
-			"With --review, the session claims someone else's PR to review it, not to work on it: before the claim, Orchestrator turns off the session's " +
+			"With --review, the session claims someone else's PR to review it, not to work on it. It implies --no-takeover, so it never takes the PR from a session working on it. Before the claim, Orchestrator turns off the session's " +
 			"automatic fixing of CI failures, merge conflicts and review comments, and its native auto-review, so none of the PR's feedback reaches the agent. " +
 			"These are the session's \"Automatically fix\" switches, so they cover every PR it owns; use one session per review. " +
 			"To take the PR over later, claim it again with --review=false, which turns CI and review-comment fixing back on. " +
@@ -488,7 +488,7 @@ func newSessionClaimPRCommand(ctx *commandContext) *cobra.Command {
 	}
 	addSessionProjectFlag(cmd.Flags(), &opts.project, "Project id to scope the lookup")
 	cmd.Flags().BoolVar(&opts.noTakeover, "no-takeover", false, "Refuse if another active session owns the PR")
-	cmd.Flags().BoolVar(&review, "review", false, "Claim to review someone else's PR: turn off automatic CI and review-comment fixing and native auto-review first. --review=false turns fixing back on to take it over")
+	cmd.Flags().BoolVar(&review, "review", false, "Claim to review someone else's PR: turn off automatic CI and review-comment fixing and native auto-review first, and refuse if another active session owns it (implies --no-takeover). --review=false turns fixing back on to take it over")
 	cmd.Flags().BoolVar(&opts.json, "json", false, "Output as JSON")
 	return cmd
 }
@@ -629,7 +629,11 @@ func (c *commandContext) claimSessionPR(ctx context.Context, cmd *cobra.Command,
 		}
 	}
 	var res claimPRResponse
-	req := claimPRRequest{PR: resolvedRef, AllowTakeover: !opts.noTakeover}
+	// A review claim never takes the PR from another active session: that
+	// session would lose the PR's feedback, since the PR follows the
+	// reviewer's switches. --review=false can still take it over.
+	reviewing := opts.review != nil && *opts.review
+	req := claimPRRequest{PR: resolvedRef, AllowTakeover: !opts.noTakeover && !reviewing}
 	if err := c.postJSON(ctx, "sessions/"+url.PathEscape(id)+"/pr/claim", req, &res); err != nil {
 		return restore(err)
 	}

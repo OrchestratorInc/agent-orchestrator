@@ -127,7 +127,8 @@ turns off the session's automatic CI and review-comment fixing
 its native auto-review (`PUT /api/v1/sessions/{id}/auto-review`), so the session
 gets none of the PR's CI failures, merge conflicts, or review comments. These
 switches cover every PR the session owns; if the claim is refused, the CLI puts
-them back. To take the PR over, run `ao session claim-pr <pr-ref> --review=false`,
+them back. `--review` implies `--no-takeover`, so it never takes the PR from a
+session that is working on it. To take the PR over, run `ao session claim-pr <pr-ref> --review=false`,
 which turns CI and review-comment fixing back on.
 
 Both `ao session claim-pr` and `ao spawn --claim-pr` claim ownership metadata

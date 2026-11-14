@@ -346,7 +346,8 @@ the original checkout. Review-only work should use the PR revision view or
 read-only revision diffs without switching the session's checkout.
 
 A review claim (`--review`) is the same claim made for review instead of work.
-Before claiming, it turns off the session's "Automatically fix CI failures" and
+It implies `--no-takeover`: it never takes the PR from another active session,
+which would lose the PR's feedback. Before claiming, it turns off the session's "Automatically fix CI failures" and
 "Automatically fix review comments" switches and its native auto-review, so the
 session gets none of the PR's CI failures, merge conflicts, or review comments,
 and Orchestrator's reviewer never starts on it. These are the switches the
@@ -366,7 +367,7 @@ posted while fixing was off are never sent, so read them on the PR.
 | `--json` | Output as JSON | - |
 | `--no-takeover` | Refuse if another active session owns the PR | - |
 | `-p, --project string` | Project id to scope the lookup | - |
-| `--review` | Claim to review the PR: turn off automatic CI and review-comment fixing and native auto-review first. `--review=false` turns fixing back on to take the PR over | Switches unchanged |
+| `--review` | Claim to review the PR: turn off automatic CI and review-comment fixing and native auto-review first. Implies `--no-takeover`. `--review=false` turns fixing back on to take the PR over | Switches unchanged |
 
 **Examples:**
 
