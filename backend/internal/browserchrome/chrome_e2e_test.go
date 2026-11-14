@@ -246,10 +246,14 @@ func TestChromeE2E(t *testing.T) {
 		return int(value["windowId"].(float64))
 	}
 
-	// The agent works in its own window, not the one the user had open.
+	// The agent works in a tab group in the user's window, behind the tab the
+	// user has in front, without opening a window of its own.
 	agentWindow := windowOf("Orchestrator · " + session)
-	if first := extension(`chrome.windows.getAll().then((all) => ({ count: all.length }))`); first["count"].(float64) < 2 {
-		t.Fatalf("agent shares the user's window: %v", first)
+	if windows := extension(fmt.Sprintf(`chrome.windows.getAll({ windowTypes: ["normal"] }).then((all) => ({ count: all.length, ours: all.some((w) => w.id === %d) }))`, agentWindow)); windows["count"].(float64) != 1 || windows["ours"] != true {
+		t.Fatalf("normal windows = %v, want only the user's window", windows)
+	}
+	if front := extension(fmt.Sprintf(`chrome.tabs.query({ windowId: %d, active: true }).then(([tab]) => ({ grouped: tab.groupId !== -1 }))`, agentWindow)); front["grouped"] == true {
+		t.Fatal("the agent's tab took the front of the user's window")
 	}
 
 	// The user switches to their own tab in the agent's window: it stays in
@@ -282,11 +286,17 @@ func TestChromeE2E(t *testing.T) {
 		t.Helper()
 		return extension(fmt.Sprintf(`chrome.windows.get(%d).then((w) => ({ state: w.state }))`, agentWindow))["state"] == "minimized"
 	}
+	// macOS animates the minimize; wait for the page to see it.
 	hidden := extension(fmt.Sprintf(`(async () => {
 		const [g] = await chrome.tabGroups.query({ title: %q });
 		const [tab] = await chrome.tabs.query({ groupId: g.id, active: true });
-		const [frame] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: () => document.visibilityState });
-		return { visibility: frame.result };
+		let visibility = "";
+		for (let i = 0; i < 60 && visibility !== "hidden"; i++) {
+			const [frame] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: () => document.visibilityState });
+			visibility = frame.result;
+			if (visibility !== "hidden") await new Promise((r) => setTimeout(r, 50));
+		}
+		return { visibility };
 	})()`, "Orchestrator · "+session))
 	if hidden["visibility"] != "hidden" {
 		t.Fatalf("minimized agent page visibility = %v, want hidden", hidden["visibility"])
@@ -321,16 +331,15 @@ func TestChromeE2E(t *testing.T) {
 	if err := <-secondConsent; err != nil {
 		t.Fatalf("second consent: %v", err)
 	}
-	if windowOf("Orchestrator · "+second) == agentWindow {
-		t.Fatal("sessions share a window")
+	if windowOf("Orchestrator · "+second) != agentWindow {
+		t.Fatal("the second session opened a window instead of joining the user's")
 	}
-	secondWindow := windowOf("Orchestrator · " + second)
 	if err := broker.DestroySession(ctx, second); err != nil {
 		t.Fatalf("destroy second: %v", err)
 	}
 	time.Sleep(300 * time.Millisecond)
-	if left := extension(fmt.Sprintf(`chrome.windows.getAll().then((all) => ({ open: all.some((w) => w.id === %d) }))`, secondWindow)); left["open"] == true {
-		t.Fatal("a finished session left its window open")
+	if left := extension(fmt.Sprintf(`Promise.all([chrome.windows.getAll(), chrome.tabGroups.query({ title: %q })]).then(([all, groups]) => ({ open: all.some((w) => w.id === %d), groups: groups.length }))`, "Orchestrator · "+second, agentWindow)); left["open"] != true || left["groups"].(float64) != 0 {
+		t.Fatalf("after the second session ended: %v, want the user's window open and its group gone", left)
 	}
 
 	// Allowing every session: the next new session runs without asking.
@@ -355,15 +364,19 @@ func TestChromeE2E(t *testing.T) {
 		t.Fatalf("destroy fourth: %v", err)
 	}
 
-	// The user closes the agent's window: the next command starts over cleanly.
+	// The user, with another window open, closes the one holding the agent's
+	// group: the next command starts over cleanly in the window they use now.
+	// (Closing a profile's last window on macOS shuts the profile down.)
+	other := int(extension(`chrome.windows.create({ focused: true, url: "about:blank" }).then((w) => ({ id: w.id }))`)["id"].(float64))
+	time.Sleep(500 * time.Millisecond)
 	extension(fmt.Sprintf(`chrome.windows.remove(%d).then(() => ({}))`, agentWindow))
 	time.Sleep(500 * time.Millisecond)
 	reopened := run("open", map[string]interface{}{"url": site.URL + "/next"})
 	if reopened["isLoading"] == nil {
 		t.Fatalf("open after closing the window = %#v", reopened)
 	}
-	if windowOf("Orchestrator · "+session) == agentWindow {
-		t.Fatal("the session reused a closed window")
+	if got := windowOf("Orchestrator · " + session); got != other {
+		t.Fatalf("session window after the user closed theirs = %d, want the user's other window %d", got, other)
 	}
 
 	if err := broker.DestroySession(ctx, session); err != nil {

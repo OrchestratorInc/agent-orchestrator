@@ -20,7 +20,7 @@ export type Tab = {
 };
 
 export type TabGroup = { id: number; windowId: number; title?: string; color: string; collapsed: boolean };
-export type WindowInfo = { id?: number; focused: boolean; type?: string; state?: string };
+export type WindowInfo = { id?: number; focused: boolean; type?: string; state?: string; incognito?: boolean };
 export type Frame = { frameId: number; parentFrameId: number; url: string; documentId?: string };
 export type DebuggeeTarget = { tabId: number };
 export type MessageSender = { tab?: Tab; frameId?: number; id?: string; url?: string };

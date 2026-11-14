@@ -322,14 +322,13 @@ export class Executor {
 	}
 
 	/**
-	 * captureVisibleTab needs the agent's tab painted, so show it in its own
-	 * window (without focusing the window) and wait until it is visible.
+	 * captureVisibleTab needs the agent's tab painted, so bring it to the front
+	 * of its window (never focusing the window) and wait until it is visible.
 	 */
 	private async showTab(ctx: Context, page: ActiveTab): Promise<void> {
 		const chrome = this.deps.chrome;
 		if (!page.tab.active) await chrome.tabs.update(page.tabId, { active: true });
-		const window = await chrome.windows.get(page.tab.windowId).catch(() => undefined);
-		if (window?.state === "minimized") await chrome.windows.update(page.tab.windowId, { state: "normal" }).catch(() => undefined);
+		// A minimized window stays minimized: restoring it would take focus.
 		const deadline = Date.now() + 2_000;
 		for (;;) {
 			const state = (await this.content(page, ctx, { op: "ping" }, 0)) as { visibility?: string };
