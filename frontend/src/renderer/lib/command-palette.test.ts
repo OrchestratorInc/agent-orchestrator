@@ -335,7 +335,7 @@ const reviewRun = (prNumber: number): ReviewRun => ({
 	prUrl: `https://github.com/o/r/pull/${prNumber}`,
 	reviewId: `review-${prNumber}`,
 	sessionId: "w-pr",
-	status: "delivered",
+	status: "completed",
 	targetSha: "sha",
 	verdict: "approved",
 });

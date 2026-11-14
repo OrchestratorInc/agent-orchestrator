@@ -221,6 +221,14 @@ sql:
             go_type:
               import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
               type: "ReviewTriggerSource"
+          - column: "review_run.failure_reason"
+            go_type:
+              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              type: "ReviewFailureReason"
+          - column: "review_run.cancelled_by"
+            go_type:
+              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              type: "ReviewCancelledBy"
           - column: "app_settings.default_session_mode"
             go_type:
               import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"

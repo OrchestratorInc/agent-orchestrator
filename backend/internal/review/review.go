@@ -12,6 +12,7 @@ import (
 	stdctx "context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -62,16 +63,24 @@ type Store interface {
 	ListReviewsBySession(ctx stdctx.Context, id domain.SessionID) ([]domain.Review, error)
 	ClearReviewerHandleByHarness(ctx stdctx.Context, id domain.SessionID, harness domain.ReviewerHarness) error
 	InsertReviewRun(ctx stdctx.Context, r domain.ReviewRun) error
-	UpdateReviewRunResult(ctx stdctx.Context, id string, status domain.ReviewRunStatus, verdict domain.ReviewVerdict, body, githubReviewID string, autoInjectReview bool) (bool, error)
+	// TransitionReviewRun is the one guarded write of a run's state: it moves
+	// the run only while it is still in one of from, and reports false when
+	// another actor already moved it.
+	TransitionReviewRun(ctx stdctx.Context, id string, from []domain.ReviewRunStatus, to domain.ReviewRunStatus, patch domain.ReviewRunPatch) (bool, error)
+	// TransitionReviewRunsBySession is the bulk form over one worker's runs; a
+	// nil harness matches every reviewer.
+	TransitionReviewRunsBySession(ctx stdctx.Context, sessionID domain.SessionID, harness *domain.ReviewerHarness, from []domain.ReviewRunStatus, to domain.ReviewRunStatus, patch domain.ReviewRunPatch) ([]string, error)
+	// TransitionReviewRunsForOlderSHA is the bulk form over one PR's runs
+	// against any head other than targetSHA.
+	TransitionReviewRunsForOlderSHA(ctx stdctx.Context, sessionID domain.SessionID, prURL, targetSHA string, from []domain.ReviewRunStatus, to domain.ReviewRunStatus, patch domain.ReviewRunPatch) ([]string, error)
+	MarkReviewRunsFirstActivity(ctx stdctx.Context, reviewID, launchID string, at time.Time) (int64, error)
 	UpdateReviewAgentSessionID(ctx stdctx.Context, id, agentSessionID string) (bool, error)
-	SupersedeStaleRunningReviewRuns(ctx stdctx.Context, sessionID domain.SessionID, prURL, targetSHA, body string) (int64, error)
-	CancelRunningReviewRunsBySession(ctx stdctx.Context, sessionID domain.SessionID, body string) (int64, error)
-	CancelRunningReviewRunsBySessionAndHarness(ctx stdctx.Context, sessionID domain.SessionID, harness domain.ReviewerHarness, body string) (int64, error)
 	GetReviewRun(ctx stdctx.Context, id string) (domain.ReviewRun, bool, error)
 	GetReviewRunBySessionPRAndSHA(ctx stdctx.Context, id domain.SessionID, prURL, targetSHA string) (domain.ReviewRun, bool, error)
 	GetReviewRunBySessionPRSHAAndHarness(ctx stdctx.Context, id domain.SessionID, prURL, targetSHA string, harness domain.ReviewerHarness) (domain.ReviewRun, bool, error)
 	ListReviewRunsBySession(ctx stdctx.Context, id domain.SessionID) ([]domain.ReviewRun, error)
-	ListRunningReviewRunsBySession(ctx stdctx.Context, id domain.SessionID) ([]domain.ReviewRun, error)
+	ListActiveReviewRunsBySession(ctx stdctx.Context, id domain.SessionID) ([]domain.ReviewRun, error)
+	ListActiveReviewRuns(ctx stdctx.Context) ([]domain.ReviewRun, error)
 	ListRecoverableChatReviews(ctx stdctx.Context) ([]domain.Review, error)
 	RecordReviewChatControllerError(ctx stdctx.Context, id, message string, now time.Time) (bool, error)
 }
@@ -102,6 +111,9 @@ type Deps struct {
 	Launcher   Launcher
 	// ChatRecoveryDone gates operations that could mistake a recovering reviewer for an exited one.
 	ChatRecoveryDone <-chan struct{}
+	// RunLifecycle sets the review runs' time limits; zero fields take
+	// DefaultRunLifecycleConfig's values.
+	RunLifecycle RunLifecycleConfig
 
 	// Clock and NewID are injectable for deterministic tests.
 	Clock func() time.Time
@@ -126,6 +138,8 @@ type Engine struct {
 	// lockWorker). Distinct workers never contend.
 	triggerMu    sync.Mutex
 	triggerLocks map[domain.SessionID]*sync.Mutex
+
+	runs runLifecycleState
 }
 
 const autoReviewFailedRetryLimit = domain.AutoReviewFailedRetryLimit
@@ -152,6 +166,7 @@ func New(d Deps) *Engine {
 		triggerLocks: make(map[domain.SessionID]*sync.Mutex),
 
 		chatRecoveryDone: d.ChatRecoveryDone,
+		runs:             newRunLifecycleState(d.RunLifecycle),
 	}
 }
 
@@ -164,15 +179,30 @@ func New(d Deps) *Engine {
 // engine; the entry is a single pointer, so the unbounded-by-session-count map
 // is a negligible, bounded-in-practice cost.
 func (e *Engine) lockWorker(id domain.SessionID) func() {
+	mu := e.workerMutex(id)
+	mu.Lock()
+	return mu.Unlock
+}
+
+// tryLockWorker is lockWorker for the reaper-driven run lifecycle, which must not queue
+// behind a trigger that is still launching a reviewer.
+func (e *Engine) tryLockWorker(id domain.SessionID) (func(), bool) {
+	mu := e.workerMutex(id)
+	if !mu.TryLock() {
+		return nil, false
+	}
+	return mu.Unlock, true
+}
+
+func (e *Engine) workerMutex(id domain.SessionID) *sync.Mutex {
 	e.triggerMu.Lock()
+	defer e.triggerMu.Unlock()
 	mu, ok := e.triggerLocks[id]
 	if !ok {
 		mu = &sync.Mutex{}
 		e.triggerLocks[id] = mu
 	}
-	e.triggerMu.Unlock()
-	mu.Lock()
-	return mu.Unlock
+	return mu
 }
 
 // waitForChatRecovery keeps a missing startup controller from being treated as
@@ -424,11 +454,16 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 	if modeChanging {
 		hasConfigOverride = true
 	}
-	if stale, err := e.cancelStaleRunningRuns(ctx, workerID, harness, reviewRow, hasReview, runs); err != nil {
+	// Settle any run the next reaper pass would end, so this
+	// trigger never plans over a reviewer that is already gone.
+	if settled, err := e.evaluateSessionLocked(ctx, workerID); err != nil {
 		return TriggerResult{}, err
-	} else if stale {
+	} else if settled {
 		runs, err = e.store.ListReviewRunsBySession(ctx, workerID)
 		if err != nil {
+			return TriggerResult{}, err
+		}
+		if reviewRow, hasReview, err = e.store.GetReviewBySessionAndHarness(ctx, workerID, harness); err != nil {
 			return TriggerResult{}, err
 		}
 	}
@@ -501,11 +536,11 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 		}
 		if hasConfigOverride {
 			pendingSupersedes = append(pendingSupersedes, staleSupersede{prURL: reviewState.PRURL, targetSHA: reviewState.TargetSHA})
-			if reviewState.LatestRun != nil && reviewState.LatestRun.Status == domain.ReviewRunRunning && (reviewState.LatestRun.Harness == harness || reviewState.LatestRun.Harness == "") {
+			if reviewState.LatestRun != nil && reviewRunInFlight(reviewState.LatestRun.Status) && (reviewState.LatestRun.Harness == harness || reviewState.LatestRun.Harness == "") {
 				restarted = append(restarted, *reviewState.LatestRun)
 				continue
 			}
-		} else if _, err := e.store.SupersedeStaleRunningReviewRuns(ctx, workerID, reviewState.PRURL, reviewState.TargetSHA, "superseded by a review trigger for a newer commit"); err != nil {
+		} else if err := e.supersedeOlderRuns(ctx, workerID, reviewState.PRURL, reviewState.TargetSHA); err != nil {
 			return TriggerResult{}, err
 		}
 		if batchID == "" {
@@ -520,7 +555,7 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 			TriggerSource: source,
 			PRURL:         reviewState.PRURL,
 			TargetSHA:     reviewState.TargetSHA,
-			Status:        domain.ReviewRunRunning,
+			Status:        domain.ReviewRunQueued,
 			Verdict:       domain.VerdictNone,
 			CreatedAt:     now,
 			// Completion refreshes this snapshot before delivery. Keeping the
@@ -567,11 +602,9 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 		return TriggerResult{Run: firstReusableRun(reviews), ReviewerHandleID: legacyReviewerHandle(reviewRow), Created: false, Reviews: reviews, Runs: runs, ReviewerSurface: reviewerSurface(reviewRow)}, nil
 	}
 
-	failRuns := func(start int, err error) error {
-		for _, run := range created[start:] {
-			if _, updateErr := e.store.UpdateReviewRunResult(ctx, run.ID, domain.ReviewRunFailed, domain.VerdictNone, err.Error(), "", run.AutoInjectReview); updateErr != nil {
-				return updateErr
-			}
+	failRuns := func(reason domain.ReviewFailureReason, err error) error {
+		if failErr := e.failRuns(ctx, created, reason, err); failErr != nil {
+			return errors.Join(err, failErr)
 		}
 		return err
 	}
@@ -607,13 +640,11 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 			}
 		}
 		if previousStopped {
-			for _, run := range restarted {
-				if _, err := e.store.UpdateReviewRunResult(ctx, run.ID, domain.ReviewRunFailed, domain.VerdictNone, cause.Error(), "", run.AutoInjectReview); err != nil {
-					cause = errors.Join(cause, err)
-				}
+			if err := e.failRuns(ctx, restarted, domain.ReviewFailureLaunchFailed, cause); err != nil {
+				cause = errors.Join(cause, err)
 			}
 		}
-		return failRuns(0, cause)
+		return failRuns(domain.ReviewFailureLaunchFailed, cause)
 	}
 
 	queueRuns := append([]domain.ReviewRun{}, restarted...)
@@ -628,7 +659,7 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 	if !hasConfigOverride && reviewRow.ReviewerHandleID != "" && reviewerPaneReusable(reviewRow, hadRunningReviewer) {
 		alive, err := e.launcher.Alive(ctx, reviewRow.ReviewerHandleID, reviewRow.ReviewerLaunchID)
 		if err != nil {
-			return TriggerResult{}, failRuns(0, err)
+			return TriggerResult{}, failRuns(domain.ReviewFailureLaunchFailed, err)
 		}
 		if alive {
 			handleID = reviewRow.ReviewerHandleID
@@ -637,23 +668,26 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 	if handleID == "" {
 		// Each pass gets a fresh reviewer process on the same stable terminal
 		// handle when there is no resumable live agent session to notify.
+		launchID := e.newID()
+		if err := e.markRunsLaunching(ctx, created, launchID); err != nil {
+			return TriggerResult{}, failRuns(domain.ReviewFailureLaunchFailed, err)
+		}
 		releaseHarness, err := e.beginHarnessUse(harness)
 		if err != nil {
-			return TriggerResult{}, failRuns(0, err)
+			return TriggerResult{}, failRuns(domain.ReviewFailurePreflightFailed, err)
 		}
 		defer releaseHarness()
 		if err := e.launcher.Preflight(ctx, harness, worker.Metadata.WorkspacePath, selectedMode); err != nil {
-			return TriggerResult{}, failRuns(0, fmt.Errorf("reviewer preflight: %w", err))
+			return TriggerResult{}, failRuns(domain.ReviewFailurePreflightFailed, fmt.Errorf("reviewer preflight: %w", err))
 		}
 		// A review owns one Chat controller. Stop it while its durable fence
 		// still belongs to it before a config replacement claims a new epoch.
 		if hasConfigOverride && !modeChanging && selectedMode == domain.ReviewerInterfaceChat {
 			if err := e.stopReviewChatWork(ctx, reviewRow); err != nil {
-				return TriggerResult{}, failRuns(0, err)
+				return TriggerResult{}, failRuns(domain.ReviewFailureLaunchFailed, err)
 			}
 			previousStopped = true
 		}
-		launchID := e.newID()
 		reviewRow, err = e.upsertReview(ctx, worker, harness, reviewRow.ReviewerHandleID, launchAgentSessionID, launchID, "", now)
 		if err != nil {
 			return TriggerResult{}, rollbackReplacement(err)
@@ -693,21 +727,24 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 			persistedAgentSessionID = launch.AgentSessionID
 		}
 	} else {
+		if err := e.markRunsLaunching(ctx, created, reviewRow.ReviewerLaunchID); err != nil {
+			return TriggerResult{}, failRuns(domain.ReviewFailureLaunchFailed, err)
+		}
 		launchSpec := reviewLaunchSpec(worker, harness, config, launchRun, queue, 0, reviewRow.AgentSessionID, reviewRow.ReviewerLaunchID)
 		launchSpec.InterfaceMode = selectedMode
 		if err := e.launcher.Notify(ctx, handleID, launchSpec); err != nil {
-			return TriggerResult{}, failRuns(0, fmt.Errorf("notify reviewer: %w", err))
+			return TriggerResult{}, failRuns(domain.ReviewFailureLaunchFailed, fmt.Errorf("notify reviewer: %w", err))
 		}
 	}
 	for _, stale := range pendingSupersedes {
-		if _, err := e.store.SupersedeStaleRunningReviewRuns(ctx, workerID, stale.prURL, stale.targetSHA, "superseded by a review trigger for a newer commit"); err != nil {
+		if err := e.supersedeOlderRuns(ctx, workerID, stale.prURL, stale.targetSHA); err != nil {
 			if previousReview.IsArchived || modeChanging {
 				return TriggerResult{}, rollbackReplacement(err)
 			}
 			if handleID != "" {
 				_ = e.launcher.Destroy(ctx, handleID)
 			}
-			return TriggerResult{}, failRuns(0, err)
+			return TriggerResult{}, failRuns(domain.ReviewFailureLaunchFailed, err)
 		}
 	}
 	if hasConfigOverride && persistedAgentSessionID == "" && reviewRow.ID != "" {
@@ -718,7 +755,7 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 			if handleID != "" {
 				_ = e.launcher.Destroy(ctx, handleID)
 			}
-			return TriggerResult{}, failRuns(0, err)
+			return TriggerResult{}, failRuns(domain.ReviewFailureLaunchFailed, err)
 		}
 	}
 	reviewRow, err = e.upsertReview(ctx, worker, harness, handleID, persistedAgentSessionID, reviewRow.ReviewerLaunchID, "", now)
@@ -729,7 +766,7 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 		if handleID != "" {
 			_ = e.launcher.Destroy(ctx, handleID)
 		}
-		return TriggerResult{}, err
+		return TriggerResult{}, failRuns(domain.ReviewFailureLaunchFailed, err)
 	}
 	if hasConfigOverride && previousHandleID != "" && previousHandleID != handleID {
 		if err := e.launcher.Destroy(ctx, previousHandleID); err != nil {
@@ -737,14 +774,14 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 				return TriggerResult{}, rollbackReplacement(fmt.Errorf("destroy previous reviewer: %w", err))
 			}
 			if _, rollbackErr := e.upsertReview(ctx, worker, harness, previousHandleID, previousAgentSessionID, "", "", now); rollbackErr != nil {
-				return TriggerResult{}, failRuns(0, fmt.Errorf("destroy previous reviewer: %w; rollback review row: %w", err, rollbackErr))
+				return TriggerResult{}, failRuns(domain.ReviewFailureLaunchFailed, fmt.Errorf("destroy previous reviewer: %w; rollback review row: %w", err, rollbackErr))
 			}
 			if handleID != "" {
 				if destroyNewErr := e.launcher.Destroy(ctx, handleID); destroyNewErr != nil {
-					return TriggerResult{}, failRuns(0, fmt.Errorf("destroy previous reviewer: %w; cleanup replacement reviewer: %w", err, destroyNewErr))
+					return TriggerResult{}, failRuns(domain.ReviewFailureLaunchFailed, fmt.Errorf("destroy previous reviewer: %w; cleanup replacement reviewer: %w", err, destroyNewErr))
 				}
 			}
-			return TriggerResult{}, failRuns(0, fmt.Errorf("destroy previous reviewer: %w", err))
+			return TriggerResult{}, failRuns(domain.ReviewFailureLaunchFailed, fmt.Errorf("destroy previous reviewer: %w", err))
 		}
 		previousStopped = true
 		if deferInitialMessage {
@@ -755,8 +792,30 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 			}
 		}
 	}
+	// The prompt reached the reviewer: from here the reaper-driven run
+	// lifecycle owns it.
+	startedAt := e.clock()
 	for i := range created {
 		created[i].ReviewID = reviewRow.ID
+		run, err := e.markRunRunning(ctx, created[i], []domain.ReviewRunStatus{domain.ReviewRunLaunching}, reviewRow.ReviewerLaunchID, startedAt)
+		if err != nil {
+			return TriggerResult{}, err
+		}
+		created[i] = run
+		reviews = replaceReviewLatestRun(reviews, run.PRURL, run.TargetSHA, run)
+	}
+	for i := range restarted {
+		// A restarted pass keeps its row but is now served by the new launch.
+		run, err := e.markRunRunning(ctx, restarted[i], []domain.ReviewRunStatus{domain.ReviewRunLaunching, domain.ReviewRunRunning}, reviewRow.ReviewerLaunchID, startedAt)
+		if err != nil {
+			return TriggerResult{}, err
+		}
+		restarted[i] = run
+	}
+	if len(restarted) > 0 {
+		launchRun = restarted[0]
+	} else {
+		launchRun = created[0]
 	}
 	triggerRuns := append([]domain.ReviewRun{}, created...)
 	triggerRuns = append(triggerRuns, runs...)
@@ -800,7 +859,7 @@ func headHasReview(runs []domain.ReviewRun, prURL, targetSHA string) bool {
 		if run.PRURL != prURL || run.TargetSHA != targetSHA {
 			continue
 		}
-		if run.Status == domain.ReviewRunRunning || run.Verdict == domain.VerdictApproved || run.Verdict == domain.VerdictChangesRequested {
+		if run.Status.IsActive() || run.Verdict == domain.VerdictApproved || run.Verdict == domain.VerdictChangesRequested {
 			return true
 		}
 	}
@@ -809,7 +868,7 @@ func headHasReview(runs []domain.ReviewRun, prURL, targetSHA string) bool {
 
 func headRunningForHarness(runs []domain.ReviewRun, prURL, targetSHA string, harness domain.ReviewerHarness) bool {
 	for _, run := range runs {
-		if run.PRURL == prURL && run.TargetSHA == targetSHA && run.Status == domain.ReviewRunRunning && (run.Harness == harness || run.Harness == "") {
+		if run.PRURL == prURL && run.TargetSHA == targetSHA && run.Status.IsActive() && (run.Harness == harness || run.Harness == "") {
 			return true
 		}
 	}
@@ -830,7 +889,7 @@ func nothingToReviewError(reviews []PRReviewState, runs []domain.ReviewRun, harn
 			return fmt.Errorf("%w: %s is already reviewing PR #%d head %s; wait for it, cancel it with `ao review cancel`, or choose another reviewer with --agent", ErrReviewAlreadyRunning, harness, review.PRNumber, sha)
 		}
 		for _, run := range runs {
-			if run.PRURL == review.PRURL && run.TargetSHA == review.TargetSHA && run.Status == domain.ReviewRunRunning {
+			if run.PRURL == review.PRURL && run.TargetSHA == review.TargetSHA && run.Status.IsActive() {
 				return fmt.Errorf("%w: %s is already reviewing PR #%d head %s; wait for its result, or pass --rerun to add another reviewer", ErrReviewAlreadyRunning, run.Harness, review.PRNumber, sha)
 			}
 		}
@@ -935,7 +994,7 @@ func reviewerPaneReusable(reviewRow domain.Review, hadRunningReviewer bool) bool
 
 func reviewRunsContainRunningForHarness(runs []domain.ReviewRun, harness domain.ReviewerHarness) bool {
 	for _, run := range runs {
-		if (run.Harness == harness || run.Harness == "") && run.Status == domain.ReviewRunRunning {
+		if (run.Harness == harness || run.Harness == "") && run.Status.IsActive() {
 			return true
 		}
 	}
@@ -953,7 +1012,9 @@ func (e *Engine) destroyOtherReviewerHandles(ctx stdctx.Context, workerID domain
 		if err := e.store.ClearReviewerHandleByHarness(ctx, workerID, review.Harness); err != nil {
 			return err
 		}
-		if _, err := e.store.CancelRunningReviewRunsBySessionAndHarness(ctx, workerID, review.Harness, "cancelled because reviewer agent was switched"); err != nil {
+		// Switching reviewer is a person's choice and the pane is gone, so the
+		// stop is confirmed.
+		if err := e.endReviewerRuns(ctx, workerID, &review.Harness, endAsCancelled(domain.ReviewCancelledByUser)); err != nil {
 			return err
 		}
 	}
@@ -974,7 +1035,7 @@ func (e *Engine) destroyIdleOtherReviewerHandles(ctx stdctx.Context, workerID do
 
 func reviewRunsContainRunningForReview(runs []domain.ReviewRun, review domain.Review) bool {
 	for _, run := range runs {
-		if run.Status == domain.ReviewRunRunning && (run.ReviewID == review.ID || run.Harness == review.Harness) {
+		if run.Status.IsActive() && (run.ReviewID == review.ID || run.Harness == review.Harness) {
 			return true
 		}
 	}
@@ -1092,7 +1153,7 @@ func (e *Engine) restorePersistedChatReviewerLocked(ctx stdctx.Context, worker d
 		if err := e.stopReviewChatWork(ctx, review); err != nil {
 			return RestoreReviewerResult{}, err
 		}
-		if _, err := e.store.CancelRunningReviewRunsBySessionAndHarness(ctx, worker.ID, review.Harness, "cancelled because reviewer Chat is unavailable"); err != nil {
+		if err := e.endReviewerRuns(ctx, worker.ID, &review.Harness, endAsFailed(domain.ReviewFailureProcessExited)); err != nil {
 			return RestoreReviewerResult{}, err
 		}
 		if err := e.setReviewerInterfaceMode(ctx, review.ID, domain.ReviewerInterfaceTUI, e.clock()); err != nil {
@@ -1152,16 +1213,12 @@ func (e *Engine) restoreReviewerLocked(
 	if err := e.destroyIdleOtherReviewerHandles(ctx, workerID, harness, reviewRows, runs); err != nil {
 		return RestoreReviewerResult{}, err
 	}
-	for _, other := range reviewRows {
-		if other.Harness == harness || !reviewRunsContainRunningForReview(runs, other) {
-			continue
-		}
-		// A Chat reviewer has no pane by design; RecoverChatReviewers restores
-		// its durable conversation, so a missing handle is not a dead reviewer.
-		if other.InterfaceMode == domain.ReviewerInterfaceChat {
-			continue
-		}
-		if _, err := e.cancelStaleRunningRuns(ctx, workerID, other.Harness, other, true, runs); err != nil {
+	// A reviewer whose pane did not survive cannot finish its passes; settle
+	// them now rather than leave them looking like a review in progress.
+	if settled, err := e.evaluateSessionLocked(ctx, workerID); err != nil {
+		return RestoreReviewerResult{}, err
+	} else if settled {
+		if runs, err = e.store.ListReviewRunsBySession(ctx, workerID); err != nil {
 			return RestoreReviewerResult{}, err
 		}
 	}
@@ -1217,7 +1274,7 @@ func (e *Engine) restoreReviewerLocked(
 		if err := e.stopReviewChatWork(ctx, reviewRow); err != nil {
 			return RestoreReviewerResult{}, err
 		}
-		if _, err := e.store.CancelRunningReviewRunsBySessionAndHarness(ctx, worker.ID, harness, "cancelled because reviewer Chat is unavailable"); err != nil {
+		if err := e.endReviewerRuns(ctx, worker.ID, &harness, endAsFailed(domain.ReviewFailureProcessExited)); err != nil {
 			return RestoreReviewerResult{}, err
 		}
 		if err := e.setReviewerInterfaceMode(ctx, reviewRow.ID, domain.ReviewerInterfaceTUI, e.clock()); err != nil {
@@ -1261,14 +1318,14 @@ func (e *Engine) restoreReviewerLocked(
 				restoreErr = errors.Join(restoreErr, markErr)
 			}
 		}
-		if failErr := e.failRunningRestoredRuns(ctx, previousRuns, restoreErr.Error()); failErr != nil {
+		if failErr := e.failRuns(ctx, previousRuns, domain.ReviewFailureProcessExited, restoreErr); failErr != nil {
 			return RestoreReviewerResult{}, errors.Join(restoreErr, failErr)
 		}
 		return RestoreReviewerResult{}, restoreErr
 	}
 	if !launch.NativeResumed {
-		const reason = "reviewer native conversation was unavailable during restore; retry the review"
-		if err := e.failRunningRestoredRuns(ctx, previousRuns, reason); err != nil {
+		reason := errors.New("reviewer native conversation was unavailable during restore; retry the review")
+		if err := e.failRuns(ctx, previousRuns, domain.ReviewFailureProcessExited, reason); err != nil {
 			_ = e.launcher.Destroy(ctx, launch.HandleID)
 			return RestoreReviewerResult{}, err
 		}
@@ -1281,18 +1338,6 @@ func (e *Engine) restoreReviewerLocked(
 		return RestoreReviewerResult{}, err
 	}
 	return RestoreReviewerResult{ReviewerHandleID: launch.HandleID, Restored: true}, nil
-}
-
-func (e *Engine) failRunningRestoredRuns(ctx stdctx.Context, runs []domain.ReviewRun, body string) error {
-	for _, run := range runs {
-		if run.Status != domain.ReviewRunRunning {
-			continue
-		}
-		if _, err := e.store.UpdateReviewRunResult(ctx, run.ID, domain.ReviewRunFailed, domain.VerdictNone, body, "", run.AutoInjectReview); err != nil {
-			return fmt.Errorf("fail review run %q after reviewer restore: %w", run.ID, err)
-		}
-	}
-	return nil
 }
 
 // TeardownReviewerTerminal destroys reviewer panes before shutdown removes the
@@ -1324,7 +1369,9 @@ func (e *Engine) TeardownReviewerTerminal(ctx stdctx.Context, workerID domain.Se
 			return err
 		}
 	}
-	return nil
+	// The panes are gone, so no pass of theirs can finish. Restore relaunches
+	// an idle reviewer; it never resumes a pass.
+	return e.endReviewerRuns(ctx, workerID, nil, endAsCancelled(domain.ReviewCancelledByWorkerLifecycle))
 }
 
 func autoReviewHeadBlocked(runs []domain.ReviewRun, prURL, targetSHA string, harness domain.ReviewerHarness) bool {
@@ -1333,7 +1380,10 @@ func autoReviewHeadBlocked(runs []domain.ReviewRun, prURL, targetSHA string, har
 		if run.PRURL != prURL || run.TargetSHA != targetSHA || (run.Harness != harness && run.Harness != "") {
 			continue
 		}
-		if run.Status == domain.ReviewRunRunning || run.Status == domain.ReviewRunCancelled || run.Verdict == domain.VerdictApproved || run.Verdict == domain.VerdictChangesRequested {
+		if run.Status.IsActive() || run.Status == domain.ReviewRunCancelled || run.Verdict == domain.VerdictApproved || run.Verdict == domain.VerdictChangesRequested {
+			return true
+		}
+		if run.Status == domain.ReviewRunFailed && !run.FailureReason.AutoRetryable() {
 			return true
 		}
 		if run.Status == domain.ReviewRunFailed && run.TriggerSource == domain.ReviewTriggerAuto {
@@ -1364,39 +1414,6 @@ func reviewRunsForReview(runs []domain.ReviewRun, reviewID string) []domain.Revi
 		}
 	}
 	return out
-}
-
-// cancelStaleRunningRuns fails this reviewer's running passes when its pane is
-// gone. It is scoped to one reviewer so a dead pane cannot cancel another
-// reviewer that is still working on the same worker.
-func (e *Engine) cancelStaleRunningRuns(ctx stdctx.Context, workerID domain.SessionID, harness domain.ReviewerHarness, reviewRow domain.Review, hasReview bool, runs []domain.ReviewRun) (bool, error) {
-	hasRunning := false
-	for _, run := range runs {
-		if run.SessionID == workerID && run.Status == domain.ReviewRunRunning && run.Verdict == domain.VerdictNone && (run.Harness == harness || run.Harness == "") {
-			hasRunning = true
-			break
-		}
-	}
-	if !hasRunning {
-		return false, nil
-	}
-	if hasReview && reviewRow.ReviewerHandleID != "" {
-		alive, err := e.launcher.Alive(ctx, reviewRow.ReviewerHandleID, reviewRow.ReviewerLaunchID)
-		if err != nil {
-			return false, err
-		}
-		if alive {
-			return false, nil
-		}
-	}
-	for _, h := range []domain.ReviewerHarness{harness, ""} {
-		// Legacy rows predate per-harness runs and belong to whichever reviewer
-		// is current, so they go with it.
-		if _, err := e.store.CancelRunningReviewRunsBySessionAndHarness(ctx, workerID, h, "cancelled because reviewer terminal is unavailable"); err != nil {
-			return false, err
-		}
-	}
-	return true, nil
 }
 
 func reviewLaunchSpec(
@@ -1473,7 +1490,7 @@ func replaceReviewLatestRun(reviews []PRReviewState, prURL, targetSHA string, ru
 	for i := range reviews {
 		if reviews[i].PRURL == prURL && reviews[i].TargetSHA == targetSHA {
 			reviews[i].LatestRun = &run
-			if run.Status == domain.ReviewRunRunning {
+			if run.Status.IsActive() {
 				reviews[i].Status = ReviewStateRunning
 			}
 			break
@@ -1520,6 +1537,11 @@ func (e *Engine) List(ctx stdctx.Context, workerID domain.SessionID) (SessionRev
 }
 
 func (e *Engine) listLocked(ctx stdctx.Context, workerID domain.SessionID, selectedHarness domain.ReviewerHarness) (SessionReviews, error) {
+	// List never repairs state itself. It lets the run lifecycle settle this
+	// session first so a poll never shows a run the next tick would end.
+	if _, err := e.evaluateSessionLocked(ctx, workerID); err != nil {
+		return SessionReviews{}, err
+	}
 	runs, err := e.store.ListReviewRunsBySession(ctx, workerID)
 	if err != nil {
 		return SessionReviews{}, err
@@ -1537,14 +1559,6 @@ func (e *Engine) listLocked(ctx stdctx.Context, workerID domain.SessionID, selec
 		reviewRow = review
 		reviewerHarness = review.Harness
 	}
-	if changed, err := e.reconcileExitedReviewer(ctx, &reviewRow, runs); err != nil {
-		return SessionReviews{}, err
-	} else if changed {
-		runs, err = e.store.ListReviewRunsBySession(ctx, workerID)
-		if err != nil {
-			return SessionReviews{}, err
-		}
-	}
 	reviewRows, err := e.store.ListReviewsBySession(ctx, workerID)
 	if err != nil {
 		return SessionReviews{}, err
@@ -1557,16 +1571,6 @@ func (e *Engine) listLocked(ctx stdctx.Context, workerID domain.SessionID, selec
 		other := reviewRows[i]
 		if other.ID == reviewRow.ID {
 			continue
-		}
-		// Other reviewers can be running alongside the selected one; a pane that
-		// died mid-pass must fail its runs the same way the selected one does.
-		if changed, err := e.reconcileExitedReviewer(ctx, &other, runs); err != nil {
-			return SessionReviews{}, err
-		} else if changed {
-			runs, err = e.store.ListReviewRunsBySession(ctx, workerID)
-			if err != nil {
-				return SessionReviews{}, err
-			}
 		}
 		if reviewerRowActive(other, runs) {
 			active = append(active, reviewerSurface(other))
@@ -1597,54 +1601,11 @@ func reviewerRowActive(review domain.Review, runs []domain.ReviewRun) bool {
 		return true
 	}
 	for _, run := range runs {
-		if run.ReviewID == review.ID && run.Status == domain.ReviewRunRunning {
+		if run.ReviewID == review.ID && run.Status.IsActive() {
 			return true
 		}
 	}
 	return false
-}
-
-const reviewerExitedBeforeSubmission = "reviewer process exited before submitting a result"
-
-// reconcileExitedReviewer converts a definitively dead active reviewer into
-// durable failed-run facts. Probe errors are intentionally ignored: an unknown
-// runtime state is not proof that the reviewer exited.
-func (e *Engine) reconcileExitedReviewer(ctx stdctx.Context, review *domain.Review, runs []domain.ReviewRun) (bool, error) {
-	if review.ID == "" || review.ReviewerHandleID == "" || review.ReviewerActivityState != domain.ActivityActive {
-		return false, nil
-	}
-	hasRunning := false
-	for _, run := range runs {
-		if run.ReviewID == review.ID && run.Status == domain.ReviewRunRunning {
-			hasRunning = true
-			break
-		}
-	}
-	if !hasRunning {
-		return false, nil
-	}
-	alive, err := e.launcher.Alive(ctx, review.ReviewerHandleID, review.ReviewerLaunchID)
-	if err != nil {
-		// An unavailable probe is unknown, not evidence that the reviewer died.
-		alive = true
-	}
-	if alive {
-		return false, nil
-	}
-	for _, run := range runs {
-		if run.ReviewID != review.ID || run.Status != domain.ReviewRunRunning {
-			continue
-		}
-		if _, err := e.store.UpdateReviewRunResult(ctx, run.ID, domain.ReviewRunFailed, domain.VerdictNone, reviewerExitedBeforeSubmission, "", run.AutoInjectReview); err != nil {
-			return false, err
-		}
-	}
-	review.ReviewerActivityState = domain.ActivityExited
-	review.UpdatedAt = e.clock()
-	if err := e.store.UpsertReview(ctx, *review); err != nil {
-		return false, err
-	}
-	return true, nil
 }
 
 func reviewerSurface(review domain.Review) domain.ReviewerSurface {
@@ -1668,8 +1629,11 @@ func legacyReviewerHandle(review domain.Review) string {
 	return review.ReviewerHandleID
 }
 
-// Cancel interrupts the live reviewer pane for a worker and marks running
-// review runs as cancelled so they no longer block a fresh trigger.
+// Cancel asks every reviewer working for a worker to stop. Runs that never
+// reached a reviewer are cancelled at once; the rest move to cancelling and
+// become cancelled once the stop is confirmed, inline when it already is,
+// otherwise by the next reaper pass (which force-kills a reviewer that ignores
+// the interrupt for longer than its cancel timeout).
 func (e *Engine) Cancel(ctx stdctx.Context, workerID domain.SessionID) (CancelResult, error) {
 	if workerID == "" {
 		return CancelResult{}, fmt.Errorf("%w: worker session id is required", ErrInvalid)
@@ -1688,9 +1652,15 @@ func (e *Engine) Cancel(ctx stdctx.Context, workerID domain.SessionID) (CancelRe
 	if err != nil {
 		return CancelResult{}, err
 	}
-	running, err := e.store.ListRunningReviewRunsBySession(ctx, workerID)
+	active, err := e.store.ListActiveReviewRunsBySession(ctx, workerID)
 	if err != nil {
 		return CancelResult{}, err
+	}
+	running := make([]domain.ReviewRun, 0, len(active))
+	for _, run := range active {
+		if reviewRunInFlight(run.Status) {
+			running = append(running, run)
+		}
 	}
 	if len(running) == 0 {
 		review, ok, err := e.currentReviewForSession(ctx, workerID, harness)
@@ -1718,46 +1688,53 @@ func (e *Engine) Cancel(ctx stdctx.Context, workerID domain.SessionID) (CancelRe
 	if err != nil {
 		return CancelResult{}, err
 	}
-	if len(reviewers) == 0 {
-		return CancelResult{}, fmt.Errorf("%w: reviewer for worker session %q", ErrNotFound, workerID)
-	}
-	cancelledHarness := make(map[domain.ReviewerHarness]bool, len(reviewers))
+	now := e.clock()
+	interrupted := make(map[domain.ReviewerHarness]domain.Review, len(reviewers))
 	for _, review := range reviewers {
 		if err := e.launcher.Cancel(ctx, review.ReviewerHandleID, review.Harness); err != nil {
 			alive, aliveErr := e.launcher.Alive(ctx, review.ReviewerHandleID, review.ReviewerLaunchID)
-			if aliveErr != nil {
-				return CancelResult{}, err
-			}
-			if alive {
+			if aliveErr != nil || alive {
 				return CancelResult{}, err
 			}
 		}
-		if _, err := e.store.CancelRunningReviewRunsBySessionAndHarness(ctx, workerID, review.Harness, "cancelled by user"); err != nil {
-			return CancelResult{}, err
-		}
-		cancelledHarness[review.Harness] = true
+		interrupted[review.Harness] = review
 	}
-	primary := reviewers[0]
-	// Legacy rows have no harness; they belong to the reported reviewer.
-	hasLegacy := false
+	primaryHandle := ""
+	if len(reviewers) > 0 {
+		primaryHandle = reviewers[0].ReviewerHandleID
+	}
 	for _, run := range running {
-		hasLegacy = hasLegacy || run.Harness == ""
-	}
-	if hasLegacy {
-		if _, err := e.store.CancelRunningReviewRunsBySessionAndHarness(ctx, workerID, "", "cancelled by user"); err != nil {
+		review, hasReviewer := interrupted[run.Harness]
+		if run.Harness == "" && len(reviewers) > 0 {
+			// Legacy rows have no harness; they belong to the reported reviewer.
+			review, hasReviewer = reviewers[0], true
+		}
+		if run.Status == domain.ReviewRunQueued || !hasReviewer {
+			// Nothing was started for this pass, so there is nothing to stop.
+			if _, err := e.transitionRun(ctx, run, []domain.ReviewRunStatus{run.Status}, domain.ReviewRunCancelled, domain.ReviewRunPatch{CancelledBy: domain.ReviewCancelledByUser, EndedAt: &now}); err != nil {
+				return CancelResult{}, err
+			}
+			continue
+		}
+		moved, err := e.transitionRun(ctx, run, []domain.ReviewRunStatus{domain.ReviewRunLaunching, domain.ReviewRunRunning}, domain.ReviewRunCancelling, domain.ReviewRunPatch{CancelledBy: domain.ReviewCancelledByUser, CancelRequestedAt: &now})
+		if err != nil {
 			return CancelResult{}, err
+		}
+		if moved && e.cancelConfirmed(ctx, review) {
+			if _, err := e.transitionRun(ctx, run, []domain.ReviewRunStatus{domain.ReviewRunCancelling}, domain.ReviewRunCancelled, domain.ReviewRunPatch{EndedAt: &now}); err != nil {
+				return CancelResult{}, err
+			}
 		}
 	}
 	cancelled := make([]domain.ReviewRun, 0, len(running))
 	for _, run := range running {
-		if run.Harness != "" && !cancelledHarness[run.Harness] {
-			continue
+		current, ok, err := e.store.GetReviewRun(ctx, run.ID)
+		if err != nil {
+			return CancelResult{}, err
 		}
-		run.Status = domain.ReviewRunCancelled
-		run.Verdict = domain.VerdictNone
-		run.Body = "cancelled by user"
-		run.GithubReviewID = ""
-		cancelled = append(cancelled, run)
+		if ok && (current.Status == domain.ReviewRunCancelling || current.Status == domain.ReviewRunCancelled) {
+			cancelled = append(cancelled, current)
+		}
 	}
 	prs, err := e.prs.ListPRsBySession(ctx, workerID)
 	if err != nil {
@@ -1767,7 +1744,18 @@ func (e *Engine) Cancel(ctx stdctx.Context, workerID domain.SessionID) (CancelRe
 	if err != nil {
 		return CancelResult{}, err
 	}
-	return CancelResult{ReviewerHandleID: primary.ReviewerHandleID, Reviews: Plan(prs, runs), CancelledRuns: cancelled}, nil
+	return CancelResult{ReviewerHandleID: primaryHandle, Reviews: Plan(prs, runs), CancelledRuns: cancelled}, nil
+}
+
+// cancelConfirmed reports whether an interrupted reviewer has already
+// stopped. A Chat interrupt settles its turn before returning; a terminal
+// reviewer is stopped once its process is definitively gone.
+func (e *Engine) cancelConfirmed(ctx stdctx.Context, review domain.Review) bool {
+	if review.InterfaceMode == domain.ReviewerInterfaceChat {
+		return true
+	}
+	alive, err := e.launcher.Alive(ctx, review.ReviewerHandleID, review.ReviewerLaunchID)
+	return err == nil && !alive
 }
 
 // runningReviewersForCancel returns every reviewer row with a live handle that
@@ -1843,20 +1831,21 @@ func (e *Engine) currentReviewForSession(ctx stdctx.Context, workerID domain.Ses
 }
 
 // TerminateReviewer destroys the live reviewer pane for a worker and cancels
-// any running review runs. Unlike Cancel, this does not ask the reviewer
+// any active review runs. Unlike Cancel, this does not ask the reviewer
 // adapter for a graceful interrupt sequence: worker termination/restore must
-// remove the terminal pane itself.
-func (e *Engine) TerminateReviewer(ctx stdctx.Context, workerID domain.SessionID, body string) (TerminateResult, error) {
-	return e.terminateReviewer(ctx, workerID, body, false)
+// remove the terminal pane itself. reason is logged; the runs record
+// worker_lifecycle as who cancelled them.
+func (e *Engine) TerminateReviewer(ctx stdctx.Context, workerID domain.SessionID, reason string) (TerminateResult, error) {
+	return e.terminateReviewer(ctx, workerID, reason, false)
 }
 
 // ArchiveReviewer retires all reviewer surfaces but retains conversations and results.
 func (e *Engine) ArchiveReviewer(ctx stdctx.Context, workerID domain.SessionID) error {
-	_, err := e.terminateReviewer(ctx, workerID, "cancelled because reviewer was archived", true)
+	_, err := e.terminateReviewer(ctx, workerID, "reviewer archived", true)
 	return err
 }
 
-func (e *Engine) terminateReviewer(ctx stdctx.Context, workerID domain.SessionID, body string, archive bool) (TerminateResult, error) {
+func (e *Engine) terminateReviewer(ctx stdctx.Context, workerID domain.SessionID, reason string, archive bool) (TerminateResult, error) {
 	if workerID == "" {
 		return TerminateResult{}, fmt.Errorf("%w: worker session id is required", ErrInvalid)
 	}
@@ -1869,7 +1858,7 @@ func (e *Engine) terminateReviewer(ctx stdctx.Context, workerID domain.SessionID
 	if err != nil {
 		return TerminateResult{}, err
 	}
-	running, err := e.store.ListRunningReviewRunsBySession(ctx, workerID)
+	active, err := e.store.ListActiveReviewRunsBySession(ctx, workerID)
 	if err != nil {
 		return TerminateResult{}, err
 	}
@@ -1893,10 +1882,15 @@ func (e *Engine) terminateReviewer(ctx stdctx.Context, workerID domain.SessionID
 			return TerminateResult{}, err
 		}
 	}
-	if body == "" {
-		body = "cancelled by worker session lifecycle"
+	by := domain.ReviewCancelledByWorkerLifecycle
+	if archive {
+		by = domain.ReviewCancelledByUser
 	}
-	if _, err := e.store.CancelRunningReviewRunsBySession(ctx, workerID, body); err != nil {
+	if len(active) > 0 {
+		slog.Default().InfoContext(ctx, "review runs cancelled with their reviewer", "session", workerID, "runs", len(active), "reason", reason)
+	}
+	// Destroy returned, so the stop is confirmed and the runs end cancelled.
+	if err := e.endReviewerRuns(ctx, workerID, nil, endAsCancelled(by)); err != nil {
 		return TerminateResult{}, err
 	}
 	if archive {
@@ -1905,12 +1899,10 @@ func (e *Engine) terminateReviewer(ctx stdctx.Context, workerID domain.SessionID
 		}
 		return TerminateResult{}, nil
 	}
-	cancelled := make([]domain.ReviewRun, 0, len(running))
-	for _, run := range running {
+	cancelled := make([]domain.ReviewRun, 0, len(active))
+	for _, run := range active {
 		run.Status = domain.ReviewRunCancelled
-		run.Verdict = domain.VerdictNone
-		run.Body = body
-		run.GithubReviewID = ""
+		run.CancelledBy = by
 		cancelled = append(cancelled, run)
 	}
 	return TerminateResult{ReviewerHandleID: destroyedHandle, CancelledRuns: cancelled}, nil

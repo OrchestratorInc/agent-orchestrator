@@ -120,8 +120,8 @@ import type { MessageKey } from "../i18n";
 import { usesPreviewWorkspaceData as usePreviewData } from "../lib/preview-mode";
 import {
 	openReviewStatesFor,
-	reviewHasLiveActivity,
 	reviewIsRunning,
+	reviewPhase,
 	reviewRunDisabled,
 	reviewSessionRunAction,
 	sessionReviewsQueryOptions,
@@ -1861,7 +1861,7 @@ function LocalReviewsSection({
 	const reviewerOwnerKey = sessionUiKey(session.id, hostId);
 	const openReviewStates = openReviewStatesFor(session, reviewsQuery.data?.reviews ?? []);
 	const reviewHeads = openReviewStates.map((review) => `${review.prUrl}@${review.targetSha}`).sort().join("\n");
-	const currentHeadReviewed = openReviewStates.some((review) => review.latestRun?.targetSha === review.targetSha && (review.latestRun.status === "complete" || review.latestRun.status === "delivered"));
+	const currentHeadReviewed = openReviewStates.some((review) => review.latestRun?.targetSha === review.targetSha && review.latestRun.status === "completed");
 	useEffect(() => {
 		setRerunConfirmation((current) => current && (current.ownerKey !== reviewerOwnerKey || current.heads !== reviewHeads) ? null : current);
 	}, [reviewerOwnerKey, reviewHeads]);
@@ -2284,11 +2284,22 @@ function cloudReviewRun(run: CloudCpAOReviewRun, harness: string): ReviewRunFact
 		prUrl: run.pullRequestUrl,
 		reviewId: run.reviewId,
 		sessionId: run.sessionId,
-		status: run.status,
+		status: cloudReviewRunStatus(run.status),
 		targetSha: run.targetSha,
 		triggerSource: run.triggerSource,
 		verdict: run.verdict,
 	};
+}
+
+/** AO Cloud keeps its original run vocabulary; read it as the daemon's states. */
+function cloudReviewRunStatus(status: CloudCpAOReviewRun["status"]): ReviewRunFacts["status"] {
+	switch (status) {
+		case "complete":
+		case "delivered":
+			return "completed";
+		default:
+			return status;
+	}
 }
 
 function cloudReviewsToLocal(
@@ -2852,17 +2863,13 @@ function ReviewPanel({
 	onCloudInstallHarness?: () => void;
 }) {
 	const { t } = useTranslation();
-	// A failed run stores its reason in body. Show it for manual triggers too:
-	// the trigger request itself only returns a generic "Review operation failed".
+	// The daemon records why a run failed as a code for diagnostics; people see
+	// one generic message with a retry, for manual triggers too.
 	const latestFailure = reviewStates
 		.map((review) => review.latestRun)
 		.filter(
 			(run): run is ReviewRunFacts =>
-				Boolean(
-					run?.status === "failed" &&
-						run.body?.trim() &&
-						(run.triggerSource !== "auto" || autoReviewEnabled),
-				),
+				Boolean(run?.status === "failed" && (run.triggerSource !== "auto" || autoReviewEnabled)),
 		)
 		.sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
 	const [dismissedFailureId, setDismissedFailureId] = useState<string | null>(null);
@@ -2897,7 +2904,7 @@ function ReviewPanel({
 	const hasReviewerSession = reviewerHandleId.trim() !== "" ||
 		Boolean(reviewerSurface?.mode === "chat" && reviewerSurface.reviewId);
 	const reviewRunning = reviewIsRunning(openReviewStates);
-	const reviewLive = reviewHasLiveActivity(openReviewStates, reviewerActivityState, hasReviewerSession);
+	const phase = reviewPhase(openReviewStates, reviewerActivityState);
 	const reviewHasRun = reviewRunning || Boolean(latest);
 	const runAction = reviewSessionRunAction(openReviewStates, isTriggering);
 	const runDisabled = isKilling || isSwitchingReviewer || (cloud && !cloudReviewerReady) || reviewRunDisabled(openReviewStates, isTriggering);
@@ -2920,10 +2927,26 @@ function ReviewPanel({
 				{reviewFailure ? (
 					<p className="m-0 rounded-md border border-error/28 bg-error/8 px-2.5 py-2 text-xs leading-normal text-error" role="status">
 						<span className="font-semibold">
-							{reviewFailure.triggerSource === "auto" ? t("inspector.autoReview") : t("pr.section.review")}{" "}
-							{t("inspector.review.failed")}:
+							{reviewFailure.triggerSource === "auto" ? t("inspector.autoReview") : t("pr.section.review")}:
 						</span>{" "}
-						{reviewFailure.body.trim()}
+						{t("inspector.review.failedRetry")}
+						{readOnly ? null : (
+							<>
+								{" "}
+								<Button
+									className="h-auto p-0 text-xs"
+									disabled={runDisabled || autoReviewEnabled || reviewRunning}
+									onClick={() => {
+										setDismissedFailureId(reviewFailure.id);
+										onTrigger();
+									}}
+									size="xs"
+									variant="link"
+								>
+									{t("inspector.review.retry")}
+								</Button>
+							</>
+						)}
 					</p>
 				) : null}
 				{notice ? (
@@ -3076,13 +3099,17 @@ function ReviewPanel({
 					</div>
 				</div>
 				)}
-				{reviewLive ? (
+				{phase ? (
 					<div className="flex items-center gap-2 border-t border-border pt-3">
 						<Loader2 aria-hidden="true" className="size-icon-sm shrink-0 animate-spin text-muted-foreground" />
 						<span className="min-w-0 flex-1 truncate text-xs font-medium text-muted-foreground">
-							{isCancelling
+							{isCancelling || phase === "stopping"
 								? t("inspector.review.cancelling")
-								: `Review in progress · ${agentLabel(activeReviewerHarness)}`}
+								: phase === "starting"
+									? t("inspector.review.starting")
+									: phase === "waiting_input"
+										? `${t("inspector.review.waitingForInput")} · ${agentLabel(activeReviewerHarness)}`
+										: `${t("inspector.review.reviewing")} · ${agentLabel(activeReviewerHarness)}`}
 						</span>
 					</div>
 				) : null}
@@ -3113,7 +3140,7 @@ function githubVerdict(verdict: string, t: TFunction): { label: string; tone: "n
 function runsByPRFrom(openReviewStates: PRReviewState[], runs: ReviewRunFacts[]): Map<string, ReviewRunFacts[]> {
 	const byPR = new Map<string, ReviewRunFacts[]>();
 	for (const run of runs.filter(
-		(run) => (run.status === "complete" || run.status === "delivered") && Boolean(run.body?.trim()),
+		(run) => run.status === "completed" && Boolean(run.body?.trim()),
 	)) {
 		byPR.set(run.prUrl, [...(byPR.get(run.prUrl) ?? []), run]);
 	}
@@ -3122,7 +3149,7 @@ function runsByPRFrom(openReviewStates: PRReviewState[], runs: ReviewRunFacts[])
 			const fallback = [state.latestRun, state.previousRun].filter(
 				(run): run is ReviewRunFacts =>
 					Boolean(run) &&
-					(run!.status === "complete" || run!.status === "delivered") &&
+					run!.status === "completed" &&
 					Boolean(run!.body?.trim()),
 			);
 			if (fallback.length > 0) byPR.set(state.prUrl, fallback);
@@ -3152,7 +3179,8 @@ function aoReviewMeta(reviewState: PRReviewState): string {
 		reviewState.status === "needs_review" &&
 		(!reviewState.latestRun ||
 			reviewState.latestRun.status === "failed" ||
-			reviewState.latestRun.status === "cancelled")
+			reviewState.latestRun.status === "cancelled" ||
+			reviewState.latestRun.status === "superseded")
 	) {
 		return appI18n.t("inspector.latestCommitNotReviewedMeta", { number: reviewState.prNumber });
 	}
@@ -3185,6 +3213,16 @@ function reviewVerdict(reviewState: PRReviewState): {
 	}
 	if (reviewState.latestRun?.status === "cancelled") {
 		return { label: appI18n.t("inspector.review.cancelled"), tone: "neutral" };
+	}
+	if (reviewState.latestRun?.status === "superseded") {
+		return { label: appI18n.t("inspector.review.superseded"), tone: "neutral" };
+	}
+	switch (reviewState.latestRun?.status) {
+		case "queued":
+		case "launching":
+			return { label: appI18n.t("inspector.review.starting"), tone: "running" };
+		case "cancelling":
+			return { label: appI18n.t("inspector.review.cancelling"), tone: "running" };
 	}
 	switch (reviewState.status) {
 		case "running":

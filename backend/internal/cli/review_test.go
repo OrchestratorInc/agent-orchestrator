@@ -521,6 +521,32 @@ func TestReviewListGetsReviews(t *testing.T) {
 	}
 }
 
+// ao review ls names the latest pass's state and, for a failed pass, the
+// daemon's reason code, so a person can tell why it ended.
+func TestReviewListShowsRunStateAndFailureReason(t *testing.T) {
+	cfg := setReviewEnv(t)
+	srv, _ := reviewServer(t, http.StatusOK, `{
+		"reviewerHandleId":"handle-1",
+		"reviews":[
+			{"prUrl":"https://github.com/example/repo/pull/42","prNumber":42,"title":"Fix session resume","targetSha":"abc123","status":"needs_review",
+			 "latestRun":{"id":"run-1","reviewId":"review-1","status":"failed","failureReason":"turn_ended_without_submit"}},
+			{"prUrl":"https://github.com/example/repo/pull/43","prNumber":43,"title":"Add retries","targetSha":"def456","status":"running",
+			 "latestRun":{"id":"run-2","reviewId":"review-1","status":"launching"}}
+		]
+	}`)
+	writeRunFileFor(t, cfg, srv)
+
+	out, errOut, err := executeCLI(t, aliveDeps(), "review", "ls", "mer-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v\nstderr=%s", err, errOut)
+	}
+	for _, want := range []string{"RUN", "failed (turn_ended_without_submit)", "launching"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("stdout = %q, want %q", out, want)
+		}
+	}
+}
+
 func TestReviewListJSONPreservesResponse(t *testing.T) {
 	cfg := setReviewEnv(t)
 	srv, _ := reviewServer(t, http.StatusOK, `{

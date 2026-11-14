@@ -23020,10 +23020,42 @@ components:
           type: string
         body:
           type: string
+        cancelRequestedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        cancelledBy:
+          enum:
+          - user
+          - worker_lifecycle
+          type: string
         createdAt:
           format: date-time
           type: string
         deliveredAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        endedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        failureReason:
+          enum:
+          - preflight_failed
+          - launch_failed
+          - never_started
+          - exited_during_launch
+          - turn_ended_without_submit
+          - process_exited
+          - timed_out
+          - daemon_restarted
+          - cancel_unconfirmed
+          type: string
+        firstActivityAt:
           format: date-time
           type:
           - "null"
@@ -23034,13 +23066,32 @@ components:
           type: string
         id:
           type: string
+        launchingAt:
+          format: date-time
+          type:
+          - "null"
+          - string
         prUrl:
           type: string
         reviewId:
           type: string
         sessionId:
           type: string
+        startedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
         status:
+          enum:
+          - queued
+          - launching
+          - running
+          - cancelling
+          - completed
+          - failed
+          - cancelled
+          - superseded
           type: string
         targetSha:
           type: string

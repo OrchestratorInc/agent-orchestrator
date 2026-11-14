@@ -52,6 +52,8 @@ type fakeReviewService struct {
 
 func (*fakeReviewService) RecoverChatReviewers(context.Context) error { return nil }
 
+func (*fakeReviewService) ReviewerObserver() ports.ReviewerObserver { return nil }
+
 func (f *fakeReviewService) runTrigger(
 	_ context.Context,
 	_ domain.SessionID,
