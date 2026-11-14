@@ -942,7 +942,7 @@ function formatDecisionDuration(ms: number): string {
 
 /**
  * The step rows' icon column (ACTIVITY_SUMMARY_BUTTON_CLASS: a 12px icon at the
- * turn's edge, then a 6px gap). The live row, its setup checklist and their marks
+ * turn's edge, then an 8px gap). The live row, its setup checklist and their marks
  * use the same box, so a mark sits on the step icons' left edge and the label
  * starts where the step labels do. The lattice is 13px across, a pixel wider than
  * the slot: it starts at the slot's left edge and overhangs into the gap. Centred,
@@ -1486,7 +1486,7 @@ export function LiveResponseStatus({ entranceKey, startedAt, startupLabel, faile
 	// The mark takes the step rows' icon slot and gap (STEP_MARK_SLOT_CLASS), so the
 	// dots sit on the step icons' left edge and the label starts where theirs do: a
 	// step that moves up from here into its own row keeps both edges.
-	const rowClass = "-mx-1 flex h-7 select-none items-center gap-1.5 px-1 py-0";
+	const rowClass = "-mx-1 flex h-7 select-none items-center gap-2 px-1 py-0";
 	const row = (
 		<>
 			<span aria-hidden="true" className={STEP_MARK_SLOT_CLASS}>
@@ -1574,7 +1574,7 @@ export function LiveResponseStatus({ entranceKey, startedAt, startupLabel, faile
 			</AnimatePresence>
 			{reconnect?.detail && !startupLabel ? (
 				<p
-					className="truncate pl-4.5 text-xs leading-5 text-muted-foreground"
+					className="truncate pl-5 text-xs leading-5 text-muted-foreground"
 					title={reconnect.detail}
 					data-testid="live-turn-status"
 				>
