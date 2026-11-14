@@ -2,13 +2,14 @@
 
 import { msg } from "@lingui/core/macro";
 import { useLingui } from "@lingui/react";
-import { buttonVariants } from "fumadocs-ui/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "fumadocs-ui/components/ui/popover";
 import { Check, ChevronDown, Copy, ExternalLink } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { COMPANY } from "@/lib/constants";
 
-const BUTTON = buttonVariants({ color: "secondary", size: "sm", className: "gap-2 [&_svg]:size-3.5" });
+// The marketing site's quiet secondary button.
+const BUTTON =
+  "inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1.5 text-xs font-medium text-foreground/80 transition-colors hover:bg-white/[0.08] hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fd-ring [&_svg]:size-3.5";
 const MENU_ITEM =
   "flex items-center gap-2 rounded-md px-2 py-1.5 text-sm text-fd-foreground hover:bg-fd-accent hover:text-fd-accent-foreground [&_svg]:size-3.5";
 
@@ -58,7 +59,7 @@ export function PageActions({ markdownPath, sourceUrl }: { markdownPath: string;
   ];
 
   return (
-    <div className="flex flex-wrap items-center gap-2 border-b pb-6">
+    <div className="flex flex-wrap items-center gap-2 border-b border-white/[0.08] pb-8">
       <button type="button" className={BUTTON} onClick={() => void copyMarkdown()}>
         {copied ? <Check /> : <Copy />}
         {copied ? i18n._(msg({ message: "Copied", context: "page actions" })) : i18n._(msg`Copy Markdown`)}

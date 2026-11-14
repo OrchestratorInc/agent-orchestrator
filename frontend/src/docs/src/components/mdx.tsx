@@ -3,6 +3,7 @@ import defaultMdxComponents from "fumadocs-ui/mdx";
 import { Children, cloneElement, isValidElement, type ComponentPropsWithoutRef, type ReactElement, type ReactNode } from "react";
 import type { MDXComponents } from "mdx/types";
 import type { CodeBlockProps } from "fumadocs-ui/components/codeblock";
+import { ArrowUpRight, ChevronDown, CircleAlert, Download, Info, TriangleAlert } from "lucide-react";
 import { LocalizedCodeBlock } from "./code-block";
 import { Tab, Tabs } from "./docs-tabs";
 
@@ -63,25 +64,34 @@ export function Logo({ name, size = 20, className }: { name: string; size?: numb
 
   return (
     <span aria-hidden="true" className={className} style={{ width: size, height: size }}>
-      <span className="grid size-full place-items-center rounded-sm bg-muted text-[0.6em] font-bold uppercase text-foreground">
+      <span className="grid size-full place-items-center rounded-md border border-white/10 bg-white/[0.06] text-[0.6em] font-medium uppercase text-foreground/80">
         {name.charAt(0)}
       </span>
     </span>
   );
 }
 
-const CALLOUT_TONE: Record<string, string> = {
-  info: "border-border bg-muted/35",
-  warn: "border-border bg-muted/35",
-  warning: "border-border bg-muted/35",
-  error: "border-border bg-muted/35",
+// One accent per meaning, drawn from the marketing site's sky blue for notes
+// and the usual amber and red for warnings and errors.
+const CALLOUT_TONE: Record<string, { icon: typeof Info; frame: string; mark: string }> = {
+  info: { icon: Info, frame: "border-sky-400/20 bg-sky-400/[0.05]", mark: "text-sky-300" },
+  warn: { icon: TriangleAlert, frame: "border-amber-400/25 bg-amber-400/[0.05]", mark: "text-amber-300" },
+  warning: { icon: TriangleAlert, frame: "border-amber-400/25 bg-amber-400/[0.05]", mark: "text-amber-300" },
+  error: { icon: CircleAlert, frame: "border-red-400/25 bg-red-400/[0.05]", mark: "text-red-300" },
 };
 
 export function Callout({ type = "info", title, children }: { type?: string; title?: ReactNode; children: ReactNode }) {
+  const tone = CALLOUT_TONE[type] ?? CALLOUT_TONE.info;
+  const Icon = tone.icon;
   return (
-    <div className={`my-6 rounded-xl border px-4 py-3 ${CALLOUT_TONE[type] ?? CALLOUT_TONE.info}`}>
-      {title && <div className="mb-1 text-sm font-semibold text-foreground">{title}</div>}
-      <div className="text-sm text-muted-foreground [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">{children}</div>
+    <div className={`not-prose my-6 flex gap-3 rounded-xl border px-4 py-3.5 ${tone.frame}`}>
+      <Icon aria-hidden="true" className={`mt-0.5 size-4 shrink-0 ${tone.mark}`} />
+      <div className="min-w-0 flex-1">
+        {title && <div className="mb-1 text-sm font-medium text-foreground">{title}</div>}
+        <div className="docs-callout-body text-sm leading-relaxed text-foreground/70 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
+          {children}
+        </div>
+      </div>
     </div>
   );
 }
@@ -94,26 +104,28 @@ export function Accordions({ children, expandAll = false }: { children: ReactNod
       })
     : children;
 
-  return <div className="my-6 overflow-hidden rounded-xl border border-border bg-muted/30">{items}</div>;
+  return (
+    <div className="my-6 overflow-hidden rounded-xl border border-white/[0.08] bg-[oklch(0.175_0.006_257)]">{items}</div>
+  );
 }
 
 export function Accordion({ title, children, open = false }: { title: ReactNode; children: ReactNode; open?: boolean }) {
   return (
-    <details open={open} className="group border-b border-border/80 px-4 py-3 last:border-b-0">
-      <summary className="cursor-pointer list-none text-sm font-medium text-foreground marker:hidden">
-        {title}
+    <details open={open} className="group border-b border-white/[0.08] last:border-b-0">
+      <summary className="flex cursor-pointer list-none items-center gap-3 px-4 py-3.5 text-sm font-medium text-foreground transition-colors hover:bg-white/[0.03] [&::-webkit-details-marker]:hidden">
+        <span className="min-w-0 flex-1">{title}</span>
+        <ChevronDown
+          aria-hidden="true"
+          className="size-4 shrink-0 text-foreground/45 transition-transform group-open:rotate-180"
+        />
       </summary>
-      <div className="mt-3 text-sm text-muted-foreground [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">{children}</div>
+      <div className="px-4 pb-4 text-sm text-foreground/70 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">{children}</div>
     </details>
   );
 }
 
 export function Steps({ children }: { children: ReactNode }) {
-  return (
-    <div className="my-6 ml-3 border-l border-border/80 pl-6 [counter-reset:step] [&>*]:relative [&>*]:mb-6 [&>*]:before:absolute [&>*]:before:-left-[2.1rem] [&>*]:before:grid [&>*]:before:size-6 [&>*]:before:place-items-center [&>*]:before:rounded-full [&>*]:before:border [&>*]:before:border-border [&>*]:before:bg-background [&>*]:before:text-xs [&>*]:before:text-muted-foreground [&>*]:before:[counter-increment:step] [&>*]:before:[content:counter(step)]">
-      {children}
-    </div>
-  );
+  return <div className="docs-steps my-8">{children}</div>;
 }
 
 export function Step({ children }: { children: ReactNode }) {
@@ -121,7 +133,7 @@ export function Step({ children }: { children: ReactNode }) {
 }
 
 export function Cards({ children }: { children: ReactNode }) {
-  return <div className="my-6 grid gap-3 sm:grid-cols-2">{children}</div>;
+  return <div className="not-prose my-6 grid gap-3 sm:grid-cols-2">{children}</div>;
 }
 
 export function Card({
@@ -137,11 +149,20 @@ export function Card({
 }) {
   const body = (
     <>
-      <div className="text-sm font-semibold text-foreground">{title}</div>
-      <div className="mt-1 text-sm text-muted-foreground">{description ?? children}</div>
+      <span className="flex items-start gap-3">
+        <span className="min-w-0 flex-1 text-[0.9375rem] font-medium text-foreground">{title}</span>
+        {href && (
+          <ArrowUpRight
+            aria-hidden="true"
+            className="mt-0.5 size-4 shrink-0 text-foreground/35 transition-[color,transform] group-hover:-translate-y-0.5 group-hover:translate-x-0.5 group-hover:text-foreground"
+          />
+        )}
+      </span>
+      <span className="mt-1.5 block text-sm leading-relaxed text-foreground/60">{description ?? children}</span>
     </>
   );
-  const cls = "block rounded-xl border border-border bg-muted/30 p-4 no-underline transition-colors hover:bg-muted/45";
+  const cls =
+    "group block rounded-xl border border-white/[0.08] bg-[oklch(0.175_0.006_257)] p-4 no-underline transition-colors hover:border-white/[0.16] hover:bg-white/[0.04]";
 
   return href ? (
     <Link href={href} className={cls}>
@@ -153,7 +174,7 @@ export function Card({
 }
 
 export function PluginGrid({ children }: { children: ReactNode }) {
-  return <div className="my-6 grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(260px,1fr))]">{children}</div>;
+  return <div className="not-prose my-6 grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(260px,1fr))]">{children}</div>;
 }
 
 export function PluginCard({
@@ -172,13 +193,13 @@ export function PluginCard({
   return (
     <Link
       href={href}
-      className="flex items-start gap-3.5 rounded-xl border border-border bg-muted/30 p-4 no-underline transition-colors hover:bg-muted/45"
+      className="flex items-start gap-3.5 rounded-xl border border-white/[0.08] bg-[oklch(0.175_0.006_257)] p-4 no-underline transition-colors hover:border-white/[0.16] hover:bg-white/[0.04]"
     >
-      <span className="grid size-9 shrink-0 place-items-center rounded-lg border border-border bg-background">
+      <span className="grid size-9 shrink-0 place-items-center rounded-lg border border-white/10 bg-black/40">
         <Logo name={logo} size={22} />
       </span>
       <span className="flex min-w-0 flex-col gap-1">
-        <span className="inline-flex items-center gap-2 text-[0.9375rem] font-semibold text-foreground">
+        <span className="inline-flex items-center gap-2 text-[0.9375rem] font-medium text-foreground">
           {name}
           {badge}
         </span>
@@ -197,20 +218,18 @@ const STATUS_LABEL: Record<Status, string> = {
 };
 
 const STATUS_DOT: Record<Status, string> = {
-  full: "bg-green-400",
+  full: "bg-sky-400",
   partial: "bg-amber-400",
   none: "bg-muted-foreground",
 };
 
 function PlatformCell({ platform, status }: { platform: "macos" | "linux" | "windows"; status: Status }) {
-  const logoName = platform === "macos" ? "apple" : platform;
   const title = platform === "macos" ? "macOS" : platform === "linux" ? "Linux" : "Windows";
 
   return (
-    <div className="flex min-w-0 flex-1 items-center gap-2 rounded-xl border border-border bg-muted/30 px-3 py-2.5">
-      <Logo name={logoName} size={18} />
-      <div className="flex min-w-0 flex-col">
-        <span className="text-[0.8125rem] font-semibold text-foreground">{title}</span>
+    <div className="flex min-w-0 flex-1 items-center rounded-xl border border-white/[0.08] bg-[oklch(0.175_0.006_257)] px-4 py-3">
+      <div className="flex min-w-0 flex-col gap-0.5">
+        <span className="text-[0.8125rem] font-medium text-foreground">{title}</span>
         <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
           <span className={`inline-block size-1.5 rounded-full ${STATUS_DOT[status]}`} />
           {STATUS_LABEL[status]}
@@ -232,7 +251,7 @@ export function PlatformSupport({
   note?: ReactNode;
 }) {
   return (
-    <div className="my-5">
+    <div className="not-prose my-6">
       <div className="flex flex-wrap gap-2">
         <PlatformCell platform="macos" status={macos} />
         <PlatformCell platform="linux" status={linux} />
@@ -253,30 +272,24 @@ export function InstallDownloads() {
   ];
 
   return (
-    <div style={{ marginBlock: "1.25rem", overflowX: "auto" }}>
-      <table>
-        <caption>Download the latest Orchestrator desktop release</caption>
-        <thead>
-          <tr><th scope="col">Platform</th><th scope="col">Download</th></tr>
-        </thead>
-        <tbody>
-          {downloads.map(({ platform, assets }) => (
-            <tr key={platform}>
-              <th scope="row">{platform}</th>
-              <td>
-                <div style={{ display: "flex", flexWrap: "wrap", columnGap: "0.4rem", rowGap: "0.25rem" }}>
-                  {assets.map(([label, asset], index) => (
-                    <span key={asset}>
-                      {index > 0 && <span aria-hidden="true"> · </span>}
-                      <a href={`${release}/${asset}`}>{label}</a>
-                    </span>
-                  ))}
-                </div>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+    <div role="group" aria-label="Download the latest Orchestrator desktop release" className="not-prose my-6 grid gap-3 sm:grid-cols-2">
+      {downloads.map(({ platform, assets }) => (
+        <div key={platform} className="rounded-xl border border-white/[0.08] bg-[oklch(0.175_0.006_257)] p-4">
+          <div className="text-sm font-medium text-foreground">{platform}</div>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {assets.map(([label, asset]) => (
+              <a
+                key={asset}
+                href={`${release}/${asset}`}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1.5 text-xs font-medium text-foreground/85 no-underline transition-colors hover:bg-white/[0.09] hover:text-foreground"
+              >
+                <Download aria-hidden="true" className="size-3.5 text-foreground/50" />
+                {label}
+              </a>
+            ))}
+          </div>
+        </div>
+      ))}
     </div>
   );
 }

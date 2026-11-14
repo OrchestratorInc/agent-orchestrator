@@ -46,7 +46,7 @@ export function articleRoute(locale: SupportedLocale) {
     return (
       <DocsPage toc={page.data.toc} full={page.data.full}>
         <LocalizedTitle source={page.data.title} />
-        <DocsTitle lang={locale}>{page.data.title}</DocsTitle>
+        <DocsTitle lang={locale} className="docs-title">{page.data.title}</DocsTitle>
         <DocsDescription lang={locale}>{page.data.description && visibleProductName(page.data.description)}</DocsDescription>
         {locale === DEFAULT_LOCALE && <EnglishArticleNotice />}
         {/* The Markdown copy is English, also for translated articles. */}
