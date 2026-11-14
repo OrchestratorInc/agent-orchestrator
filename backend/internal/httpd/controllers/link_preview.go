@@ -60,11 +60,12 @@ func (c *LinkPreviewController) preview(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	envelope.WriteJSON(w, http.StatusOK, LinkPreviewResponse{
-		URL:         p.URL,
-		Title:       p.Title,
-		Description: p.Description,
-		ImageURL:    p.ImageURL,
-		SiteName:    p.SiteName,
-		FaviconURL:  p.FaviconURL,
+		URL:            p.URL,
+		Title:          p.Title,
+		Description:    p.Description,
+		ImageURL:       p.ImageURL,
+		SiteName:       p.SiteName,
+		FaviconURL:     p.FaviconURL,
+		FaviconDarkURL: p.FaviconDarkURL,
 	})
 }

@@ -6,13 +6,13 @@ import { useUiStore } from "../../stores/ui-store";
 import { TooltipProvider } from "../ui/tooltip";
 import { AgentAccountsPanel, type CliLoginControls } from "./AgentAccountsSection";
 
-const { deleteMock, getMock, postMock, terminalState } = vi.hoisted(() => ({
-	deleteMock: vi.fn(), getMock: vi.fn(), postMock: vi.fn(),
+const { deleteMock, getMock, patchMock, postMock, terminalState } = vi.hoisted(() => ({
+	deleteMock: vi.fn(), getMock: vi.fn(), patchMock: vi.fn(), postMock: vi.fn(),
 	terminalState: { value: undefined as ((state: "attached" | "exited" | "error") => void) | undefined },
 }));
 
 vi.mock("../../lib/api-client", () => ({
-	apiClient: { DELETE: deleteMock, GET: getMock, POST: postMock },
+	apiClient: { DELETE: deleteMock, GET: getMock, PATCH: patchMock, POST: postMock },
 	apiErrorMessage: (error: unknown) => error instanceof Error ? error.message : "request failed",
 }));
 
@@ -265,4 +265,26 @@ it("says an API key is not a subscription sign-in and keeps the sign-in open", a
 	await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("This is an API key, not a subscription. Sign in with your subscription account."));
 	expect(screen.getByTestId("agent-account-login-terminal")).toBeInTheDocument();
 	expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+});
+
+it("turns the usage-limit handoff on through the daemon and shows what it stored", async () => {
+	const user = userEvent.setup();
+	let stored = false;
+	getMock.mockImplementation((path: string) => Promise.resolve({
+		data: path === "/api/v1/settings" ? { accountHandoff: stored }
+			: path === "/api/v1/agents/accounts/usage" ? { days: 30, usage: [] } : { accounts: [device, saved] },
+	}));
+	patchMock.mockReset().mockImplementation((_path: string, { body }: { body: { enabled: boolean } }) => {
+		stored = body.enabled;
+		return Promise.resolve({ data: { accountHandoff: stored } });
+	});
+	renderPanel();
+	const toggle = await screen.findByRole("switch", { name: "Move to another account at a usage limit" });
+	await waitFor(() => expect(toggle).toBeEnabled());
+	expect(toggle).not.toBeChecked();
+
+	await user.click(toggle);
+
+	expect(patchMock).toHaveBeenCalledWith("/api/v1/settings/account-handoff", { body: { enabled: true } });
+	await waitFor(() => expect(toggle).toBeChecked());
 });

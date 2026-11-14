@@ -71,7 +71,7 @@ vi.mock("expo-router", async () => {
 });
 vi.mock("expo-router/react-navigation", () => ({ useHeaderHeight: () => 0 }));
 vi.mock("react-native-keyboard-controller", async () => ({ KeyboardAvoidingView: await host("KeyboardAvoidingView") }));
-vi.mock("../api", () => ({ mobileReachablePreviewURL: () => undefined, restoreSession: vi.fn(), resumeSessionAgent: vi.fn() }));
+vi.mock("../api", () => ({ ApiError: class ApiError extends Error {}, apiRequest: vi.fn(() => new Promise(() => {})), mobileReachablePreviewURL: () => undefined, restoreSession: vi.fn(), resumeSessionAgent: vi.fn() }));
 vi.mock("../haptics", () => ({ haptics: { tap: vi.fn(), success: vi.fn(), warning: vi.fn(), error: vi.fn() } }));
 vi.mock("../openGitHub", () => ({ openGitHub: vi.fn() }));
 vi.mock("../InlineBanner", async () => ({ InlineBanner: await host("InlineBanner") }));
@@ -101,13 +101,21 @@ vi.mock("../ThemeProvider", () => {
 	const theme = new Proxy({}, { get: (_target, key) => `#${String(key)}` });
 	return { useTheme: () => theme, useThemedStyles: (factory: (value: unknown) => unknown) => factory(theme) };
 });
-vi.mock("./api", () => ({ getWorkspacePaths: vi.fn(), openSessionShell: vi.fn() }));
+vi.mock("./api", () => ({
+	getWorkspacePaths: vi.fn(),
+	openSessionShell: vi.fn(),
+	prewarmChatAgent: vi.fn(),
+	// The screen asks whether its turns can be forked.
+	getForkOptions: () => Promise.resolve({ allowed: false }),
+	forkSession: () => Promise.resolve(undefined),
+}));
 vi.mock("./requestDockModel", () => ({ requestDockModel: () => undefined }));
 vi.mock("./ChatComposer", async () => ({ ChatComposer: await host("ChatComposer") }));
 vi.mock("./KeyboardFollower", async () => ({ KeyboardFollower: await host("KeyboardFollower") }));
 vi.mock("./ChatMarkdown", async () => ({ ChatLinkProvider: await host("ChatLinkProvider") }));
 vi.mock("./ChatTimeline", async () => ({ ChatTimeline: await host("ChatTimeline") }));
 vi.mock("./McpServerNotice", async () => ({ McpServerNotice: await host("McpServerNotice") }));
+vi.mock("./ProviderSwitchMarker", async () => ({ ProviderSwitchLine: await host("ProviderSwitchLine") }));
 vi.mock("./useChatKeyboard", () => ({
 	useChatKeyboard: () => ({ keyboardVisible: false, rootStyle: {}, behavior: "padding", keyboardVerticalOffset: 0, composerLift: 0, restingInset: 0, dockRiseOverride: undefined }),
 }));
@@ -128,6 +136,7 @@ vi.mock("./conversationErrors", () => ({ conversationActionError: () => undefine
 vi.mock("./turnOptionsCatalog", () => ({ providerCatalogLive: () => false, turnOptionsLoadFor: () => undefined }));
 vi.mock("./types", () => ({ brokenMcpServers: () => [], can: () => false }));
 vi.mock("./useConversation", () => ({ useMobileConversation: () => fixtures.conversation }));
+vi.mock("./useAgentSwitchMenu", () => ({ useAgentSwitchMenu: () => undefined }));
 vi.mock("../useLastVerifiedConfig", () => ({ useLastVerifiedConfig: () => undefined }));
 vi.mock("./SessionStartup", async () => ({ SessionStartupStatus: await host("SessionStartupStatus") }));
 vi.mock("../session/sessionStartup", () => ({ sessionStartupView: () => undefined, startupVisible: () => false }));
@@ -234,6 +243,24 @@ describe("Chat while it switches to Terminal", () => {
 		expect(card().props).toMatchObject({ title: "Terminal UI is ready", ready: true, retryable: true });
 		await act(async () => (card().props.onRetry as () => void)());
 		expect(fixtures.refreshBoard).toHaveBeenCalledTimes(1);
+	});
+
+	it("takes its header title with it when the route swaps to Terminal", async () => {
+		fixtures.navigation.setOptions.mockClear();
+		fixtures.interfaceSwitch.transition = { id: "t-1", phase: "activating", targetMode: "tui" };
+		await mount();
+		fixtures.interfaceSwitch.transition = { id: "t-1", phase: "completed", targetMode: "tui" };
+		fixtures.conversation.snapshot.controller = { state: "stopped" };
+		await rerender();
+		// The stack merges each call into the route's options, and the route keeps
+		// them when it swaps Chat for Terminal, which sets only `title`. A
+		// `headerTitle` left behind outranks that title and froze the bar on the
+		// stopped Chat controller while the board said Idle (#8283).
+		const merged = () => Object.assign({}, ...fixtures.navigation.setOptions.mock.calls.map(([options]) => options as object)) as { headerTitle?: () => { props: { state?: string } } };
+		expect(merged().headerTitle?.().props.state).toBe("stopped");
+		await act(async () => renderer!.unmount());
+		renderer = undefined;
+		expect(merged().headerTitle).toBeUndefined();
 	});
 
 	it("shows the stopped controller as before for a switch that completed before this visit", async () => {

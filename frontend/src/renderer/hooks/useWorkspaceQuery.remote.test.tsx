@@ -317,15 +317,15 @@ it("keeps a removed local project out of a list fetched while its removal is in 
 	}
 });
 
-it("renames a remote Scratchpad when the language changes", async () => {
+it("renames a remote Sessions list when the language changes", async () => {
 	const { result } = renderCachedHost([{ id: "session-1", harness: "codex", status: "working", prs: [] }], []);
-	expect(result.current.data.map((project) => project.name)).toEqual(["Scratchpad"]);
+	expect(result.current.data.map((project) => project.name)).toEqual(["Sessions"]);
 	try {
 		await act(() => appI18n.changeLanguage("de"));
-		expect(result.current.data.map((project) => project.name)).toEqual(["Notizblock"]);
-		expect(result.current.data[0]?.sessions[0]?.workspaceName).toBe("Notizblock");
+		expect(result.current.data.map((project) => project.name)).toEqual(["Sitzungen"]);
+		expect(result.current.data[0]?.sessions[0]?.workspaceName).toBe("Sitzungen");
 	} finally {
 		await act(() => appI18n.changeLanguage("en"));
 	}
-	expect(result.current.data.map((project) => project.name)).toEqual(["Scratchpad"]);
+	expect(result.current.data.map((project) => project.name)).toEqual(["Sessions"]);
 });

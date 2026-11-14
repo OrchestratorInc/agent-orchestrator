@@ -1009,7 +1009,7 @@ func TestRunPostCreate(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		command = `echo %PROJECT_TOKEN%^|%AO_SOURCE_TREE_PATH%^|%AO_WORKTREE_PATH%> out.txt`
 	}
-	if err := runPostCreate(context.Background(), workspace, source, []string{command}, map[string]string{"PROJECT_TOKEN": "setup-value"}); err != nil {
+	if err := runPostCreate(context.Background(), workspace, source, []string{command}, map[string]string{"PROJECT_TOKEN": "setup-value"}, nil); err != nil {
 		t.Fatalf("runPostCreate: %v", err)
 	}
 	output, err := os.ReadFile(filepath.Join(workspace, "out.txt"))
@@ -1020,7 +1020,7 @@ func TestRunPostCreate(t *testing.T) {
 		t.Fatalf("post-create environment = %q", output)
 	}
 	// A failing command surfaces an error.
-	if err := runPostCreate(context.Background(), workspace, source, []string{"exit 3"}, nil); err == nil {
+	if err := runPostCreate(context.Background(), workspace, source, []string{"exit 3"}, nil, nil); err == nil {
 		t.Fatal("expected error from failing post-create command")
 	}
 }
@@ -1031,7 +1031,7 @@ func TestRunPostCreateReceivesAndRedactsProjectEnv(t *testing.T) {
 		command = `echo %PROJECT_TOKEN% && exit /b 3`
 	}
 	secret := "project-secret-123"
-	err := runPostCreate(context.Background(), t.TempDir(), t.TempDir(), []string{command}, map[string]string{"PROJECT_TOKEN": secret})
+	err := runPostCreate(context.Background(), t.TempDir(), t.TempDir(), []string{command}, map[string]string{"PROJECT_TOKEN": secret}, nil)
 	if err == nil || !strings.Contains(err.Error(), "[REDACTED]") || strings.Contains(err.Error(), secret) {
 		t.Fatalf("postCreate error did not redact project value: %v", err)
 	}
@@ -1066,7 +1066,7 @@ func TestRunPostCreateFailureSaysWhatFailedAndWhereToFixIt(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("sh-only step")
 	}
-	err := runPostCreate(t.Context(), t.TempDir(), t.TempDir(), []string{"true", "echo could not reach registry; exit 3"}, nil)
+	err := runPostCreate(t.Context(), t.TempDir(), t.TempDir(), []string{"true", "echo could not reach registry; exit 3"}, nil, nil)
 	want := "The project's Setup script failed at step 2 (exit status 3), so the agent did not start. " +
 		"Fix the script in Project settings > Scripts, then try again. Output: could not reach registry"
 	if err == nil || err.Error() != want {
@@ -1082,7 +1082,7 @@ func TestRunPostCreateStopsLaterStepsAfterCancellation(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
 	defer cancel()
-	err := runPostCreate(ctx, workspace, t.TempDir(), []string{"", command, "echo unexpected > later.txt"}, nil)
+	err := runPostCreate(ctx, workspace, t.TempDir(), []string{"", command, "echo unexpected > later.txt"}, nil, nil)
 	var setupErr *SetupStepError
 	if !errors.As(err, &setupErr) || setupErr.Step != 2 || setupErr.TimedOut {
 		t.Fatalf("cancellation error = %v", err)
@@ -1152,7 +1152,7 @@ func TestRunPostCreateUsesEachStepsTimeLimit(t *testing.T) {
 		write = "echo ran> out.txt"
 		slow = "ping -n 3 127.0.0.1 > NUL"
 	}
-	if err := runPostCreate(context.Background(), workspace, t.TempDir(), []string{"# ao-timeout: 30m\n" + write}, nil); err != nil {
+	if err := runPostCreate(context.Background(), workspace, t.TempDir(), []string{"# ao-timeout: 30m\n" + write}, nil, nil); err != nil {
 		t.Fatalf("a timed step failed: %v", err)
 	}
 	if output, err := os.ReadFile(filepath.Join(workspace, "out.txt")); err != nil || strings.TrimSpace(string(output)) != "ran" {
@@ -1160,12 +1160,12 @@ func TestRunPostCreateUsesEachStepsTimeLimit(t *testing.T) {
 	}
 	// One "minute" is 100ms here: the step stops at its own limit.
 	started := time.Now()
-	err := runPostCreate(context.Background(), workspace, t.TempDir(), []string{"# ao-timeout: 1m\n" + slow}, nil)
+	err := runPostCreate(context.Background(), workspace, t.TempDir(), []string{"# ao-timeout: 1m\n" + slow}, nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "The project's Setup script stopped at step 1 after 1 minute, so the agent did not start.") || time.Since(started) > 1500*time.Millisecond {
 		t.Fatalf("err = %v after %s, want the step stopped at its limit", err, time.Since(started))
 	}
 	// A long limit leaves the step running past the default one.
-	if err := runPostCreate(context.Background(), workspace, t.TempDir(), []string{"# ao-timeout: 30m\n" + slow}, nil); err != nil {
+	if err := runPostCreate(context.Background(), workspace, t.TempDir(), []string{"# ao-timeout: 30m\n" + slow}, nil, nil); err != nil {
 		t.Fatalf("a step under its own limit failed: %v", err)
 	}
 }

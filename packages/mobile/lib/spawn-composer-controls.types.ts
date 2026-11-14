@@ -48,6 +48,9 @@ export type SpawnComposerControlsProps = {
 	projects: readonly SpawnComposerOption[];
 	projectId: string | null;
 	onSelectProject: (projectId: string) => void;
+	accounts?: readonly SpawnComposerOption[];
+	accountId?: string;
+	onSelectAccount?: (accountId: string) => void;
 	agents: readonly SpawnComposerOption[];
 	harness: string;
 	onSelectHarness: (harness: string) => void;

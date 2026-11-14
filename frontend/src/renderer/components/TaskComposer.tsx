@@ -15,6 +15,7 @@ import { AGENT_OPTIONS, agentLabel } from "../lib/agent-options";
 import type { components } from "../../api/schema";
 import { apiClient, apiErrorCode, apiErrorMessage } from "../lib/api-client";
 import { clientForHost } from "../lib/host-clients";
+import { agentAccountProviderFor, type AgentAccountProvider } from "../hooks/useAgentAccounts";
 import { useConnectedHosts } from "../hooks/useHostConnection";
 import { useResetStaleProjectTuning } from "../hooks/useResetStaleProjectTuning";
 import { captureRendererEvent } from "../lib/telemetry";
@@ -37,7 +38,8 @@ import { useCloudOrg } from "../hooks/useCloudOrg";
 import { useCloudOrchestratorModel } from "../hooks/useCloudOrchestratorModel";
 import { useProviderConnections } from "../hooks/useProviderConnections";
 import { CLOUD_AGENT_PROVIDERS, cloudAgentInfos, connectedCredentialType, credentialModelScope } from "../lib/cloud-agents";
-import { createCloudSession } from "../lib/cloud-session-create";
+import { CloudTaskFilesNeedChatError, CloudTaskFilesUndeliveredError, createCloudChatSessionWithFiles, createCloudSession } from "../lib/cloud-session-create";
+import { uploadCloudAttachment } from "../lib/cloud-attachments";
 import { reportCloudSessionCreateRequested } from "../lib/cloud-telemetry";
 import { rememberStandaloneAgent } from "../lib/cloud-standalone-agents";
 import { cloudDefaultModel, cloudModelLabel, isConcreteModelID, isModelSelectable, modelChoiceLabel, splitClaudeModels, withoutLocalAvailability } from "../lib/agent-model-choices";
@@ -61,6 +63,7 @@ import {
 	revalidateAgentModels,
 } from "../hooks/useAgentModelsQuery";
 import { useModelCatalogAuthRecovery } from "../hooks/useModelCatalogAuthRecovery";
+import { sessionNameFromBrief } from "../lib/report-problem";
 import { useUiStore } from "../stores/ui-store";
 import { ModelCatalogNotice } from "./ModelCatalogNotice";
 import { CLOUD_STANDALONE_WORKSPACE_ID, STANDALONE_WORKSPACE_ID, toAgentProvider } from "../types/workspace";
@@ -90,6 +93,7 @@ type CreateTaskInput = {
 	effort?: string;
 	mode?: "chat" | "tui";
 	approvalMode?: ApprovalMode;
+	accountId?: string;
 	attachments?: FileAttachmentPayload[];
 	taskPreparation?: string;
 };
@@ -162,6 +166,7 @@ export type LaunchReplay = {
 	effort?: string;
 	approvalMode?: ApprovalMode;
 	mode?: "chat" | "tui";
+	accountId?: string;
 };
 
 /**
@@ -191,6 +196,8 @@ export function useTaskLaunch({ projectId, hostId }: {
 	const [status, setStatus] = useState<string | undefined>();
 	const [errorAction, setErrorAction] = useState<"install-agent" | "choose-branch" | undefined>();
 	const [branchOverride, setBranchOverride] = useState("");
+	const [accountPicks, setAccountPicks] = useState<Partial<Record<AgentAccountProvider, string>>>({});
+	useEffect(() => setAccountPicks({}), [hostId]);
 	const [branchDraft, setBranchDraft] = useState("");
 	useEffect(() => {
 		setBranchOverride("");
@@ -241,7 +248,24 @@ export function useTaskLaunch({ projectId, hostId }: {
 	const createCloudTask = useCallback(
 		async (input: CreateTaskInput): Promise<string> => {
 			try {
-				if (input.attachments?.length) throw new Error(t("newTask.cloudAttachmentsUnsupported", { defaultValue: "File attachments are not supported for cloud tasks yet." }));
+				const files = input.attachments ?? [];
+				// Files ride the first message of a Chat session (createCloudChatSessionWithFiles),
+				// on a control plane that takes them. A standalone agent starts without
+				// them: its own project comes with its session, and a start the files
+				// did not reach would leave that project behind.
+				// Both are final refusals (a code), so the page hands the task back to change.
+				if (files.length > 0 && (isCloudStandalone || cloudOffering.maxAttachmentBytes === undefined)) {
+					throw new TaskCreateError(t("newTask.cloudAttachmentsUnsupported", { defaultValue: "File attachments are not supported for cloud tasks yet." }), "CLOUD_ATTACHMENTS_UNSUPPORTED");
+				}
+				if (files.length > 0 && input.mode !== "chat") {
+					// No switch on the page picks the interface: an agent Cloud runs
+					// only in the terminal starts there, any other as the default
+					// session interface in Settings says.
+					throw new TaskCreateError(input.agent && !cloudOffering.chatHarnesses.includes(input.agent)
+						? t("newTask.cloudAttachmentsNeedChatAgent", { agent: agentLabel(input.agent), defaultValue: "Files can start a Cloud task only in Chat, which {{agent}} doesn't run in on Cloud. Choose another agent, or remove the files." })
+						: t("newTask.cloudAttachmentsNeedChatDefault", { defaultValue: "Files can start a Cloud task only in Chat. Set the default session interface to Chat in Settings > General, or remove the files." }),
+					"CLOUD_ATTACHMENTS_NEED_CHAT");
+				}
 				if (!cloudOrg?.id) throw new Error(t("newTask.unableToStart"));
 				// The agent is always the one the picker shows; with none there is nothing to start.
 				if (!input.agent) throw new Error(t("newTask.noReadyAgent"));
@@ -263,17 +287,23 @@ export function useTaskLaunch({ projectId, hostId }: {
 					...(input.approvalMode ? { approvalMode: input.approvalMode } : {}),
 				};
 				const createOptions = input.clientRequestId ? { idempotencyKey: input.clientRequestId } : undefined;
+				const orgId = cloudOrg.id;
 				let session;
 				if (isCloudStandalone) {
 					// The agent and its project come back together; its project joins
 					// the list now so the Scratchpad shows the agent at once.
 					reportCloudSessionCreateRequested({ kind: "worker", projectId: "" });
-					const created = await cloudClient.createStandaloneAgent(cloudOrg.id, body, createOptions);
-					seedCreatedStandaloneAgent(queryClient, cloudBaseUrl, cloudOrg.id, created.project);
+					const created = await cloudClient.createStandaloneAgent(orgId, body, createOptions);
+					seedCreatedStandaloneAgent(queryClient, cloudBaseUrl, orgId, created.project);
 					rememberStandaloneAgent(created.session.id, created.project.id);
 					session = created.session;
+				} else if (files.length > 0) {
+					({ session } = await createCloudChatSessionWithFiles(cloudClient, orgId,
+						{ projectId: input.projectId, kind: "worker", ...body, interfaceMode: "chat" }, files,
+						(sessionId, file, signal) => uploadCloudAttachment(cloudBaseUrl, orgId, sessionId, { name: file.name || "attachment", data: file.data }, { signal }),
+						{ idempotencyKey: input.clientRequestId }));
 				} else {
-					({ session } = await createCloudSession(cloudClient, cloudOrg.id, { projectId: input.projectId, kind: "worker", ...body }, createOptions));
+					({ session } = await createCloudSession(cloudClient, orgId, { projectId: input.projectId, kind: "worker", ...body }, createOptions));
 				}
 				// The session's Chat composer shows, and its turns keep, what the task
 				// was started with, as a local task's chat does.
@@ -301,10 +331,13 @@ export function useTaskLaunch({ projectId, hostId }: {
 				}
 				// The code drives the same fallbacks a local create error does ("Create as Terminal").
 				if (err instanceof CloudCpError) throw new TaskCreateError(err.message, err.code, undefined, err.status);
+				// A task with files that left nothing behind is refused as final, to send again.
+				if (err instanceof CloudTaskFilesNeedChatError) throw new TaskCreateError(t("newTask.cloudAttachmentsStartedInTerminal", { defaultValue: err.message }), err.code);
+				if (err instanceof CloudTaskFilesUndeliveredError) throw new TaskCreateError(err.message, err.code);
 				throw err instanceof Error ? err : new Error(t("newTask.unableToStart"));
 			}
 		},
-		[cloudBaseUrl, cloudClient, cloudOrg, cloudUserId, isCloudStandalone, queryClient, t],
+		[cloudBaseUrl, cloudClient, cloudOffering.chatHarnesses, cloudOffering.maxAttachmentBytes, cloudOrg, cloudUserId, isCloudStandalone, queryClient, t],
 	);
 
 	const createDaemonTask = useCallback(
@@ -322,6 +355,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 						...(input.effort !== undefined ? { effort: input.effort } : {}),
 						...(input.mode ? { mode: input.mode } : {}),
 						...(input.approvalMode ? { approvalMode: input.approvalMode } : {}),
+						...(input.accountId ? { accountId: input.accountId } : {}),
 						...(input.attachments && input.attachments.length > 0 ? { attachments: input.attachments } : {}),
 						...(input.taskPreparation ? { taskPreparation: input.taskPreparation } : {}),
 					},
@@ -359,7 +393,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 	const createStandaloneTask = useCallback(
 		async (input: CreateTaskInput): Promise<string> => {
 			try {
-			const displayName = input.brief.trim().slice(0, 100) || input.agent || "Standalone agent";
+			const displayName = sessionNameFromBrief(input.brief) || input.agent || "Standalone agent";
 			const { data, error } = await (hostId ? clientForHost(hostId) : apiClient).POST("/api/v1/sessions", {
 				headers: input.attachments?.length ? { "X-AO-Attachment-Upload": "1" } : undefined,
 				body: {
@@ -372,6 +406,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 					...(input.effort ? { effort: input.effort } : {}),
 					...(input.mode ? { mode: input.mode } : {}),
 					...(input.approvalMode ? { approvalMode: input.approvalMode } : {}),
+					...(input.accountId ? { accountId: input.accountId } : {}),
 					...(input.attachments && input.attachments.length > 0 ? { attachments: input.attachments } : {}),
 				},
 			});
@@ -489,6 +524,8 @@ export function useTaskLaunch({ projectId, hostId }: {
 	);
 	const defaultWorkerAgent = rememberedAgentIsAvailable ? rememberedAgent : configuredDefaultAgent;
 	const selectedAgent = agent || defaultWorkerAgent;
+	const accountProvider = agentAccountProviderFor(selectedAgent);
+	const accountId = accountProvider && !isCloudProject ? accountPicks[accountProvider] : undefined;
 	// The connection a cloud task with this agent runs on; its catalog follows it.
 	const selectedCloudConnection = isCloudProject
 		? cloudConnectionsQuery.data?.find(
@@ -1118,6 +1155,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 					effort: replay.effort,
 					mode: replay.mode ?? (isCloudProject ? settings?.defaultSessionMode : undefined),
 					approvalMode: replay.approvalMode,
+					accountId: replay.accountId,
 				} : {
 					agent: selectedAgent ? (selectedAgent as CreateTaskInput["agent"]) : undefined,
 					model: requestedModel,
@@ -1127,6 +1165,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 					// plane has none, so a cloud task carries it.
 					mode: interfaceMode ?? (isCloudProject ? settings?.defaultSessionMode : undefined),
 					approvalMode: requestedApproval ?? launchApproval,
+					accountId,
 				}),
 				attachments: attachmentPayloads.length > 0 ? attachmentPayloads : undefined,
 				taskPreparation: submittedPreparation || undefined,
@@ -1338,7 +1377,13 @@ export function useTaskLaunch({ projectId, hostId }: {
 			effort: requestedEffort,
 			approvalMode: launchApproval,
 			mode: submitMode,
+			accountId,
 		}),
+		account: accountProvider && !isCloudProject ? {
+			provider: accountProvider,
+			value: accountId,
+			choose: (id: string | undefined) => setAccountPicks((picks) => ({ ...picks, [accountProvider]: id })),
+		} : undefined,
 		// The interface a plain send starts in, including the Settings default.
 		effectiveInterface: (submitMode ?? settings?.defaultSessionMode ?? "tui") as "chat" | "tui",
 		refreshModels: refreshSelectedModels,

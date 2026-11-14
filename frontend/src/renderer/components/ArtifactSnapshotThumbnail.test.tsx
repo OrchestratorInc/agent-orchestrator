@@ -66,9 +66,9 @@ describe("ArtifactSnapshotThumbnail", () => {
 		miss(container);
 		expect(screen.getByTestId("live-thumbnail")).toBeTruthy();
 		scrollIntoView();
-		await act(() => vi.advanceTimersByTimeAsync(1_000));
+		await act(() => vi.advanceTimersByTimeAsync(300));
 		expect(mocks.request).not.toHaveBeenCalled();
-		await act(() => vi.advanceTimersByTimeAsync(1_000));
+		await act(() => vi.advanceTimersByTimeAsync(300));
 		expect(mocks.request).toHaveBeenCalledTimes(1);
 		expect(mocks.request.mock.calls[0]?.[0]).toMatchObject({ path: "new.md", theme: "dark" });
 		unmount();
@@ -81,7 +81,7 @@ describe("ArtifactSnapshotThumbnail", () => {
 		const { container } = render(<ArtifactSnapshotThumbnail row={row({ path: "passed.md" })} />);
 		miss(container);
 		scrollIntoView();
-		await act(() => vi.advanceTimersByTimeAsync(500));
+		await act(() => vi.advanceTimersByTimeAsync(300));
 		scrollIntoView(false);
 		await act(() => vi.advanceTimersByTimeAsync(5_000));
 		expect(mocks.request).not.toHaveBeenCalled();

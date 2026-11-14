@@ -3,7 +3,7 @@ import { ChevronLeft, ChevronRight, CircleArrowUp, LoaderCircle, TriangleAlert }
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../../../api/schema";
-import { agentAccountProviderFor, agentAccountsQueryKey, fetchAgentAccounts, followsSavedAccount } from "../../../hooks/useAgentAccounts";
+import { agentAccountProviderFor, agentAccountsQueryKeyFor, fetchAgentAccounts, followsSavedAccount } from "../../../hooks/useAgentAccounts";
 import { agentAuthPlansQueryKeyForHost, probeAgentAuth, useAgentAuthPlans, useStartAgentAuth } from "../../../hooks/useAgentAuth";
 import { agentModelsQueryOptions, invalidateAgentModelCatalogs, refreshAgentModels } from "../../../hooks/useAgentModelsQuery";
 import { CLOUD_VERSIONED_HARNESSES, describeCloudHarness, useCloudHarnessVersions } from "../../../hooks/useCloudHarnessVersions";
@@ -677,11 +677,11 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 	// changed, and returns whether the CLI is logged in by any method, an API
 	// key included.
 	const refreshCliLogin = useCallback(async (agentId: AgentId): Promise<boolean | undefined> => {
-		const provider = hostId ? null : agentAccountProviderFor(agentId);
+		const provider = agentAccountProviderFor(agentId);
 		if (!provider) return undefined;
-		const accounts = await fetchAgentAccounts(true).catch(() => undefined);
+		const accounts = await fetchAgentAccounts(true, hostId).catch(() => undefined);
 		if (!accounts) return undefined;
-		queryClient.setQueryData(agentAccountsQueryKey, accounts);
+		queryClient.setQueryData(agentAccountsQueryKeyFor(hostId), accounts);
 		return accounts.find((account) => account.provider === provider && account.device)?.loggedIn;
 	}, [hostId, queryClient]);
 

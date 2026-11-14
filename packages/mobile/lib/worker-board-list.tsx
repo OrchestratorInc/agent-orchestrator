@@ -29,6 +29,7 @@ import type { Theme } from "./theme";
 import { statusVisual } from "./theme";
 import { useTheme, useThemedStyles } from "./ThemeProvider";
 import { ListSectionHeader } from "./ui";
+import { MenuRowWidthScope, type MenuRowWidths } from "./useMenuRowWidth";
 import { ARCHIVE_CLOUD_SESSION_CONFIRM } from "./cloud/sessionMenu";
 import { isCloudHost } from "./cloud/mapping";
 import { ARCHIVE_SESSION_CONFIRM } from "./worker-action-model";
@@ -98,8 +99,16 @@ export const BOARD_LIST_WINDOW = { initialNumToRender: 12, maxToRenderPerBatch: 
  * does — same grouping, same ordering, same swipe and long-press actions —
  * rather than a second list that would drift from this one. Callers scope the
  * sessions; this owns how they are presented and acted on.
+ *
+ * Its rows share one width (see `MenuRowWidthScope`), so a row mounted in a
+ * later render batch is sized on its first frame. A screen that remounts the
+ * board passes `rowWidths` to keep that width across the remount.
  */
-export function WorkerBoardList({
+export function WorkerBoardList({ rowWidths, ...props }: ComponentProps<typeof WorkerBoard> & { rowWidths?: MenuRowWidths }) {
+	return <MenuRowWidthScope widths={rowWidths}><WorkerBoard {...props} /></MenuRowWidthScope>;
+}
+
+function WorkerBoard({
 	sessions,
 	query = "",
 	listRef,
