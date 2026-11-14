@@ -3,7 +3,6 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
-	"github.com/aoagents/agent-orchestrator/backend/internal/approval"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +13,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/approval"
 )
 
 type browserRequestCapture struct {
@@ -888,7 +889,7 @@ func TestMayWaitForApproval(t *testing.T) {
 // browser callers (batch steps, self-hosted browsers) use.
 func TestBrowserTimeoutsNest(t *testing.T) {
 	wait := approval.BrowserWaitTimeout
-	if !(wait < approval.BrowserCommandBudget && approval.BrowserCommandBudget < browserCommandTimeout) {
+	if wait >= approval.BrowserCommandBudget || approval.BrowserCommandBudget >= browserCommandTimeout {
 		t.Fatalf("approval wait %s, daemon budget %s, CLI browser timeout %s must increase", wait, approval.BrowserCommandBudget, browserCommandTimeout)
 	}
 	if wait >= commandTimeout || wait >= remoteBrowserTimeout {
