@@ -9,10 +9,12 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"testing/iotest"
 	"time"
+	"unicode/utf8"
 )
 
 // reviewCapture records the method/path/body of the request the CLI made.
@@ -521,6 +523,35 @@ func TestReviewListGetsReviews(t *testing.T) {
 	}
 }
 
+func TestReviewListShowsOnlyLatestFailedRunError(t *testing.T) {
+	cfg := setReviewEnv(t)
+	srv, _ := reviewServer(t, http.StatusOK, `{
+		"reviews":[
+			{"prNumber":42,"status":"needs_review","title":"Failed review",
+			 "latestRun":{"id":"failed","status":"failed","body":"invalid_request_error: model unavailable\nHTTP 400"}},
+			{"prNumber":43,"status":"up_to_date","title":"Completed review",
+			 "latestRun":{"id":"complete","status":"completed","body":"private completed review body"},
+			 "previousRun":{"id":"previous","status":"failed","body":"obsolete failure"}},
+			{"prNumber":44,"status":"running","title":"Running review"}
+		]
+	}`)
+	writeRunFileFor(t, cfg, srv)
+	out, errOut, err := executeCLI(t, aliveDeps(), "review", "ls", "mer-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v\nstderr=%s", err, errOut)
+	}
+	for _, want := range []string{`"invalid_request_error: model unavailable HTTP 400"`} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("stdout = %q, want %q", out, want)
+		}
+	}
+	for _, unwanted := range []string{"private completed review body", "obsolete failure", "\x1b"} {
+		if strings.Contains(out, unwanted) {
+			t.Fatalf("stdout contains unrelated body or terminal control: %q", out)
+		}
+	}
+}
+
 func TestReviewListJSONPreservesResponse(t *testing.T) {
 	cfg := setReviewEnv(t)
 	srv, _ := reviewServer(t, http.StatusOK, `{
@@ -734,5 +765,152 @@ func TestReviewListDefaultsToCallingSession(t *testing.T) {
 	}
 	if capture.path != "/api/v1/sessions/mer-3/reviews" {
 		t.Fatalf("path = %q, want the calling session", capture.path)
+	}
+}
+
+func TestReviewListSanitizesOlderDaemonFailures(t *testing.T) {
+	const raw = `{"status":400,"error":{"type":"invalid_request_error","message":"Model unavailable for this account"},"request":{"api_key":"synthetic-secret"},"diagnostics":"private-payload"}`
+	const embedded = `{"status":400,"error":{"type":"invalid_request_error","message":"Authorization: Bearer synthetic-embedded"}}`
+	const safeEmbedded = "HTTP 400: invalid_request_error: provider error details withheld"
+	const preserved = "Authorization: Bearer legitimate-review-content"
+	for _, jsonOutput := range []bool{false, true} {
+		name := "table"
+		if jsonOutput {
+			name = "json"
+		}
+		t.Run(name, func(t *testing.T) {
+			cfg := setReviewEnv(t)
+			response := listReviewsResponse{Reviews: []reviewState{
+				{PRNumber: 42, LatestRun: &reviewRun{Status: "failed", Body: raw}, PreviousRun: &reviewRun{Status: "failed", Body: raw}},
+				{PRNumber: 43, LatestRun: &reviewRun{Status: "completed", Body: preserved}},
+				{PRNumber: 44, LatestRun: &reviewRun{Status: "failed", Verdict: "approved", Body: preserved}},
+				{PRNumber: 45, LatestRun: &reviewRun{Status: "failed", GithubReviewID: "123", Body: preserved}},
+				{PRNumber: 46, LatestRun: &reviewRun{Status: "failed", Body: embedded}, PreviousRun: &reviewRun{Status: "failed", Body: embedded}},
+			}}
+			encoded, err := json.Marshal(response)
+			if err != nil {
+				t.Fatal(err)
+			}
+			srv, _ := reviewServer(t, http.StatusOK, string(encoded))
+			writeRunFileFor(t, cfg, srv)
+			args := []string{"review", "ls", "mer-1"}
+			if jsonOutput {
+				args = append(args, "--json")
+			}
+			out, errOut, err := executeCLI(t, aliveDeps(), args...)
+			if err != nil {
+				t.Fatalf("unexpected error: %v\nstderr=%s", err, errOut)
+			}
+			for _, want := range []string{"400", "invalid_request_error", "Model unavailable for this account", safeEmbedded} {
+				if !strings.Contains(out, want) {
+					t.Fatalf("stdout %q missing %q", out, want)
+				}
+			}
+			for _, unwanted := range []string{"synthetic-secret", "private-payload", "api_key", "diagnostics", "synthetic-embedded"} {
+				if strings.Contains(out, unwanted) {
+					t.Fatalf("stdout contains %q: %q", unwanted, out)
+				}
+			}
+			if jsonOutput {
+				var got listReviewsResponse
+				if err := json.Unmarshal([]byte(out), &got); err != nil {
+					t.Fatal(err)
+				}
+				if got.Reviews[0].PreviousRun.Body != got.Reviews[0].LatestRun.Body {
+					t.Fatal("historical failure was not sanitized consistently")
+				}
+				if got.Reviews[4].LatestRun.Body != safeEmbedded || got.Reviews[4].PreviousRun.Body != safeEmbedded {
+					t.Fatal("embedded credential not withheld consistently")
+				}
+				for _, review := range got.Reviews[1:4] {
+					if review.LatestRun.Body != preserved {
+						t.Fatal("completed/submitted review body changed")
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestReviewListPayloadDoesNotMutateInput(t *testing.T) {
+	const raw = `{"error":{"message":"Model unavailable"},"request":"synthetic-secret"}`
+	run := &reviewRun{Status: "failed", Body: raw}
+	input := listReviewsResponse{Reviews: []reviewState{{LatestRun: run, PreviousRun: run}}}
+	got := reviewListPayload(input)
+	if run.Body != raw || input.Reviews[0].LatestRun != run || input.Reviews[0].PreviousRun != run {
+		t.Fatal("sanitization mutated input")
+	}
+	if got.Reviews[0].LatestRun.Body == raw || got.Reviews[0].PreviousRun.Body == raw {
+		t.Fatal("failure was not sanitized")
+	}
+}
+
+func TestReviewListWithholdsUnsafeTerminalError(t *testing.T) {
+	cfg := setReviewEnv(t)
+	srv, _ := reviewServer(t, http.StatusOK, `{"reviews":[{"prNumber":42,"latestRun":{"status":"failed","body":"Model unavailable\u001b[31m"}}]}`)
+	writeRunFileFor(t, cfg, srv)
+	out, errOut, err := executeCLI(t, aliveDeps(), "review", "ls", "mer-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v\nstderr=%s", err, errOut)
+	}
+	if !strings.Contains(out, `"provider error details withheld"`) || strings.Contains(out, "\x1b") || strings.Contains(out, "[31m") {
+		t.Fatalf("unsafe terminal error output = %q", out)
+	}
+}
+
+func TestReviewListBoundsMalformedAndMultibyteFailures(t *testing.T) {
+	const fallback = "reviewer Chat turn ended without submitting a result"
+	for _, tc := range []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{"malformed", `{"message":"synthetic-sensitive`, fallback},
+		{"multibyte", strings.Repeat("模 ", 1000), strings.Repeat("模 ", 255) + "…"},
+		{"oversized multibyte", strings.Repeat("模 ", 5000), fallback},
+	} {
+		for _, jsonOutput := range []bool{false, true} {
+			mode := "table"
+			if jsonOutput {
+				mode = "json"
+			}
+			t.Run(tc.name+"/"+mode, func(t *testing.T) {
+				cfg := setReviewEnv(t)
+				run := &reviewRun{Status: "failed", Body: tc.raw}
+				response := listReviewsResponse{Reviews: []reviewState{{PRNumber: 42, LatestRun: run, PreviousRun: run}}}
+				encoded, err := json.Marshal(response)
+				if err != nil {
+					t.Fatal(err)
+				}
+				srv, _ := reviewServer(t, http.StatusOK, string(encoded))
+				writeRunFileFor(t, cfg, srv)
+				args := []string{"review", "ls", "mer-1"}
+				if jsonOutput {
+					args = append(args, "--json")
+				}
+				out, errOut, err := executeCLI(t, aliveDeps(), args...)
+				if err != nil {
+					t.Fatalf("unexpected error: %v; stderr=%s", err, errOut)
+				}
+				if !jsonOutput {
+					if !strings.Contains(out, strconv.Quote(tc.want)) || strings.Contains(out, "synthetic-sensitive") {
+						t.Fatal("table did not contain the bounded safe summary")
+					}
+					return
+				}
+				var got listReviewsResponse
+				if err := json.Unmarshal([]byte(out), &got); err != nil {
+					t.Fatal(err)
+				}
+				if len(got.Reviews) != 1 || got.Reviews[0].LatestRun == nil || got.Reviews[0].PreviousRun == nil {
+					t.Fatal("missing latest or previous run")
+				}
+				for _, actual := range []string{got.Reviews[0].LatestRun.Body, got.Reviews[0].PreviousRun.Body} {
+					if actual != tc.want || len(actual) > 1024 || !utf8.ValidString(actual) {
+						t.Fatalf("unsafe summary: bytes=%d valid=%v", len(actual), utf8.ValidString(actual))
+					}
+				}
+			})
+		}
 	}
 }
