@@ -75,7 +75,7 @@ raise SystemExit(1)' "$TAG" && return 0
   done; echo STILL_WORKING; }; f
 ```
 - A reply: relay it. Keep it faithful. Shorten only for a phone, and send a long reply as a file.
-- `STILL_WORKING`: tell the user the orchestrator is still on it, and offer: "I'll message you when it replies." On yes, create a routine that runs step 4 once every 5 minutes for that tag, reports the reply, then deletes itself.
+- `STILL_WORKING`: tell the user the orchestrator is still on it, and offer: "I'll message you when it replies." On yes: when memory says live events are on for that host, save the note "awaiting reply: <host>/<orchestrator id>"; its `finished` event brings the reply (ao-live). Otherwise create a routine that runs step 4 once every 5 minutes for that tag, reports the reply, then deletes itself.
 - The orchestrator asks the user something back: show it as a card if it gives clear options, and send the pick as a new message (step 3).
 
 ## 5. After

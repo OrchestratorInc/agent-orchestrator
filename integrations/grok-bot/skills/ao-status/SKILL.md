@@ -49,6 +49,7 @@ open(sys.argv[1],"a").writelines(i+"\n" for i in new)' "$SEEN"
 ```
 - `ready_to_merge` comes from the unresolved list, so a PR that was merged or changed since drops off. For "what's ready to merge", list these with the PR link, and offer the merge (ao-actions; needs the user's yes per PR).
 - `review_completed`, `review_changes_requested`, `pr_merged`, `pr_closed_unmerged` are news. The command prints only news this bot hasn't reported before, and records it as reported, so each item appears once, in a status reply or in the digest, whichever comes first. Mention each in one line. For "what's new again" or "show all news", run it without the seen list.
+- Live events on for that host (memory) already brought this news to chat: leave it out of status replies and the digest unless the user asks for news.
 - Never use `needs_input` notifications. They can outlive the wait (the session answered or exited); section 1 is the source for what's waiting.
 
 ## 3. One session in detail

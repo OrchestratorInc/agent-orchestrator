@@ -2,10 +2,14 @@
 name: ao-actions
 description: >-
   Direct actions on one Orchestrator session or PR: stop or interrupt, resume, merge a PR,
-  start a review, screenshot a session's browser, send a session's files, keep
-  a host awake, and recurring Orchestrator automations. Use for "stop <session>",
-  "merge <PR>", "review <session>'s PR", "show me what <session> built",
-  "keep the Mac awake tonight", "every night, ...".
+  start a review, screenshot a session's browser, send a session's files or
+  diff, rename, pin, switch model, retry a failed turn, resume after a usage
+  limit, search all chats, keep a host awake, and recurring Orchestrator
+  automations. Use for "stop <session>", "merge <PR>", "review <session>'s PR",
+  "show me what <session> built", "diff of <session>", "rename <session>",
+  "pin <session>", "switch <session> to <model>", "retry it", "resume after the
+  limit", "find where we talked about <words>", "keep the Mac awake tonight",
+  "every night, ...".
 ---
 Follow the ao-rules skill. Find the session first (ao-rules "AO hosts": `<host>/<session id>`). Run each action on the owner host from its `via` computer. "Yes" means the user's yes for that exact action in this chat.
 
@@ -22,10 +26,55 @@ Follow the ao-rules skill. Find the session first (ao-rules "AO hosts": `<host>/
 | Keep the host awake | see "Keep awake" | Yes | Local |
 | Recurring agent work | see "Automations" | Yes | Local |
 | Start one worker directly | `aoapi POST sessions '<json>'` with `projectId`, `displayName`, `prompt` | Yes | All |
+| Rename | `aoapi PATCH "sessions/<id>" "$(python3 -c 'import json,sys; print(json.dumps({"displayName":sys.argv[1]}))' '<name>')"` | No | All |
+| Pin, unpin | `aoapi POST "sessions/<id>/pin"`, `aoapi DELETE "sessions/<id>/pin"` | No | All |
+| Switch model or effort | see "Model" | Yes | All |
+| Retry a failed turn | `aoapi POST "sessions/<id>/conversation/turns/<turn id>/retry"` | Yes | All |
+| Resume when a usage limit resets | see "Usage limit" | Yes | All |
+| Search every chat | see "Search" | No | All |
+| A session's diff | see "Diff" | No | All |
 
 For an action marked Local on a remote host, ask that host's orchestrator to do it (ao-orchestrator).
 
 Start a worker directly only when the project has no orchestrator and the user doesn't want one (ao-rules "orchestrator first").
+
+## Model
+List what the session can use, then show the current pick and the choices as one card:
+```sh
+f(){ <aoapi helper>; aoapi GET "sessions/<id>/conversation/models" | python3 -c '
+import json,sys
+d=json.load(sys.stdin); print("now:", json.dumps(d.get("selected")))
+for m in d.get("models") or []: print(json.dumps(m)[:200])'; }; f
+```
+An empty list means the session doesn't offer a choice (a terminal session, for example): say so. On the pick and a yes, send only what changes:
+`aoapi PATCH "sessions/<id>/conversation/settings" "$(python3 -c 'import json,sys; print(json.dumps(json.loads(sys.argv[1])))' '{"model":"<model id>","reasoningEffort":"<effort>"}')"`
+It applies from the next turn. A `409` means a turn is running: say it will apply after it, or offer to interrupt first.
+
+## Usage limit
+A turn that hit a usage limit has `usageLimit` in `aoapi GET "sessions/<id>/conversation"` (`turns`, the last one with `state` `failed`). With `resetsAt` ahead, on yes: `aoapi PATCH "sessions/<id>/conversation/turns/<turn id>/auto-resume" '{"enabled":true}'`, and say when it continues. `{"enabled":false}` cancels it. With no `resetsAt`, Orchestrator can't schedule it: offer to retry later.
+
+## Search
+```sh
+f(){ <aoapi helper>; aoapi GET "conversations/search?query=$(python3 -c 'import sys,urllib.parse; print(urllib.parse.quote(sys.argv[1]))' '<words>')" | python3 -c '
+import json,sys
+for r in json.load(sys.stdin)["results"][:10]: print(r["sessionId"], (r.get("title") or "")[:50], "|", r["text"].replace("\x02","**").replace("\x03","**")[:200])'; }; f
+```
+Run it on every host. Give each hit as `<host>/<session>`, its title and the passage.
+
+## Diff
+```sh
+f(){ <aoapi helper>; S='<id>'; aoapi GET "sessions/$S/workspace/manifest" | python3 -c '
+import json,sys
+d=json.load(sys.stdin); s=d.get("summary") or {}; print("files=%s +%s -%s" % (s.get("files"),s.get("additions"),s.get("deletions")))
+for f in d.get("files") or []: print(f["status"], "+%s -%s" % (f.get("additions"),f.get("deletions")), f["path"])'; }; f
+```
+That is the summary. For the patch of some files (at most 100 paths), write it to a file and send it:
+```sh
+f(){ <aoapi helper>; mkdir -p ~/.ao-grok/out; aoapi POST "sessions/<id>/workspace/diffs" "$(python3 -c 'import json,sys; print(json.dumps({"scope":"combined","paths":sys.argv[1:]}))' '<path>' '<path>')" | python3 -c '
+import json,sys
+print("".join(g.get("patch") or "" for g in json.load(sys.stdin)["groups"]))' > ~/.ao-grok/out/<id>.diff && wc -l ~/.ao-grok/out/<id>.diff; }; f
+```
+Then CopyToBox and SendToUser. For a PR's diff instead, `gh pr diff <url>` on a computer where `gh` is signed in.
 
 ## Merge
 First show the PR and ask:
