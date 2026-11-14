@@ -160,6 +160,7 @@ export function HarnessAccountTab({ details, hostId, cloud, authWorkflowActive, 
 			onLogout,
 		}} /> : null}
 		{accountProvider && loginPanel ? <HarnessDetailGroup title={t("settings.harness.account")}>{loginPanel}</HarnessDetailGroup> : null}
+		{details.loginUnconfirmed && !authBusy ? <p className="-mt-3 text-xs text-settings-muted">{t("settings.harness.loginUnconfirmedHint")}</p> : null}
 		{authPlan?.action === "instructions" && authPlan.documentationUrl ? <div><Button type="button" size="sm" variant="secondary" onClick={() => void aoBridge.app.openExternal(authPlan.documentationUrl)}><BookOpen aria-hidden="true" />{t("settings.harness.instructions")}</Button></div> : null}
 		{rowAuthWorkflow ? <HarnessAuthTerminalPanel
 			workflow={rowAuthWorkflow}

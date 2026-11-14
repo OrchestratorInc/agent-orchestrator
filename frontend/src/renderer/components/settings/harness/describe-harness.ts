@@ -120,7 +120,12 @@ export function describeHarness(input: HarnessDescribeInput) {
 		&& ["provider_unsupported", "provider_inconclusive", "provider_unreachable", "probe_timeout", "probe_cancelled"].includes(step.code))
 		|| readinessAgent?.authentication.diagnostics?.some((step) => step.code === "model_selection_unresolved");
 	const renewsOnRun = authStatus === "configured" && Boolean(readinessAgent?.authentication.diagnostics?.some((step) => step.code === "token_renewal_pending"));
+	// The CLI reports a saved login it could not confirm with its provider
+	// (rejected, or the provider was unreachable). It stays signed in, with
+	// a caveat instead of a plain "Connected".
+	const loginUnconfirmed = authStatus === "authorized" && Boolean(readinessAgent?.authentication.diagnostics?.some((step) => step.code === "account_unconfirmed"));
 	const authSummary = renewsOnRun ? t("settings.harness.loggedIn")
+		: loginUnconfirmed ? t("settings.harness.loginUnconfirmed")
 		: authStatus === "configured" ? t(unverifiedProvider ? "settings.harness.health.authUnverified" : isSetupAction ? "settings.harness.configured" : "settings.harness.installed")
 		: authStatus === "authorized" ? t("settings.harness.loggedIn")
 		: authStatus === "not_applicable" || (!input.authPlansPending && (!authPlan || authPlan.action === "instructions")) ? t("settings.harness.installed")
@@ -158,7 +163,7 @@ export function describeHarness(input: HarnessDescribeInput) {
 	return {
 		agentId, plan, job, isInstalled, availableMethods, installMethod, methodId, maintenanceMethod, canUpdate, manualOnly, updateReason,
 		advisoryQuery, advisory, updateUnknown, updateAvailable, currentVersion, busy, failed, jobFailed, currentOperation, readinessAgent,
-		authPlan, authState, authStatus, authSummary, renewsOnRun, unverifiedProvider, accountDescription, rowAuthWorkflow, authBusy, needsLogin, showSetup, isSetupAction, isDocumentationAction, canRelogin,
+		authPlan, authState, authStatus, authSummary, renewsOnRun, loginUnconfirmed, unverifiedProvider, accountDescription, rowAuthWorkflow, authBusy, needsLogin, showSetup, isSetupAction, isDocumentationAction, canRelogin,
 		showUpdate, hasDiagnostics, installWarning, rowError, versionText, versionUnverified, updatedAt: input.updatedAt, progressLabel, installationPending, installNote, listTone, statusLabel,
 	};
 }

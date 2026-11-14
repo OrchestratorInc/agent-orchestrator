@@ -102,6 +102,9 @@ func NewAgentAuthDiagnostic(method, code string) AgentAuthDiagnostic {
 	case "model_selection_unresolved":
 		d.Reason = "Orchestrator could not resolve the configured or recent model from the harness's available models."
 		d.NextStep = "Select an available model in the harness, then check again."
+	case "account_unconfirmed":
+		d.Reason = "The CLI reported a saved login, but could not confirm the account with the provider. The provider may have rejected the saved login, or it could not be reached."
+		d.NextStep = "If updates or sessions fail with an authentication error, log out and log in again."
 	case "token_renewal_pending":
 		d.Reason = "Signed in. The stored access token has expired; the harness renews it with its refresh token the next time it runs, so no action is needed."
 	case "provider_accepted":

@@ -1489,6 +1489,12 @@ func (s *Service) runAgentOperation(parent context.Context, plan Plan, operation
 			strings.Contains(out.String(), "The existing installation was not changed.") {
 			message = fmt.Sprintf("Autohand could not start the downloaded CLI; the existing installation was not changed. Its startup check can time out on a busy machine. Let other updates finish, then retry. (%v)", runErr)
 		}
+		// Cursor's update service accepts anonymous requests but rejects a
+		// stale or revoked saved login, which `cursor-agent status` still
+		// reports as logged in. Without a stored login the update succeeds.
+		if plan.Target == TargetCursor && strings.Contains(out.String(), "[unauthenticated]") {
+			message = fmt.Sprintf("Cursor's update service rejected the CLI's saved login. Log out of Cursor, update, then log in again. (%v)", runErr)
+		}
 		s.finishAgentJob(job, StatusFailed, out.String(), message, "")
 		return
 	}

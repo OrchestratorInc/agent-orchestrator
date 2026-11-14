@@ -3008,6 +3008,8 @@
 	"settings.harness.instructions": "Instructions",
 	"settings.harness.interrupted": "Interrupted",
 	"settings.harness.loggedIn": "Connected",
+	"settings.harness.loginUnconfirmed": "登录未确认",
+	"settings.harness.loginUnconfirmedHint": "CLI 无法向服务提供方确认此登录。如果更新或会话因身份验证错误而失败，请退出登录后重新登录。",
 	"settings.harness.signedInAs": "已登录为 {{account}}",
 	"settings.harness.usingApiKey": "正在使用 API 密钥",
 	"settings.harness.signedInWithAccount": "已使用账户登录",

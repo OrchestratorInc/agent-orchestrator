@@ -756,6 +756,51 @@ func TestAutohandStartupFailureExplainsRecoveryWithoutClaimingSuccess(t *testing
 	}
 }
 
+func TestCursorRejectedLoginUpdateExplainsRecovery(t *testing.T) {
+	// The exact output of `cursor-agent update` when Cursor rejects the
+	// stored login (reproduced with 2026.04.16 and 2026.11.10 builds).
+	const rejected = "Checking for updates...\nError: Update failed: [unauthenticated] Error\n"
+	for _, tc := range []struct {
+		name     string
+		target   Target
+		output   string
+		wantHint bool
+	}{
+		{name: "rejected login", target: TargetCursor, output: rejected, wantHint: true},
+		{name: "other cursor failure", target: TargetCursor, output: "Checking for updates...\nError: Update failed: Download failed (curl exit 6)\n"},
+		{name: "other harness", target: TargetGrok, output: rejected},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newTestService("darwin", "sh")
+			t.Cleanup(s.stop)
+			s.commands = commandRunnerFunc(func(_ context.Context, _ []string, stdout, _ io.Writer) error {
+				_, _ = io.WriteString(stdout, tc.output)
+				return errors.New("exit status 1")
+			})
+			s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) {
+				t.Fatal("a failed update must not be verified")
+				return VerifyResult{}, nil
+			})
+			plan := Plan{Target: tc.target, Method: "official-installer", Command: []string{"/home/test/.local/bin/cursor-agent", "update"}}
+			job := &Job{Target: tc.target, Status: StatusInstalling}
+			s.jobs[tc.target] = job
+			s.runAgentOperation(t.Context(), plan, AgentOperationUpdate, job, nil)
+			if job.Status != StatusFailed || job.Output != tc.output {
+				t.Fatalf("job = %+v, want failure with original diagnostics", job)
+			}
+			if tc.wantHint {
+				for _, want := range []string{"rejected the CLI's saved login", "Log out of Cursor, update, then log in again", "exit status 1"} {
+					if !strings.Contains(job.Error, want) {
+						t.Fatalf("error = %q, want %q", job.Error, want)
+					}
+				}
+			} else if job.Error != "exit status 1" {
+				t.Fatalf("unrelated error was rewritten: %q", job.Error)
+			}
+		})
+	}
+}
+
 func TestAgentVendorScriptInstallPreservesPlanEnvironment(t *testing.T) {
 	s := newTestService("windows", "pwsh.exe")
 	captured := make(chan ports.InstallScriptCommand, 1)
