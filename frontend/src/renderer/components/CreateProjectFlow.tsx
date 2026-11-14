@@ -1111,7 +1111,7 @@ function isRepositorySetupRecoveryCode(code: string | undefined): code is "NOT_A
 }
 
 function sameProjectPath(left: string, right: string): boolean {
-	const normalize = (path: string) => path.trim().replace(/[\\/]+$/, "").replaceAll("\\", "/");
+	const normalize = (path: string) => path.replace(/[\\/]+$/, "").replaceAll("\\", "/");
 	return normalize(left) === normalize(right);
 }
 

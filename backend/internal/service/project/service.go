@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -1028,8 +1029,7 @@ func projectDisplayName(row domain.ProjectRecord) string {
 }
 
 func normalizePath(raw string) (string, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
+	if strings.TrimSpace(raw) == "" {
 		return "", apierr.Invalid("PATH_REQUIRED", "Repository path is required", nil)
 	}
 	if strings.HasPrefix(raw, "~") {
@@ -1131,6 +1131,10 @@ func hasGitMetadata(path string) bool {
 }
 
 func normalizeGitReportedPath(base, reported string) string {
+	reported = strings.TrimSuffix(reported, "\n")
+	if runtime.GOOS == "windows" {
+		reported = strings.TrimSuffix(reported, "\r")
+	}
 	if reported == "" {
 		return comparablePath(reported)
 	}
@@ -1174,7 +1178,7 @@ func isGitRepo(path string) bool {
 	if err != nil {
 		return false
 	}
-	top := normalizeGitReportedPath(path, strings.TrimSpace(string(out)))
+	top := normalizeGitReportedPath(path, string(out))
 	return samePath(top, comparablePath(path))
 }
 
