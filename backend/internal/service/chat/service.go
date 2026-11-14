@@ -406,6 +406,29 @@ func (s *Service) settleOrphanedWork(ctx context.Context, session domain.Session
 	}
 }
 
+// SettleAbandonedWork fails the work a controller that died without stopping
+// left open, so a chat can sleep without its next wake failing new messages.
+func (s *Service) SettleAbandonedWork(ctx context.Context, id domain.SessionID) error {
+	gate := s.controllerGate(domain.SessionConversationOwner(id))
+	if err := gate.lock(ctx); err != nil {
+		return err
+	}
+	defer gate.unlock()
+	if s.HasLiveChatController(id) {
+		return fmt.Errorf("settle abandoned work for %s: a controller is running", id)
+	}
+	conversation, err := s.store.ConversationForSession(ctx, id)
+	if err != nil {
+		return fmt.Errorf("settle abandoned work for %s: %w", id, err)
+	}
+	now := s.now()
+	return errors.Join(
+		s.store.SettleOrphanedTurns(ctx, id, now),
+		s.store.FailPendingApprovals(ctx, conversation.ID, now),
+		s.store.FailPendingInputs(ctx, conversation.ID, now),
+	)
+}
+
 // Start launches or resumes the Chat controller for a session.
 //
 // A resume that fails is reported as a failure rather than quietly becoming a new

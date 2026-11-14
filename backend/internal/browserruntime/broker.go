@@ -95,6 +95,7 @@ type Status struct {
 	// hello, for example the AO Chrome extension and its version.
 	Client        string
 	ClientVersion string
+	ClientPID     int
 	// Target is set by the session router: which browser the session uses.
 	Target string
 }
@@ -130,9 +131,10 @@ type wireMessage struct {
 	Type    string `json:"type"`
 	Version int    `json:"version,omitempty"`
 	Token   string `json:"token,omitempty"`
-	// Client and ClientVersion are optional hello metadata.
+	// Client, ClientVersion and PID are optional hello metadata.
 	Client        string                 `json:"client,omitempty"`
 	ClientVersion string                 `json:"clientVersion,omitempty"`
+	PID           int                    `json:"pid,omitempty"`
 	RequestID     string                 `json:"requestId,omitempty"`
 	SessionID     domain.SessionID       `json:"sessionId,omitempty"`
 	Action        string                 `json:"action,omitempty"`
@@ -163,6 +165,7 @@ type Broker struct {
 	transport         string
 	client            string
 	clientVersion     string
+	clientPID         int
 	verifyPeer        func(net.Conn) error
 	exclusive         bool
 	pongAt            time.Time
@@ -233,6 +236,7 @@ func (b *Broker) Status() Status {
 		Transport:     b.transport,
 		Client:        b.client,
 		ClientVersion: b.clientVersion,
+		ClientPID:     b.clientPID,
 	}
 }
 
@@ -376,6 +380,7 @@ func (b *Broker) serveConn(ctx context.Context, conn net.Conn) {
 	b.connectedAt = time.Now().UTC()
 	b.client = hello.Client
 	b.clientVersion = hello.ClientVersion
+	b.clientPID = hello.PID
 	b.signalConnectionChangedLocked()
 	pending := b.takePendingLocked()
 	// A v3 runtime is probed; v2 peers keep their connection but are never pinged.
@@ -600,6 +605,7 @@ func (b *Broker) disconnect(conn net.Conn, cause error) {
 	b.connectedAt = time.Time{}
 	b.client = ""
 	b.clientVersion = ""
+	b.clientPID = 0
 	b.signalConnectionChangedLocked()
 	pending := b.takePendingLocked()
 	b.mu.Unlock()

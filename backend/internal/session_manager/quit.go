@@ -4,9 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 // StopAgentsForQuit releases processes without terminating sessions or removing worktrees.
@@ -37,7 +40,12 @@ func (m *Manager) StopAgentsForQuit(ctx context.Context) error {
 					}
 				}
 			} else {
-				_, stopErr = m.ExitAgent(ctx, rec.ID)
+				_, stopErr = m.exitAgent(ctx, rec.ID, func(exited domain.SessionRecord) error {
+					if canSleepStoppedChat(exited) && m.settleAbandonedChatWork(ctx, exited.ID) {
+						return m.sleepStoppedChat(ctx, exited)
+					}
+					return nil
+				})
 				if errors.Is(stopErr, ErrAgentExited) {
 					stopErr = nil
 				}
@@ -54,4 +62,59 @@ func (m *Manager) StopAgentsForQuit(ctx context.Context) error {
 		failures = append(failures, err)
 	}
 	return errors.Join(failures...)
+}
+
+func canSleepStoppedChat(rec domain.SessionRecord) bool {
+	return domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat &&
+		rec.Kind != domain.KindOrchestrator &&
+		rec.ProvisionState.WithDefault() == domain.SessionProvisionReady &&
+		strings.TrimSpace(rec.Metadata.ProviderConversationID) != ""
+}
+
+func (m *Manager) sleepStoppedChat(ctx context.Context, rec domain.SessionRecord) (err error) {
+	store, ok := m.store.(interface {
+		SetSessionHibernated(context.Context, domain.SessionID, int64, *time.Time) (bool, error)
+	})
+	if !ok {
+		return fmt.Errorf("sleep chat %s: hibernation store unavailable", rec.ID)
+	}
+	if err := m.lcm.ApplyActivitySignal(ctx, rec.ID, ports.ActivitySignal{
+		Valid:                true,
+		State:                domain.ActivityIdle,
+		Event:                "chat.controller.stopped",
+		ControllerGeneration: strings.TrimSpace(rec.Metadata.ControllerGeneration),
+		Timestamp:            m.clock(),
+	}); err != nil {
+		return fmt.Errorf("sleep chat %s: %w", rec.ID, err)
+	}
+	defer func() {
+		if err != nil {
+			err = errors.Join(err, m.recordAgentExited(context.WithoutCancel(ctx), rec))
+		}
+	}()
+	for range 3 {
+		current, found, err := m.store.GetSession(ctx, rec.ID)
+		if err != nil || !found || current.IsTerminated || current.HibernatedAt != nil {
+			return err
+		}
+		at := m.clock()
+		if applied, err := store.SetSessionHibernated(ctx, rec.ID, current.Revision, &at); err != nil || applied {
+			return err
+		}
+	}
+	return fmt.Errorf("sleep chat %s: session changed concurrently", rec.ID)
+}
+
+func (m *Manager) settleAbandonedChatWork(ctx context.Context, id domain.SessionID) bool {
+	settler, ok := m.chat.(interface {
+		SettleAbandonedWork(context.Context, domain.SessionID) error
+	})
+	if !ok {
+		return false
+	}
+	if err := settler.SettleAbandonedWork(ctx, id); err != nil {
+		m.logger.Warn("chat stays stopped: could not settle the work its host left open", "sessionID", id, "error", err)
+		return false
+	}
+	return true
 }

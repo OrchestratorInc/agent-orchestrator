@@ -53,6 +53,7 @@ func snapshotKey(session any, snapshotID string) string {
 }
 
 func (s *Service) rememberSnapshot(session any, state map[string]any) {
+	s.rememberFrame(session, state)
 	id, _ := state["snapshot_id"].(string)
 	if id == "" || !has(state, "pid") || !has(state, "window_id") {
 		return
@@ -124,8 +125,13 @@ func (s *Service) observeAfter(ctx context.Context, binary string, saved *savedI
 	if session != nil {
 		read["session"] = session
 	}
-	screenshot := saved.nextPath(".png")
-	read["screenshot_out_file"] = screenshot
+	screenshot := ""
+	if include, set := arguments["include_screenshot"].(bool); set && !include {
+		read["include_screenshot"] = false
+	} else {
+		screenshot = saved.nextPath(".png")
+		read["screenshot_out_file"] = screenshot
+	}
 	// The session can end between the action and this read; revive it like Call.
 	stdout, stderr, err := s.callInSession(ctx, binary, "get_window_state", read)
 	if err != nil {

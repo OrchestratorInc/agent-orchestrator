@@ -929,6 +929,10 @@ func (c chatLauncher) StopChat(ctx context.Context, id domain.SessionID) error {
 	return c.svc.StopChat(ctx, id)
 }
 
+func (c chatLauncher) SettleAbandonedWork(ctx context.Context, id domain.SessionID) error {
+	return c.svc.SettleAbandonedWork(ctx, id)
+}
+
 // reviewPRRefresher lets a review trigger fetch a worker's PR fresh from the
 // provider through the session service's claim, which re-reads the PR and
 // records it on the session. Claiming a PR the session already owns only
