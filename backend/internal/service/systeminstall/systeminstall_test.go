@@ -599,6 +599,8 @@ func TestAgentInstallPersistsInstallVerifySuccessLifecycle(t *testing.T) {
 	s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) {
 		return VerifyResult{ResolvedPath: "/Users/test/.npm/bin/codex", Output: "codex 1.2.3\n"}, nil
 	})
+	succeeded := make(chan Target, 1)
+	s.SetOnSucceeded(func(target Target) { succeeded <- target })
 
 	job, err := s.StartAgent(context.Background(), TargetCodex, "npm")
 	if err != nil {
@@ -607,7 +609,7 @@ func TestAgentInstallPersistsInstallVerifySuccessLifecycle(t *testing.T) {
 	if job.Status != StatusInstalling || job.Method != "npm" {
 		t.Fatalf("initial job = %+v", job)
 	}
-	waitForStatus(t, s, TargetCodex, StatusSucceeded)
+	waitForPersistedSuccess(t, succeeded)
 
 	final, err := s.Status(context.Background(), TargetCodex)
 	if err != nil {
@@ -671,6 +673,8 @@ func TestAgentVendorScriptInstallPersistsInstallVerifySuccessLifecycle(t *testin
 	s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) {
 		return VerifyResult{ResolvedPath: "/home/test/.local/bin/agent", Output: "cursor 1.2.3\n"}, nil
 	})
+	succeeded := make(chan Target, 1)
+	s.SetOnSucceeded(func(target Target) { succeeded <- target })
 
 	job, err := s.StartAgent(context.Background(), TargetCursor, "official-installer")
 	if err != nil {
@@ -679,7 +683,7 @@ func TestAgentVendorScriptInstallPersistsInstallVerifySuccessLifecycle(t *testin
 	if job.Status != StatusInstalling || job.Method != "official-installer" {
 		t.Fatalf("initial job = %+v", job)
 	}
-	waitForStatus(t, s, TargetCursor, StatusSucceeded)
+	waitForPersistedSuccess(t, succeeded)
 	command := <-captured
 	if command.URL != "https://cursor.com/install" {
 		t.Fatalf("URL = %q", command.URL)
@@ -1419,6 +1423,18 @@ func waitForStatus(t *testing.T, s *Service, target Target, want Status) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for %s to reach status %q", target, want)
+}
+
+// waitForPersistedSuccess waits for the success callback, which runs only once
+// the succeeded state is in the job store; the in-memory job reports succeeded
+// before that write.
+func waitForPersistedSuccess(t *testing.T, succeeded <-chan Target) {
+	t.Helper()
+	select {
+	case <-succeeded:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for the persisted install success")
+	}
 }
 
 // A Linux package-manager plan must now carry the resolved argv even though it

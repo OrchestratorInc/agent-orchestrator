@@ -127,13 +127,16 @@ test("clicking chat whitespace and composer padding keeps the draft caret positi
 	await page.keyboard.type("X");
 	await expect(composer).toHaveText("abcdXef");
 
-	await composer.press("ArrowLeft");
-	await expect.poll(caretOffset).toBe(4);
+	// No arrow key here: Lexical skips the next selectionchange after it writes
+	// the DOM selection itself (the focus restore above), so a caret move sent
+	// before that event fires never reaches the editor's selection, and the
+	// next focus would restore the stale one.
+	await expect.poll(caretOffset).toBe(5);
 	await composer.locator("xpath=ancestor::form").click({ position: { x: 20, y: 6 } });
 	await expect(composer).toBeFocused();
-	await expect.poll(caretOffset).toBe(4);
+	await expect.poll(caretOffset).toBe(5);
 	await page.keyboard.type("Y");
-	await expect(composer).toHaveText("abcdYXef");
+	await expect(composer).toHaveText("abcdXYef");
 });
 
 test("typed chat composer text is visibly selected with a pointer drag @T0", async ({ page }) => {
