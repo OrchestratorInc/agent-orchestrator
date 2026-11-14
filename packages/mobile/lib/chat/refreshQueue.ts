@@ -36,8 +36,12 @@ export function createRefreshQueue(): RefreshQueue {
 
 	return {
 		run(task) {
-			if (!running || running.generation !== generation) return start(task);
+			// The queued run is checked first: once the running one settles there is
+			// a moment where `running` is already cleared but the queued run has not
+			// started yet. A caller that awaited the running one and asks again
+			// right away must join the queued run, not start a second one beside it.
 			if (queued && queued.generation === generation) return queued.done;
+			if (!running || running.generation !== generation) return start(task);
 			const mine = generation;
 			const done = running.done.catch(() => {}).then(() => {
 				if (queued?.done === done) queued = null;
