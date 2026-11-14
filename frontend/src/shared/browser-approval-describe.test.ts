@@ -59,6 +59,27 @@ describe("describeApprovalTarget", () => {
 		});
 	});
 
+	it("uses the submitter's formaction and formmethod over the form's", () => {
+		const doc = page(`
+			<form action="/search" method="get"><input type="password" name="pw"><button id="go" formaction="/account" formmethod="post">Continue</button></form>`);
+		const facts = describeApprovalTarget(doc, { mode: "element" }, doc.getElementById("go"));
+		expect(facts).toMatchObject({ formMethod: "post", formHasPassword: true, isSubmit: true });
+		expect(facts?.formAction).toContain("/account");
+	});
+
+	it("applies the default button's overrides to Enter in a field", () => {
+		const doc = page(`<form method="get"><input id="f"><button formmethod="post">Save changes</button></form>`);
+		(doc.getElementById("f") as HTMLInputElement).focus();
+		expect(describeApprovalTarget(doc, { mode: "focused" })).toMatchObject({ formMethod: "post", submitName: "Save changes", isSubmit: true });
+	});
+
+	it("counts fields that join the form from outside it", () => {
+		const doc = page(`<form id="pay" method="post"><button id="b">Continue</button></form><input form="pay" autocomplete="cc-number"><input form="pay" type="password">`);
+		expect(describeApprovalTarget(doc, { mode: "element" }, doc.getElementById("b"))).toMatchObject({
+			formHasPayment: true, formHasPassword: true,
+		});
+	});
+
 	it("returns null when nothing matches or nothing is focused", () => {
 		const doc = page(`<button>Other</button>`);
 		expect(describeApprovalTarget(doc, { mode: "match", role: "button", name: "Delete" })).toBeNull();

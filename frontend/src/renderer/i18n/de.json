@@ -4960,6 +4960,7 @@
 	"settings.approvals.logEmpty": "Noch keine geprüften Aktionen",
 	"settings.approvals.loadFailed": "Freigaben konnten nicht geladen werden: {{message}}",
 	"browser.approvals.label": "Vor dem Handeln fragen",
+	"approvals.category.script": "Seitenskript",
 	"settings.passwords": "Passwörter",
 	"settings.passwords.saved": "Gespeicherte Passwörter",
 	"settings.passwords.add": "Passwort hinzufügen",

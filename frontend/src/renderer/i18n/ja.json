@@ -4960,6 +4960,7 @@
 	"settings.approvals.logEmpty": "確認対象の操作はまだありません",
 	"settings.approvals.loadFailed": "承認を読み込めませんでした: {{message}}",
 	"browser.approvals.label": "操作前に確認",
+	"approvals.category.script": "ページスクリプト",
 	"settings.passwords": "パスワード",
 	"settings.passwords.saved": "保存済みパスワード",
 	"settings.passwords.add": "パスワードを追加",

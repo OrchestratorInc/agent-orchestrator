@@ -931,7 +931,10 @@ func Run(buildVersion string) (retErr error) {
 	// audit log live under the data dir.
 	var approvals controllers.ApprovalService
 	if gate, err := approval.Open(filepath.Join(cfg.DataDir, "approvals")); err != nil {
-		log.Error("browser approvals unavailable; consequential actions will not ask first", "err", err)
+		// Fail closed: without the gate, actions that may need approval are
+		// refused, never run unasked.
+		log.Error("browser approvals unavailable; consequential browser actions are refused until it loads", "err", err)
+		browserService.ApprovalsUnavailable(err)
 	} else {
 		browserService.UseApprovals(gate, 0)
 		approvals = gate

@@ -4,6 +4,7 @@ import { useContext, useState } from "react";
 import { useWorkspaceQuery } from "../../hooks/useWorkspaceQuery";
 import { decideApproval, usePendingApprovals, type ApprovalDecision, type PendingApproval } from "../../lib/approvals";
 import { useNavigateToSession } from "../../lib/navigate-to-session";
+import { useUiStore } from "../../stores/ui-store";
 import { ApprovalPrompt } from "./ApprovalPrompt";
 
 function useDecide(request: PendingApproval | undefined) {
@@ -48,9 +49,13 @@ export function SessionApprovalDock({ sessionId }: { sessionId: string }) {
 	);
 }
 
-/** The local session the window is showing, if any. */
+/**
+ * The local session the window is showing, if any. Global Settings hides the
+ * routed page without changing the route, so no session is showing then.
+ */
 function useRoutedLocalSessionId(): string | undefined {
-	return useRouterState({
+	const settingsOpen = useUiStore((state) => state.settingsModal?.scope === "global");
+	const routed = useRouterState({
 		select: (state) => {
 			for (const match of [...state.matches].reverse()) {
 				const params = match.params as { sessionId?: string; hostId?: string };
@@ -59,6 +64,7 @@ function useRoutedLocalSessionId(): string | undefined {
 			return undefined;
 		},
 	});
+	return settingsOpen ? undefined : routed;
 }
 
 /**

@@ -4940,6 +4940,7 @@
 	"settings.approvals.logEmpty": "No gated actions yet",
 	"settings.approvals.loadFailed": "Could not load approvals: {{message}}",
 	"browser.approvals.label": "Ask before acting",
+	"approvals.category.script": "Page script",
 	"settings.passwords": "Passwords",
 	"settings.passwords.saved": "Saved passwords",
 	"settings.passwords.add": "Add password",

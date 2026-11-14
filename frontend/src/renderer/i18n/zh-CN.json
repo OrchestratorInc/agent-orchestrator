@@ -4942,6 +4942,7 @@
 	"settings.approvals.logEmpty": "还没有受控操作",
 	"settings.approvals.loadFailed": "无法加载批准：{{message}}",
 	"browser.approvals.label": "操作前询问",
+	"approvals.category.script": "页面脚本",
 	"settings.passwords": "密码",
 	"settings.passwords.saved": "已保存的密码",
 	"settings.passwords.add": "添加密码",

@@ -4960,6 +4960,7 @@
 	"settings.approvals.logEmpty": "아직 확인한 작업이 없습니다",
 	"settings.approvals.loadFailed": "승인을 불러오지 못했습니다: {{message}}",
 	"browser.approvals.label": "작업 전에 묻기",
+	"approvals.category.script": "페이지 스크립트",
 	"settings.passwords": "비밀번호",
 	"settings.passwords.saved": "저장된 비밀번호",
 	"settings.passwords.add": "비밀번호 추가",

@@ -239,3 +239,63 @@ func TestGateDefaultModeAppliesToSessionsWithoutTheirOwn(t *testing.T) {
 		t.Fatal("bad default accepted")
 	}
 }
+
+func TestGatePolicyChangesAreAtomic(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	dir := t.TempDir()
+	g, _ := Open(dir)
+	out := requestAsync(g, sampleRequest())
+	id := waitPending(t, g).ID
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	if err := g.Decide(id, DecisionAllowSite); err == nil {
+		t.Fatal("allow-site saved into a read-only dir")
+	}
+	if rules := g.SiteRules(); len(rules) != 0 {
+		t.Fatalf("unsaved rule kept in memory: %+v", rules)
+	}
+	if err := g.SetSessionMode("s-1", ModeOff); err == nil || g.SessionMode("s-1") != ModeRisky {
+		t.Fatalf("unsaved session mode applied: err=%v mode=%s", err, g.SessionMode("s-1"))
+	}
+	if err := g.SetDefaultMode(ModeOff); err == nil || g.DefaultMode() != ModeRisky {
+		t.Fatalf("unsaved default mode applied: err=%v mode=%s", err, g.DefaultMode())
+	}
+	_ = os.Chmod(dir, 0o700)
+	_ = g.Decide(id, DecisionDeny)
+	<-out
+	// The failed allow-site left nothing behind: the next request asks again.
+	req := sampleRequest()
+	req.Timeout = 20 * time.Millisecond
+	if outcome, _ := g.Request(context.Background(), req); outcome.Decision != DecisionTimeout {
+		t.Fatalf("next request = %+v", outcome)
+	}
+}
+
+func TestGateRefusesWhenTheAuditLogCannotBeWritten(t *testing.T) {
+	dir := t.TempDir()
+	g, _ := Open(dir)
+	// A directory where the log file should be makes every append fail.
+	if err := os.Mkdir(filepath.Join(dir, "audit.jsonl"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	out := make(chan struct {
+		outcome Outcome
+		err     error
+	}, 1)
+	go func() {
+		outcome, err := g.Request(context.Background(), sampleRequest())
+		out <- struct {
+			outcome Outcome
+			err     error
+		}{outcome, err}
+	}()
+	_ = g.Decide(waitPending(t, g).ID, DecisionAllowOnce)
+	got := <-out
+	if got.err == nil || got.outcome.Allowed() {
+		t.Fatalf("allowed without an audit record: %+v %v", got.outcome, got.err)
+	}
+}

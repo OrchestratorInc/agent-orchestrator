@@ -5081,6 +5081,7 @@
 	"settings.approvals.logEmpty": "Nenhuma ação controlada ainda",
 	"settings.approvals.loadFailed": "Não foi possível carregar as aprovações: {{message}}",
 	"browser.approvals.label": "Perguntar antes de agir",
+	"approvals.category.script": "Script da página",
 	"settings.passwords": "Senhas",
 	"settings.passwords.saved": "Senhas salvas",
 	"settings.passwords.add": "Adicionar senha",

@@ -4629,11 +4629,23 @@ export function createBrowserViewHost(
               };
             };
             let inputWasDispatched = false;
+            // The daemon passes the ref the user approved; a page that moved
+            // the match to another element during the wait is refused.
+            const expectRef =
+              typeof args.expectRef === "string" && args.expectRef
+                ? args.expectRef.replace(/^@/, "")
+                : undefined;
             const performMatchedAction = async (
               candidate: ActCandidate,
               retried: boolean,
               beforeSnapshot: string,
             ) => {
+              if (expectRef && candidate.ref !== expectRef) {
+                throw browserError(
+                  "BROWSER_TARGET_CHANGED",
+                  "The page changed while the action waited for approval, so the approved element is no longer the one this instruction matches. Take a new snapshot and try again.",
+                );
+              }
               const actionEntry = activeEntry(session);
               const before = actionFacts(actionEntry);
               const generations = {
@@ -5067,6 +5079,14 @@ export function createBrowserViewHost(
                   : undefined,
               snapshot: async () => {
                 const result = await runNative("snapshot", { interactive: true });
+                // The facts below come from describeEntry; a snapshot of
+                // another tab must not be merged with them.
+                if (result.target.tabId !== describeEntry.tabId) {
+                  throw browserError(
+                    "BROWSER_TARGET_MISMATCH",
+                    "The active tab changed while describing the action",
+                  );
+                }
                 return { refs: result.refs };
               },
               page: {
