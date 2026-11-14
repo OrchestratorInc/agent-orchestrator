@@ -42,7 +42,11 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	}
 	statusCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	out, runErr := process.CommandContext(statusCtx, binary, "auth", "status").CombinedOutput()
+	// Run the check in the environment Stakpak sessions receive, so a key AO
+	// withholds from this harness cannot make it read as signed in.
+	cmd := process.CommandContext(statusCtx, binary, "auth", "status")
+	cmd.Env = authprobe.Environ(ctx, os.Environ())
+	out, runErr := cmd.CombinedOutput()
 	switch apiCheck(string(out)) {
 	case apiCheckPassed:
 		ports.RecordAuthEvidence(ctx, authprobe.FileSource(configPath()).WithMethod(domain.AgentAccountMethodAPIKey))
@@ -52,7 +56,8 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	case apiCheckSkipped, apiCheckNoCredentials:
 		// `auth status` reads stored credentials only, so "No credentials
 		// configured." still allows the environment keys Stakpak runs on.
-		return withEnvironmentKey(probeProviders(ctx, http.DefaultClient))
+		status, err := probeProviders(ctx, http.DefaultClient)
+		return withEnvironmentKey(ctx, status, err)
 	}
 	if runErr != nil {
 		return ports.AgentAuthStatusUnknown, fmt.Errorf("stakpak auth status: %w", runErr)
@@ -62,8 +67,8 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 
 // withEnvironmentKey keeps a STAKPAK_API_KEY, which Stakpak runs on but
 // `auth status` never reads, from reading as signed out. AO cannot verify it without the Stakpak API, so it is only configured.
-func withEnvironmentKey(status ports.AgentAuthStatus, err error) (ports.AgentAuthStatus, error) {
-	if status == ports.AgentAuthStatusUnauthorized && strings.TrimSpace(os.Getenv("STAKPAK_API_KEY")) != "" {
+func withEnvironmentKey(ctx context.Context, status ports.AgentAuthStatus, err error) (ports.AgentAuthStatus, error) {
+	if status == ports.AgentAuthStatusUnauthorized && strings.TrimSpace(authprobe.Getenv(ctx, "STAKPAK_API_KEY")) != "" {
 		return ports.AgentAuthStatusConfigured, nil
 	}
 	return status, err
@@ -141,7 +146,8 @@ type stakpakConfig struct {
 
 // activeProviders merges the special "all" profile's providers under the
 // active profile's (STAKPAK_PROFILE, else "default"), as Stakpak does.
-func activeProviders(data []byte, profile string) ([]provider, error) {
+// getenv reads the environment Stakpak sessions receive.
+func activeProviders(data []byte, profile string, getenv func(string) string) ([]provider, error) {
 	var config stakpakConfig
 	if err := toml.Unmarshal(data, &config); err != nil {
 		return nil, fmt.Errorf("parse stakpak config: %w", err)
@@ -165,7 +171,9 @@ func activeProviders(data []byte, profile string) ([]provider, error) {
 		case value.Auth.Type == "oauth" && value.Auth.Access != "":
 			value.OAuth = true
 		default:
-			value.APIKey = os.Getenv(providerKeyEnv[value.Type])
+			if name := providerKeyEnv[value.Type]; name != "" {
+				value.APIKey = getenv(name)
+			}
 		}
 		out = append(out, value)
 	}
@@ -197,11 +205,12 @@ func probeProviders(ctx context.Context, client *http.Client) (ports.AgentAuthSt
 	if err != nil {
 		return ports.AgentAuthStatusUnknown, err
 	}
-	profile := strings.TrimSpace(os.Getenv("STAKPAK_PROFILE"))
+	getenv := func(name string) string { return authprobe.Getenv(ctx, name) }
+	profile := strings.TrimSpace(getenv("STAKPAK_PROFILE"))
 	if profile == "" {
 		profile = "default"
 	}
-	providers, err := activeProviders(data, profile)
+	providers, err := activeProviders(data, profile, getenv)
 	if err != nil {
 		return ports.AgentAuthStatusUnknown, err
 	}

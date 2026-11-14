@@ -22,8 +22,8 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-// runFakeStakpak answers `--version`, `sessions list` and `sessions show <id>`
-// from the files fakeStakpak wrote, logging every call to calls.log. A
+// runFakeStakpak answers `--version`, `sessions list`, `sessions show <id>`
+// and `auth status` from the files fakeStakpak wrote, logging every call to calls.log. A
 // `broken` file makes every call fail.
 func runFakeStakpak(dir string, args []string) int {
 	if f, err := os.OpenFile(filepath.Join(dir, "calls.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600); err == nil { //nolint:gosec // test-only path
@@ -50,6 +50,9 @@ func runFakeStakpak(dir string, args []string) int {
 			return 1
 		}
 		fmt.Printf("ID:          %s\n", args[2])
+	case len(args) > 1 && args[0] == "auth" && args[1] == "status":
+		// What Stakpak prints for a profile with no stored credential.
+		fmt.Println("No credentials configured.")
 	}
 	return 0
 }

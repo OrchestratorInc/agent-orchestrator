@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -47,7 +48,7 @@ api_key = "ignored"
 
 [settings]
 auto_append_gitignore = false
-`), "default")
+`), "default", os.Getenv)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,7 +149,7 @@ auth = { type = "api", key = "saved-by-login" }
 [profiles.default.providers.claude]
 type = "anthropic"
 auth = { type = "oauth", access = "token", refresh = "r", expires = 1 }
-`), "default")
+`), "default", os.Getenv)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,16 +223,61 @@ func TestEnvironmentKeysAreNotSignedOut(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(home, ".stakpak", "config.toml"), []byte(config), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := withEnvironmentKey(probeProviders(context.Background(), server.Client())); err != nil || got != ports.AgentAuthStatusAuthorized {
+	if got, err := authCheck(context.Background(), server.Client()); err != nil || got != ports.AgentAuthStatusAuthorized {
 		t.Fatalf("keyless provider with ANTHROPIC_API_KEY = %q, %v; want authorized", got, err)
 	}
 
 	t.Setenv("HOME", t.TempDir())
-	if got, err := withEnvironmentKey(probeProviders(context.Background(), server.Client())); err != nil || got != ports.AgentAuthStatusUnauthorized {
+	if got, err := authCheck(context.Background(), server.Client()); err != nil || got != ports.AgentAuthStatusUnauthorized {
 		t.Fatalf("no credentials = %q, %v; want unauthorized", got, err)
 	}
 	t.Setenv("STAKPAK_API_KEY", "stakpak-key")
-	if got, err := withEnvironmentKey(probeProviders(context.Background(), server.Client())); err != nil || got != ports.AgentAuthStatusConfigured {
+	if got, err := authCheck(context.Background(), server.Client()); err != nil || got != ports.AgentAuthStatusConfigured {
 		t.Fatalf("STAKPAK_API_KEY only = %q, %v; want configured", got, err)
+	}
+}
+
+// authCheck is AuthStatus after `auth status` reports no stored credential.
+func authCheck(ctx context.Context, client *http.Client) (ports.AgentAuthStatus, error) {
+	status, err := probeProviders(ctx, client)
+	return withEnvironmentKey(ctx, status, err)
+}
+
+// The readiness check passes the environment Stakpak sessions receive. A key
+// AO withholds from this harness must read as unset even when the daemon's
+// own environment has it.
+func TestAuthStatusHonoursWithheldKeys(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("x-api-key") != "env-key" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	defer server.Close()
+	bin := fakeStakpak(t, `{"sessions":[]}`, "")
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("STAKPAK_PROFILE", "")
+	t.Setenv("ANTHROPIC_API_KEY", "env-key")
+	t.Setenv("STAKPAK_API_KEY", "stakpak-key")
+	if err := os.MkdirAll(filepath.Join(home, ".stakpak"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	config := "[profiles.default.providers.anthropic]\ntype = \"anthropic\"\napi_endpoint = \"" + server.URL + "/v1/\"\n"
+	if err := os.WriteFile(filepath.Join(home, ".stakpak", "config.toml"), []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if got, err := New().AuthStatus(context.Background()); err != nil || got != ports.AgentAuthStatusAuthorized {
+		t.Fatalf("AuthStatus with the daemon's keys = %q, %v; want authorized", got, err)
+	}
+	withheld := ports.WithAuthEnvironment(context.Background(), map[string]string{"ANTHROPIC_API_KEY": "", "STAKPAK_API_KEY": ""})
+	if got, err := New().AuthStatus(withheld); err != nil || got != ports.AgentAuthStatusUnauthorized {
+		t.Fatalf("AuthStatus with keys withheld = %q, %v; want unauthorized", got, err)
+	}
+	if calls := fakeStakpakCalls(t, bin); !slices.Contains(calls, "auth status") {
+		t.Fatalf("fake stakpak calls = %q; want the auth status check", calls)
 	}
 }
