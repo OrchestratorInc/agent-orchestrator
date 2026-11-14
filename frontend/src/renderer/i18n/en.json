@@ -1356,6 +1356,8 @@
 	"pr.edit.loadFailed": "Couldn't load this pull request for editing.",
 	"pr.edit.saveFailed": "Couldn't save the change.",
 	"pr.edit.conflict": "Someone changed this while you were editing. Your text is kept: check it against the latest version, then save again to replace theirs.",
+	"pr.edit.latestVersion": "Latest version",
+	"pr.edit.latestEmpty": "Empty",
 	"pr.edit.blocked.noPermission": "Only the pull request's author or someone with write access to the repository can edit it.",
 	"pr.edit.blocked.notOpen": "A merged or closed pull request can't be edited here.",
 	"pr.edit.blocked.unsupported": "Editing isn't available for this pull request.",

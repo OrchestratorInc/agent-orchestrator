@@ -253,6 +253,8 @@ describe("PREditableDescription", () => {
 		expect(mutateAsync).toHaveBeenLastCalledWith({ base: "Provider body\r\nline two", field: "body", value: "mine" });
 		expect(box.value).toBe("mine");
 		expect(load).toHaveBeenCalledTimes(2);
+		// What they saved is shown beside the draft, so "Save anyway" is an informed choice.
+		expect(screen.getByTestId("pr-edit-latest")).toHaveTextContent("theirs");
 
 		// Typing leaves the warning up; the second save is against the newer text.
 		fireEvent.change(box, { target: { value: "mine, merged with theirs" } });

@@ -1402,6 +1402,8 @@
 	"pr.edit.loadFailed": "No se pudo cargar este pull request para editarlo.",
 	"pr.edit.saveFailed": "No se pudo guardar el cambio.",
 	"pr.edit.conflict": "Alguien cambió esto mientras lo editabas. Tu texto se conserva: compáralo con la versión más reciente y guarda de nuevo para reemplazarla.",
+	"pr.edit.latestVersion": "Versión más reciente",
+	"pr.edit.latestEmpty": "Vacío",
 	"pr.edit.blocked.noPermission": "Solo el autor del pull request o alguien con acceso de escritura al repositorio puede editarlo.",
 	"pr.edit.blocked.notOpen": "Un pull request fusionado o cerrado no se puede editar aquí.",
 	"pr.edit.blocked.unsupported": "La edición no está disponible para este pull request.",

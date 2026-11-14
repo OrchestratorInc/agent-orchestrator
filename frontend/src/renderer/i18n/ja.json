@@ -1386,6 +1386,8 @@
 	"pr.edit.loadFailed": "編集用にこのプルリクエストを読み込めませんでした。",
 	"pr.edit.saveFailed": "変更を保存できませんでした。",
 	"pr.edit.conflict": "編集中に他の誰かがこれを変更しました。入力した内容は保持されています。最新版と見比べてから、もう一度保存すると置き換えられます。",
+	"pr.edit.latestVersion": "最新版",
+	"pr.edit.latestEmpty": "空",
 	"pr.edit.blocked.noPermission": "編集できるのは、プルリクエストの作成者か、リポジトリへの書き込み権限を持つユーザーだけです。",
 	"pr.edit.blocked.notOpen": "マージ済みまたはクローズ済みのプルリクエストはここでは編集できません。",
 	"pr.edit.blocked.unsupported": "このプルリクエストは編集できません。",

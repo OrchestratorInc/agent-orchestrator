@@ -79,7 +79,9 @@ describe("ActivityRail", () => {
 		expect(rows[3]).toContain("Created workspace");
 		expect(rows[3]).toContain("fix/dashboard");
 		// Two days, each its own list under its divider.
-		expect(within(rail).getAllByRole("list")).toHaveLength(2);
+		// (Counted in this machine's time zone, as the rail does.)
+		const days = new Set(["2026-10-20T08:00:00Z", "2026-10-20T09:00:00Z", "2026-10-20T10:00:00Z", "2026-10-21T10:00:00Z"].map((at) => new Date(at).toDateString()));
+		expect(within(rail).getAllByRole("list")).toHaveLength(days.size);
 		// Three weights: what someone wrote is loud and leads with their face, a PR
 		// milestone leads with its glyph, and machine rows are quiet one-liners (a
 		// commit by someone on the PR still carries their face).
@@ -141,8 +143,9 @@ describe("ActivityRail", () => {
 		render(
 			<ActivityRail
 				commits={[
-					{ sha: "bbbbbbb2", subject: "Second", timestamp: "2026-10-20T10:00:00Z", author: "ada" },
-					{ sha: "aaaaaaa1", subject: "First", timestamp: "2026-10-20T09:00:00Z", author: "ada" },
+					// Half an hour apart at an hour no time zone turns midnight in: one day everywhere.
+					{ sha: "bbbbbbb2", subject: "Second", timestamp: "2026-10-20T12:30:00Z", author: "ada" },
+					{ sha: "aaaaaaa1", subject: "First", timestamp: "2026-10-20T12:00:00Z", author: "ada" },
 				]}
 				prs={[]}
 				session={session}

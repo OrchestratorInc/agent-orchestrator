@@ -1402,6 +1402,8 @@
 	"pr.edit.loadFailed": "Impossible de charger cette pull request pour la modifier.",
 	"pr.edit.saveFailed": "Impossible d'enregistrer la modification.",
 	"pr.edit.conflict": "Quelqu'un a modifié ceci pendant votre édition. Votre texte est conservé : comparez-le à la dernière version, puis enregistrez de nouveau pour la remplacer.",
+	"pr.edit.latestVersion": "Dernière version",
+	"pr.edit.latestEmpty": "Vide",
 	"pr.edit.blocked.noPermission": "Seul l'auteur de la pull request ou une personne ayant un accès en écriture au dépôt peut la modifier.",
 	"pr.edit.blocked.notOpen": "Une pull request fusionnée ou fermée ne peut pas être modifiée ici.",
 	"pr.edit.blocked.unsupported": "La modification n'est pas disponible pour cette pull request.",

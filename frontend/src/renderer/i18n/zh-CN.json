@@ -1368,6 +1368,8 @@
 	"pr.edit.loadFailed": "无法加载此拉取请求以进行编辑。",
 	"pr.edit.saveFailed": "无法保存更改。",
 	"pr.edit.conflict": "在你编辑期间，有人修改了这里的内容。你的文本已保留：请与最新版本核对，然后再次保存以替换它。",
+	"pr.edit.latestVersion": "最新版本",
+	"pr.edit.latestEmpty": "空",
 	"pr.edit.blocked.noPermission": "只有拉取请求的作者或对仓库有写入权限的人才能编辑。",
 	"pr.edit.blocked.notOpen": "已合并或已关闭的拉取请求无法在此编辑。",
 	"pr.edit.blocked.unsupported": "此拉取请求不支持编辑。",

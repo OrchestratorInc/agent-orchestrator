@@ -103,3 +103,19 @@ func TestEditPullRequest_GitLabFailures(t *testing.T) {
 		t.Fatal("edit with a blank title succeeded")
 	}
 }
+
+func TestEditPullRequest_ForgetsTheCachedMergeRequest(t *testing.T) {
+	_, p := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"iid": 42, "title": "New title", "description": "body"})
+	}))
+	request := ports.SCMPREditRequest{PR: validMergeRequest().PR, Title: strPtr("New title")}
+	repo := request.PR.Repo
+	p.cache.setMRDetail(repo.Host, repo.Repo, request.PR.Number, &restMR{IID: request.PR.Number, Title: "Old title"})
+	if _, err := p.EditPullRequest(ctx(), request); err != nil {
+		t.Fatal(err)
+	}
+	// The poll after an edit must read GitLab, not the title from before it.
+	if cached, ok := p.cache.getMRDetail(repo.Host, repo.Repo, request.PR.Number); ok {
+		t.Fatalf("cached merge request survived the edit: %#v", cached.Title)
+	}
+}

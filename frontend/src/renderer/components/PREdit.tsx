@@ -158,6 +158,20 @@ function EditorActions({ editor, hint }: { editor: ReturnType<typeof usePRFieldE
 
 const EditorError = ({ children }: { children: string | null }) => (children ? <p className="m-0 text-xs text-error" role="alert">{children}</p> : null);
 
+/** After a conflict, the text someone else saved: what "Save anyway" would replace. */
+function EditorLatest({ editor }: { editor: ReturnType<typeof usePRFieldEditor> }) {
+	const { t } = useTranslation();
+	if (!editor.editing?.conflict) return null;
+	return (
+		<div className="flex min-w-0 flex-col gap-1" data-testid="pr-edit-latest">
+			<span className="text-xs text-muted-foreground">{t("pr.edit.latestVersion")}</span>
+			<div className="max-h-40 min-w-0 overflow-y-auto whitespace-pre-wrap rounded-md border border-border bg-background px-2.5 py-2 text-xs leading-5 text-foreground [overflow-wrap:anywhere]">
+				{unixLines(editor.editing.base) || <span className="text-passive">{t("pr.edit.latestEmpty")}</span>}
+			</div>
+		</div>
+	);
+}
+
 /** The button that opens an editor; when the PR can't be edited it stays, greyed out, and says why. */
 function EditButton({ editor, label, showLabel }: { editor: ReturnType<typeof usePRFieldEditor>; label: string; showLabel?: boolean }) {
 	return (
@@ -229,6 +243,7 @@ function EditableTitle({ className, edit, pr, titleClass }: { className?: string
 				value={editor.editing.draft}
 			/>
 			<EditorError>{editor.error}</EditorError>
+			<EditorLatest editor={editor} />
 			<EditorActions editor={editor} />
 		</div>
 	);
@@ -315,6 +330,7 @@ export function PREditableDescription({ children, edit, pr }: { children: ReactN
 				{draft.trim() ? <PRDescriptionBody cloud={false} pr={{ ...pr, description: draft, descriptionTruncated: false, detailsObservedAt: pr.detailsObservedAt ?? pr.updatedAt }} /> : <p className="m-0 text-sm text-passive">{t("pr.edit.previewEmpty")}</p>}
 			</TabsContent>
 			<EditorError>{editor.error}</EditorError>
+			<EditorLatest editor={editor} />
 			<EditorActions editor={editor} hint />
 		</Tabs>
 	);

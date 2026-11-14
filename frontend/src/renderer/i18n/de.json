@@ -1386,6 +1386,8 @@
 	"pr.edit.loadFailed": "Dieser Pull Request konnte nicht zum Bearbeiten geladen werden.",
 	"pr.edit.saveFailed": "Die Änderung konnte nicht gespeichert werden.",
 	"pr.edit.conflict": "Jemand hat dies geändert, während du es bearbeitet hast. Dein Text bleibt erhalten: Vergleiche ihn mit der neuesten Version und speichere dann erneut, um sie zu ersetzen.",
+	"pr.edit.latestVersion": "Neueste Version",
+	"pr.edit.latestEmpty": "Leer",
 	"pr.edit.blocked.noPermission": "Nur der Autor des Pull Requests oder jemand mit Schreibzugriff auf das Repository kann ihn bearbeiten.",
 	"pr.edit.blocked.notOpen": "Ein gemergter oder geschlossener Pull Request kann hier nicht bearbeitet werden.",
 	"pr.edit.blocked.unsupported": "Bearbeiten ist für diesen Pull Request nicht verfügbar.",

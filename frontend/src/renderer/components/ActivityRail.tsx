@@ -128,7 +128,7 @@ export function ActivityRail({ commits, hostId, prs, session, status, statusAt }
 								key={event.key}
 								face={hasFace(event, logins)}
 								last={index === group.events.length - 1}
-								onOpen={event.pr ? () => openPRTab(sessionKey, event.pr!.url, isTalk(event.kind) ? "comments" : "summary") : undefined}
+								onOpen={event.pr && !session.cloud ? () => openPRTab(sessionKey, event.pr!.url, isTalk(event.kind) ? "comments" : "summary") : undefined}
 								standalone={standalone}
 								time={timeFormat.format(new Date(event.at))}
 							/>
@@ -158,9 +158,9 @@ function RailRow({ event, face, last, onOpen, standalone, time }: { event: RailE
 		<>
 			<span className="relative flex justify-center pt-0.5" data-tier={tier}>
 				{faceNode
-					? <span data-tone={tone}><PRAvatar bot={event.bot} name={event.author!} size="md" /></span>
+					? <span className="mt-px inline-flex" data-tone={tone}><PRAvatar bot={event.bot} name={event.author!} size="sm" /></span>
 					: <Icon aria-hidden="true" className={cn(tier === "quiet" ? "mt-px size-3.5 text-passive" : cn("size-4", GLYPH_CLASS[tone]))} data-tone={tone} strokeWidth={2} />}
-				{last ? null : <span aria-hidden="true" className={cn("absolute w-px bg-border", tier === "quiet" ? "top-[22px] -bottom-1" : faceNode ? "top-[30px] -bottom-1.5" : "top-[26px] -bottom-1.5")} />}
+				{last ? null : <span aria-hidden="true" className={cn("absolute w-px bg-border", tier === "quiet" ? "top-[22px] -bottom-1" : "top-[26px] -bottom-1.5")} />}
 			</span>
 			<span className="flex min-w-0 flex-col gap-0.5">
 				<span className={cn("flex min-w-0 items-center gap-1.5", tier === "quiet" ? "text-xs text-passive" : "text-sm text-muted-foreground")}>

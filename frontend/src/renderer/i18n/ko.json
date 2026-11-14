@@ -1386,6 +1386,8 @@
 	"pr.edit.loadFailed": "편집할 풀 리퀘스트를 불러오지 못했습니다.",
 	"pr.edit.saveFailed": "변경 사항을 저장하지 못했습니다.",
 	"pr.edit.conflict": "편집하는 동안 다른 사람이 이 내용을 변경했습니다. 작성한 내용은 그대로 있습니다. 최신 버전과 비교한 뒤 다시 저장하면 그 내용을 대체합니다.",
+	"pr.edit.latestVersion": "최신 버전",
+	"pr.edit.latestEmpty": "비어 있음",
 	"pr.edit.blocked.noPermission": "풀 리퀘스트 작성자 또는 저장소 쓰기 권한이 있는 사용자만 편집할 수 있습니다.",
 	"pr.edit.blocked.notOpen": "병합되었거나 닫힌 풀 리퀘스트는 여기에서 편집할 수 없습니다.",
 	"pr.edit.blocked.unsupported": "이 풀 리퀘스트는 편집할 수 없습니다.",

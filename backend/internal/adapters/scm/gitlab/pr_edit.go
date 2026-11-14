@@ -91,6 +91,11 @@ func (p *Provider) EditPullRequest(ctx context.Context, request ports.SCMPREditR
 		}
 		return ports.SCMPRContent{}, mapMutationStatus(resp.StatusCode, err)
 	}
+	// The poll that follows an edit must not read the merge request from
+	// before it and store the old title over the new one.
+	if p.cache != nil {
+		p.cache.dropMRDetail(request.PR.Repo.Host, request.PR.Repo.Repo, request.PR.Number)
+	}
 	var mr editableMR
 	if err := json.Unmarshal(resp.Body, &mr); err != nil {
 		return ports.SCMPRContent{}, fmt.Errorf("gitlab scm: decode merge request edit response: %w", err)
