@@ -1,9 +1,13 @@
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { KeyRound } from "@/components/app-icons";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useCloudCp } from "../../../hooks/useCloudCp";
 import { describeCloudHarness, useCloudHarnessVersions } from "../../../hooks/useCloudHarnessVersions";
 import { versionLabel } from "../../../hooks/useHarnessUpdates";
 import { useCloudOrg } from "../../../hooks/useCloudOrg";
-import { useProviderConnections } from "../../../hooks/useProviderConnections";
+import { providerConnectionsQueryKey, useProviderConnections } from "../../../hooks/useProviderConnections";
+import type { CloudCpProviderConnection } from "../../../lib/cloud-cp";
 import { agentLabel, type AgentId } from "../../../lib/agent-options";
 import { CLOUD_AGENT_PROVIDERS, isCloudHarnessConnected } from "../../../lib/cloud-agents";
 import { cn } from "../../../lib/utils";
@@ -11,6 +15,7 @@ import { AgentAvatar } from "../../AgentAvatar";
 import { Button } from "../../ui/button";
 import { Pressable } from "../../ui/pressable";
 import { CloudHarnessLoginPanel, type CloudHarness } from "../CloudHarnessLoginPanel";
+import { SettingsRow } from "../SettingsRow";
 import { FOCUS_HIGHLIGHT_MS } from "./harness-ui";
 
 export function CloudHarnessContent({ focusAgentId, search }: { focusAgentId?: string; search: string }) {
@@ -72,5 +77,38 @@ export function CloudHarnessContent({ focusAgentId, search }: { focusAgentId?: s
 				})}
 				{rows.length === 0 ? <p className="px-3 py-6 text-center text-sm text-settings-muted">{t("settings.harness.noResults")}</p> : null}
 			</div>}
+		{org?.id && hasSavedGitHubToken(connections.data) ? <div className="mt-3 border-t border-border px-3 pt-3"><SavedGitHubTokenRow /></div> : null}
 	</>;
+}
+
+/** A GitHub token saved for Cloud before it reached GitHub through the GitHub App, whatever its last check said. */
+function hasSavedGitHubToken(connections: CloudCpProviderConnection[] | undefined): boolean {
+	return (connections ?? []).some((connection) => connection.provider === "github" && connection.label === "default");
+}
+
+/**
+ * Nothing saves a GitHub token for Cloud any more, but the control plane keeps
+ * one saved earlier and can still use it, so its owner can remove it here. The
+ * row leaves once the token is gone.
+ */
+function SavedGitHubTokenRow() {
+	const { t } = useTranslation();
+	const { client } = useCloudCp();
+	const queryClient = useQueryClient();
+	const remove = useMutation({
+		mutationFn: () => client.deleteGitHubPAT(),
+		onSuccess: () => queryClient.invalidateQueries({ queryKey: providerConnectionsQueryKey }),
+	});
+	return <SettingsRow
+		data-saved-github-token=""
+		description={remove.isError
+			? <span className="text-error" role="alert">{t("settings.cloudAgents.savedGitHubToken.errorRemove")}</span>
+			: t("settings.cloudAgents.savedGitHubToken.hint")}
+		icon={KeyRound}
+		label={t("settings.cloudAgents.savedGitHubToken.title")}
+	>
+		<Button disabled={remove.isPending} onClick={() => remove.mutate()} type="button" variant="destructive-ghost">
+			{remove.isPending ? t("settings.cloudAgents.savedGitHubToken.removing") : t("settings.cloudAgents.savedGitHubToken.remove")}
+		</Button>
+	</SettingsRow>;
 }
