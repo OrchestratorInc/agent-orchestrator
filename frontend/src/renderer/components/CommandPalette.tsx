@@ -279,7 +279,8 @@ export const CommandPalette = memo(function CommandPalette() {
 	const searchQueryReady = isOpen && normalizedFileQuery.length >= PALETTE_FILE_SEARCH_MIN_CHARS;
 	// A Cloud session's contents are searched by its worker, once Cloud is signed in.
 	const contentTarget = activeFileTarget && (!activeFileTarget.cloudOrgId || cloudReady) ? activeFileTarget : undefined;
-	const contentSearchEnabled = searchQueryReady && (view.mode === "root" || view.mode === "file-search") && Boolean(contentTarget);
+	// Text inside files is searched only from Go to file, not the main list.
+	const contentSearchEnabled = searchQueryReady && view.mode === "file-search" && Boolean(contentTarget);
 	const contentSearchOptions = commandPaletteContentSearchQueryOptions(contentTarget ?? { projectId: "", sessionId: "" }, normalizedFileQuery, t("command.searchContentError"), cloud);
 	const contentSearchQuery = useQuery({
 		...contentSearchOptions,
@@ -620,7 +621,7 @@ export const CommandPalette = memo(function CommandPalette() {
 		const shownRootItems = currentSession
 			? rootItems.map((item) => (item.group === "current" || item.id === "current-copy-branch" ? { ...item, searchOnly: true } : item))
 			: rootItems;
-		return displayGroups([...shownRootItems, ...rootContextItems, ...fileItems, ...contentItems, ...chatItems], query, t);
+		return displayGroups([...shownRootItems, ...rootContextItems, ...fileItems, ...chatItems], query, t);
 	}, [view.mode, rootItems, rootContextItems, currentSession, sessionActionItems, fileSessionItems, menuViewItems, fileItems, contentItems, chatItems, query, normalizedFileQuery, t, i18n.resolvedLanguage]);
 
 	const visibleItems = useMemo(() => groups.flatMap((group) => group.items), [groups]);

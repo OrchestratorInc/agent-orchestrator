@@ -588,12 +588,12 @@ describe("CommandPalette content search", () => {
 	const contentHit = { path: "src/lib/palette.ts", line: 12, text: "export function \x02closePalette\x03() {}" };
 	const chatHit = { messageId: "msg-1", sessionId: "w-fix", projectId: "proj-1", title: "Palette cleanup", text: "we should \x02close\x03 the \x02palette\x03 on Escape" };
 
-	it("opens a file at its matched line", async () => {
+	it("opens a file at its matched line, from Go to file", async () => {
 		ctx.params = { projectId: "proj-1", sessionId: "w-fix" };
 		mockSearch([], [contentHit]);
 		renderPalette();
-		act(() => useUiStore.getState().setCommandPaletteOpen(true));
-		fireEvent.change(await screen.findByPlaceholderText(/search sessions/i), { target: { value: "close palette" } });
+		act(() => appShortcutBus.emit({ id: "quick-open-file" }));
+		fireEvent.change(await screen.findByPlaceholderText("Search files"), { target: { value: "close palette" } });
 
 		fireEvent.click(await screen.findByText(rowTitle("palette.ts:12"), {}, { timeout: 2_000 }));
 		expect(getMock).toHaveBeenCalledWith(
@@ -657,25 +657,25 @@ describe("CommandPalette content search", () => {
 			? { error: {} }
 			: { data: { results: [], truncated: false } });
 		renderPalette();
-		act(() => useUiStore.getState().setCommandPaletteOpen(true));
-		const input = await screen.findByPlaceholderText(/search sessions/i);
+		// Text inside files is searched from Go to file; chats from the main list.
+		const inFiles = failedPath.endsWith("/content");
+		act(() => (inFiles ? appShortcutBus.emit({ id: "quick-open-file" }) : useUiStore.getState().setCommandPaletteOpen(true)));
+		const input = await screen.findByPlaceholderText(inFiles ? "Search files" : /search sessions/i);
 		fireEvent.change(input, { target: { value: "close palette" } });
 		expect(await screen.findByRole("alert", {}, { timeout: 2_000 })).toHaveTextContent(message);
 		fireEvent.change(input, { target: { value: "new query" } });
 		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 	});
 
-	it("keeps a control that names every word above content that mentions them", async () => {
+	it("leaves text inside files to Go to file", async () => {
 		ctx.params = { projectId: "proj-1", sessionId: "w-fix" };
 		mockSearch([], [{ path: "src/Sidebar.tsx", line: 3, text: "// \x02hide\x03 \x02sidebar\x03" }]);
 		renderPalette();
 		act(() => useUiStore.getState().setCommandPaletteOpen(true));
-		const input = await screen.findByPlaceholderText(/search sessions/i);
-		for (const query of ["hide sidebar", "toggle sidbar"]) {
-			fireEvent.change(input, { target: { value: query } });
-			await screen.findByText(rowTitle("Sidebar.tsx:3"), {}, { timeout: 2_000 });
-			expect(screen.getAllByRole("option")[0]).toHaveTextContent("Toggle sidebar");
-		}
+		fireEvent.change(await screen.findByPlaceholderText(/search sessions/i), { target: { value: "hide sidebar" } });
+		expect(await screen.findByText(rowTitle("Toggle sidebar"), {}, { timeout: 2_000 })).toBeInTheDocument();
+		expect(screen.queryByText(rowTitle("Sidebar.tsx:3"))).not.toBeInTheDocument();
+		expect(getMock).not.toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/workspace/search/content", expect.anything());
 	});
 });
 
