@@ -3273,7 +3273,7 @@
 	"pr.merge.reasonReview": "A required review must be completed before this PR can merge.",
 	"pr.merge.reasonComments": "Unresolved review comments must be resolved before this PR can merge.",
 	"pr.merge.reasonReady": "No merge conflict, checks are passing, and the review requirement is satisfied.",
-	"pr.merge.reasonReadyNoChecks": "No merge conflict, no checks are configured, and the review requirement is satisfied.",
+	"pr.merge.reasonReadyNoChecks": "병합 충돌이 없고, 구성된 검사가 없으며, 검토 요구 사항이 충족되었습니다.",
 	"pr.review.requirementSatisfied": "PR approved",
 	"pr.review.unresolvedComments": "해결되지 않은 리뷰 댓글",
 	"pr.review.viewDetails": "View review details",

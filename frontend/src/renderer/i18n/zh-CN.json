@@ -3255,7 +3255,7 @@
 	"pr.merge.reasonReview": "A required review must be completed before this PR can merge.",
 	"pr.merge.reasonComments": "Unresolved review comments must be resolved before this PR can merge.",
 	"pr.merge.reasonReady": "No merge conflict, checks are passing, and the review requirement is satisfied.",
-	"pr.merge.reasonReadyNoChecks": "No merge conflict, no checks are configured, and the review requirement is satisfied.",
+	"pr.merge.reasonReadyNoChecks": "没有合并冲突，未配置任何检查，且已满足审查要求。",
 	"pr.review.requirementSatisfied": "PR approved",
 	"pr.review.unresolvedComments": "未解决的审查评论",
 	"pr.review.viewDetails": "View review details",

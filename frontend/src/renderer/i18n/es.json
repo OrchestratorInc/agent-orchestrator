@@ -3333,7 +3333,7 @@
 	"pr.merge.reasonReview": "A required review must be completed before this PR can merge.",
 	"pr.merge.reasonComments": "Unresolved review comments must be resolved before this PR can merge.",
 	"pr.merge.reasonReady": "No merge conflict, checks are passing, and the review requirement is satisfied.",
-	"pr.merge.reasonReadyNoChecks": "No merge conflict, no checks are configured, and the review requirement is satisfied.",
+	"pr.merge.reasonReadyNoChecks": "No hay conflictos de fusión, no hay comprobaciones configuradas y se cumple el requisito de revisión.",
 	"pr.review.requirementSatisfied": "PR approved",
 	"pr.review.unresolvedComments": "Comentarios de revisión sin resolver",
 	"pr.review.viewDetails": "View review details",
