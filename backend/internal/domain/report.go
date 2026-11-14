@@ -217,3 +217,13 @@ func CoordinationDeliveryID(message string) (string, bool) {
 	}
 	return deliveryID(message, `<ao-session-delivery id="`)
 }
+
+// IsCoordinationMessage reports a prompt AO wrote itself: a delivery, a handoff
+// request, or a continuation kickoff. These stay in provider history but aren't
+// the user's latest instruction.
+func IsCoordinationMessage(message string) bool {
+	message = strings.TrimSpace(message)
+	_, delivery := CoordinationDeliveryID(message)
+	return delivery || strings.HasPrefix(message, "<ao-handoff-request") ||
+		strings.HasPrefix(message, "AO transferred the previous agent's context in hidden system instructions.")
+}

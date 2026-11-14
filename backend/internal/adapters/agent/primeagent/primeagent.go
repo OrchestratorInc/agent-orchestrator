@@ -35,8 +35,8 @@ func New() *Plugin {
 	return &Plugin{}
 }
 
-// EmitsSemanticMessageAcceptance reports that AO's Prime Agent plugin includes
-// the accepted prompt text in its user-prompt-submit callback.
+// EmitsSemanticMessageAcceptance reports that AO learns the accepted prompt text:
+// from the user-prompt-submit callback, or from ObserveNativeSessions on 0.10.
 func (p *Plugin) EmitsSemanticMessageAcceptance() bool { return true }
 
 // AugmentRuntimeEnv points Prime Agent at AO's isolated profile so persistent
@@ -184,8 +184,8 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 // steering for that active turn.
 func (p *Plugin) SteersActiveTurn() bool { return true }
 
-// EmitsSubmitActivity reports that the managed extension emits an active
-// signal when Prime starts processing a submitted prompt.
+// EmitsSubmitActivity reports that AO sees a submitted prompt go active: through
+// the managed extension, or through ObserveNativeSessions on 0.10.
 func (p *Plugin) EmitsSubmitActivity() bool { return true }
 
 // EmitsBlockedActivity is false because Prime has no lifecycle signal with the
