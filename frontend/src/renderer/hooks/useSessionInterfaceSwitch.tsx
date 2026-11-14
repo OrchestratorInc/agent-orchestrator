@@ -458,10 +458,12 @@ export function useSessionInterfaceSwitch(sessionId: string, session: WorkspaceS
 		? "Checking whether this agent can switch interfaces…"
 		: blockedReason || interfaceSwitch.status?.reason || interfaceSwitch.statusError;
 	// While a switch runs, the control is its status, with cancel on hover. Only
-	// a Cloud session's creator may cancel its agent switch; anyone else sees
-	// the switch's progress without a cancel.
+	// a Cloud session's creator may cancel its agent switch or its move to
+	// another account, both of which run on the creator's logins; anyone else
+	// sees the switch's progress without a cancel.
 	const showStatus = cloudDrainWaiting || (!isCloud && activeTransition);
-	const cancelRefused = isCloud && Boolean(agentSwitchTarget(interfaceSwitch.transition)) && !cloudCreator;
+	const cancelRefused = isCloud && !cloudCreator &&
+		Boolean(agentSwitchTarget(interfaceSwitch.transition) || interfaceSwitch.transition?.targetAccountId);
 	const switchControl = session && showAction ? <span className="group inline-flex shrink-0"><SessionInterfaceSwitchButton
 		target={target}
 		mayStartFresh={session.provider === "hermes"}

@@ -290,6 +290,29 @@ describe("useSessionInterfaceSwitch Cloud handoff", () => {
 		expect(control()?.props.children.props.onCancel).toBeTypeOf("function");
 	});
 
+	// A move to another account runs on the creator's accounts too: the
+	// control plane lets only the creator cancel it (403 for anyone else).
+	it("offers the cancel of an account move only to the session's creator", () => {
+		mocks.status = {
+			supported: true,
+			targetMode: "tui",
+			transition: {
+				id: "move-1", sessionId: "session-1", sourceMode: "chat", targetMode: "chat",
+				policy: "drain", historyPolicy: "strict", phase: "draining",
+				createdAt: "2026-10-01T00:00:00Z", updatedAt: "2026-10-01T00:00:01Z",
+				sourceAccountId: "account-1", targetAccountId: "account-2",
+			} as SessionInterfaceTransition,
+		};
+		const control = () => renderHook(() => useSessionInterfaceSwitch("session-1", { ...cloudSession, mode: "chat", status: "working" }, { orgId: "org-1" }))
+			.result.current.switchControl as SwitchControl;
+
+		expect(control()?.props.children.props.onCancel).toBeTypeOf("function");
+		mocks.meUserId = "user-2";
+		const member = control()?.props.children.props;
+		expect(member?.transition).toBeDefined();
+		expect(member?.onCancel).toBeUndefined();
+	});
+
 	it("checks fresh Cloud activity before automatically interrupting an idle terminal", async () => {
 		mocks.getSession.mockResolvedValue({ session: { activityState: "idle", status: "idle" } });
 		const { result } = renderHook(() => useSessionInterfaceSwitch("session-1", cloudSession, { orgId: "org-1" }));
