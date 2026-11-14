@@ -212,6 +212,11 @@ func classifyRisk(action, role, name string, target Target) Verdict {
 	if _, ok := valueRoles[role]; ok {
 		return Verdict{}
 	}
+	// Card fields decide before any label: a payment form's "Send" or
+	// "Search" button still pays, and must not fall under a message rule.
+	if target.IsSubmit && target.FormHasPayment {
+		return paymentFormVerdict()
+	}
 	if name != "" && name != "cancel" && !containsAny(name, benignPhrases) && !opensComposer(name) {
 		linkish := role == "link"
 		for _, set := range phraseSets {
@@ -233,12 +238,13 @@ func classifyRisk(action, role, name string, target Target) Verdict {
 
 // classifySubmit judges a form submission by its form and submit label.
 func classifySubmit(submitName string, target Target) Verdict {
+	// Card fields first: the label exemptions below are for ordinary search
+	// and sign-in forms, which collect no card.
+	if target.FormHasPayment {
+		return paymentFormVerdict()
+	}
 	if containsAny(submitName, []string{"search", "filter", "sign in", "log in", "login"}) {
 		return Verdict{}
-	}
-	if target.FormHasPayment {
-		return Verdict{NeedsApproval: true, Category: CategoryPayment,
-			Reason: "It submits a form with payment card fields."}
 	}
 	if submitName != "" && !containsAny(submitName, benignPhrases) {
 		for _, set := range phraseSets {
@@ -264,6 +270,10 @@ func classifySubmit(submitName string, target Target) Verdict {
 		return Verdict{NeedsApproval: true, Category: CategoryAccount, Reason: reason}
 	}
 	return Verdict{}
+}
+
+func paymentFormVerdict() Verdict {
+	return Verdict{NeedsApproval: true, Category: CategoryPayment, Reason: "It submits a form with payment card fields."}
 }
 
 func labelReason(target Target, role, category string) string {
