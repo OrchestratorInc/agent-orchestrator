@@ -242,8 +242,43 @@ describe("ReviewerSelect", () => {
 			const onConfigChange = renderWithCatalog({ model: "gpt-other", effort: "high" });
 			await openCodex();
 			expect(screen.getByRole("menuitemradio", { name: "High" })).toHaveAttribute("aria-checked", "true");
+			// The reported default already clears, so no separate row is offered.
+			expect(screen.queryByRole("menuitem", { name: "Clear effort" })).not.toBeInTheDocument();
 			await userEvent.click(screen.getByRole("menuitemradio", { name: "Low" }));
 			expect(onConfigChange).toHaveBeenCalledWith("codex", { model: "gpt-other" });
+		});
+
+		it("can clear a saved effort when the model reports no default effort", async () => {
+			const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+			client.setQueryData(["agent-models", "codex", ""], {
+				agentId: "codex", selectionMode: "catalog", models: [
+					{ id: "gpt-test", label: "GPT Test", isDefault: true, efforts: ["low", "high"] },
+					{ id: "gpt-other", label: "GPT Other", efforts: ["low", "high"] },
+				],
+			});
+			const onConfigChange = vi.fn();
+			render(<QueryClientProvider client={client}><ReviewerSelect
+				ariaLabel="Reviewer" value="codex" model="gpt-other" effort="high" defaultHarness="claude-code"
+				onChange={() => undefined} onConfigChange={onConfigChange}
+			/></QueryClientProvider>);
+			await openCodex();
+			expect(screen.getByRole("menuitemradio", { name: "High" })).toHaveAttribute("aria-checked", "true");
+			await userEvent.click(screen.getByRole("menuitem", { name: "Clear effort" }));
+			expect(onConfigChange).toHaveBeenCalledWith("codex", { model: "gpt-other" });
+		});
+
+		it("offers no clear row while following the agent effort without a reported default", async () => {
+			const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+			client.setQueryData(["agent-models", "codex", ""], {
+				agentId: "codex", selectionMode: "catalog", models: [{ id: "gpt-test", label: "GPT Test", isDefault: true, efforts: ["low", "high"] }],
+			});
+			render(<QueryClientProvider client={client}><ReviewerSelect
+				ariaLabel="Reviewer" value="codex" defaultHarness="claude-code"
+				onChange={() => undefined} onConfigChange={() => undefined}
+			/></QueryClientProvider>);
+			await openCodex();
+			expect(screen.getAllByRole("menuitemradio")).toHaveLength(2);
+			expect(screen.queryByRole("menuitem", { name: "Clear effort" })).not.toBeInTheDocument();
 		});
 
 		it("keeps the effort across a model switch only when the new model offers it", async () => {

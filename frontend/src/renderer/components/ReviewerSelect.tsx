@@ -252,6 +252,17 @@ function ReviewerHarnessOption({
 	const effortModel = isCurrentHarness ? catalogModel(catalog, currentMode || currentModel || defaultModel || "") : undefined;
 	const effortChoices = (effortModel?.efforts ?? []).filter((value) => value && value.toLowerCase() !== "default").map((value) => ({ value }));
 	const showEffort = isCurrentHarness && (effortChoices.length > 0 || currentEffort !== "");
+	// Picking the reported default is how an effort override is cleared. With no
+	// default reported (Pi, for one), a saved level needs its own way back.
+	const reportedDefaultEffort = effortModel?.defaultEffort?.trim().toLowerCase();
+	const needsClearEffort = currentEffort !== ""
+		&& effortChoices.some((choice) => choice.value === currentEffort)
+		&& !effortChoices.some((choice) => choice.value.toLowerCase() === reportedDefaultEffort);
+	const selectEffort = (nextEffort: string) => onSelect(persistHarness, {
+		...(currentModel ? { model: currentModel } : {}),
+		...(currentMode ? { mode: currentMode } : {}),
+		...(nextEffort ? { effort: nextEffort } : {}),
+	});
 	// Switching model keeps the chosen effort only when the new model offers it.
 	const keptEffort = (modelID: string) =>
 		isCurrentHarness && currentEffort && catalogModel(catalog, modelID)?.efforts?.includes(currentEffort) ? { effort: currentEffort } : {};
@@ -340,12 +351,11 @@ function ReviewerHarnessOption({
 							choices={effortChoices}
 							defaultEffort={effortModel?.defaultEffort}
 							availability={effortModel?.efforts === undefined ? "unknown" : effortChoices.length > 0 ? "supported" : "unsupported"}
-							onChange={(nextEffort) => onSelect(persistHarness, {
-								...(currentModel ? { model: currentModel } : {}),
-								...(currentMode ? { mode: currentMode } : {}),
-								...(nextEffort ? { effort: nextEffort } : {}),
-							})}
+							onChange={selectEffort}
 						/>
+						{needsClearEffort ? (
+							<OptionMenuItem onSelect={() => selectEffort("")}>{t("settings.models.clearEffort")}</OptionMenuItem>
+						) : null}
 					</>
 				) : null}
 			</OptionMenuSubContent>
