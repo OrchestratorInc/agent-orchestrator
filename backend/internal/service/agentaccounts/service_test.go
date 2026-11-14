@@ -47,6 +47,7 @@ func (m *memStore) GetSessionAgentAccount(_ context.Context, id domain.SessionID
 func (m *memStore) AgentAccountUsageSince(context.Context, time.Time) ([]domain.AgentAccountUsage, error) {
 	return nil, nil
 }
+
 // fakeClaude reports who each folder is signed in as; "" is the device.
 // unshared makes every account folder fail to link.
 type fakeClaude struct {
