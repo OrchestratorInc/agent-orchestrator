@@ -579,8 +579,7 @@ var vendorUpdateEnv = map[Target][]string{
 // installs it does not manage, and on native installs only stages the new
 // binary for a later launch to swap in.
 var installerUpdateTargets = map[Target]bool{
-	TargetKimi:        true,
-	TargetMiniMaxCode: true,
+	TargetKimi: true,
 }
 
 func packageWithoutLatest(pkg string) string {

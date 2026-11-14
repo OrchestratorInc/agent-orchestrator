@@ -2,6 +2,7 @@ package systeminstall
 
 import (
 	"context"
+	"path/filepath"
 	"slices"
 	"testing"
 )
@@ -30,10 +31,43 @@ func TestMiniMaxOffersOfficialInstallerThenNPM(t *testing.T) {
 	}
 }
 
-func TestMiniMaxUpdateRerunsOfficialInstaller(t *testing.T) {
-	if !installerUpdateTargets[TargetMiniMaxCode] {
-		t.Fatal("MiniMax official-installer updates must re-run the installer")
+// Only Kimi's installer re-run is pinned to the approved release and bound to
+// the install it updates. An official-installer MiniMax install therefore gets
+// manual-update guidance, not an Update that would install an unpinned latest
+// without binding it to the copy sessions run.
+func TestMiniMaxOfficialInstallUpdatesManually(t *testing.T) {
+	if installerUpdateTargets[TargetMiniMaxCode] {
+		t.Fatal("MiniMax has no pinned, install-bound installer re-run")
 	}
+	for _, goos := range []string{"darwin", "linux", "windows"} {
+		t.Run(goos, func(t *testing.T) {
+			s := newTestService(goos, "bash", "powershell.exe", "npm")
+			planner, err := s.newRequestPlanner(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			var official *Plan
+			for _, plan := range planner.agentMethodPlans(TargetMiniMaxCode, AgentOperationUpdate) {
+				if plan.Method == "official-installer" {
+					official = &plan
+				}
+			}
+			if official == nil || !official.Unsupported || official.Script != nil {
+				t.Fatalf("official-installer update = %+v, want unsupported with no installer re-run", official)
+			}
+			home := t.TempDir()
+			binary := filepath.Join(home, ".minimax-code", "bin", "mcode")
+			if goos == "windows" {
+				binary = filepath.Join(home, ".minimax-code", "mcode.cmd")
+			}
+			if vendorMaintainable(goos, TargetMiniMaxCode, binary, home) {
+				t.Fatalf("update advisory offered a vendor update for %s", binary)
+			}
+		})
+	}
+}
+
+func TestMiniMaxMinimumNode(t *testing.T) {
 	if got := minimumNodeVersionForTarget(TargetMiniMaxCode); got != [3]int{22, 19, 0} {
 		t.Fatalf("minimum Node = %v, want 22.19.0", got)
 	}
