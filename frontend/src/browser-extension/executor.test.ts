@@ -843,6 +843,18 @@ describe("Executor", () => {
 		}
 	});
 
+	it("never restores a minimized window for a synthetic-input screenshot", async () => {
+		const { fake, run, approve } = setup();
+		await approve();
+		await run("open", { url: "https://shop.test/" });
+		await fake.local.set({ [POLICY_KEY]: { ...DEFAULT_SITE_POLICY, syntheticInput: ["shop.test"] } });
+		const sessionWindow = [...fake.tabs.values()].find((tab) => tab.url === "https://shop.test/")!.windowId;
+		fake.windowStates.set(sessionWindow, "minimized");
+		await expect(run("screenshot")).rejects.toMatchObject({ code: "BROWSER_TAB_HIDDEN", message: expect.stringContaining("ao browser snapshot") });
+		expect(fake.windowUpdates).toEqual([]);
+		expect(fake.captures).toEqual([]);
+	});
+
 	it("tells the agent to use a snapshot when a synthetic-input site's window is hidden", async () => {
 		vi.useFakeTimers({ shouldAdvanceTime: true });
 		try {

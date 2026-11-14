@@ -324,21 +324,23 @@ export class Executor {
 	/**
 	 * captureVisibleTab needs the agent's tab painted, so bring it to the front
 	 * of its window (never focusing the window) and wait until it is visible.
+	 * A minimized window stays minimized: restoring it would take focus.
 	 */
 	private async showTab(ctx: Context, page: ActiveTab): Promise<void> {
 		const chrome = this.deps.chrome;
+		const hidden = () =>
+			new BridgeError(
+				"BROWSER_TAB_HIDDEN",
+				`Screenshots on this site need the "${groupTitle(ctx.sessionId)}" window on screen, and Chrome is hiding it. Use \`ao browser snapshot\` instead of a screenshot`,
+			);
+		const window = await chrome.windows.get(page.tab.windowId).catch(() => undefined);
+		if (window?.state === "minimized") throw hidden();
 		if (!page.tab.active) await chrome.tabs.update(page.tabId, { active: true });
-		// A minimized window stays minimized: restoring it would take focus.
 		const deadline = Date.now() + 2_000;
 		for (;;) {
 			const state = (await this.content(page, ctx, { op: "ping" }, 0)) as { visibility?: string };
 			if (state.visibility !== "hidden") return;
-			if (Date.now() >= deadline) {
-				throw new BridgeError(
-					"BROWSER_TAB_HIDDEN",
-					`Screenshots on this site need the "${groupTitle(ctx.sessionId)}" window on screen, and Chrome is hiding it. Use \`ao browser snapshot\` instead of a screenshot`,
-				);
-			}
+			if (Date.now() >= deadline) throw hidden();
 			await sleep(50, ctx.signal);
 		}
 	}
