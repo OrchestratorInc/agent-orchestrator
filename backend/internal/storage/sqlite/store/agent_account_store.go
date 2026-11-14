@@ -127,7 +127,7 @@ func (s *Store) GetSessionAgentAccount(ctx context.Context, id domain.SessionID,
 // An account, day and model may appear twice (live and deleted); callers sum.
 func (s *Store) AgentAccountUsageSince(ctx context.Context, since time.Time) ([]domain.AgentAccountUsage, error) {
 	since = since.UTC()
-	rows, err := s.qr.AgentAccountUsageSince(ctx, gen.AgentAccountUsageSinceParams{Since: sql.NullTime{Time: since, Valid: true}})
+	rows, err := s.qr.AgentAccountUsageSince(ctx, sql.NullTime{Time: since, Valid: true})
 	if err != nil {
 		return nil, fmt.Errorf("read agent account usage: %w", err)
 	}
@@ -158,8 +158,8 @@ func (s *Store) AgentAccountUsageSince(ctx context.Context, since time.Time) ([]
 // totals. It runs inside the delete's transaction, before the session row (and
 // with it the usage events and account bindings) cascades away.
 func foldDeletedSessionAccountUsage(ctx context.Context, q *gen.Queries, id domain.SessionID) error {
-	rows, err := q.AgentAccountUsageSince(ctx, gen.AgentAccountUsageSinceParams{
-		Since: sql.NullTime{Time: time.Time{}, Valid: true}, SessionID: string(id),
+	rows, err := q.SessionAgentAccountUsageSince(ctx, gen.SessionAgentAccountUsageSinceParams{
+		SessionID: id, Since: sql.NullTime{Time: time.Time{}, Valid: true},
 	})
 	if err != nil {
 		return err
