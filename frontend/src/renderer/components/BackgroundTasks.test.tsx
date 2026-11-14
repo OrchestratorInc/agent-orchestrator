@@ -118,7 +118,8 @@ describe("composer tab", () => {
 		const rows = within(screen.getByRole("list")).getAllByRole("listitem");
 		// Failures stay above the five-row cap, without a stop.
 		expect(rows.map((row) => row.textContent)).toEqual(["Run the Go linter2m", "Start the renderer dev server12m", "Watch the composer tests9m"]);
-		expect(within(rows[0]).getByRole("img", { name: "Failed" })).toBeVisible();
+		// The red dot ends the row, in the stop square's place, after the time.
+		expect(rows[0].lastElementChild).toContainElement(within(rows[0]).getByRole("img", { name: "Failed" }));
 		expect(within(rows[0]).queryByRole("button")).toBeNull();
 		await userEvent.click(within(rows[2]).getByRole("button", { name: "Stop Watch the composer tests" }));
 		expect(mutateMock).toHaveBeenCalledWith("watch");
