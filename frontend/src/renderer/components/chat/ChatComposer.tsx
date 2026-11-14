@@ -53,6 +53,7 @@ import {
 	type Ref,
 } from "react";
 import { ArrowUp, CornerUpRight, Loader2, Mic, Paperclip, Play, Plus, Square, X } from "@/components/app-icons";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { isMacPlatform } from "../../lib/platform";
 import { useDictation } from "./useDictation";
 import { DictationMeter } from "./DictationMeter";
@@ -179,6 +180,33 @@ const SEND_CONCEAL_MS = 3000;
 const MAX_NATIVE_IMAGE_BYTES = 10 * 1024 * 1024;
 const MAX_NATIVE_IMAGES_BYTES = 25 * 1024 * 1024;
 
+/**
+ * The band hung on the chat box slides up out from behind it as it comes and
+ * back down behind it as it goes. Only the band moves, and by transform alone:
+ * its space above the box is taken at once, so nothing else is laid out again
+ * while it slides, and the clip at the box's edge hides it there.
+ */
+function ComposerBand({ band }: { band?: ReactNode }) {
+	const reducedMotion = useReducedMotion();
+	return (
+		<AnimatePresence initial={false}>
+			{band ? (
+				<div key="band" className="overflow-hidden">
+					<motion.div
+						className="chat-composer-band-tray"
+						initial={{ y: "100%" }}
+						// --duration-normal (150ms), DESIGN.md's small panel movement.
+						animate={{ y: 0, transition: { duration: reducedMotion ? 0 : 0.15, ease: "easeOut" } }}
+						exit={{ y: "100%", transition: { duration: reducedMotion ? 0 : 0.15, ease: "easeIn" } }}
+					>
+						{band}
+					</motion.div>
+				</div>
+			) : null}
+		</AnimatePresence>
+	);
+}
+
 /** A message entered while the previous one was still being sent. */
 type HeldSubmit = {
 	/** The draft as entered; it is sent only if the box still holds exactly this. */
@@ -252,6 +280,7 @@ export const ChatComposer = memo(function ChatComposer({
 	queuePlaceholder,
 	disabled,
 	disabledPlaceholder,
+	typingLocked = false,
 	sendBlockedReason,
 	starting,
 	holdAttachments,
@@ -289,6 +318,7 @@ export const ChatComposer = memo(function ChatComposer({
 	queuedEditRecovery,
 	commandError,
 	notice,
+	trayBand,
 	queuedDock,
 	onCompact,
 	compacting,
@@ -348,6 +378,11 @@ export const ChatComposer = memo(function ChatComposer({
 	disabled?: boolean;
 	/** Explains why message entry is temporarily blocked. */
 	disabledPlaceholder?: string;
+	/**
+	 * Takes no typing and sends nothing, while the box looks exactly as usual; the
+	 * tools around it (attachments, the agent and model pickers) stay usable.
+	 */
+	typingLocked?: boolean;
 	sendBlockedReason?: string;
 	starting?: boolean;
 	/**
@@ -436,6 +471,8 @@ export const ChatComposer = memo(function ChatComposer({
 	commandError?: string;
 	/** A notice attached to the form, below queued messages and input requests. */
 	notice?: ReactNode;
+	/** A band hung on top of the chat box (a refused login's); the box itself is not moved or recolored. */
+	trayBand?: ReactNode;
 	/** Queued messages rendered above the composer. */
 	queuedDock?: ReactNode;
 	/** Run AO's built-in `/compact` command instead of sending it to the agent. */
@@ -551,6 +588,12 @@ export const ChatComposer = memo(function ChatComposer({
 		onEnd: (keep) => editor.current?.endDictation(keep),
 	});
 	const dictating = dictation.phase !== "idle";
+	// A locked box takes no dictating either: a lock that comes while the user
+	// speaks stops listening, keeping the words so far.
+	const detachDictation = dictation.detach;
+	useEffect(() => {
+		if (typingLocked) detachDictation();
+	}, [detachDictation, typingLocked]);
 	// Dictation is in preview: macOS only, behind Developer mode.
 	const canDictate = useUiStore((state) => state.developerMode) && isMacPlatform();
 	const filePicker = useRef<HTMLInputElement>(null);
@@ -839,6 +882,7 @@ export const ChatComposer = memo(function ChatComposer({
 		durableDelivery &&
 			(!busy || durableDelivery.state === "accepted") &&
 			!disabled &&
+			!typingLocked &&
 			!sendBlockedReason &&
 			!steerPending &&
 		!savingQueuedEditPending &&
@@ -856,6 +900,7 @@ export const ChatComposer = memo(function ChatComposer({
 		hasDraft &&
 		(savingQueuedEdit || !busy) &&
 		!disabled &&
+		!typingLocked &&
 		!sendBlockedReason &&
 		!steerPending &&
 		!savingQueuedEditPending &&
@@ -1552,6 +1597,7 @@ export const ChatComposer = memo(function ChatComposer({
 			}
 			return submitInFlight.current;
 		}
+		if (typingLocked) return Promise.resolve();
 		setHeldSubmit(null);
 		heldDuringSubmit.current = null;
 		submitAccepted.current = false;
@@ -2139,7 +2185,7 @@ export const ChatComposer = memo(function ChatComposer({
 	function recallSentMessage(older: boolean, event: KeyboardEvent<HTMLDivElement>): boolean {
 		if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || isComposing) return false;
 		// A queued edit, a delivery still settling, or a disabled controller owns the text.
-		if (editingQueuedTurnId || queuedEditRecovery || disabled || submitInFlight.current || draftMutationPending) {
+		if (editingQueuedTurnId || queuedEditRecovery || disabled || typingLocked || submitInFlight.current || draftMutationPending) {
 			return false;
 		}
 		// A pasted image holds its place in the draft until staging fills it in.
@@ -2242,7 +2288,7 @@ export const ChatComposer = memo(function ChatComposer({
 			text={stripDelivery.draft.text}
 			attachmentCount={stripDelivery.draft.attachments.length}
 			sending={!unsent}
-			retryDisabled={Boolean(busy || disabled || sendBlockedReason || durableDelivery || submitting || composerMutation.pending)}
+			retryDisabled={Boolean(busy || disabled || typingLocked || sendBlockedReason || durableDelivery || submitting || composerMutation.pending)}
 			onRetry={retryUnsent}
 			onDiscard={discardUnsent}
 		/>
@@ -2277,6 +2323,7 @@ export const ChatComposer = memo(function ChatComposer({
 						{unsentStrip}
 					</div>
 				) : null}
+				<ComposerBand band={trayBand} />
 				{notice}
 				{form}
 			</div>
@@ -2482,6 +2529,7 @@ export const ChatComposer = memo(function ChatComposer({
 					images={composerImages}
 					promptSuggestion={willQueue || starting || editingQueuedTurnId || staged ? undefined : promptSuggestion}
 					disabled={Boolean(disabled || queuedEditRecovery || (!optimisticSend && (submitting || draftMutationPending)))}
+					readOnly={typingLocked}
 					enterSends={enterSends}
 					concealed={sendConcealed && !optimisticSend}
 					label="Message the agent"
@@ -2629,7 +2677,7 @@ export const ChatComposer = memo(function ChatComposer({
 											variant={dictating ? "primary" : "quiet"}
 											size="none"
 											shape="pill"
-											disabled={!dictating && controlsDisabled}
+											disabled={!dictating && (controlsDisabled || typingLocked)}
 											// Keep focus in the editor, where the words appear.
 											onMouseDown={(event) => event.preventDefault()}
 											onClick={() => {

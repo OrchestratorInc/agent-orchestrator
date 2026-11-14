@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactElement, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useQueryClient } from "@tanstack/react-query";
-import { Check, ChevronDown, Copy, Loader2, Share } from "@/components/app-icons";
+import { Check, Copy, Loader2, Share } from "@/components/app-icons";
 import {
 	type CloudShareAccess,
 	type CloudShareFile,
@@ -473,9 +473,9 @@ function usePublishedShare(file: CloudShareFile | null, scope: ShareScope, revis
  * popover first, to choose who it is for, and its Publish there uploads it.
  * Once published, the button reads Published, with the same Publish icon: who
  * the link opens for is shown in the popover, not guessed at on the button.
- * Once the file changed since, it splits: Republish puts the newer version on
- * the same link, and the chevron opens the popover without republishing. For
- * a video the button is disabled and says why.
+ * Once the file changed since, it reads Republish with an amber dot, and one
+ * click puts the newer version on the same link and opens the popover on it.
+ * For a video the button is disabled and says why.
  */
 export function ShareArtifactButton({ file, name, className, iconOnly = false, revision = "", published = false }: {
 	file: Omit<CloudShareFile, "baseUrl" | "shareId">;
@@ -500,10 +500,6 @@ export function ShareArtifactButton({ file, name, className, iconOnly = false, r
 	// What the panel does on opening is fixed when it opens, so a check that
 	// lands while it is open never starts a second publish.
 	const [republishOnOpen, setRepublishOnOpen] = useState(false);
-	const openPanel = (republish: boolean) => {
-		setRepublishOnOpen(republish);
-		setOpen(true);
-	};
 	const onOpenChange = (next: boolean) => {
 		if (next) setRepublishOnOpen(outdated);
 		else recheck();
@@ -539,40 +535,6 @@ export function ShareArtifactButton({ file, name, className, iconOnly = false, r
 			</Tooltip>
 		);
 	}
-	// The file changed since it was published: Republish on the left, the link's
-	// access on the right, which opens the popover as it is.
-	if (outdated && share && !publishing && !iconOnly) {
-		return (
-			<Popover open={open} onOpenChange={onOpenChange}>
-				<PopoverAnchor asChild>
-					<span className={cn("inline-flex items-center", className)} data-share-split="">
-						<Tooltip>
-							<TooltipTrigger asChild>
-								<Button aria-label={`${label}: ${name}`} className="relative" onClick={() => openPanel(true)} size="sm" type="button" variant="quiet">
-									<Share aria-hidden="true" className="size-icon-sm" />
-									{label}
-									{amberDot}
-								</Button>
-							</TooltipTrigger>
-							<TooltipContent side="bottom">{t("artifacts.share.republishHint")}</TooltipContent>
-						</Tooltip>
-						<Button
-							aria-label={t("artifacts.share.options", { name })}
-							className="gap-0.5 px-1.5"
-							data-state={open ? "open" : "closed"}
-							onClick={() => openPanel(false)}
-							size="sm"
-							type="button"
-							variant="quiet"
-						>
-							<ChevronDown aria-hidden="true" className="size-3" />
-						</Button>
-					</span>
-				</PopoverAnchor>
-				{panel}
-			</Popover>
-		);
-	}
 	const button = (
 		<Button
 			aria-label={`${label}: ${name}`}
@@ -591,10 +553,10 @@ export function ShareArtifactButton({ file, name, className, iconOnly = false, r
 	// Closing the popover mid-publish keeps the publish going; only Cancel stops it.
 	return (
 		<Popover open={open} onOpenChange={onOpenChange}>
-			{iconOnly ? (
+			{iconOnly || (outdated && !publishing) ? (
 				<Tooltip>
 					<TooltipTrigger asChild>{popoverTrigger}</TooltipTrigger>
-					<TooltipContent side="bottom">{outdated ? t("artifacts.share.republishHint") : label}</TooltipContent>
+					<TooltipContent side="bottom">{outdated && !publishing ? t("artifacts.share.republishHint") : label}</TooltipContent>
 				</Tooltip>
 			) : popoverTrigger}
 			{panel}

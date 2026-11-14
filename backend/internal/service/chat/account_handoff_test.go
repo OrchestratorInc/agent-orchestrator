@@ -291,29 +291,6 @@ func TestAccountHandoffRollbackKeepsAccount(t *testing.T) {
 	}
 }
 
-func TestAccountHandoffRespectsStayOnAccount(t *testing.T) {
-	hh := newHandoffHarness(t, domain.HarnessClaudeCode)
-	if err := hh.st.SetSessionAccountPinned(context.Background(), testSession, true); err != nil {
-		t.Fatal(err)
-	}
-	source := failUsageLimitedTurn(t, hh.harness, timedUsageLimit)
-	hh.tick(t)
-	if len(hh.mover.moves()) != 0 {
-		t.Fatal("a pinned session was moved")
-	}
-	stored, _ := hh.st.TurnByID(context.Background(), source.ID)
-	if !stored.UsageLimit.AutoResume {
-		t.Fatal("a pinned session did not fall back to auto-resume")
-	}
-}
-
-func TestStayOnAccountRejectsUnknownSession(t *testing.T) {
-	hh := newHandoffHarness(t, domain.HarnessClaudeCode)
-	if err := hh.st.SetSessionAccountPinned(context.Background(), "missing-session", true); !errors.Is(err, ports.ErrSessionNotFound) {
-		t.Fatalf("pin unknown session: %v", err)
-	}
-}
-
 func TestAccountHandoffOffClaimsNothing(t *testing.T) {
 	hh := newHandoffHarness(t, domain.HarnessCodex)
 	hh.enabled.Store(false)

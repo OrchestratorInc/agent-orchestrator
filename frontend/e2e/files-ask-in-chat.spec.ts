@@ -205,7 +205,12 @@ test.describe("Add to chat from highlighted code", () => {
 			await useKeybindingsStore.getState().setBindings("add-selection-to-chat", [{ key: "j", ctrl: true, meta: false, shift: true, alt: true }]);
 		});
 		const mac = await page.evaluate(() => /Mac/i.test(navigator.platform));
-		await expect(toolbar.getByRole("button", { name: "Add to chat", exact: true })).toHaveAttribute("title", mac ? "Add to chat (⌃⌥⇧J)" : "Add to chat (Ctrl+Alt+Shift+J)");
+		const hint = mac ? "Add to chat (⌃⌥⇧J)" : "Add to chat (Ctrl+Alt+Shift+J)";
+		const add = toolbar.getByRole("button", { name: "Add to chat", exact: true });
+		if (mode === "chat") {
+			await add.hover();
+			await expect(page.getByRole("tooltip")).toHaveText(hint);
+		} else await expect(add).toHaveAttribute("title", hint);
 		await page.keyboard.press("ControlOrMeta+L");
 		await expect(page.getByRole("button", { name: "1 annotation" })).toHaveCount(0);
 		await expect(toolbar).toBeVisible();

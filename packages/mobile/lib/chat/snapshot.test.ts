@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import * as snapshotModule from "./snapshot";
 
-const { cachedConversationState, createConversationPageCache, discardHistoricalPages, mergeConversationPages, olderPageFits, withLivePage } = snapshotModule;
+const { cacheConversationPages, cachedConversationState, createConversationPageCache, discardHistoricalPages, mergeConversationPages, olderPageFits, withLivePage } = snapshotModule;
 type ConversationPage = snapshotModule.ConversationPage;
 
 function page(overrides: Partial<ConversationPage> = {}): ConversationPage {
@@ -129,6 +129,34 @@ describe("mobile conversation reopen cache", () => {
 		cache.set("server/session-1", [live, history]);
 
 		expect(cache.get("server/session-1")).toEqual([live]);
+	});
+
+	it("puts a conversation back in the cache on an unchanged refresh once another evicted it", () => {
+		const cache = createConversationPageCache(1);
+		const pages = [page({ sessionId: "session-1" })];
+		cache.set("session-1", pages);
+		cache.set("session-2", [page({ sessionId: "session-2" })]);
+		expect(cache.get("session-1")).toBeUndefined();
+
+		// The refresh found nothing new: the same pages are shown again.
+		cacheConversationPages(cache, "session-1", pages, pages);
+
+		expect(cache.get("session-1")?.[0]).toBe(pages[0]);
+	});
+
+	it("skips the write when nothing changed and the cache still holds the conversation", () => {
+		const inner = createConversationPageCache(2);
+		let writes = 0;
+		const cache = { get: inner.get, set: (key: string, value: ConversationPage[]) => { writes += 1; inner.set(key, value); } };
+		const pages = [page({ sessionId: "session-1" })];
+		cacheConversationPages(cache, "session-1", [], pages);
+		cacheConversationPages(cache, "session-1", pages, pages);
+		expect(writes).toBe(1);
+
+		const changed = [page({ sessionId: "session-1", latestSequence: 9 })];
+		cacheConversationPages(cache, "session-1", pages, changed);
+		expect(writes).toBe(2);
+		expect(inner.get("session-1")?.[0]).toBe(changed[0]);
 	});
 
 	it("evicts the least recently used session when bounded", () => {

@@ -156,6 +156,20 @@ export interface CloudCpInvitationsResponse {
 	invitations: CloudCpInvitation[];
 }
 
+/** One active member of an organization (GET /orgs/{orgId}/members). */
+export interface CloudCpOrgMember {
+	userId: string;
+	email: string;
+	displayName: string;
+	role: string;
+	createdAt: string;
+}
+
+/** GET /orgs/{orgId}/members: every active member, any member may read it. */
+export interface CloudCpOrgMembersResponse {
+	members: CloudCpOrgMember[];
+}
+
 // ---------------------------------------------------------------------------
 // Pagination (`resource_handlers.go` pageInfo / transport.go cursors)
 // ---------------------------------------------------------------------------
