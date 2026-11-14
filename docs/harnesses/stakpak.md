@@ -114,7 +114,9 @@ in its working directory. AO writes that file (and a `.gitignore` beside it):
 | auto, bypass-permissions | every tool by default |
 
 Stakpak always asks before shell commands (`run_command` and friends), in every
-mode. A policy file the user wrote is left untouched.
+mode. An unattended worker therefore stops at its first shell command, and AO
+shows it as blocked until someone answers in the terminal. A policy file the
+user wrote is left untouched.
 
 ## Not supported
 
