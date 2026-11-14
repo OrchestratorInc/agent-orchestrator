@@ -74,12 +74,16 @@ type APIDeps struct {
 	Telemetry ports.EventSink
 	// TelemetryIdentity is the live telemetry identity, served to the phone by
 	// GET /api/v1/telemetry/identity and updated by the desktop over loopback.
-	TelemetryIdentity        ports.TelemetryIdentityStore
-	LifetimeSessions         func(context.Context) (int64, error)
-	Mobile                   *controllers.MobileController
-	BrowserLive              *BrowserLiveHub
-	Browser                  controllers.BrowserService
-	BrowserChrome            controllers.BrowserChromeService
+	TelemetryIdentity ports.TelemetryIdentityStore
+	LifetimeSessions  func(context.Context) (int64, error)
+	Mobile            *controllers.MobileController
+	BrowserLive       *BrowserLiveHub
+	Browser           controllers.BrowserService
+	BrowserChrome     controllers.BrowserChromeService
+	// Panes relays split-pane requests from agents to the desktop window.
+	Panes controllers.PaneService
+	// PaneTerminals lets an agent type into and read its session's shell terminals.
+	PaneTerminals            controllers.PaneTerminalService
 	PreviewServer            controllers.ManagedPreviewServer
 	SessionCapabilities      controllers.SessionCapabilityValidator
 	ShellPreviewCapabilities controllers.ShellPreviewCapabilityValidator
@@ -175,6 +179,7 @@ type API struct {
 	settings      *controllers.SettingsController
 	dev           *controllers.DevController
 	browser       *controllers.BrowserController
+	panes         *controllers.PanesController
 	system        *controllers.SystemController
 	identity      *controllers.IdentityController
 	endpoints     *controllers.EndpointsController
@@ -243,6 +248,7 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 		settings:      &controllers.SettingsController{Svc: deps.Settings},
 		dev:           &controllers.DevController{Import: deps.DevImport},
 		browser:       &controllers.BrowserController{Svc: deps.Browser, Chrome: deps.BrowserChrome},
+		panes:         &controllers.PanesController{Svc: deps.Panes, Terminals: deps.PaneTerminals, Sessions: deps.Sessions, Capabilities: deps.SessionCapabilities},
 		system:        &controllers.SystemController{Checks: deps.SystemChecks},
 		identity:      &controllers.IdentityController{HostID: deps.HostID},
 		endpoints:     &controllers.EndpointsController{Source: deps.Endpoints},
@@ -393,6 +399,7 @@ func (a *API) Register(root chi.Router) {
 			a.settings.Register(r)
 			a.dev.Register(r)
 			a.browser.Register(r)
+			a.panes.Register(r)
 			a.system.Register(r)
 			a.identity.Register(r)
 			a.endpoints.Register(r)

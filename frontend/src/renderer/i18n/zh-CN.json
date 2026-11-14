@@ -2885,7 +2885,7 @@
 	"settings.sideChats": "侧边聊天",
 	"settings.sideChatsHint": "在检查器中打开独立的侧边对话，并使用 /btw 提问。",
 	"settings.splitPanes": "分屏",
-	"settings.splitPanesHint": "将标签页拖到中间面板的边缘，即可与当前标签页并排显示。",
+	"settings.splitPanesHint": "将标签页拖到中间面板的边缘，即可与当前标签页并排显示。应你的要求，会话中的智能体也可以拆分窗格并在终端中运行命令。",
 	"settings.prView": "PR 视图",
 	"settings.prViewHint": "在单独的标签页中打开拉取请求，查看其描述、评论、检查和堆栈。",
 	"settings.chromeAgents.label": "在我的 Chrome 中使用智能体",
