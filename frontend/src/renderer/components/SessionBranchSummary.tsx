@@ -28,7 +28,7 @@ import { ChangeCounts, ChangedFilesList } from "./ChangedFilesList";
 import { usesPreviewWorkspaceData as usePreviewData } from "../lib/preview-mode";
 import { useSessionGitActionStore, type SessionGitActionKind } from "../stores/session-git-action-store";
 import type { SessionPRSummary } from "../hooks/useSessionScmSummary";
-import { type SessionBranchState, type WorkspaceSession, sessionWorkspaceReady } from "../types/workspace";
+import { type SessionBranchState, type WorkspaceSession, sessionIsActive, sessionWorkspaceReady } from "../types/workspace";
 import { Button } from "./ui/button";
 import { Pressable } from "./ui/pressable";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./ui/dropdown-menu";
@@ -507,7 +507,9 @@ export function useOtherPRConflictStep(session: WorkspaceSession, hostId: string
 	const { t } = useTranslation();
 	const conflicting = pr?.mergeability.state === "conflicting";
 	const { pending, run, error } = useAgentGitAction(session, hostId, pr ? `pr:${pr.url}` : "pr", () => !conflicting);
-	const applies = Boolean(pr && conflicting && (pr.state === "open" || pr.state === "draft") && session.kind !== "orchestrator");
+	// An archived Cloud session's agent takes no message: the control plane refuses it.
+	const reachable = !session.cloud || sessionIsActive(session);
+	const applies = Boolean(pr && conflicting && (pr.state === "open" || pr.state === "draft") && session.kind !== "orchestrator" && reachable);
 	if (!pr || (!applies && !pending)) return undefined;
 	return {
 		primary: applies ? { kind: "resolveConflicts", label: t("inspector.git.resolveConflicts") } : undefined,

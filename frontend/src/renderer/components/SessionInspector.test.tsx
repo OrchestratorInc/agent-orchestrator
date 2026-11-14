@@ -6222,6 +6222,34 @@ describe("SessionInspector branch summary", () => {
     }
   });
 
+  it("offers no Resolve conflicts on an archived Cloud session's PR: its agent can take no message", async () => {
+    cloudCpMockState.enabled = true;
+    cloudCpMock.sendSessionMessage.mockReset().mockResolvedValue({});
+    cloudCpMock.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
+    const conflicting = prSummary(7, "open", {
+      sourceBranch: "feat/ns",
+      mergeability: { state: "conflicting", reasons: [], prUrl: "https://github.com/acme/repo/pull/7", conflictFiles: [{ path: "src/a.ts" }] },
+    });
+    try {
+      renderWithQuery(
+        <SessionInspector session={session([pr(7, "open")], { isTerminated: true, status: "terminated", cloud: { orgId: "cloud-org-1" } })} />,
+        undefined,
+        (client) => {
+          client.setQueryData(settingsQueryKey, {
+            defaultSessionMode: "tui", chatHarnesses: [], client: "", localEnabled: true,
+            cloudEnabled: true, cloudControlPlaneUrl: "https://cloud.example.test",
+          }, { updatedAt: Date.now() + 60_000 });
+          client.setQueryData(["cloud-session-scm-summary", "https://cloud.example.test", "cloud-org-1", "sess-1"], { prs: [conflicting], linkedPrs: [] }, { updatedAt: Date.now() + 60_000 });
+        },
+      );
+      const card = await screen.findByTestId("pr-card");
+      expect(within(card).queryByRole("button", { name: "Resolve conflicts" })).not.toBeInTheDocument();
+      expect(cloudCpMock.sendSessionMessage).not.toHaveBeenCalled();
+    } finally {
+      cloudCpMockState.enabled = false;
+    }
+  });
+
   it("keeps committing first and puts the update in the menu while work is uncommitted", async () => {
     mockGitState({ uncommitted: [changedFile("src/c.ts", 1, 0)], committed: [changedFile("src/a.ts", 5, 0)] });
     renderWithQuery(<SessionInspector session={session([pr(7, "open")], { branchState: { ...pushed(2), base: "main", behind: 3 } })} />);
