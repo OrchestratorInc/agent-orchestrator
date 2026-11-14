@@ -55,14 +55,15 @@
   margin-bottom: 0.5rem;
 }
 
-.prose a {
+/* Card-style links opt out with `not-prose`, as in the typography plugin. */
+.prose a:not(:where(.not-prose, .not-prose *)) {
   text-decoration: underline;
   text-decoration-color: rgb(255 255 255 / 0.3);
   text-underline-offset: 2px;
   transition: text-decoration-color 0.15s;
 }
 
-.prose a:hover {
+.prose a:not(:where(.not-prose, .not-prose *)):hover {
   text-decoration-color: rgb(255 255 255 / 0.6);
 }
 
