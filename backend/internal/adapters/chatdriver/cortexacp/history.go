@@ -36,7 +36,7 @@ func validateNativeHistory(ctx context.Context, cfg ports.ChatResumeConfig) erro
 	}
 	id := cfg.ProviderConversationID
 	if id == "" || len(id) > 128 || strings.IndexFunc(id, func(r rune) bool {
-		return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_')
+		return (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') && r != '-' && r != '_'
 	}) >= 0 {
 		return fail("has an unsafe session identifier")
 	}
@@ -44,7 +44,7 @@ func validateNativeHistory(ctx context.Context, cfg ports.ChatResumeConfig) erro
 	if err != nil {
 		return fail("profile is unavailable")
 	}
-	defer root.Close()
+	defer func() { _ = root.Close() }()
 	relative := filepath.Join(".snowflake", "cortex", "conversations", id)
 	snapshot, err := readNativeFile(root, relative+".json", maxSnapshotBytes)
 	if err != nil {
@@ -98,7 +98,7 @@ func validateNativeHistory(ctx context.Context, cfg ports.ChatResumeConfig) erro
 	}
 	count := 0
 	if err == nil {
-		defer journal.Close()
+		defer func() { _ = journal.Close() }()
 		info, statErr := journal.Stat()
 		if statErr != nil || !info.Mode().IsRegular() || info.Size() > maxJournalBytes {
 			return fail("journal is not a bounded regular file")
@@ -186,7 +186,7 @@ func readNativeFile(root *os.Root, name string, limit int64) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	info, err := file.Stat()
 	if err != nil {
 		return nil, err

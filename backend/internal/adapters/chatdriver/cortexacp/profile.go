@@ -31,7 +31,7 @@ func validateProfile(ctx context.Context, home string) error {
 	if err != nil {
 		return fail()
 	}
-	defer root.Close()
+	defer func() { _ = root.Close() }()
 	directories := []string{"."}
 	count := 0
 	for len(directories) > 0 {

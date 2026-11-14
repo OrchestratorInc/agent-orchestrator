@@ -55,7 +55,7 @@ func instructionPlugin(ctx context.Context, dataDir, prompt string) (string, err
 		}
 	}()
 	manifestDir := filepath.Join(dir, ".cortex-plugin")
-	if err := os.Mkdir(manifestDir, 0700); err != nil {
+	if err := os.Mkdir(manifestDir, 0o700); err != nil {
 		return "", err
 	}
 	output, err := json.Marshal(map[string]any{
@@ -88,7 +88,7 @@ func instructionPlugin(ctx context.Context, dataDir, prompt string) (string, err
 		if err := ctx.Err(); err != nil {
 			return "", err
 		}
-		f, err := os.OpenFile(file.name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+		f, err := os.OpenFile(file.name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 		if err != nil {
 			return "", err
 		}

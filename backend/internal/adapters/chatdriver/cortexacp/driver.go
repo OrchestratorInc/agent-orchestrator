@@ -14,11 +14,12 @@ import (
 	"path/filepath"
 	"strings"
 
+	acpsdk "github.com/coder/acp-go-sdk"
+
 	acpdriver "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/nativeacp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
-	acpsdk "github.com/coder/acp-go-sdk"
 )
 
 const harness domain.AgentHarness = "cortex-code"
@@ -78,7 +79,10 @@ func newCandidate(plugin nativeacp.Plugin, log *slog.Logger, instructions bool) 
 			return "", false
 		},
 	}, log)
-	return &candidate{driver: driver, reconnect: driver.(ports.ChatDriverReconnector), instructions: instructions}
+	// A shared driver without live reconnect leaves reconnect nil; Reconnect
+	// then fails closed instead of panicking at construction.
+	reconnect, _ := driver.(ports.ChatDriverReconnector)
+	return &candidate{driver: driver, reconnect: reconnect, instructions: instructions}
 }
 
 func (d *candidate) Harness() domain.AgentHarness { return harness }
@@ -132,6 +136,9 @@ func (d *candidate) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (por
 }
 
 func (d *candidate) Reconnect(ctx context.Context, cfg ports.ChatResumeConfig) (ports.ChatConversation, error) {
+	if d.reconnect == nil {
+		return nil, fmt.Errorf("%w: Cortex candidate requires shared ACP live reconnect", ports.ErrChatDriverIncompatible)
+	}
 	if err := d.validateResume(cfg); err != nil {
 		return nil, err
 	}
@@ -156,13 +163,12 @@ func (d *candidate) validateLaunch(dataDir, workspace, prompt string, env map[st
 	if err := validateInstructions(prompt, d.instructions); err != nil {
 		return err
 	}
-	return validateLaunch(dataDir, workspace, "", env)
+	return validateLaunch(dataDir, workspace, env)
 }
 
-func validateLaunch(dataDir, workspace, prompt string, env map[string]string) error {
-	if prompt != "" {
-		return fmt.Errorf("%w: Cortex ACP additive standing instructions are not qualified", ports.ErrChatDriverIncompatible)
-	}
+// validateLaunch checks launch paths only; standing instructions are gated by
+// validateInstructions before every caller reaches this check.
+func validateLaunch(dataDir, workspace string, env map[string]string) error {
 	// Resolve both directories: a lexically isolated HOME that links into the
 	// user's profile must never authorize a candidate launch. Existing profiles
 	// only; the adapter must not initialize or modify source configuration.
@@ -196,7 +202,7 @@ func configureInstructions(ctx context.Context, cfg acpdriver.LaunchConfig, inst
 	if err := validateInstructions(cfg.SystemPrompt, instructions); err != nil {
 		return nil, nil, err
 	}
-	if err := validateLaunch(cfg.DataDir, cfg.WorkspacePath, "", cfg.Env); err != nil {
+	if err := validateLaunch(cfg.DataDir, cfg.WorkspacePath, cfg.Env); err != nil {
 		return nil, nil, err
 	}
 	if err := validateProfile(ctx, cfg.Env["HOME"]); err != nil {

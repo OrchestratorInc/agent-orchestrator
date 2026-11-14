@@ -95,10 +95,19 @@ func TestResumeNeverUsesFreshFallback(t *testing.T) {
 	}
 }
 
+func TestReconnectFailsClosedWithoutSharedReconnector(t *testing.T) {
+	cfg := isolatedConfig(t)
+	d := &candidate{driver: &recordingDriver{}}
+	resume := ports.ChatResumeConfig{ProviderConversationID: "native-id", DataDir: cfg.DataDir, WorkspacePath: cfg.WorkspacePath, Env: cfg.Env}
+	if _, err := d.Reconnect(context.Background(), resume); !errors.Is(err, ports.ErrChatDriverIncompatible) {
+		t.Fatalf("Reconnect = %v", err)
+	}
+}
+
 func TestCandidateRejectsSourceOrSymlinkedHome(t *testing.T) {
 	cfg := isolatedConfig(t)
 	for _, home := range []string{"", ".", cfg.DataDir, t.TempDir()} {
-		if err := validateLaunch(cfg.DataDir, cfg.WorkspacePath, "", map[string]string{"HOME": home}); !errors.Is(err, ports.ErrChatDriverIncompatible) {
+		if err := validateLaunch(cfg.DataDir, cfg.WorkspacePath, map[string]string{"HOME": home}); !errors.Is(err, ports.ErrChatDriverIncompatible) {
 			t.Fatalf("HOME %q = %v", home, err)
 		}
 	}
@@ -106,7 +115,7 @@ func TestCandidateRejectsSourceOrSymlinkedHome(t *testing.T) {
 	if err := os.Symlink(t.TempDir(), link); err != nil {
 		t.Skipf("symlink unavailable: %v", err)
 	}
-	if err := validateLaunch(cfg.DataDir, cfg.WorkspacePath, "", map[string]string{"HOME": link}); !errors.Is(err, ports.ErrChatDriverIncompatible) {
+	if err := validateLaunch(cfg.DataDir, cfg.WorkspacePath, map[string]string{"HOME": link}); !errors.Is(err, ports.ErrChatDriverIncompatible) {
 		t.Fatalf("symlink escape = %v", err)
 	}
 }

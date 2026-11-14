@@ -363,7 +363,7 @@ func TestConstructorLoadsExactHistoryAndRejectsWrongWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(first) == 0 || !reflect.DeepEqual(first, second) {
+	if len(first) == 0 || !reflect.DeepEqual(historyFingerprint(t, first), historyFingerprint(t, second)) {
 		t.Fatalf("replay changed/duplicated events: first=%+v second=%+v", first, second)
 	}
 	wrong := resume
@@ -519,7 +519,12 @@ func TestInstructionConstructorSeparatesContextAcrossColdRestoreAndLiveReconnect
 		t.Fatal("cold restore changed native ID")
 	}
 	got := contexts()
-	if len(got) != 2 || !(got[0] == "fresh private context" && got[1] == resume.SystemPrompt || got[1] == "fresh private context" && got[0] == resume.SystemPrompt) {
+	if len(got) != 2 {
+		t.Fatalf("cold restore context: %v", got)
+	}
+	freshThenRestored := got[0] == "fresh private context" && got[1] == resume.SystemPrompt
+	restoredThenFresh := got[1] == "fresh private context" && got[0] == resume.SystemPrompt
+	if !freshThenRestored && !restoredThenFresh {
 		t.Fatalf("cold restore context: %v", got)
 	}
 	send()
@@ -560,4 +565,24 @@ func TestInstructionConstructorSeparatesContextAcrossColdRestoreAndLiveReconnect
 	if prompts != 2 || loads != 1 || news != 1 {
 		t.Fatalf("prompt/load/new = %d/%d/%d", prompts, loads, news)
 	}
+}
+
+// historyFingerprint compares replayed events by value. ChatEvent.Err is an
+// interface, so its text is compared instead of its dynamic error identity.
+func historyFingerprint(t *testing.T, events []ports.ChatEvent) []string {
+	t.Helper()
+	out := make([]string, 0, len(events))
+	for _, event := range events {
+		errText := ""
+		if event.Err != nil {
+			errText = event.Err.Error()
+		}
+		event.Err = nil
+		data, err := json.Marshal(event)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, errText+"\x00"+string(data))
+	}
+	return out
 }
