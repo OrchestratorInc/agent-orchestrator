@@ -142,6 +142,51 @@ it("checks a sign-in once when the CLI exits during a check", async () => {
 	expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 });
 
+// A chat turn refused for its login sent the user here: the account that signs
+// in takes them back to it.
+it("returns to the chat turn waiting on a Claude login once its account signs in", async () => {
+	const user = userEvent.setup();
+	useUiStore.setState({
+		settingsModal: { scope: "global", section: "harness", focusAgentId: "claude-code", startLogin: true },
+		loginReturn: { sessionId: "s1", agentId: "claude-code", accountId: saved.id },
+	});
+	postMock.mockImplementation((path: string) => {
+		if (path === "/api/v1/agents/accounts/{accountId}/login") return Promise.resolve({ data: login });
+		if (path === "/api/v1/agents/accounts/login/{operationId}/verify") return Promise.resolve({ data: { status: "complete", account: { ...saved, signedIn: true } } });
+		return Promise.resolve({ data: {} });
+	});
+	renderPanel();
+	await user.click(await screen.findByRole("button", { name: "Sign in again" }));
+	await user.click(await screen.findByRole("button", { name: "Check sign-in" }));
+
+	await waitFor(() => expect(useUiStore.getState().loginReturn?.loggedInAt).toBeDefined());
+	expect(useUiStore.getState().settingsModal).toBeNull();
+	useUiStore.setState({ loginReturn: null });
+});
+
+// The session runs on its own account; signing another one in does not fix it.
+it("keeps the chat waiting when a different account signs in", async () => {
+	const user = userEvent.setup();
+	useUiStore.setState({
+		settingsModal: { scope: "global", section: "harness", focusAgentId: "claude-code", startLogin: true },
+		loginReturn: { sessionId: "s1", agentId: "claude-code", accountId: "the-sessions-account" },
+	});
+	postMock.mockImplementation((path: string) => {
+		if (path === "/api/v1/agents/accounts/{accountId}/login") return Promise.resolve({ data: login });
+		if (path === "/api/v1/agents/accounts/login/{operationId}/verify") return Promise.resolve({ data: { status: "complete", account: { ...saved, signedIn: true } } });
+		return Promise.resolve({ data: {} });
+	});
+	renderPanel();
+	await user.click(await screen.findByRole("button", { name: "Sign in again" }));
+	await user.click(await screen.findByRole("button", { name: "Check sign-in" }));
+
+	await waitFor(() => expect(postMock.mock.calls.some(([path]) => path === "/api/v1/agents/accounts/login/{operationId}/verify")).toBe(true));
+	await waitFor(() => expect(screen.queryByTestId("agent-account-login-terminal")).not.toBeInTheDocument());
+	expect(useUiStore.getState().loginReturn?.loggedInAt).toBeUndefined();
+	expect(useUiStore.getState().settingsModal).not.toBeNull();
+	useUiStore.setState({ loginReturn: null, settingsModal: null });
+});
+
 // The CLI's own login has no card of its own: its row signs it in again and
 // out through the harness's login terminal, and has no folder to remove.
 it("signs the CLI login in again and out from its own row", async () => {
