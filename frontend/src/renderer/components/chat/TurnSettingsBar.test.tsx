@@ -1130,6 +1130,27 @@ describe("remember project permissions", () => {
 		expect(screen.getByRole("button", { name: "Approval policy for the next turn" })).toBeEnabled();
 	});
 
+	it("shows a settings error inside the picker row, so the composer does not grow", () => {
+		const message = "the agent rejected that model because the account cannot use it";
+		const props = { models: [], settings: {}, onChange: vi.fn() };
+		const { rerender } = render(<TurnSettingsBar {...props} />);
+		const bar = screen.getByRole("group", { name: "Turn settings" });
+		const row = bar.firstElementChild as HTMLElement;
+		expect(bar.children).toHaveLength(1);
+		expect(row).toHaveClass("h-7");
+		expect(row).toContainElement(screen.getByRole("button", { name: "Approval policy for the next turn" }));
+
+		rerender(<TurnSettingsBar {...props} error={message} rememberPermissionsError="Could not save project default" />);
+		const alert = screen.getByRole("alert");
+		expect(row).toContainElement(alert);
+		// The row stays the only child of the bar: nothing is stacked under it.
+		expect(bar.children).toHaveLength(1);
+		// The line truncates to the free space; the whole message is on hover.
+		expect(alert).toHaveAttribute("title", `${message} · Could not save project default`);
+		expect(alert).toHaveTextContent(message);
+		expect(alert).toHaveTextContent("Could not save project default");
+	});
+
 	it("matches the remembered mode against the provider mode instead of stale native settings", async () => {
 		const user = userEvent.setup();
 		const props = { models: [], settings: { approvalMode: "auto" as const }, onChangeConfigOption: vi.fn(), onRememberPermissions: vi.fn() };

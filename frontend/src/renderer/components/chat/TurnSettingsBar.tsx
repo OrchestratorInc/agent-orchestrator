@@ -256,6 +256,7 @@ export function TurnSettingsBar({
 		: modelLabel;
 	const grouped = partitionConfigOptions(displayConfigOptions, harness !== "agy");
 	const optionDisabled = Boolean(disabled || configPending || rememberPermissionsPending);
+	const settingsProblem = [error, rememberPermissionsError].filter(Boolean).join(" · ") || undefined;
 	const applyOption = (optionId: string, value: ChatConfigOptionValue) => {
 		if (!onChangeConfigOption) return;
 		const providerId = harness === "agy" && optionId === AGY_MODEL_EFFORT
@@ -548,6 +549,14 @@ export function TurnSettingsBar({
 							onChange={applyOption}
 						/>
 					) : null}
+
+					{/* In the row's free space beside the pickers, so an error never makes the composer taller. */}
+					{settingsProblem ? (
+						<p role="alert" title={settingsProblem} className="ml-1 flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden text-xs text-destructive">
+							<TriangleAlert aria-hidden="true" className="size-3.5 shrink-0" />
+							<span className="min-w-0 truncate">{settingsProblem}</span>
+						</p>
+					) : null}
 				</div>
 
 				{showRightDropdown || children || (unified && planOn) ? (
@@ -659,14 +668,6 @@ export function TurnSettingsBar({
 					</div>
 				) : null}
 			</div>
-			{rememberPermissionsError ? (
-				<p role="alert" className="px-1 text-xs text-destructive">{rememberPermissionsError}</p>
-			) : null}
-			{error ? (
-				<p role="alert" className="px-1 text-xs leading-snug text-destructive">
-					{error}
-				</p>
-			) : null}
 		</div>
 	);
 }
