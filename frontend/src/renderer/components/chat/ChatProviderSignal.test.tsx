@@ -327,6 +327,33 @@ describe("steer message", () => {
 		expect(await screen.findByText("Split across two pastes")).toBeInTheDocument();
 	});
 
+	it("keeps an automation steer's annotation and comment", async () => {
+		const user = userEvent.setup();
+		render(
+			<SteerMessage
+				sessionId="target-1"
+				activity={activity({
+					activityKind: "system",
+					summary: "[from worker-1] look at this",
+					detail: {
+						event: "steer",
+						text: "[from worker-1] look at this",
+						origin: "human",
+						senderSessionId: "worker-1",
+						content: [{
+							type: "excerpt",
+							excerpt: { reference: { id: "ex-1", messageId: "m-1", revision: 0, comment: "Why twice?" }, selectedText: "Split across two pastes" },
+						}],
+					},
+				})}
+			/>,
+		);
+		expect(screen.getByText("look at this")).toBeInTheDocument();
+		await user.click(screen.getByRole("button", { name: "1 annotation" }));
+		expect(await screen.findByText("Split across two pastes")).toBeInTheDocument();
+		expect(screen.getByText("Why twice?")).toBeInTheDocument();
+	});
+
 	it("renders a CLI steer as an attributed automation block with a session link", () => {
 		render(
 			<SteerMessage

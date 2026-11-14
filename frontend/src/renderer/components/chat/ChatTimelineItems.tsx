@@ -3568,12 +3568,13 @@ export function SteerMessage({
 					<SessionLinkedText text={preview} />
 				</p>
 			) : null}
+				{annotationSummary ? <div className={cn(body && "mt-2")}>{annotationSummary}</div> : null}
 				<StagedAttachmentItems
 					paths={attachments}
 					sessionId={sessionId}
 					apiBaseUrl={apiBaseUrl}
 					ariaLabel="Steered attachments"
-					className={cn(body && "mt-2")}
+					className={cn((body || annotationSummary) && "mt-2")}
 				/>
 				<ConversationContentItems
 					content={remainingContent}
