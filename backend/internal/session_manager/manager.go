@@ -1856,13 +1856,13 @@ func (m *Manager) resolveAgentConfigOnce(ctx context.Context, cfg ports.SpawnCon
 		}
 		return resolved, nil
 	}
-	if cfg.Harness != domain.HarnessCodex && cfg.Harness != domain.HarnessClaudeCode && cfg.Harness != domain.HarnessCommandCode && cfg.Harness != domain.HarnessHermes {
+	if cfg.Harness != domain.HarnessCodex && cfg.Harness != domain.HarnessClaudeCode && cfg.Harness != domain.HarnessCommandCode && cfg.Harness != domain.HarnessHermes && cfg.Harness != domain.HarnessOpenInterpreter {
 		// Only a flagged explicit override (the spawn API and delegation mark
 		// request-carried effort) fails loudly: the caller asked for something
 		// the harness cannot honor. Unflagged or inherited effort still clears
 		// silently so role/project defaults keep working for every harness.
 		if cfg.EffortOverride && strings.TrimSpace(requested.Effort) != "" {
-			return ports.AgentConfig{}, fmt.Errorf("%w for harness %q: effort is only supported for codex, claude-code, command-code, and hermes agents, or Grok Chat", ports.ErrUnsupportedEffort, cfg.Harness)
+			return ports.AgentConfig{}, fmt.Errorf("%w for harness %q: effort is only supported for codex, claude-code, command-code, hermes, and open-interpreter agents, or Grok Chat", ports.ErrUnsupportedEffort, cfg.Harness)
 		}
 		resolved.Effort = ""
 		return resolved, nil
