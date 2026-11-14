@@ -578,6 +578,8 @@ export interface SystemEventDetail {
 	senderProjectId?: string;
 	senderDisplayName?: string;
 	clientMessageId?: string;
+	/** steer: the person deleted the queued message while the agent was taking it; it was delivered. */
+	deliveredBeforeDelete?: boolean;
 	/** steer: the queued turns whose messages this steer carried into the running turn. */
 	providerInputSourceTurnIds?: string[];
 	/** steer: complete provider-neutral content copied from a promoted queue item. */

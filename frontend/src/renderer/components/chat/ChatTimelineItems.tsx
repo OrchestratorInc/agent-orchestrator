@@ -3506,7 +3506,9 @@ export function SteerMessage({
 	const senderSessionId = activity.detail?.senderSessionId?.trim();
 	const senderProjectId = activity.detail?.senderProjectId?.trim();
 	const senderLabel = activity.detail?.senderDisplayName?.trim() || senderSessionId;
-	const automationSteer = Boolean(senderSessionId);
+	// From another AO session, or from the orchestrator that spawned this one (a Cloud
+	// orchestrator's message steered into a busy worker names only its label).
+	const automationSteer = Boolean(senderSessionId) || (activity.detail?.origin === "automation" && Boolean(senderLabel));
 	const senderHref = senderSessionId && senderProjectId
 		? `ao://sessions/${encodeURIComponent(senderProjectId)}/${encodeURIComponent(senderSessionId)}`
 		: undefined;
@@ -3596,7 +3598,9 @@ export function SteerMessage({
 			)}
 			<span className="flex items-center gap-1 text-xs text-muted-foreground">
 				<CornerDownRight aria-hidden="true" className="size-3" />
-				Steered
+				{activity.detail?.deliveredBeforeDelete
+					? "Steered: the agent took it before your delete could stop it"
+					: "Steered"}
 			</span>
 		</div>
 	);

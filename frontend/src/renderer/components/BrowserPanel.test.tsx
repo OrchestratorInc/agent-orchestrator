@@ -1195,8 +1195,14 @@ describe("BrowserPanel", () => {
 
 		expect(firstTab).toHaveAttribute("aria-selected", "false");
 		expect(secondTab).toHaveAttribute("aria-selected", "true");
-		expect(firstTab).toHaveAttribute("data-slot", "tooltip-trigger");
-		expect(screen.getByRole("button", { name: "Close tab First app" })).toHaveAttribute("data-slot", "tooltip-trigger");
+		// The shared tab frame: the full title as the tab's native tooltip, and
+		// the ghost close button in the icon's slot.
+		expect(firstTab).toHaveAttribute("title", "First app");
+		expect(firstTab.closest("[data-terminal-tab-frame]")).not.toBeNull();
+		expect(firstTab.closest("[data-terminal-tab-frame]")).not.toHaveAttribute("data-active");
+		expect(secondTab.closest("[data-terminal-tab-frame]")).toHaveAttribute("data-active");
+		expect(tabList).toHaveAttribute("data-tab-strip");
+		expect(screen.getByRole("button", { name: "Close tab First app" })).toBeInTheDocument();
 		await userEvent.click(firstTab);
 		expect(hookState.selectTab).toHaveBeenCalledWith("t1");
 	});
@@ -1210,9 +1216,10 @@ describe("BrowserPanel", () => {
 
 		const overlay = screen.getByTestId("browser-tab-drag-overlay");
 		expect(overlay).toHaveClass("browser-panel__tab--drag-overlay");
+		expect(overlay).toHaveAttribute("data-dragging");
 		expect(overlay).toHaveTextContent("First app");
-		expect(overlay.querySelector(".browser-panel__tab-icon")).not.toBeNull();
-		expect(overlay.querySelector(".browser-panel__tab-close")).not.toBeNull();
+		expect(overlay.querySelector("[data-terminal-tab-frame][data-active]")).not.toBeNull();
+		expect(overlay.querySelector('button[aria-label="Close tab First app"]')).not.toBeNull();
 	});
 
 	it("moves browser tab focus and selection with arrow keys", async () => {
@@ -1245,6 +1252,8 @@ describe("BrowserPanel", () => {
 		await userEvent.click(within(tabList).getByRole("button", { name: "Close tab Second app" }));
 
 		expect(hookState.closeTab).toHaveBeenCalledWith("t2");
+		// Closing an inactive tab does not select it first.
+		expect(hookState.selectTab).not.toHaveBeenCalled();
 	});
 
 	it("allows closing the final browser tab", async () => {
@@ -1267,7 +1276,7 @@ describe("BrowserPanel", () => {
 
 	it("shows the empty tab's close icon in its drag overlay", () => {
 		render(<BrowserTopTabDragOverlay tab={{ id: "t1", url: "about:blank", title: "", active: true }} />);
-		expect(screen.getByTestId("browser-tab-drag-overlay").querySelector(".browser-panel__tab-close")).not.toBeNull();
+		expect(screen.getByTestId("browser-tab-drag-overlay").querySelector('button[aria-label="Close tab New tab"]')).not.toBeNull();
 	});
 
 	it("shows no placeholder tab when empty and still offers the new tab button", async () => {

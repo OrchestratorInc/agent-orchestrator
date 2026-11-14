@@ -15,7 +15,7 @@ import { useUiStore } from "../../stores/ui-store";
 import type { ChatConfigOption, ChatModel, TurnSettings } from "../../types/conversation";
 import type { AgentSwitchProps, PickerSource } from "./AgentSwitchPicker";
 import { cloudSessionsQueryKey, sharedCloudWorkspacesQueryKey } from "../../hooks/useWorkspaceQuery";
-import { appendCloudEvents, CHAT_EVENTS_CACHE_MS, cloudExcerptText, cloudAnnotationContent, cloudMessageBody, CloudSessionChatSurface, cloudStartupChecklist, cloudWorkspaceFilePath, ownMessageTurns, toSnapshot } from "./CloudSessionChatSurface";
+import { QUEUED_STEER_STALE_MS, cloudSteeringQueuedTurns, nextQueuedSteerDeadline, appendCloudEvents, CHAT_EVENTS_CACHE_MS, cloudExcerptText, cloudAnnotationContent, cloudMessageBody, cloudQueuedSteerErrors, CloudSessionChatSurface, cloudStartupChecklist, cloudWorkspaceFilePath, ownMessageTurns, toSnapshot } from "./CloudSessionChatSurface";
 import { CLOUD_CHAT_NEWEST, cloudChatHistoryKey, mergeCloudEvents } from "../../lib/cloud-chat-history";
 import { clearPreviousAccountState } from "../../hooks/useCloudAccountSwitchReset";
 import { TurnSettingsBar } from "./TurnSettingsBar";
@@ -27,6 +27,7 @@ const cloudMocks = vi.hoisted(() => ({
 	steerTurn: vi.fn(),
 	editQueuedMessage: vi.fn(),
 	deleteQueuedMessage: vi.fn(),
+	steerQueuedMessage: vi.fn(),
 	decideChatApproval: vi.fn(),
 	listChatModels: vi.fn(),
 	listUserAgentModels: vi.fn(),
@@ -729,6 +730,182 @@ describe("CloudSessionChatSurface", () => {
 		const partial = toSnapshot(session, events.slice(4), undefined, { partial: true });
 		expect(partial.items).toEqual([]);
 		expect(partial.turns.find((turn) => turn.id === "turn-ended")?.state).toBe("cancelled");
+	});
+
+	// A queued message steered into the running turn reads from the events, so
+	// a remount (a tab switch, a screen change) shows what the control plane
+	// holds: steering while the agent has not answered, the steer in the turn
+	// once it took it, and the message back in the queue, with the reason,
+	// when it did not. It was once kept only in the view, and a remount put a
+	// message shown as steered back in the queue.
+	const steerEvents = () => {
+		const at = (sequence: number, type: string, payload: Record<string, unknown>) =>
+			({ sessionId: session.id, sequence, type, payload, createdAt: `2026-11-13T09:0${sequence}:00Z` });
+		const requested = { turnId: "turn-run", text: "report progress now", clientMessageId: "key-1", queuedTurnId: "turn-orch" };
+		return {
+			queued: [
+				at(1, "chat.user_message", { text: "long job", turnId: "turn-run" }),
+				at(2, "chat.turn_started", { turnId: "turn-run", attempt: 1 }),
+				at(3, "chat.turn_capabilities", { turnId: "turn-run", attempt: 1, steering: true }),
+				at(4, "chat.user_message", { text: "report progress now", turnId: "turn-orch", origin: "automation", senderLabel: "Orchestrator", displayText: "report progress now" }),
+				at(5, "chat.user_message", { text: "mine, later", turnId: "turn-mine", authorUserId: "user-1" }),
+				at(6, "chat.turn_steer_requested", requested),
+			],
+			steered: [
+				at(7, "chat.turn_steered", { ...requested, origin: "automation", senderLabel: "Orchestrator" }),
+				at(8, "chat.turn_interrupted", { turnId: "turn-orch", attempt: 0, reason: "steered" }),
+			],
+			failed: [at(7, "chat.turn_steer_failed", { ...requested, origin: "automation", senderLabel: "Orchestrator", error: "The agent finished first." })],
+		};
+	};
+	const queuedTurns = (snapshot: ReturnType<typeof toSnapshot>) =>
+		snapshot.turns.filter((turn) => turn.state === "queued" && snapshot.items.some((item) => item.kind === "message" && item.turnId === turn.id)).map((turn) => turn.id);
+	const steers = (snapshot: ReturnType<typeof toSnapshot>) =>
+		snapshot.items.filter((item) => item.kind === "activity" && item.detail?.event === "steer")
+			.map((item) => item.kind === "activity" ? { turnId: item.turnId, text: item.detail?.text, origin: item.detail?.origin, from: item.detail?.senderDisplayName } : undefined);
+
+	it("keeps a queued message being steered in its place in the queue, marked steering, on every read", () => {
+		const { queued } = steerEvents();
+		const snapshot = toSnapshot(session, queued);
+		expect(queuedTurns(snapshot)).toEqual(["turn-orch", "turn-mine"]);
+		expect(steers(snapshot)).toEqual([]);
+		expect([...cloudSteeringQueuedTurns(queued)]).toEqual(["turn-orch"]);
+		expect(cloudQueuedSteerErrors(queued)).toEqual({});
+		// A remount reads the same events, and the same chat.
+		expect(toSnapshot(session, [...queued])).toEqual(snapshot);
+	});
+
+	it("drops a steered message from the queue and keeps its steer in the running turn, as its sender's", () => {
+		const { queued, steered } = steerEvents();
+		const snapshot = toSnapshot(session, [...queued, ...steered]);
+		expect(queuedTurns(snapshot)).toEqual(["turn-mine"]);
+		expect(snapshot.items.some((item) => item.kind === "message" && item.turnId === "turn-orch")).toBe(false);
+		expect(snapshot.turns.find((turn) => turn.id === "turn-orch")?.state).toBe("cancelled");
+		expect(steers(snapshot)).toEqual([{ turnId: "turn-run", text: "report progress now", origin: "automation", from: "Orchestrator" }]);
+		// On a page holding only the outcome too.
+		const partial = toSnapshot(session, steered, undefined, { partial: true });
+		expect(partial.turns.find((turn) => turn.id === "turn-orch")?.state).toBe("cancelled");
+	});
+
+	it("puts a message whose steer failed back in the queue, in its place, saying why", () => {
+		const { queued, failed } = steerEvents();
+		const events = [...queued, ...failed];
+		const snapshot = toSnapshot(session, events);
+		expect(queuedTurns(snapshot)).toEqual(["turn-orch", "turn-mine"]);
+		expect(steers(snapshot)).toEqual([]);
+		expect(cloudQueuedSteerErrors(events)).toEqual({ "turn-orch": "Couldn't steer: The agent finished first. It's back in the queue; select Steer to try again." });
+		// Steering it again clears the reason.
+		expect(cloudQueuedSteerErrors([...events, { ...queued[5], sequence: 8 }])).toEqual({});
+	});
+
+	// The queue's Steer is offered only where the control plane records it
+	// (queued-steer) and the running turn can take guidance; it asks the
+	// control plane, and a refusal comes back as the row's error rather than
+	// as a steer that never happened.
+	it("steers a queued message through the control plane only where it offers queued-steer", async () => {
+		const { queued, failed } = steerEvents();
+		const events = queued.slice(0, 5);
+		cloudMocks.listChatEvents.mockReset().mockResolvedValue({ events, hasMore: false, nextAfter: 5, hasOlder: false, nextBefore: 1 });
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		const mount = async () => {
+			cloudMocks.chatProps.mockClear();
+			const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+			const view = render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} /></QueryClientProvider>);
+			await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].onSteer).toEqual(expect.any(Function)));
+			return view;
+		};
+		const older = await mount();
+		expect(cloudMocks.chatProps.mock.lastCall?.[0].onPromoteQueuedTurn).toBeUndefined();
+		older.unmount();
+
+		cloudSetup.features = ["queued-steer"];
+		await mount();
+		const promote = cloudMocks.chatProps.mock.lastCall?.[0].onPromoteQueuedTurn as (turnId: string) => Promise<unknown>;
+		expect(promote).toEqual(expect.any(Function));
+		cloudMocks.steerQueuedMessage.mockReset().mockResolvedValue({ event: queued[5] });
+		cloudMocks.listChatEvents.mockReset().mockResolvedValue({ events: failed, hasMore: false, nextAfter: 7, hasOlder: false, nextBefore: 7 });
+		let outcome: unknown;
+		await act(async () => { outcome = await promote("turn-orch").then(() => "steered", (error: unknown) => error); });
+		expect(cloudMocks.steerQueuedMessage).toHaveBeenCalledWith("org-1", session.id, "turn-orch", {}, { idempotencyKey: expect.any(String) });
+		expect(outcome).toMatchObject({ message: "Couldn't steer: The agent finished first. It's back in the queue; select Steer to try again." });
+
+		cloudMocks.listChatEvents.mockReset().mockResolvedValue({ events: steerEvents().steered, hasMore: false, nextAfter: 8, hasOlder: false, nextBefore: 7 });
+		await act(async () => { outcome = await promote("turn-orch").then(() => "steered", (error: unknown) => error); });
+		expect(outcome).toBe("steered");
+	});
+
+	// A steer the agent never answered (the worker went silent before the
+	// control plane recorded the expiry) is not read as steering forever: past
+	// the time it could be answered in, the message is back in the queue with
+	// why.
+	it("reads a queued steer left unanswered too long as failed, with the message back in the queue", () => {
+		const { queued } = steerEvents();
+		const requestedAt = Date.parse(queued[5].createdAt);
+		expect([...cloudSteeringQueuedTurns(queued, requestedAt + 1_000)]).toEqual(["turn-orch"]);
+		expect(cloudQueuedSteerErrors(queued, requestedAt + 1_000)).toEqual({});
+		expect([...cloudSteeringQueuedTurns(queued, requestedAt + QUEUED_STEER_STALE_MS)]).toEqual([]);
+		expect(cloudQueuedSteerErrors(queued, requestedAt + QUEUED_STEER_STALE_MS)).toEqual({
+			"turn-orch": "Couldn't steer: the agent did not answer in time. It's back in the queue; select Steer to try again.",
+		});
+
+		// The chat's clock moves on at each unanswered steer's deadline in turn,
+		// so a later one fails too after an earlier one did.
+		const later = { ...queued[5], sequence: 7, createdAt: new Date(requestedAt + 30_000).toISOString(), payload: { ...queued[5].payload, queuedTurnId: "turn-mine" } };
+		const both = [...queued, later];
+		expect(nextQueuedSteerDeadline(both, requestedAt)).toBe(requestedAt + QUEUED_STEER_STALE_MS);
+		expect(nextQueuedSteerDeadline(both, requestedAt + QUEUED_STEER_STALE_MS)).toBe(requestedAt + 30_000 + QUEUED_STEER_STALE_MS);
+		expect(nextQueuedSteerDeadline(both, requestedAt + 30_000 + QUEUED_STEER_STALE_MS)).toBeUndefined();
+	});
+
+	// What the chat shows after a failed or a delivered steer comes from the
+	// control plane's events, so it is the same after a remount (a tab or
+	// screen switch): queued with the reason when the steer failed, gone from
+	// the queue into the running turn when it was delivered.
+	it("shows a failed or a delivered queued steer the same after a remount", async () => {
+		const { queued, failed, steered } = steerEvents();
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		const shown = async (events: CloudCpClientEvent[]) => {
+			cloudMocks.listChatEvents.mockReset().mockResolvedValue({ events, hasMore: false, nextAfter: events.at(-1)!.sequence, hasOlder: false, nextBefore: 1 });
+			cloudMocks.chatProps.mockClear();
+			const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+			const view = render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} /></QueryClientProvider>);
+			await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].snapshot.latestSequence).toBe(events.at(-1)!.sequence));
+			const props = cloudMocks.chatProps.mock.lastCall?.[0] as { snapshot: ReturnType<typeof toSnapshot>; queuedSteerErrors: Record<string, string> };
+			view.unmount();
+			return { queue: queuedTurns(props.snapshot), steers: steers(props.snapshot), errors: props.queuedSteerErrors };
+		};
+		const failedView = { queue: ["turn-orch", "turn-mine"], steers: [], errors: { "turn-orch": "Couldn't steer: The agent finished first. It's back in the queue; select Steer to try again." } };
+		expect(await shown([...queued, ...failed])).toEqual(failedView);
+		expect(await shown([...queued, ...failed])).toEqual(failedView);
+		const steeredView = { queue: ["turn-mine"], steers: [{ turnId: "turn-run", text: "report progress now", origin: "automation", from: "Orchestrator" }], errors: {} };
+		expect(await shown([...queued, ...steered])).toEqual(steeredView);
+		expect(await shown([...queued, ...steered])).toEqual(steeredView);
+	});
+
+	// A steer the control plane refuses, or cannot be asked (offline), comes
+	// back as the row's reason, never as a steer that silently did nothing.
+	it("turns a refused or unreachable queued steer into the row's reason", async () => {
+		cloudSetup.features = ["queued-steer"];
+		const { queued } = steerEvents();
+		cloudMocks.listChatEvents.mockReset().mockResolvedValue({ events: queued.slice(0, 5), hasMore: false, nextAfter: 5, hasOlder: false, nextBefore: 1 });
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		cloudMocks.chatProps.mockClear();
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} /></QueryClientProvider>);
+		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].onPromoteQueuedTurn).toEqual(expect.any(Function)));
+		const promote = cloudMocks.chatProps.mock.lastCall?.[0].onPromoteQueuedTurn as (turnId: string) => Promise<unknown>;
+		const outcome = async (error: unknown) => {
+			cloudMocks.steerQueuedMessage.mockReset().mockRejectedValue(error);
+			let thrown: unknown;
+			await act(async () => { thrown = await promote("turn-mine").then(() => "steered", (reason: unknown) => reason); });
+			return (thrown as Error).message;
+		};
+		expect(await outcome(new TypeError("Failed to fetch")))
+			.toBe("Couldn't steer: AO Cloud could not be reached. It's back in the queue; select Steer to try again.");
+		expect(await outcome(new CloudCpError("The agent is not running a turn it can take guidance in.", { status: 409, code: "TURN_NOT_STEERABLE" })))
+			.toBe("Couldn't steer: the agent's running turn can't take guidance. It's back in the queue; select Steer to try again.");
+		expect(await outcome(new CloudCpError("The request could not be completed.", { status: 500, code: "internal_error" })))
+			.toBe("Couldn't steer: The request could not be completed. It's back in the queue; select Steer to try again.");
 	});
 
 	// A queued message ended any other way (a stop-now switch to the terminal,

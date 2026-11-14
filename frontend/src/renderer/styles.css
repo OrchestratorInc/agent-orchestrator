@@ -729,8 +729,10 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 }
 
 /* Floating session tabs use the secondary control surface when selected and
- * an instant ghost hover fill when inactive. Tabs have no press effect. */
-.center-panel-shell--floating-topbar [data-terminal-tab-frame] {
+ * an instant ghost hover fill when inactive. Tabs have no press effect. Every
+ * strip built on the tab frame (the session's, the Browser panel's pages, side
+ * chats) wears this look, the Browser's also while it is popped out. */
+:is(.center-panel-shell--floating-topbar, .browser-popout-overlay--mac-windowed) [data-terminal-tab-frame] {
 	--floating-tab-gap: var(--space-1);
 	--floating-tab-separator: color-mix(in oklch, var(--color-foreground) 16%, transparent);
 	font-size: var(--font-size-md);
@@ -747,7 +749,7 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 }
 
 /* The pill. */
-.center-panel-shell--floating-topbar [data-terminal-tab-frame]::before {
+:is(.center-panel-shell--floating-topbar, .browser-popout-overlay--mac-windowed) [data-terminal-tab-frame]::before {
 	content: "";
 	position: absolute;
 	z-index: -1;
@@ -759,7 +761,7 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 }
 
 /* The separator, centered in the trailing gap. */
-.center-panel-shell--floating-topbar [data-terminal-tab-frame]::after {
+:is(.center-panel-shell--floating-topbar, .browser-popout-overlay--mac-windowed) [data-terminal-tab-frame]::after {
 	content: "";
 	position: absolute;
 	top: 50%;
@@ -773,7 +775,7 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 
 /* Leave both sides of the selected pill clear, including the fixed session
  * tab before the first tab in the reorder group. */
-.center-panel-shell--floating-topbar [data-terminal-tab-frame][data-active]::after,
+:is(.center-panel-shell--floating-topbar, .browser-popout-overlay--mac-windowed) [data-terminal-tab-frame][data-active]::after,
 .center-panel-shell--floating-topbar [data-terminal-tab-key]:has(+ [data-terminal-tab-key] [data-terminal-tab-frame][data-active]) [data-terminal-tab-frame]::after,
 .center-panel-shell--floating-topbar [data-terminal-tab-key]:has(+ div > [data-terminal-tab-key]:first-child [data-terminal-tab-frame][data-active]) [data-terminal-tab-frame]::after {
 	content: none;
@@ -797,26 +799,26 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 	margin-inline-end: 0;
 }
 
-.center-panel-shell--floating-topbar [data-terminal-tab-frame]:hover::before,
-.center-panel-shell--floating-topbar [data-terminal-tab-frame]:has(:focus-visible)::before {
+:is(.center-panel-shell--floating-topbar, .browser-popout-overlay--mac-windowed) [data-terminal-tab-frame]:hover::before,
+:is(.center-panel-shell--floating-topbar, .browser-popout-overlay--mac-windowed) [data-terminal-tab-frame]:has(:focus-visible)::before {
 	inset: 0;
 	background-color: var(--color-interactive-hover);
 }
 
 .session-inspector__tab-button[aria-selected="true"],
-.center-panel-shell--floating-topbar [data-terminal-tab-frame][data-active] {
+:is(.center-panel-shell--floating-topbar, .browser-popout-overlay--mac-windowed) [data-terminal-tab-frame][data-active] {
 	color: var(--secondary-foreground);
 }
 
 @supports (color: contrast-color(red)) {
 	.session-inspector__tab-button[aria-selected="true"],
-	.center-panel-shell--floating-topbar [data-terminal-tab-frame][data-active] {
+	:is(.center-panel-shell--floating-topbar, .browser-popout-overlay--mac-windowed) [data-terminal-tab-frame][data-active] {
 		color: contrast-color(color-mix(in srgb-linear, var(--secondary) 49.796664%, black));
 	}
 }
 
 .session-inspector__tab-button[aria-selected="true"],
-.center-panel-shell--floating-topbar [data-terminal-tab-frame][data-active]::before {
+:is(.center-panel-shell--floating-topbar, .browser-popout-overlay--mac-windowed) [data-terminal-tab-frame][data-active]::before {
 	inset: 0;
 	border-color: color-mix(in oklab, var(--secondary), #000 5%);
 	background-color: var(--secondary);
@@ -824,17 +826,17 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 }
 
 .session-inspector__tab-button[aria-selected="true"]:hover,
-.center-panel-shell--floating-topbar [data-terminal-tab-frame][data-active]:hover::before {
+:is(.center-panel-shell--floating-topbar, .browser-popout-overlay--mac-windowed) [data-terminal-tab-frame][data-active]:hover::before {
 	background-color: color-mix(in oklab, var(--secondary), #000 7%);
 }
 
 /* Light: the selected tab's fill leans toward the panel's surface, keeps the
  * control edge, and does not darken on hover. */
-html[data-theme="light"] .center-panel-shell--floating-topbar [data-terminal-tab-frame][data-active]::before {
+html[data-theme="light"] :is(.center-panel-shell--floating-topbar, .browser-popout-overlay--mac-windowed) [data-terminal-tab-frame][data-active]::before {
 	background-color: color-mix(in oklab, var(--color-bg-primary), var(--secondary));
 }
 
-.center-panel-shell--floating-topbar [data-terminal-tab-frame]:has(> button:focus-visible)::before {
+:is(.center-panel-shell--floating-topbar, .browser-popout-overlay--mac-windowed) [data-terminal-tab-frame]:has(> button:focus-visible)::before {
 	outline: 2px solid var(--ring);
 	outline-offset: 2px;
 }
@@ -842,12 +844,30 @@ html[data-theme="light"] .center-panel-shell--floating-topbar [data-terminal-tab
 /* Muted gray icons wash out on the light chrome; bar icons use the full
  * foreground there. Disabled controls keep their own reduced opacity. */
 html[data-theme="light"] .center-panel-shell--floating-topbar .session-inspector__tab-button:not([aria-selected="true"]),
-html[data-theme="light"] .center-panel-shell--floating-topbar .workspace-topbar-actions .group\/button:not(.button-raised):not(:disabled) {
+html[data-theme="light"] .center-panel-shell--floating-topbar .workspace-topbar-actions .group\/button:not(.button-raised):not(:disabled),
+html[data-theme="light"] .browser-popout-overlay--mac-windowed .workspace-topbar-actions .group\/button:not(.button-raised):not(:disabled) {
 	color: var(--color-foreground);
 }
 
-.center-panel-shell--floating-topbar [data-testid="active-terminal-tab-indicator"] {
+:is(.center-panel-shell--floating-topbar, .browser-popout-overlay--mac-windowed) [data-testid="active-terminal-tab-indicator"] {
 	display: none;
+}
+
+/* A strip other than the session's (the Browser panel's pages, side chats)
+ * lists its tabs flat: each child of [data-tab-strip] holds one frame. The
+ * same divider rules as the session strip's above: none beside the selected
+ * pill, none after the last tab, which ends one gap before New tab. */
+:is(.center-panel-shell--floating-topbar, .browser-popout-overlay--mac-windowed) [data-tab-strip] > :has(+ * [data-terminal-tab-frame][data-active]) [data-terminal-tab-frame]::after,
+:is(.center-panel-shell--floating-topbar, .browser-popout-overlay--mac-windowed) [data-tab-strip] > :last-child [data-terminal-tab-frame]::after {
+	content: none;
+}
+
+:is(.center-panel-shell--floating-topbar, .browser-popout-overlay--mac-windowed) [data-tab-strip] > :last-child [data-terminal-tab-frame] {
+	margin-inline-end: var(--floating-tab-gap);
+}
+
+:is(.center-panel-shell--floating-topbar, .browser-popout-overlay--mac-windowed) [data-tab-strip-action] {
+	padding-inline-start: 0;
 }
 
 /* Draggable tab wrappers are opaque so a dragged tab hides the tabs it
@@ -5373,11 +5393,12 @@ html[data-shell-linux] body > .files-popout-overlay {
 	padding: 0 4px;
 }
 
+/* The tabs' height plus the row's insets: 40px under a 28px tab. */
 .browser-panel__tab-row {
 	container-name: browser-toolbar;
 	container-type: inline-size;
 	display: flex;
-	height: 40px;
+	height: calc(var(--size-topbar-control) + 3 * var(--space-1));
 	align-items: center;
 	gap: 2px;
 	flex-shrink: 0;
@@ -5387,9 +5408,23 @@ html[data-shell-linux] body > .files-popout-overlay {
 	background: var(--bg);
 }
 
-.browser-panel__toolbar,
-.browser-panel__tab-bar {
+.browser-panel__toolbar {
 	display: contents;
+}
+
+/* The tabs and New tab, sized to the tabs so New tab follows the last one;
+ * the toolbar after it keeps to the row's end. */
+.browser-panel__tab-bar {
+	display: flex;
+	min-width: 0;
+	flex: 0 1 auto;
+	align-self: stretch;
+	align-items: center;
+	margin-inline-end: auto;
+}
+
+.browser-panel__tab-bar > .workspace-topbar-actions {
+	height: auto;
 }
 
 .browser-panel__toolbar > .browser-panel__navigation-control,
@@ -5666,9 +5701,7 @@ html[data-shell-linux] body > .files-popout-overlay {
 
 .browser-panel__tab-actions button,
 .browser-panel__toolbar button,
-.browser-panel__address-bar button,
-.browser-panel__tab-new,
-.browser-panel__tab-close {
+.browser-panel__address-bar button {
 	color: var(--fg-muted);
 	transform-origin: center;
 	transition:
@@ -5689,15 +5722,14 @@ html[data-shell-linux] body > .files-popout-overlay {
 	position: relative;
 	display: flex;
 	min-width: 0;
-	flex: 1 1 0;
+	flex: 0 1 auto;
+	align-self: stretch;
 	overflow: hidden;
 }
 
 .browser-panel__tab-strip {
 	display: flex;
 	min-width: 0;
-	align-items: center;
-	gap: 2px;
 	flex: 1 1 auto;
 	overflow-x: auto;
 	overflow-y: hidden;
@@ -5708,17 +5740,26 @@ html[data-shell-linux] body > .files-popout-overlay {
 	display: none;
 }
 
+/* A tab's slot in the strip; its look is the shared tab frame's. Unlike the
+ * session strip's content-sized tabs, these keep a 200px width and shrink to
+ * 150px before the strip scrolls. */
 .browser-panel__tab {
-	position: relative;
 	display: flex;
 	width: 200px;
 	min-width: 150px;
-	max-width: 200px;
-	height: 28px;
 	flex: 0 1 200px;
-	border-radius: var(--radius-md);
-	color: var(--fg-muted);
-	background: transparent;
+}
+
+.browser-panel__tab > [data-terminal-tab-frame] {
+	min-width: 0;
+	max-width: none;
+	flex: 1 1 auto;
+}
+
+/* Past seven tabs only the selected tab keeps its close button, so titles keep
+ * their room. */
+.browser-panel__tab-strip:has(> .browser-panel__tab:nth-child(8)) > .browser-panel__tab:not(:has([data-active])) [data-terminal-tab-action] {
+	display: none;
 }
 
 .browser-panel__tab--drag-placeholder {
@@ -5726,136 +5767,33 @@ html[data-shell-linux] body > .files-popout-overlay {
 	pointer-events: none;
 }
 
+/* The dragged tab: its hover pill on the panel's fill, so it hides the tabs
+ * it crosses, as a dragged session tab does. */
 .browser-panel__tab--drag-overlay {
 	width: 100%;
 	min-width: 0;
-	max-width: none;
 	flex: none;
-	color: var(--fg);
-	background: var(--surface);
-	box-shadow: var(--shadow-popover);
+	height: 100%;
+	background: var(--bg);
 	cursor: grabbing;
 	pointer-events: none;
 }
 
-.browser-panel__tab:hover {
-	color: var(--fg);
-	background: var(--interactive-hover);
+.browser-panel__tab--drag-overlay [data-terminal-tab-frame] {
+	margin-inline-end: 0;
 }
 
-.browser-panel__tab--active {
-	color: var(--fg);
-	background: var(--interactive-active);
+.browser-panel__tab--drag-overlay [data-terminal-tab-frame]::after {
+	content: none;
 }
 
-.browser-panel__tab-select {
-	display: flex;
-	min-width: 0;
-	height: 100%;
-	align-items: center;
-	gap: 7px;
-	flex: 1;
-	padding: 0 4px 0 10px;
-	border: 0;
-	color: inherit;
-	background: transparent;
-	font-size: 12px;
-	text-align: left;
-}
-
-.browser-panel__tab-select:focus-visible,
-.browser-panel__tab-close:focus-visible {
-	outline: 2px solid var(--color-accent);
-	outline-offset: -2px;
-}
-
-.browser-panel__tab-icon {
-	width: 16px;
-	height: 16px;
-	flex: none;
-	color: var(--fg-passive);
-}
-
-.browser-panel__tab-title {
-	min-width: 0;
-	overflow: hidden;
-	font-weight: 550;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-}
-
-/* Match the title line box to the icon so flex centering aligns both. */
-.side-chat__tab-row .browser-panel__tab-title {
-	line-height: 16px;
-}
-
-.browser-panel__tab-close {
-	position: relative;
-	top: 1px;
-	display: grid;
-	width: 26px;
-	height: 26px;
-	place-items: center;
-	flex: none;
-	margin-right: 3px;
-	border: 0;
-	border-radius: 5px;
-	color: var(--fg-muted);
-	background: transparent;
-	transition:
-		background var(--duration-fast) ease,
-		color var(--duration-fast) ease,
-		transform var(--duration-fast) ease;
-}
-
-.browser-panel__tab-close:not(:disabled):hover {
-	color: var(--fg);
-	background: var(--surface-hover);
-}
-
-.browser-panel__tab-close:disabled {
-	display: none;
-}
-
-.browser-panel__tab-strip:has(.browser-panel__tab:nth-child(8)) .browser-panel__tab-close {
-	display: none;
-}
-
-.browser-panel__tab-strip:has(.browser-panel__tab:nth-child(8)) .browser-panel__tab--active .browser-panel__tab-close {
-	display: grid;
-}
-
-.browser-panel__tab-new {
-	display: grid;
-	width: var(--size-control-md);
-	height: var(--size-control-md);
-	place-items: center;
-	flex: none;
-	margin-left: 0;
-	border: 0;
-	border-radius: var(--radius-md);
-	color: var(--fg-muted);
-	background: transparent;
-	transform-origin: center;
-	transition:
-		background var(--duration-fast) ease,
-		color var(--duration-fast) ease,
-		transform var(--duration-fast) ease;
+.browser-panel__tab--drag-overlay [data-terminal-tab-frame]::before {
+	background-color: var(--color-interactive-hover);
 }
 
 .browser-panel__tab-new--dragging {
 	visibility: hidden;
 	pointer-events: none;
-}
-
-.browser-panel__tab-new:not(:disabled):hover {
-	color: var(--fg);
-	background: var(--interactive-hover);
-}
-
-.browser-panel__tab-new:focus-visible {
-	outline: 2px solid var(--color-accent);
-	outline-offset: -2px;
 }
 
 .browser-panel__url-wrap {
@@ -6141,9 +6079,7 @@ html[data-native-browser-composition="true"] .browser-popout-frame {
 	.browser-panel,
 	.browser-panel__toolbar button,
 	.browser-panel__toolbar > :not(.browser-panel__url-wrap),
-	.browser-panel__url-input,
-	.browser-panel__tab-new,
-	.browser-panel__tab-close {
+	.browser-panel__url-input {
 		transition: none;
 	}
 }

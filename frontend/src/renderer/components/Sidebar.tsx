@@ -1805,6 +1805,7 @@ const ProjectItem = memo(function ProjectItem({
 
 
 	const removeProject = () => setConfirmOpen(true);
+	const isCloudProject = !workspace.hostId && workspace.kind === CLOUD_PROJECT_KIND;
 	const copyToClipboard = useCopyToClipboard();
 	// Pins are a local list preference; remote host rows and the Scratchpad
 	// have their own sections and are not pinnable.
@@ -1902,14 +1903,16 @@ const ProjectItem = memo(function ProjectItem({
 						label: t("shell.projectSettings"),
 						onSelect: () => selection.goSettings(workspace.id, workspace.cloudOrgId),
 					},
-					{
+					// A project shared from another organization is its organization's to delete.
+					...(workspace.shared ? [] : [{
 						kind: "item" as const,
 						id: "remove",
 						icon: <Trash2 aria-hidden="true" />,
-						label: t("shell.removeProjectTitle"),
+						// A Cloud project is deleted for good; a local one only leaves the sidebar.
+						label: isCloudProject ? t("shell.deleteCloudProjectTitle") : t("shell.removeProjectTitle"),
 						destructive: true,
 						onSelect: removeProject,
-					},
+					}]),
 				]
 				: []),
 		];
@@ -2259,15 +2262,16 @@ const ProjectItem = memo(function ProjectItem({
 					<ConfirmDialog
 						open={confirmOpen}
 						onOpenChange={setConfirmOpen}
-						title={t("shell.removeProjectTitle")}
+						title={isCloudProject ? t("shell.deleteCloudProjectTitle") : t("shell.removeProjectTitle")}
 						description={
 							<>
-								<p className="text-sm font-medium text-foreground">{t("shell.removeProjectLead", { name: workspace.name })}</p>
-								<p className="mt-1 text-xs text-muted-foreground">
-									{workspace.kind === CLOUD_PROJECT_KIND
-										? t("shell.removeCloudProjectBody")
-										: t("shell.removeProjectBody")}
+								<p className="text-sm font-medium text-foreground">
+									{isCloudProject
+										? t("shell.deleteCloudProjectLead", { name: workspace.name })
+										: t("shell.removeProjectLead", { name: workspace.name })}
 								</p>
+								{/* The lead already says a Cloud project is deleted for good. */}
+								{isCloudProject ? null : <p className="mt-1 text-xs text-muted-foreground">{t("shell.removeProjectBody")}</p>}
 								{openPullRequestCount > 0 ? (
 									<p className="mt-2 text-xs font-medium text-error">
 										{t("shell.removeProjectOpenPrWarning", { count: openPullRequestCount })}
@@ -2275,7 +2279,7 @@ const ProjectItem = memo(function ProjectItem({
 								) : null}
 							</>
 						}
-						confirmLabel={t("shell.remove")}
+						confirmLabel={isCloudProject ? t("shell.deleteCloudProjectConfirm") : t("shell.remove")}
 						destructive
 						onConfirm={handleConfirmRemove}
 					/>

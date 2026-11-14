@@ -24,13 +24,12 @@ import { emptySideChatDraft, parseSideChatDraft, type SideChatDraft, type SideDe
 import { TurnSettingsBar } from "./TurnSettingsBar";
 import { QueuedMessageDock } from "./QueuedMessageDock";
 import { Button } from "../ui/button";
-import { Pressable } from "../ui/pressable";
+import { TabCloseButton, TerminalTabFrame, terminalTabRenameInputClassName } from "../TerminalTabFrame";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { ContextMenu, ContextMenuTrigger, ContextMenuContent, ContextMenuItem } from "../ui/context-menu";
 import { handleTabListKeyDown } from "../../lib/terminal-tabs";
 import { saveSideChatDraft, readSideChatDraft } from "./sideChatDraftWriter";
 import { useTabScrollEdges } from "../../hooks/useTabScrollEdges";
-import { cn } from "../../lib/utils";
 import { MAX_SESSION_DISPLAY_NAME_LEN } from "../../hooks/useSessionRename";
 import { useUiStore } from "../../stores/ui-store";
 
@@ -1340,108 +1339,126 @@ export function useIndependentSideChats(
 
 	const tabBar = enabled ? (
 		<header className="browser-panel__tab-row side-chat__tab-row">
-			<div className="browser-panel__tab-region">
-				<div
-					ref={tabStripRef}
-					role="tablist"
-					aria-label={t("sideChat.tabs")}
-					onKeyDown={handleTabListKeyDown}
-					className="browser-panel__tab-strip edge-fade edge-fade-x"
-				>
-					{sides.map((side) => {
-						const tab = (
-							<div
-								key={side.id}
-								className={cn("browser-panel__tab", side.id === currentActiveId && "browser-panel__tab--active")}
-							>
-								{renameId === side.id ? (
-									<input
-										autoFocus
-										aria-label={t("sideChat.renameSideChat")}
-										className="min-w-0 w-36 flex-1 rounded-xs border border-accent bg-background px-1 text-control text-foreground outline-none ring-1 ring-accent"
-										maxLength={MAX_SESSION_DISPLAY_NAME_LEN}
-										onFocus={(event) => event.currentTarget.select()}
-										onBlur={() => void saveRename()}
-										value={renameText ?? ""}
-										onChange={(event) => setRenameText(event.target.value)}
-										onKeyDown={(event) => {
-											if (event.key === "Enter") {
-												event.preventDefault();
-												event.currentTarget.blur();
-											}
-											if (event.key === "Escape") {
-												event.preventDefault();
-												renameCancelled.current = true;
-												setRenameId(undefined);
-												setRenameText(undefined);
-											}
-										}}
-									/>
-								) : (
-									<Pressable
-										role="tab"
-										aria-selected={side.id === currentActiveId}
-										tabIndex={side.id === currentActiveId ? 0 : -1}
-										className="browser-panel__tab-select"
-										onClick={(event) => {
+			<div className="browser-panel__tab-bar">
+				<div className="browser-panel__tab-region">
+					<div
+						ref={tabStripRef}
+						role="tablist"
+						aria-label={t("sideChat.tabs")}
+						onKeyDown={handleTabListKeyDown}
+						className="browser-panel__tab-strip edge-fade edge-fade-x"
+						data-tab-strip
+					>
+						{sides.map((side) => {
+							const active = side.id === currentActiveId;
+							const renaming = renameId === side.id;
+							const closingTab = pendingCloses.some((pending) => pending.id === side.id);
+							const label = side.label?.trim() || t("sideChat.defaultLabel");
+							const requestClose = () => {
+								setCloseError(undefined);
+								setConfirmClose(side.id);
+							};
+							const frame = (
+								<TerminalTabFrame
+									action={
+										renaming || closingTab ? undefined : (
+											<TabCloseButton label={t("sideChat.closeNamed", { name: side.label })} onClose={requestClose} />
+										)
+									}
+									actionPinned
+									actionPosition="end"
+									active={active}
+									buttonProps={{
+										"aria-keyshortcuts": "F2",
+										"aria-selected": active,
+										onClick: (event) => {
 											if (event.detail > 1) return;
 											setActiveId(side.id);
 											setFocusKey(0);
-										}}
-										aria-keyshortcuts="F2"
-										onDoubleClick={(event) => {
+										},
+										onDoubleClick: (event) => {
 											event.preventDefault();
 											if (!closingSidesRef.current.has(side.id)) beginRename(side);
-										}}
-										onKeyDown={(event) => {
-											if (event.key === "F2") {
-												event.preventDefault();
-												if (!closingSidesRef.current.has(side.id)) beginRename(side);
-											}
-										}}
-										title={side.label}
-									>
-										<MessageSquare className="browser-panel__tab-icon" aria-hidden="true" />
-										<span className="browser-panel__tab-title">{side.label?.trim() || t("sideChat.defaultLabel")}{pendingCloses.some((pending) => pending.id === side.id) ? ` · ${t("sideChat.closingTab")}` : ""}</span>
-									</Pressable>
-								)}
-								<Pressable
-									hidden={renameId === side.id || pendingCloses.some((pending) => pending.id === side.id)}
-									className="browser-panel__tab-close"
-									aria-label={t("sideChat.closeNamed", { name: side.label })}
-									onClick={() => {
-										setCloseError(undefined);
-										setConfirmClose(side.id);
+										},
+										onKeyDown: (event) => {
+											if (event.key !== "F2") return;
+											event.preventDefault();
+											if (!closingSidesRef.current.has(side.id)) beginRename(side);
+										},
+										role: "tab",
+										tabIndex: active ? 0 : -1,
+										title: side.label,
+										type: "button",
 									}}
-								>
-									<X className="size-3.5" aria-hidden="true" />
-								</Pressable>
-							</div>
-						);
-						if (renameId === side.id || pendingCloses.some((pending) => pending.id === side.id)) return tab;
-						return (
-							<ContextMenu key={side.id}>
-								<ContextMenuTrigger asChild>{tab}</ContextMenuTrigger>
-								<ContextMenuContent className="min-w-44">
-									<ContextMenuItem onSelect={() => beginRename(side)}>
-										<Pencil aria-hidden="true" />
-										{t("sideChat.rename")}
-									</ContextMenuItem>
-								</ContextMenuContent>
-							</ContextMenu>
-						);
-					})}
+									editingContent={
+										renaming ? (
+											<input
+												autoFocus
+												aria-label={t("sideChat.renameSideChat")}
+												className={terminalTabRenameInputClassName}
+												maxLength={MAX_SESSION_DISPLAY_NAME_LEN}
+												onFocus={(event) => event.currentTarget.select()}
+												onBlur={() => void saveRename()}
+												value={renameText ?? ""}
+												onChange={(event) => setRenameText(event.target.value)}
+												onKeyDown={(event) => {
+													if (event.key === "Enter") {
+														event.preventDefault();
+														event.currentTarget.blur();
+													}
+													if (event.key === "Escape") {
+														event.preventDefault();
+														renameCancelled.current = true;
+														setRenameId(undefined);
+														setRenameText(undefined);
+													}
+												}}
+											/>
+										) : undefined
+									}
+									editingValue={renameText}
+									icon={<MessageSquare aria-hidden="true" className="size-icon-sm" />}
+									label={closingTab ? `${label} · ${t("sideChat.closingTab")}` : label}
+									onClose={renaming || closingTab ? undefined : requestClose}
+								/>
+							);
+							if (renaming || closingTab) {
+								return (
+									<div key={side.id} className="browser-panel__tab">
+										{frame}
+									</div>
+								);
+							}
+							return (
+								<ContextMenu key={side.id}>
+									<ContextMenuTrigger asChild>
+										<div className="browser-panel__tab">{frame}</div>
+									</ContextMenuTrigger>
+									<ContextMenuContent className="min-w-44">
+										<ContextMenuItem onSelect={() => beginRename(side)}>
+											<Pencil aria-hidden="true" />
+											{t("sideChat.rename")}
+										</ContextMenuItem>
+									</ContextMenuContent>
+								</ContextMenu>
+							);
+						})}
+					</div>
+				</div>
+				{/* The session strip's New terminal button, in its action slot. */}
+				<div className="workspace-topbar-actions shrink-0 pl-(--gap-topbar-control)" data-tab-strip-action>
+					<Button
+						type="button"
+						size="icon-sm"
+						variant="quiet"
+						disabled={!canCreate || pending}
+						aria-label={t("sideChat.newSideChat")}
+						onClick={() => void create(undefined, true).catch(() => undefined)}
+					>
+						<Plus aria-hidden="true" className="size-icon-md" />
+					</Button>
 				</div>
 			</div>
-			<Pressable
-				type="button"
-				className="browser-panel__tab-new"
-				disabled={!canCreate || pending}
-				aria-label={t("sideChat.newSideChat")}
-				onClick={() => void create(undefined, true).catch(() => undefined)}
-			>
-				<Plus className="size-3.5" />
-			</Pressable>
 		</header>
 	) : null;
 	const closeDialog = (

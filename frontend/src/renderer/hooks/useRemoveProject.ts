@@ -209,7 +209,7 @@ export function useRemoveProject({ findWorkspace, isViewing, cloud }: {
 			queryClient.setQueriesData<CloudCpProject[]>({ queryKey: cloudProjectsQueryKey }, (current) =>
 				current?.some((project) => project.id === projectId) ? current.filter((project) => project.id !== projectId) : current);
 		}
-		showGlobalToast(t("shell.projectRemoved", { name }), undefined, { tone: "success", dedupeKey: toastKey });
+		showGlobalToast(isCloud ? t("shell.cloudProjectDeleted", { name }) : t("shell.projectRemoved", { name }), undefined, { tone: "success", dedupeKey: toastKey });
 
 		const unpin = () => {
 			// Project ids come from the folder name, so a stale pin would come back
