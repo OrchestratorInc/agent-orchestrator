@@ -67,19 +67,29 @@ export function useChatKeyboard({ underHeader = false, floating = false }: {
 		// reduceChatKeyboard. Only the latest one is kept, and it is dropped if React
 		// Native's own record has moved on by the time it would apply.
 		let settle: ReturnType<typeof setTimeout> | undefined;
+		// Bumped by every open either source reports. Android sends the two in
+		// either order: keyboard-controller's keyboardWillShow can land before
+		// React Native's keyboardDidShow, while Keyboard.isVisible() still says
+		// hidden, so visibility alone cannot tell a close that is stale.
+		let opens = 0;
 		const settleThenCorrect = (signal: Extract<ChatKeyboardSignal, { kind: "platform-shown" | "platform-hidden" }>) => {
 			if (settle) clearTimeout(settle);
+			const opensAtReport = opens;
 			settle = setTimeout(() => {
 				settle = undefined;
 				if (Keyboard.isVisible() !== (signal.kind === "platform-shown")) return;
-				// A close only React Native saw ends a reported open too; a newer open
-				// would have made the keyboard visible and dropped this above.
-				if (signal.kind === "platform-hidden") setControllerOpen(false);
+				if (signal.kind === "platform-hidden") {
+					// An open since this close was reported owns the keyboard now.
+					if (opens !== opensAtReport) return;
+					// A close only React Native saw ends a reported open too.
+					setControllerOpen(false);
+				}
 				dispatch(signal);
 			}, PLATFORM_KEYBOARD_SETTLE_MS);
 		};
 		const subscriptions = [
 			KeyboardEvents.addListener("keyboardWillShow", (event) => {
+				opens += 1;
 				setClosing(false);
 				setControllerOpen(true);
 				dispatch({ kind: "controller-show", height: event.height });
@@ -90,7 +100,10 @@ export function useChatKeyboard({ underHeader = false, floating = false }: {
 				setControllerOpen(false);
 				dispatch({ kind: "controller-hidden" });
 			}),
-			Keyboard.addListener("keyboardDidShow", (event) => settleThenCorrect({ kind: "platform-shown", height: event.endCoordinates.height, insetsBottom: insetsBottom.current })),
+			Keyboard.addListener("keyboardDidShow", (event) => {
+				opens += 1;
+				settleThenCorrect({ kind: "platform-shown", height: event.endCoordinates.height, insetsBottom: insetsBottom.current });
+			}),
 			Keyboard.addListener("keyboardDidHide", () => settleThenCorrect({ kind: "platform-hidden" })),
 		];
 		return () => {
