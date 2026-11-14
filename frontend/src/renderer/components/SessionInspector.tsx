@@ -109,8 +109,7 @@ import { Pressable } from "./ui/pressable";
 import { cn } from "../lib/utils";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { SessionArchiveDialog, type SessionArchiveChoice } from "./SessionArchiveDialog";
-import { REVIEWER_GROUP, REVIEWER_ROW, REVIEWER_ROW_LABEL, REVIEWER_ROW_TRIGGER, ReviewerModelEffortRows, type ReviewerModelConfig } from "./ReviewerModelEffortRows";
-import { ReviewerSelect } from "./ReviewerSelect";
+import { ReviewerPicker, type ReviewerModelConfig } from "./ReviewerPicker";
 import { agentLabel } from "../lib/agent-options";
 import { useAgentReadinessQuery, useEnsureAgentReadiness } from "../hooks/useAgentReadinessQuery";
 import { Switch } from "./ui/switch";
@@ -2078,12 +2077,6 @@ function LocalReviewsSection({
 					setReviewerEffort(config.effort ?? "");
 					saveReviewer.mutate({ harness: next, model: config.model ?? "", mode: config.mode ?? "", effort: config.effort ?? "" });
 				}}
-				onReviewerHarnessPreviewChange={(next) => {
-					setReviewerOverride(next);
-					setReviewerModel("");
-					setReviewerMode("");
-					setReviewerEffort("");
-				}}
 				session={session}
 			/>
 			<ConfirmDialog
@@ -2271,7 +2264,6 @@ function CloudReviewsSection({
 				onAutoReviewChange={(enabled) => updateAutoReview.mutate(enabled)}
 				onCancel={() => cancelReview.mutate()}
 				onKill={() => undefined}
-				onReviewerHarnessPreviewChange={() => undefined}
 				onReviewerOverrideChange={() => undefined}
 				cloudReviewerHarnesses={reviewsQuery.data?.availableReviewerHarnesses ?? []}
 				cloudReviewerHarness={selectedReviewerHarness}
@@ -2856,7 +2848,6 @@ function ReviewPanel({
 	reviewerMode,
 	reviewerEffort,
 	onReviewerOverrideChange,
-	onReviewerHarnessPreviewChange,
 	onTrigger,
 	onCancel,
 	onAutoReviewChange,
@@ -2884,7 +2875,6 @@ function ReviewPanel({
 	reviewerMode: string;
 	reviewerEffort: string;
 	onReviewerOverrideChange: (next: ReviewerHarness | "", config: { model?: string; mode?: string; effort?: string }) => void;
-	onReviewerHarnessPreviewChange: (next: ReviewerHarness | "") => void;
 	onTrigger: () => void;
 	onCancel: () => void;
 	onAutoReviewChange: (enabled: boolean) => void;
@@ -3037,39 +3027,24 @@ function ReviewPanel({
 							</div>
 						</div>
 					) : (
-					// Agent, model, and effort: one grouped list, a row each.
-					<div className={cn(REVIEWER_GROUP, "my-1")}>
-					<div className={REVIEWER_ROW}>
-						<span className={REVIEWER_ROW_LABEL}>
-							{t("inspector.selectReviewerAgent")}
-						</span>
-						<ReviewerSelect
+					// Agent, model, and effort in one menu, picked the way the chat box picks them.
+					<div className="flex min-h-8 min-w-0 items-center justify-between gap-3 py-1">
+						<span className="shrink-0 text-sm text-settings-label">{t("settings.models.reviewerRole")}</span>
+						<ReviewerPicker
 							ariaLabel={t("inspector.selectReviewerAgent")}
 							agents={agentCatalog?.agents}
-							contentAlign="end"
 							defaultHarness={resolvedDefaultHarness}
-							disabled={reviewerControlsLocked}
-							harnessOnly
-							onChange={(next) => onReviewerHarnessPreviewChange(next as ReviewerHarness | "")}
-							onConfigChange={(harness, config) => onReviewerOverrideChange(harness as ReviewerHarness | "", config)}
-							hostId={hostId}
-							projectId={session.workspaceId}
-							triggerVariant="ghost"
-							triggerClassName={REVIEWER_ROW_TRIGGER}
 							value={reviewerOverride}
+							model={reviewerModel}
+							mode={reviewerMode}
+							effort={reviewerEffort}
+							inherited={inheritedReviewerConfig(config, reviewerOverride || resolvedDefaultHarness)}
+							projectId={session.workspaceId}
+							hostId={hostId}
+							disabled={reviewerControlsLocked}
+							onAgentChange={(next) => onReviewerOverrideChange(next as ReviewerHarness | "", {})}
+							onConfigChange={(next) => onReviewerOverrideChange(reviewerOverride, next)}
 						/>
-					</div>
-					<ReviewerModelEffortRows
-						agentId={reviewerOverride || resolvedDefaultHarness}
-						projectId={session.workspaceId}
-						hostId={hostId}
-						model={reviewerModel}
-						mode={reviewerMode}
-						effort={reviewerEffort}
-						inherited={inheritedReviewerConfig(config, reviewerOverride || resolvedDefaultHarness)}
-						disabled={reviewerControlsLocked}
-						onChange={(next) => onReviewerOverrideChange(reviewerOverride, next)}
-					/>
 					</div>
 					)}
 					{/* Several reviewers can work on one worker at once (an agent may

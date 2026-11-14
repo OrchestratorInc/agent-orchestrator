@@ -31,7 +31,7 @@ import {
 } from "./ui/option-menu";
 
 const REVIEWER_AGENT_PRIORITY = ["claude-code", "codex", "cursor", "opencode", "opencode-v2", "muse", "aider"] as const;
-const REVIEWER_AGENT_PRIORITY_RANK = new Map<string, number>(
+export const REVIEWER_AGENT_PRIORITY_RANK = new Map<string, number>(
 	REVIEWER_AGENT_PRIORITY.map((agent, index) => [agent, index]),
 );
 
@@ -63,7 +63,6 @@ export function ReviewerSelect({
 	defaultHarness,
 	harnessOnly = false,
 	contentAlign = "start",
-	triggerVariant,
 	disabled = false,
 	agents,
 	excludedHarness,
@@ -76,8 +75,6 @@ export function ReviewerSelect({
 	projectId?: string;
 	hostId?: string;
 	triggerClassName?: string;
-	/** "ghost" drops the bordered button chrome, for a picker sitting in a list row. */
-	triggerVariant?: "secondary" | "ghost";
 	ariaLabel?: string;
 	defaultHarness: string;
 	harnessOnly?: boolean;
@@ -147,7 +144,6 @@ export function ReviewerSelect({
 				)}
 				aria-label={reviewerAriaLabel}
 				disabled={disabled}
-				variant={triggerVariant}
 			>
 				<span className="flex min-w-0 items-center gap-2">
 					{effectiveHarness ? <AgentAvatar provider={effectiveHarness} className="size-icon-lg shrink-0" /> : null}

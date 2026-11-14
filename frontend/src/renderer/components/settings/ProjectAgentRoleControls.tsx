@@ -38,10 +38,6 @@ export function AgentModelField({
 	independentMode = false,
 	cloudOrgId,
 	warningClassName,
-	showEffort = true,
-	disabled = false,
-	triggerClassName,
-	menuAlign = "start",
 }: {
 	role: "worker" | "orchestrator" | "reviewer";
 	variant?: "settings" | "task";
@@ -71,12 +67,6 @@ export function AgentModelField({
 	 * Cloud has no list for the agent (an older control plane, opencode).
 	 */
 	cloudOrgId?: string;
-	/** False leaves effort out of the field, for a caller that gives it its own row. */
-	showEffort?: boolean;
-	disabled?: boolean;
-	/** Replaces the model button's settings chrome, for a caller with its own row style. */
-	triggerClassName?: string;
-	menuAlign?: "start" | "center" | "end";
 }) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
@@ -164,7 +154,7 @@ export function AgentModelField({
 				<>
 					<div className="flex min-w-0 flex-wrap items-center gap-2">
 						<span className="text-settings-muted">{t("settings.models.autoRouteLabel")}</span>
-						<EffortPicker label={label} value={shownMode} choices={options} triggerClassName={triggerClassName ?? "w-fit"} triggerVariant={triggerClassName ? "ghost" : undefined} onChange={selectMode} disabled={disabled}
+						<EffortPicker label={label} value={shownMode} choices={options} triggerClassName="w-fit" onChange={selectMode}
 							followLabel={defaultListed ? undefined : t("settings.models.agentDefaultMode")}
 							footer={!defaultListed && selectedMode ? <OptionMenuItem onSelect={() => { onModeChange(""); onModelChange(""); }}>{t("settings.models.useAgentMode")}</OptionMenuItem> : undefined} />
 					</div>
@@ -182,8 +172,8 @@ export function AgentModelField({
 							options={options}
 							placeholder={t("settings.models.modeNotReported")}
 							action={selectedMode && !defaultMode ? { label: t("settings.models.useAgentMode"), onSelect: () => onModeChange("") } : undefined}
-							triggerClassName={triggerClassName ?? "w-fit"}
-							disabled={disabled || (options.length === 0 && !(selectedMode && !defaultMode))}
+							triggerClassName="w-fit"
+							disabled={options.length === 0 && !(selectedMode && !defaultMode)}
 							onChange={(value) => {
 								onModeChange(value === defaultMode ? "" : value);
 								onModelChange("");
@@ -245,22 +235,22 @@ export function AgentModelField({
 				refreshing={catalog?.refreshState === "queued" || catalog?.refreshState === "refreshing"}
 				refreshError={catalog?.refreshError}
 				retryAt={catalog?.retryAt}
-				disabled={disabled || catalogFetching || agentId === ""}
+				disabled={catalogFetching || agentId === ""}
 				onChange={selectCatalogModel}
 				onCustom={selectCustomModel}
-				triggerClassName={triggerClassName ?? cn(MENU_TRIGGER_CHROME, "w-fit")}
+				triggerClassName={cn(MENU_TRIGGER_CHROME, "w-fit")}
 				compact
 				recentScope={agentId}
-				menuAlign={menuAlign}
+				menuAlign="start"
 				effortPlacement="chip"
 				warningClassName={warningClassName}
-				tuning={showEffort ? {
+				tuning={{
 					effort,
 					effortsWithoutModel: supportedEfforts,
 					onEffortChange,
 					onValidityChange,
 					roleLabel: t(`settings.models.${role}Role`),
-				} : undefined}
+				}}
 			/>
 			{warning && <FieldWarning className={cn("px-1 text-xs leading-row", warningClassName)} warning={warning} onRetry={cloudGapWarning ? readCloudAgain : undefined} />}
 		</>
