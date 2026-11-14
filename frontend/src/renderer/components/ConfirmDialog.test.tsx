@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { expect, test, vi } from "vitest";
 import { ConfirmDialog } from "./ConfirmDialog";
 
@@ -13,18 +14,27 @@ test("can disable confirmation without preventing cancellation", () => {
 	expect(onOpenChange).toHaveBeenCalledWith(false);
 });
 
-test("starts on Cancel for destructive confirms and restores focus on close", async () => {
+test("starts on the confirm button for destructive confirms, so Enter confirms, and restores focus on close", async () => {
 	const opener = document.createElement("button");
 	document.body.appendChild(opener);
 	opener.focus();
 	const props = { title: "Kill?", description: "Sure?", confirmLabel: "Kill it", onConfirm: vi.fn(), onOpenChange: vi.fn() };
 	const { rerender } = render(<ConfirmDialog {...props} open destructive />);
-	await waitFor(() => expect(screen.getByRole("button", { name: "Cancel" })).toHaveFocus());
+	await waitFor(() => expect(screen.getByRole("button", { name: "Kill it" })).toHaveFocus());
 	expect(screen.getByRole("button", { name: "Close dialog" })).toHaveAttribute("tabindex", "-1");
 
 	rerender(<ConfirmDialog {...props} open={false} destructive />);
 	await waitFor(() => expect(opener).toHaveFocus());
 	opener.remove();
+});
+
+test("confirms a destructive dialog on Enter", async () => {
+	const user = userEvent.setup();
+	const onConfirm = vi.fn();
+	render(<ConfirmDialog open destructive title="Remove project?" description="Sure?" confirmLabel="Remove" onConfirm={onConfirm} onOpenChange={vi.fn()} />);
+	await waitFor(() => expect(screen.getByRole("button", { name: "Remove" })).toHaveFocus());
+	await user.keyboard("{Enter}");
+	expect(onConfirm).toHaveBeenCalledTimes(1);
 });
 
 test("starts on Cancel while it can't be confirmed yet, so focus never stays behind it", async () => {

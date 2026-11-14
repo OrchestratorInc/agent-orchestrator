@@ -71,7 +71,7 @@ function StartupSteps({ startup }: { startup: SessionStartupView }) {
 				return (
 					<StepRow
 						key={step.id}
-						label={stepLabel(step.id, startup.agentName)}
+						label={startup.labels?.[step.id] ?? stepLabel(step.id, startup.agentName)}
 						status={status}
 						detail={step.id === "worktree" && status !== "pending" ? startup.branch : undefined}
 						naming={step.id === "worktree" && startup.namingBranch}

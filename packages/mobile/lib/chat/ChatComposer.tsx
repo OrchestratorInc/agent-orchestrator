@@ -30,17 +30,18 @@ import {
 } from "./composerSuggestions";
 import { chatSheetRoute } from "./chatSheetRegistry";
 import { ChatAttachmentMenu } from "./ChatAttachmentMenu";
-import { ComposerAttachment } from "./ComposerAttachment";
+import { ComposerAttachmentTray } from "./ComposerAttachmentTray";
 import { ComposerGlass, composerGlassSupported } from "./composer-glass";
 import { COMPOSER_DISC, COMPOSER_FIELD_HEIGHT, COMPOSER_FONT_SCALE_CAP, COMPOSER_RADIUS, composerStyleRules, useComposerFieldSize } from "./composerStyles";
 import { ChatTurnSettingsControl } from "./ChatTurnSettingsControl";
+import type { ChatTurnSettingsControlProps } from "./ChatTurnSettingsControl.types";
 import { EffortSliderOverlay } from "../effort-slider";
 import { useChatEffort } from "./useChatEffort";
 import { compactCount } from "../files/model";
 import { composerDeliveryPresentation, composerDeliveryRoute, composerPrimaryAction, hardwareReturnIntent, type ComposerDeliveryIntent } from "./composerDeliveryModel";
 import { HardwareReturn } from "./HardwareReturn";
 import { useKeyboardSendRefocus } from "./useKeyboardSendRefocus";
-import { contextMeterModel } from "./contextMeter";
+import { contextMeterModel, quotaChipModel } from "./contextMeter";
 import { RequestCard } from "./RequestCard";
 import type { RequestDockModel } from "./requestDockModel";
 import { createRequestGate } from "./requestGate";
@@ -50,7 +51,7 @@ import type { DashboardPR, SessionPRSummary } from "../api";
 import { PRChipContent, prChipAccessibilityLabel } from "./PRChip";
 import { decodeResponseDraft, encodeResponseDraft, responseReplyText, responseExcerpts, excerptDraftText, isChatExcerpt, type ResponseQuote, type ResponseQuoteRequest } from "./responseQuotes";
 import { afterDraftWrites } from "./pendingSend";
-import { forgetComposerAttachments, readComposerAttachments, updateComposerAttachments, useComposerAttachments, type ComposerAttachment as Attachment } from "./composerAttachments";
+import { composerTrayItems, forgetComposerAttachments, readComposerAttachments, removeComposerAttachment, updateComposerAttachments, useComposerAttachments, type ComposerAttachment as Attachment } from "./composerAttachments";
 import { attachComposerImages, MAX_ATTACHMENTS } from "./composerImages";
 import { useImagePaste } from "./useImagePaste";
 
@@ -123,9 +124,10 @@ export function ChatComposer({
 	onInterrupt,
 	onSettings,
 	onConfigOption,
+	otherAgents,
 	restingInset,
 	dockRiseOverride,
-	quotaActive,
+	onOpenUsage,
 	request,
 	requestDismissed,
 	onRequestDecide,
@@ -135,6 +137,8 @@ export function ChatComposer({
 	onRestoreRequest,
 	openingTurnId,
 	startingAgentName,
+	fileUploads,
+	attachmentsUnavailable,
 }: {
 	quoteRequest?: ResponseQuoteRequest;
 	onQuoteHandled?(id: string): void;
@@ -166,11 +170,15 @@ export function ChatComposer({
 	onAcknowledgeSend(id: string): Promise<void>;
 	completedRetry?: { id: string; draftText: string };
 	onSteer(text: string): Promise<string>;
-	onPromoteQueuedTurn(turnId: string): Promise<void>;
-	onCancelQueuedTurn(turnId: string): Promise<void>;
+	/** Steers with a queued message. Left out where the host can't, which hides the action. */
+	onPromoteQueuedTurn?(turnId: string): Promise<void>;
+	/** Deletes a queued message. Left out where the host can't, which hides the action. */
+	onCancelQueuedTurn?(turnId: string): Promise<void>;
 	onInterrupt(): void;
 	onSettings(settings: TurnSettings): Promise<void>;
 	onConfigOption(id: string, value: { value: string } | { enabled: boolean }): Promise<ChatConfigOption[]>;
+	/** The model menu's other agents; choosing one's model switches the session's agent. */
+	otherAgents?: ChatTurnSettingsControlProps["otherAgents"];
 	/**
 	 * What the dock owes with the keyboard down — the home-indicator inset. The
 	 * dock keeps it at all times and closes the difference to the keyboard by
@@ -183,8 +191,8 @@ export function ChatComposer({
 	 * unset to ride the progress. See `chatDockRiseOverride`.
 	 */
 	dockRiseOverride?: number;
-	/** The account-quota banner is up, so the context meter stands down. */
-	quotaActive?: boolean;
+	/** Opens the context & usage sheet, from the quota chip. */
+	onOpenUsage?(): void;
 	/** A pending request, which takes the composer's place until it is answered. */
 	request?: RequestDockModel | null;
 	/** The user pushed the request aside to type instead. */
@@ -198,6 +206,15 @@ export function ChatComposer({
 	openingTurnId?: string;
 	/** Set while the session starts, for the placeholder. */
 	startingAgentName?: string;
+	/**
+	 * Files of any type go with the message as uploads, up to this size each,
+	 * instead of being embedded as text: an Orchestrator Cloud session takes
+	 * them that way. A picked file is then sent as a resource with only its
+	 * local `uri`, which the screen reads and uploads when the message is sent.
+	 */
+	fileUploads?: { maxBytes: number };
+	/** Nothing can be attached here (an organization whose plan takes no files): attach stays in place, dimmed. */
+	attachmentsUnavailable?: boolean;
 }) {
 	const t = useTheme();
 	const router = useRouter();
@@ -224,6 +241,7 @@ export function ChatComposer({
 	const attachmentKey = machine ? `${machine}.${sessionId}` : sessionId;
 	const { items: attachments, notice: attachmentNotice } = useComposerAttachments(attachmentKey);
 	const clearAttachments = useCallback(() => updateComposerAttachments(attachmentKey, () => ({ items: [] })), [attachmentKey]);
+	const trayItems = useMemo(() => composerTrayItems(attachments), [attachments]);
 	const dismissAttachmentNotice = useCallback(() => updateComposerAttachments(attachmentKey, (current) => current.notice ? { items: current.items } : current), [attachmentKey]);
 	const [localError, setLocalError] = useState<string>();
 	const [submitting, setSubmitting] = useState(false);
@@ -241,7 +259,9 @@ export function ChatComposer({
 	const queuedMessages = useMemo(() => queuedConversationMessages(snapshot, openingTurnId), [openingTurnId, snapshot]);
 	const visibleQueuedMessages = useMemo(() => queuedMessages.filter((entry) => !hiddenQueuedTurnIds.has(entry.turnId)), [hiddenQueuedTurnIds, queuedMessages]);
 	// Absent below 70%: a permanent token gauge is chrome nobody reads.
-	const contextMeter = contextMeterModel(snapshot.usage, Boolean(quotaActive));
+	const contextMeter = contextMeterModel(snapshot.usage);
+	// Absent below 75% of the account's usage limit, for the same reason.
+	const quotaChip = quotaChipModel(snapshot.rateLimits);
 	// A blocking question is the next thing to do, so it takes the input's place
 	// rather than pointing at a card somewhere up the timeline.
 	const requestCard = request && !requestDismissed ? (
@@ -413,7 +433,8 @@ export function ChatComposer({
 		} finally { setSubmitting(false); }
 	}, [text, quotes, attachments, steerEligible, onSteer, onSend, onAcknowledgeSend, draftKey, canSubmit, keyboardSend.begin, attachmentKey, dismissAttachmentNotice]);
 
-	const pasteLayout = useImagePaste(stopped || submitting ? null : (assets, overflow) => {
+	// Pasting is a way to attach too, so it follows the same gate as the menu.
+	const pasteLayout = useImagePaste(stopped || submitting || attachmentsUnavailable ? null : (assets, overflow) => {
 		setLocalError(undefined);
 		if (attachComposerImages(attachmentKey, assets, overflow)) haptics.tap();
 	});
@@ -433,12 +454,14 @@ export function ChatComposer({
 		}
 	};
 	const addFile = async () => {
+		if (fileUploads) return addUploadFile(fileUploads.maxBytes);
 		const key = attachmentKey;
 		setLocalError(undefined);
 		dismissAttachmentNotice();
-		const result = await DocumentPicker.getDocumentAsync({ multiple: true, copyToCacheDirectory: true, type: ["text/*", "application/json", "application/xml", "application/yaml"] });
-		if (result.canceled) return;
 		try {
+			// Inside the try: a picker that fails says so rather than rejecting unseen.
+			const result = await DocumentPicker.getDocumentAsync({ multiple: true, copyToCacheDirectory: true, type: ["text/*", "application/json", "application/xml", "application/yaml"] });
+			if (result.canceled) return;
 			const existing = readComposerAttachments(key).items.length;
 			const added: Attachment[] = [];
 			for (const asset of result.assets) {
@@ -448,6 +471,30 @@ export function ChatComposer({
 				const bytes = new TextEncoder().encode(body).byteLength;
 				if (bytes > MAX_EMBEDDED_FILE_BYTES) throw new Error(`${asset.name} is too large to embed. Reference a worktree file with @ instead.`);
 				added.push({ id: `${asset.uri}-${Date.now()}`, kind: "resource", name: asset.name, bytes, resource: { uri: `mobile-attachment://${encodeURIComponent(asset.name)}`, name: asset.name, mimeType: asset.mimeType || "text/plain", text: body } });
+			}
+			updateComposerAttachments(key, (current) => ({ items: [...current.items, ...added], notice: current.notice }));
+		} catch (cause) {
+			const notice = userFacingError(cause);
+			updateComposerAttachments(key, (current) => ({ items: current.items, notice }));
+		}
+	};
+
+	// Any file, kept as a local copy and uploaded with the message (see `fileUploads`).
+	const addUploadFile = async (maxBytes: number) => {
+		const key = attachmentKey;
+		setLocalError(undefined);
+		dismissAttachmentNotice();
+		try {
+			// Inside the try: a picker that fails says so rather than rejecting unseen.
+			const result = await DocumentPicker.getDocumentAsync({ multiple: true, copyToCacheDirectory: true, type: "*/*" });
+			if (result.canceled) return;
+			const existing = readComposerAttachments(key).items.length;
+			const added: Attachment[] = [];
+			for (const asset of result.assets) {
+				if (existing + added.length >= MAX_ATTACHMENTS) throw new Error(`You can attach up to ${MAX_ATTACHMENTS} items.`);
+				const bytes = asset.size ?? 0;
+				if (bytes > maxBytes) throw new Error(`${asset.name} is larger than ${Math.round(maxBytes / (1 << 20))} MB, the most this session takes.`);
+				added.push({ id: `${asset.uri}-${Date.now()}`, kind: "resource", name: asset.name, bytes, resource: { uri: asset.uri, name: asset.name, mimeType: asset.mimeType || "application/octet-stream" } });
 			}
 			updateComposerAttachments(key, (current) => ({ items: [...current.items, ...added], notice: current.notice }));
 		} catch (cause) {
@@ -510,7 +557,7 @@ export function ChatComposer({
 	>
 		<View style={styles.steerDisc}><AppSymbol name={steer} size={iconSize.sm} color={t.accent} /></View>
 	</Pressable> : null;
-	const attachMenu = <ChatAttachmentMenu disabled={stopped || submitting} canAttachFile={Boolean(canEmbedFiles)} onChoosePhoto={() => void addImage()} onChooseFile={() => void addFile()} />;
+	const attachMenu = <ChatAttachmentMenu disabled={stopped || submitting || Boolean(attachmentsUnavailable)} canAttachFile={Boolean(canEmbedFiles || fileUploads)} onChoosePhoto={() => void addImage()} onChooseFile={() => void addFile()} />;
 	const canDictate = voice.state !== "unavailable" && voice.state !== "denied";
 	// One round button that follows the prompt, as on the new-task sheet: it
 	// stops the mic while it is open, stops the turn while one runs and nothing
@@ -547,10 +594,17 @@ export function ChatComposer({
 		opacity: interpolate(openness.value, [0.35, 1], [0, 1], "clamp"),
 		transform: [{ translateY: interpolate(openness.value, [0, 1], [space.sm, 0], "clamp") }],
 	}));
-	// The session's state as chips over the composer, open or not: its PR, what
-	// it changed, and how full the context is once that matters.
-	const chips = activeReviewPR || changes || contextMeter ? <Animated.View entering={FadeIn.duration(COMPOSER_FADE_MS)} exiting={FadeOut.duration(COMPOSER_FADE_MS)}>
+	// The session's state as chips over the composer, open or not: the account's
+	// quota once that matters, its PR, what it changed, and how full the context
+	// is once that matters.
+	const chips = activeReviewPR || changes || contextMeter || quotaChip ? <Animated.View entering={FadeIn.duration(COMPOSER_FADE_MS)} exiting={FadeOut.duration(COMPOSER_FADE_MS)}>
 		<ScrollView key={fieldSize.fontScale} horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled" contentContainerStyle={styles.chips}>
+			{/* First: the row scrolls with no indicator, and this is the only quota
+			    warning, so it must not start off screen behind the PR and changes chips. */}
+			{quotaChip ? <ComposerChip accessibilityLabel={quotaChip.accessibilityLabel} accessibilityHint="Opens context and usage" onPress={onOpenUsage}>
+				<AppSymbol name="warning" size={iconSize.xs} color={quotaChip.severity === "critical" ? t.red : t.amber} />
+				<Text numberOfLines={1} maxFontSizeMultiplier={fontScaleCap.chrome} style={[styles.contextText, styles.tabular, { color: quotaChip.severity === "critical" ? t.red : t.amber }]}>{quotaChip.label}</Text>
+			</ComposerChip> : null}
 			{activeReviewPR ? <ComposerChip accessibilityLabel={prChipAccessibilityLabel(activeReviewPR, reviewPRSummary)} accessibilityHint="Opens the pull request review" onPress={onOpenReview}>
 				<PRChipContent pr={activeReviewPR} summary={reviewPRSummary} />
 			</ComposerChip> : null}
@@ -578,7 +632,6 @@ export function ChatComposer({
 		<Animated.View style={[styles.dock, styles.floatingDock, { paddingBottom: restingInset }, dockRise]}>
 			<DockFade />
 			{chips}
-			{attachments.length ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.attachments}>{attachments.map((item) => <ComposerAttachment key={item.id} name={item.name} image={item.kind === "image" ? item.image : undefined} onRemove={() => updateComposerAttachments(attachmentKey, (current) => ({ items: current.items.filter((candidate) => candidate.id !== item.id), notice: current.notice }))} />)}</ScrollView> : null}
 			{/* Composer-local only. Conversation and action failures are banners above
 			    the timeline; echoing them here showed one failure twice. */}
 			{localError || attachmentNotice || voice.error ? <Text accessibilityRole="alert" style={styles.error}>{localError || attachmentNotice || voice.error}</Text> : null}
@@ -590,7 +643,7 @@ export function ChatComposer({
 					return <View key={entry.turnId} style={[styles.queueRow, index > 0 && styles.queueRowDivider]}>
 						<AppSymbol name={queued} size={iconSize.sm} color={t.textTertiary} />
 						<Text numberOfLines={1} style={styles.queueText}>{entry.message.text}</Text>
-						{canSteer ? <Pressable
+						{canSteer && onPromoteQueuedTurn ? <Pressable
 							accessibilityRole="button"
 							accessibilityLabel={`Steer queued message: ${entry.message.text}`}
 							accessibilityState={{ busy: promoting, disabled: queueActionPending }}
@@ -615,7 +668,7 @@ export function ChatComposer({
 						>
 							{promoting ? <ActivityIndicator size="small" color={t.accent} /> : <AppSymbol name={steer} size={iconSize.sm} color={t.accent} />}
 						</Pressable> : null}
-						<Pressable
+						{onCancelQueuedTurn ? <Pressable
 							accessibilityRole="button"
 							accessibilityLabel={`Delete queued message: ${entry.message.text}`}
 							accessibilityState={{ busy: cancelling, disabled: queueActionPending }}
@@ -631,7 +684,7 @@ export function ChatComposer({
 							style={({ pressed }) => [styles.queueDelete, pressed && iconFeedback.pressed]}
 						>
 							{cancelling ? <ActivityIndicator size="small" color={t.textTertiary} /> : <AppSymbol name="close" size={iconSize.sm} color={t.textTertiary} />}
-						</Pressable>
+						</Pressable> : null}
 					</View>;
 				})}
 			</View> : null}
@@ -669,6 +722,8 @@ export function ChatComposer({
 						}} style={({ pressed }) => [styles.removeQuote, pressed && iconFeedback.pressed]}><AppSymbol name="close" size={iconSize.md} color={t.textSecondary} /></Pressable>
 					</View>)}
 				</ScrollView> : null}
+				{/* What goes with the message, inside the pill over the field. */}
+				<ComposerAttachmentTray items={trayItems} onRemove={(id) => removeComposerAttachment(attachmentKey, id)} />
 				{/* The field keeps one place in the tree whatever the pill's shape, so it
 				    keeps its focus as the pill opens around it. While the mic is open
 				    the dictation takes its place, and the field waits hidden with the
@@ -706,7 +761,7 @@ export function ChatComposer({
 				    drawn when the row opens rather than appearing partway through. */}
 				<Animated.View pointerEvents={expanded ? "box-none" : "none"} style={[styles.controlsRow, { paddingLeft: CORNER_CONTROL, paddingRight: CORNER_CONTROL }, controlsOpening]}>
 					<View style={styles.settingsSlot}>
-						<ChatTurnSettingsControl {...settingsProps} effort={{ choices: effort.choices, open: effort.open, onToggle: effort.toggle }} />
+						<ChatTurnSettingsControl {...settingsProps} otherAgents={otherAgents} effort={{ choices: effort.choices, open: effort.open, onToggle: effort.toggle }} />
 					</View>
 					{steerAction}
 				</Animated.View>
@@ -828,6 +883,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	contextTrack: { width: 34, height: 4, borderRadius: radius.pill, overflow: "hidden", backgroundColor: t.bgSubtle },
 	contextFill: { height: 4, borderRadius: radius.pill },
 	contextText: { fontFamily: "DMSans_600SemiBold", fontSize: type.footnote.fontSize, fontWeight: "600" },
+	tabular: { fontVariant: ["tabular-nums"] },
 	// As tall as the row; it yields before the controls do.
 	steerAction: { width: touchTarget, height: touchTarget, alignItems: "center", justifyContent: "center" },
 	dictation: { minHeight: COMPOSER_FIELD_HEIGHT },

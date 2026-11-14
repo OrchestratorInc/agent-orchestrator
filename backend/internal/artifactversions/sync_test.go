@@ -78,3 +78,28 @@ func TestSyncRecordsASettledEditWithoutWaitingForTheObserver(t *testing.T) {
 		t.Fatalf("versions after repeats = %d, want 2", got)
 	}
 }
+
+// A turn start keeps every artifact as it is then, with no settle window, so
+// a fork of that turn can copy the artifacts as they were.
+func TestSnapshotSessionKeepsEveryFileNow(t *testing.T) {
+	h := newHarness(t)
+	h.write("report.md", "turn one")
+	h.write("notes/todo.md", "a list")
+	h.cap.now = func() time.Time { return h.mtime } // both still inside the settle window
+	if err := h.cap.SnapshotSession(h.ctx, h.sess); err != nil {
+		t.Fatal(err)
+	}
+	if vs := h.versions("report.md"); len(vs) != 1 || vs[0].SHA256 != sha256Hex("turn one") {
+		t.Fatalf("report.md versions = %+v", vs)
+	}
+	if vs := h.versions("notes/todo.md"); len(vs) != 1 {
+		t.Fatalf("notes/todo.md versions = %+v", vs)
+	}
+	// Unchanged content is not recorded twice.
+	if err := h.cap.SnapshotSession(h.ctx, h.sess); err != nil {
+		t.Fatal(err)
+	}
+	if vs := h.versions("report.md"); len(vs) != 1 {
+		t.Fatalf("report.md versions after a second call = %d", len(vs))
+	}
+}

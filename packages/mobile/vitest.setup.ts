@@ -9,3 +9,7 @@ vi.mock("expo-symbols", () => ({
 	SymbolView: "SymbolView",
 	unstable_getMaterialSymbolSourceAsync: async () => null,
 }));
+
+// expo-device cannot load under node either. The connect path names this
+// phone when it pairs, so the module is reached from most connection tests.
+vi.mock("expo-device", () => ({ deviceName: "Test phone", osName: "iOS" }));

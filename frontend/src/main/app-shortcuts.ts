@@ -85,6 +85,15 @@ const legacyShortcutChannels: Partial<Record<AppShortcutId, string>> = {
 // Handled in main itself rather than forwarded to the shell.
 const mainHandledShortcuts: ReadonlySet<AppShortcutId> = new Set(["toggle-browser-devtools"]);
 
+/** The IPC message that runs shortcut `id` in the shell, shared by chords and menu items. */
+export function appShortcutDelivery(
+	id: AppShortcutId,
+	event: AppShortcutEvent = { id },
+): { channel: string; payload: unknown[] } {
+	const legacy = legacyShortcutChannels[id];
+	return legacy ? { channel: legacy, payload: [] } : { channel: APP_SHORTCUT_CHANNEL, payload: [event] };
+}
+
 const appShortcutMatch = (
 	chord: ShortcutChord,
 	isMac: boolean,
@@ -92,10 +101,8 @@ const appShortcutMatch = (
 ): { id: AppShortcutId; channel: string; payload: unknown[] } | null => {
 	for (const { id } of APP_SHORTCUTS) {
 		if (mainHandledShortcuts.has(id) || !matchesAppShortcut(id, chord, isMac, overrides)) continue;
-		const legacy = legacyShortcutChannels[id];
-		if (legacy) return { id, channel: legacy, payload: [] };
 		const event: AppShortcutEvent = id === "jump-to-session" ? { id, index: Number(chord.key) - 1 } : { id };
-		return { id, channel: APP_SHORTCUT_CHANNEL, payload: [event] };
+		return { id, ...appShortcutDelivery(id, event) };
 	}
 	return null;
 };
@@ -162,6 +169,9 @@ export function attachAppShortcuts(
 		const match = appShortcutMatch(chord, isMac, getOverrides());
 		if (!match) return;
 		const { id, channel, payload } = match;
+		// Contextual actions are owned by the focused surface. Let the renderer
+		// inspect dialogs, editors, focus and the live selection before claiming them.
+		if (id === "find-in-chat" || id === "add-selection-to-chat") return;
 		if (!isMac && shortcutYieldsToTerminal(id, chord) && isTerminalFocused()) return;
 		if (!shouldHandle(id, chord)) {
 			// Browser context owns these chords. Consume them so a racing shell

@@ -46,6 +46,9 @@ func TestGetAgentHooksInstallsV2AndRemovesOnlyManagedV1(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(workspace, ".opencode", "skills", "using-ao", "SKILL.md")); err != nil {
 		t.Fatalf("shared using-ao skill missing: %v", err)
 	}
+	if _, err := os.Stat(filepath.Join(workspace, ".opencode", "skills", "bug-triage", "SKILL.md")); err != nil {
+		t.Fatalf("bug-triage skill missing: %v", err)
+	}
 
 	if err := New().UninstallHooks(ctx, workspace); err != nil {
 		t.Fatalf("uninstall v2: %v", err)
@@ -58,6 +61,9 @@ func TestGetAgentHooksInstallsV2AndRemovesOnlyManagedV1(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(workspace, ".opencode", "skills", "using-ao")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("managed skill survived uninstall: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(workspace, ".opencode", "skills", "bug-triage")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("bug-triage skill survived uninstall: %v", err)
 	}
 }
 
@@ -215,6 +221,92 @@ process.stdin.on("end", () => {
 	}
 }
 
+func TestManagedV2PluginFiltersChildSessionsByParentID(t *testing.T) {
+	// Subagents arrive on the same bus; the embedded plugin must track them from
+	// session.created(parentID) and never report a child id as the identity.
+	for _, marker := range []string{"parentID", "childSessions", "isChildSession", "resolveSessionID"} {
+		if !strings.Contains(v2PluginSource, marker) {
+			t.Fatalf("managed v2 plugin does not filter child sessions (%q missing)", marker)
+		}
+	}
+}
+
+func TestManagedV2PluginFiltersChildSessions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake ao executable fixture uses a Unix shebang")
+	}
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the OpenCode 2 plugin fixture")
+	}
+
+	workspace := t.TempDir()
+	if err := New().GetAgentHooks(context.Background(), ports.WorkspaceHookConfig{WorkspacePath: workspace}); err != nil {
+		t.Fatal(err)
+	}
+	fixture := t.TempDir()
+	modulePath := filepath.Join(fixture, "ao-activity.mjs")
+	source, err := os.ReadFile(v2PluginPath(workspace))
+	if err != nil {
+		t.Fatal(err)
+	}
+	source = []byte(strings.Replace(string(source), "const HOOK_TIMEOUT_MS = 1_250", "const HOOK_TIMEOUT_MS = 10_000", 1))
+	writeV2TestFile(t, modulePath, string(source), 0o600)
+	capture := filepath.Join(fixture, "calls.jsonl")
+	writeV2TestFile(t, filepath.Join(fixture, "ao"), `#!/usr/bin/env node
+const fs = require("node:fs");
+let input = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", chunk => input += chunk);
+process.stdin.on("end", () => {
+  fs.appendFileSync(process.env.AO_TEST_CAPTURE, JSON.stringify({ args: process.argv.slice(2), cwd: process.cwd(), input, launch: process.env.AO_RUNTIME_LAUNCH_ID }) + "\n");
+  process.exit(9);
+});
+`, 0o755)
+	harness := writeV2Harness(t, fixture)
+	cmd := exec.CommandContext(context.Background(), node, harness, modulePath, workspace, "subagents")
+	cmd.Env = append(os.Environ(),
+		"PATH="+fixture+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"AO_TEST_CAPTURE="+capture,
+		"AO_RUNTIME_LAUNCH_ID=launch-v2-7",
+	)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("plugin harness failed: %v\n%s", err, output)
+	}
+
+	calls := readV2HookCalls(t, capture)
+	// Child execution/tool activity folds onto the parent as plain active; child
+	// permission dialogs surface on the parent; child turn boundaries are
+	// dropped. The parent turn still emits its own start/activity/stop.
+	wantEvents := []string{"session-start", "active", "active", "permission-blocked", "permission-resolved", "active", "active", "stop"}
+	if len(calls) != len(wantEvents) {
+		t.Fatalf("calls = %#v, want %d", calls, len(wantEvents))
+	}
+	payloads := make([]map[string]any, len(calls))
+	for i, event := range wantEvents {
+		if !reflect.DeepEqual(calls[i].Args, []string{"hooks", "opencode-v2", event}) {
+			t.Fatalf("call %d args = %#v, want hooks/opencode-v2/%s", i, calls[i].Args, event)
+		}
+		if strings.Contains(calls[i].Input, "ses_child") || strings.Contains(calls[i].Input, "ses_grandchild") {
+			t.Fatalf("call %d leaked a child session id: %s", i, calls[i].Input)
+		}
+		if err := json.Unmarshal([]byte(strings.TrimSpace(calls[i].Input)), &payloads[i]); err != nil {
+			t.Fatalf("call %d payload: %v", i, err)
+		}
+		if payloads[i]["session_id"] != "ses_parent" {
+			t.Fatalf("call %d session_id = %#v, want the parent id", i, payloads[i]["session_id"])
+		}
+	}
+	// A child tool must not donate its tool identity to the parent's flight.
+	if got, ok := payloads[2]["tool_name"]; ok && got != "" {
+		t.Fatalf("child tool active carried tool_name %#v, want none", got)
+	}
+	// Parent tools keep the identity the step timeline needs.
+	if payloads[6]["tool_name"] != "read" || payloads[6]["tool_use_id"] != "tool_parent" {
+		t.Fatalf("parent tool payload = %#v, want read/tool_parent", payloads[6])
+	}
+}
+
 func TestManagedV2PluginBoundsHungHook(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("fake ao executable fixture uses a Unix shebang")
@@ -318,6 +410,29 @@ const cleanup = await loaded.default.setup(context);
 const flush = () => new Promise(resolve => setImmediate(resolve));
 if (mode === "single") {
   await callbacks["tool:execute.before"]({ sessionID: "ses_native_v2", tool: "read" });
+} else if (mode === "subagents") {
+  emit({ type: "session.created", data: { sessionID: "ses_parent" } });
+  await flush();
+  emit({ type: "session.created", data: { sessionID: "ses_child", parentID: "ses_parent" } });
+  await flush();
+  emit({ type: "session.created", data: { sessionID: "ses_grandchild", parentID: "ses_child" } });
+  await flush();
+  emit({ type: "session.execution.started", data: { sessionID: "ses_child" } });
+  await flush();
+  await callbacks["tool:execute.before"]({ sessionID: "ses_child", tool: "read", id: "tool_child" });
+  emit({ type: "permission.asked", data: { sessionID: "ses_child", id: "per_child" } });
+  await flush();
+  emit({ type: "permission.replied", data: { sessionID: "ses_child", requestID: "per_child", reply: "once" } });
+  await flush();
+  emit({ type: "session.execution.succeeded", data: { sessionID: "ses_child" } });
+  await flush();
+  emit({ type: "session.status", data: { sessionID: "ses_child", status: { type: "idle" } } });
+  await flush();
+  emit({ type: "session.execution.started", data: { sessionID: "ses_parent" } });
+  await flush();
+  await callbacks["tool:execute.after"]({ sessionID: "ses_parent", tool: "read", id: "tool_parent" });
+  emit({ type: "session.execution.succeeded", data: { sessionID: "ses_parent" } });
+  await flush();
 } else {
   emit({ type: "session.created", data: { sessionID: "ses_native_v2" } });
   await flush();

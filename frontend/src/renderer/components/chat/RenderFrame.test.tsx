@@ -65,6 +65,18 @@ describe("render activity", () => {
 		expect(frame().getAttribute("src")).toMatch(/^http:\/\/127\.0\.0\.1:3555\/api\/v1\/sessions\/proj-1\/renders\/r1#ao-theme=/);
 	});
 
+	it("opens an image the reader clicks in the page at full size, only from the frame in use", async () => {
+		render(<ActivityRow activity={renderActivity()} />);
+		const src = "data:image/png;base64,iVBORw0KGgo=";
+		const request = { jsonrpc: "2.0", method: "ao/open-image", params: { src, alt: "Before" } };
+		post(request, frame().contentWindow);
+		expect(screen.queryByRole("dialog")).toBeNull();
+		act(() => frame().focus());
+		post(request, frame().contentWindow);
+		const dialog = await screen.findByRole("dialog", { name: "Before" });
+		expect(within(dialog).getByRole("img", { name: "Before" })).toHaveAttribute("src", src);
+	});
+
 	it("toggles reflow without reloading and shares the choice with the expanded page", async () => {
 		const user = userEvent.setup();
 		render(<ActivityRow activity={renderActivity()} />);
@@ -433,7 +445,7 @@ describe("render activity", () => {
 		const user = userEvent.setup();
 		const onLinkOpen = vi.fn();
 		render(<ChatLinkProvider onLinkOpen={onLinkOpen}><ActivityRow activity={renderActivity()} /></ChatLinkProvider>);
-		await user.click(screen.getByRole("button", { name: "Open in AO Browser" }));
+		await user.click(screen.getByRole("button", { name: "Open in Orchestrator Browser" }));
 		expect(onLinkOpen).toHaveBeenCalledExactlyOnceWith(expect.stringMatching(/^http:\/\/127\.0\.0\.1:3001\/api\/v1\/sessions\/proj-1\/renders\/r1#ao-theme=/));
 	});
 });
@@ -584,7 +596,7 @@ describe("artifact activity", () => {
 				</ChatLinkProvider>
 			</QueryClientProvider>,
 		);
-		await user.click(screen.getByRole("button", { name: "Open in AO Browser" }));
+		await user.click(screen.getByRole("button", { name: "Open in Orchestrator Browser" }));
 		expect(onLinkOpen).toHaveBeenCalledExactlyOnceWith(previewUrl);
 	});
 

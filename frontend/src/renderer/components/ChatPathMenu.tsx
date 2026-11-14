@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
-import { Code2, Copy, FileText } from "lucide-react";
+import { Code2, Copy, FileText } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
 import type { ChatPathActionInput, EditorHandoffState } from "../../shared/editor-handoff";
 import { aoBridge } from "../lib/bridge";

@@ -109,7 +109,7 @@ export function IdleUpdateStatus({ agentId, job, hostId, now = Date.now(), onVie
 			onClick={() => onViewSessions({ count: waitingOn.length, sessionIds: waitingOn.map((wait) => wait.sessionId), level: "idle", starting: false })}>
 			{t("settings.harness.viewWaitingSessions")}
 		</Button> : null}
-		<Button type="button" size="xs" variant="outline" disabled={cancelling} onClick={() => void cancel()}>
+		<Button type="button" size="xs" variant="secondary" disabled={cancelling} onClick={() => void cancel()}>
 			{t("settings.harness.cancelUpdate")}
 		</Button>
 		{error ? <p role="alert" className="w-full text-error">{error}</p> : null}

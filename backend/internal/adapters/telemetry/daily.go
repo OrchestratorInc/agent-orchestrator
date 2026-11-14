@@ -15,11 +15,11 @@ import (
 )
 
 const (
-	cliUsageEventName    = "ao.cli.usage_errors"
+	cliUsageEventName    = "ao.usage.cli_usage_errors"
 	dailyCommandCountCap = 20
 )
 
-// DailySummarySink turns ao.cli.usage_errors into one remote event per UTC day.
+// DailySummarySink turns ao.usage.cli_usage_errors into one remote event per UTC day.
 // Other events pass through. The local fanout is upstream, so diagnostics stay
 // complete. Counts persist across restarts. A day is sent once, after it ends,
 // when a later event arrives or FlushCompleted runs. Opt-out must wrap this

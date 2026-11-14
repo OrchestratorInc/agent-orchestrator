@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"path/filepath"
 	"reflect"
-	"strings"
 	"testing"
 	"time"
 
@@ -132,7 +131,7 @@ func (f wiringTestRoundTripper) Do(req *http.Request) (*http.Response, error) { 
 
 // TestTelemetryWiringDailyUsageSummaryPreservesCountOnTheWire builds the
 // daily summary in front of PostHog, the shape newTelemetrySink wires up, and
-// asserts ao.cli.usage_errors becomes one event whose count survives the
+// asserts ao.usage.cli_usage_errors becomes one event whose count survives the
 // allowlist. Raw error text must not.
 func TestTelemetryWiringDailyUsageSummaryPreservesCountOnTheWire(t *testing.T) {
 	requests := make(chan map[string]any, 1)
@@ -154,7 +153,7 @@ func TestTelemetryWiringDailyUsageSummaryPreservesCountOnTheWire(t *testing.T) {
 	day := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
 	for i := 0; i < 3; i++ {
 		daily.Emit(context.Background(), ports.TelemetryEvent{
-			Name:       "ao.cli.usage_errors",
+			Name:       "ao.usage.cli_usage_errors",
 			Source:     "cli",
 			OccurredAt: day,
 			Level:      ports.TelemetryLevelWarn,
@@ -171,8 +170,8 @@ func TestTelemetryWiringDailyUsageSummaryPreservesCountOnTheWire(t *testing.T) {
 
 	select {
 	case req := <-requests:
-		if got := req["event"]; got != "ao.cli.usage_errors" {
-			t.Fatalf("event = %#v, want ao.cli.usage_errors (aggregatedEventNames entry must match the real emit site)", got)
+		if got := req["event"]; got != "ao.usage.cli_usage_errors" {
+			t.Fatalf("event = %#v, want ao.usage.cli_usage_errors (aggregatedEventNames entry must match the real emit site)", got)
 		}
 		props, ok := req["properties"].(map[string]any)
 		if !ok {
@@ -203,20 +202,20 @@ func (s *lifecycleCaptureSink) Emit(_ context.Context, ev ports.TelemetryEvent) 
 }
 func (s *lifecycleCaptureSink) Close(context.Context) error { return nil }
 
-func TestEmitInstallLifecycleEventsFirstOpenOncePerInstall(t *testing.T) {
+func TestEmitInstallLifecycleEventsFreshInstallOnce(t *testing.T) {
 	dataDir := t.TempDir()
 	cfg := config.Config{DataDir: dataDir, Telemetry: config.TelemetryConfig{
 		Events: true, Remote: config.TelemetryRemotePostHog, PostHogKey: "phc_test", PostHogHost: "https://us.i.posthog.com",
 	}}
 	t.Setenv("AO_OWNER", "app")
+	empty := func(context.Context) bool { return false }
 	ident, err := telemetryadapter.NewIdentity(dataDir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	sink := &lifecycleCaptureSink{}
-	emitInstallLifecycleEvents(cfg, ident, sink, slog.Default())
-	want := []string{"ao.app.installed:desktop", "ao.install.created:desktop"}
-	if !reflect.DeepEqual(sink.names, want) {
+	emitInstallLifecycleEvents(cfg, ident, sink, empty, slog.Default())
+	if want := []string{"ao.app.installed:desktop"}; !reflect.DeepEqual(sink.names, want) {
 		t.Fatalf("first start = %v, want %v", sink.names, want)
 	}
 
@@ -225,13 +224,16 @@ func TestEmitInstallLifecycleEventsFirstOpenOncePerInstall(t *testing.T) {
 		t.Fatal(err)
 	}
 	sink = &lifecycleCaptureSink{}
-	emitInstallLifecycleEvents(cfg, restarted, sink, slog.Default())
+	emitInstallLifecycleEvents(cfg, restarted, sink, empty, slog.Default())
 	if len(sink.names) != 0 {
 		t.Fatalf("restart re-sent %v", sink.names)
 	}
 }
 
-func TestEmitInstallLifecycleEventsKeepsFirstOpenWhenNotExported(t *testing.T) {
+// An upgrade can create the install ID file today (an older build never wrote
+// one, or it was lost). Existing projects or sessions prove it is not new: the
+// install event is spent without being sent, and never sent later either.
+func TestEmitInstallLifecycleEventsSkipsUpgradeWithPriorState(t *testing.T) {
 	dataDir := t.TempDir()
 	cfg := config.Config{DataDir: dataDir, Telemetry: config.TelemetryConfig{Events: true}}
 	t.Setenv("AO_OWNER", "")
@@ -239,15 +241,35 @@ func TestEmitInstallLifecycleEventsKeepsFirstOpenWhenNotExported(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sink := &lifecycleCaptureSink{}
-	emitInstallLifecycleEvents(cfg, ident, sink, slog.Default())
-	for _, n := range sink.names {
-		if strings.HasPrefix(n, "ao.install.created") {
-			t.Fatalf("first_open spent on a local-only run: %v", sink.names)
-		}
+	if !ident.FreshInstall() {
+		t.Fatal("precondition: a just-created install ID looks fresh")
 	}
-	if marked, err := ident.MarkFirstOpenEvent(context.Background()); !marked || err != nil {
-		t.Fatalf("first_open still reservable = %t, %v", marked, err)
+	sink := &lifecycleCaptureSink{}
+	emitInstallLifecycleEvents(cfg, ident, sink, func(context.Context) bool { return true }, slog.Default())
+	if len(sink.names) != 0 {
+		t.Fatalf("upgrade sent %v, want nothing", sink.names)
+	}
+	restarted, err := telemetryadapter.NewIdentity(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	emitInstallLifecycleEvents(cfg, restarted, sink, func(context.Context) bool { return false }, slog.Default())
+	if len(sink.names) != 0 {
+		t.Fatalf("later start sent %v, want nothing", sink.names)
+	}
+}
+
+func TestStoreHasPriorState(t *testing.T) {
+	ctx := context.Background()
+	store := sqlitetest.MustOpen(t)
+	if storeHasPriorState(store)(ctx) {
+		t.Fatal("empty store reported prior state")
+	}
+	if err := store.UpsertProject(ctx, domain.ProjectRecord{ID: "existing", Path: "/repo/existing", RegisteredAt: time.Now().UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	if !storeHasPriorState(store)(ctx) {
+		t.Fatal("store with a project reported no prior state")
 	}
 }
 

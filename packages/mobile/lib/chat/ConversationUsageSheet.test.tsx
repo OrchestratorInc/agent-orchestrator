@@ -48,7 +48,7 @@ describe("ConversationUsageSheet", () => {
 		const meters = root.findAll((node) => typeof node.type === "string" && node.props.accessibilityRole === "progressbar");
 		expect(meters.map((meter) => [meter.props.accessibilityLabel, meter.props.accessibilityValue])).toEqual([
 			["Context window", { min: 0, max: 100, now: 75, text: "75% used" }],
-			["Max plan", { min: 0, max: 100, now: 82, text: "82% used" }],
+			["Max plan limit", { min: 0, max: 100, now: 82, text: "82% used" }],
 		]);
 		const text = root.findAllByType("Text" as never).map((node) => node.props.children);
 		expect(text).toContain("12.3K in · 4.5K out");
@@ -56,8 +56,25 @@ describe("ConversationUsageSheet", () => {
 		expect(text).toContain("Resets in 2h");
 	});
 
+	// The chip warns on the fullest window; the sheet it opens must show that one,
+	// not a primary window the provider never reported.
+	it("lists every reported limit and leaves out unreported ones", () => {
+		const root = render({ rateLimits: { primaryUsedPercent: -1, secondaryUsedPercent: 91, secondaryResetsInSeconds: 3600 } });
+		const meters = root.findAll((node) => typeof node.type === "string" && node.props.accessibilityRole === "progressbar");
+		expect(meters.map((meter) => [meter.props.accessibilityLabel, meter.props.accessibilityValue.now])).toEqual([["Usage limit", 91]]);
+		const both = render({ rateLimits: { primaryUsedPercent: 30, secondaryUsedPercent: 80 } });
+		expect(both.findAll((node) => typeof node.type === "string" && node.props.accessibilityRole === "progressbar").map((meter) => meter.props.accessibilityLabel))
+			.toEqual(["Short-term limit", "Long-term limit"]);
+	});
+
 	it("says so when the agent has reported nothing", () => {
 		const text = render({}).findAllByType("Text" as never).map((node) => node.props.children);
+		expect(text).toEqual(["The agent hasn't reported usage for this conversation yet."]);
+	});
+
+	// Limits with no window reported draw no rows, so the sheet must not go blank.
+	it("says so when the limits carry no reported window", () => {
+		const text = render({ rateLimits: { primaryUsedPercent: -1, secondaryUsedPercent: -1 } }).findAllByType("Text" as never).map((node) => node.props.children);
 		expect(text).toEqual(["The agent hasn't reported usage for this conversation yet."]);
 	});
 });

@@ -23,7 +23,6 @@ import {
 } from "@aoagents/product-ui";
 import type { TFunction } from "i18next";
 import { appI18n, type MessageKey } from "../i18n";
-import { isNewSidebarDesignActive } from "./new-sidebar-design";
 import { toKanbanColumn, type SessionActivity, type SessionStatus } from "../types/workspace";
 
 function translator(t: TFunction): ProductUITranslator {
@@ -86,7 +85,6 @@ export function getSessionStatusDotView(
 	},
 	t: TFunction = appI18n.t,
 ): SessionStatusDotView {
-	if (!isNewSidebarDesignActive()) return getLegacySessionStatusDotView(session, t);
 	const breathe = isAgentActivityWorking(session.activity);
 	const sectionStatus: SessionStatus = session.scmStatus ?? session.status;
 	const dot = (className: string): SessionStatusDotView => ({ className, breathe });
@@ -105,33 +103,6 @@ export function getSessionStatusDotView(
 		return { className: getSessionStatusView("merged", t).dotClassName, breathe: false };
 	}
 	return dot(getKanbanColumnView(column, t).dotClassName);
-}
-
-// The dot before the new sidebar design: colour from the SCM section (merged
-// keeps its own tone), and a no-PR idle session blinks blue while it works.
-function getLegacySessionStatusDotView(
-	session: {
-		activity?: SessionActivity | null;
-		displayStatus?: string;
-		scmStatus?: SessionStatus;
-		status: SessionStatus;
-	},
-	t: TFunction,
-): SessionStatusDotView {
-	const working = isAgentActivityWorking(session.activity);
-	const closedWithoutMerge = session.displayStatus === "Closed without merge";
-	const sectionStatus: SessionStatus =
-		closedWithoutMerge ? "exited" : (session.scmStatus ?? session.status);
-	const toneStatus = sectionStatus === "idle" && working ? "working" : sectionStatus;
-	const className =
-		closedWithoutMerge
-			? getSessionStatusView("exited", t).dotClassName
-			: toneStatus === "exited"
-				? "bg-passive"
-				: toneStatus === "idle" || toneStatus === "merged"
-					? getSessionStatusView(toneStatus, t).dotClassName
-					: getAttentionZoneView(toneStatus, t).dotClassName;
-	return { className, breathe: working };
 }
 
 /**
@@ -164,7 +135,7 @@ export function getSessionRowMarker(session: {
 	if (display === "Terminated" || sectionStatus === "terminated" || display === "Closed without merge") return null;
 
 	if (sessionNeedsInput(session)) return "attention";
-	if (display === "CI failing" || display === "Changes requested") return "attention";
+	if (display === "CI failing" || display === "Merge conflicts" || display === "Changes requested") return "attention";
 	if (!display && (session.status === "ci_failed" || session.status === "changes_requested")) {
 		return "attention";
 	}
@@ -222,7 +193,8 @@ export function sessionNeedsInput(session: {
 		session.status === "needs_input" ||
 		session.activity?.state === "waiting_input" ||
 		session.activity?.state === "blocked" ||
-		session.displayStatus === "Blocked"
+		session.displayStatus === "Blocked" ||
+		session.displayStatus === "Needs input"
 	);
 }
 
@@ -234,6 +206,7 @@ function sessionNeedsYou(session: {
 }): boolean {
 	switch (session.displayStatus) {
 		case "CI failing":
+		case "Merge conflicts":
 		case "Changes requested":
 			return true;
 		case undefined:

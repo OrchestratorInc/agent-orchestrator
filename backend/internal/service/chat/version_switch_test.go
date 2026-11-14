@@ -12,7 +12,7 @@ import (
 	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 )
 
-const refreshIdle = 10 * time.Minute
+const refreshIdle = chatsvc.IdleBeforeHibernate + 10*time.Minute
 
 // versionRefreshHarness is a settled, idle Codex chat with idle hibernation
 // off and version refresh on. A resume starts resumed, standing in for the

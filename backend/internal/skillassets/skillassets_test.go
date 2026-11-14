@@ -51,9 +51,9 @@ func TestEmbeddedPreviewGuidanceDoesNotScaffoldStaticSites(t *testing.T) {
 		"Never create or modify `package.json`",
 		"Do not create `.ao/launch.json` unless the user asks",
 		"reuse the repository's existing dev command",
-		"without waiting for a separate \"open it\" request",
+		"Do not run `ao preview` on a deliverable in this session's artifact directory, whatever its file type",
+		"renders it in the session's Artifacts tab",
 		"Do not steal the browser from an active application",
-		"open the primary requested artifact",
 		"relative to the session workspace root, not the shell's current directory",
 		"Do not compensate for the current directory with `../README.md`",
 		"existing confined loopback preview origin",
@@ -72,7 +72,7 @@ func TestEmbeddedPreviewGuidanceDoesNotScaffoldStaticSites(t *testing.T) {
 	skillText := string(skillBody)
 	normalizedSkillText := strings.Join(strings.Fields(skillText), " ")
 	if !strings.Contains(normalizedSkillText, "[commands/preview.md](commands/preview.md) before acting") ||
-		!strings.Contains(normalizedSkillText, "automatic-handoff rules are load-bearing") ||
+		!strings.Contains(normalizedSkillText, "artifacts render in the Artifacts tab after `ao artifact add`, never through `ao preview`") ||
 		!strings.Contains(normalizedSkillText, "[commands/browser.md](commands/browser.md)") ||
 		!strings.Contains(normalizedSkillText, "opt-in network policy") {
 		t.Fatalf("skill catalog is missing focused preview/browser routing:\n%s", skillText)
@@ -109,7 +109,7 @@ func TestEmbeddedSessionGuidanceDocumentsCanonicalInAppLinks(t *testing.T) {
 		"Never use display names as identity",
 		"Encode either ID with URL percent encoding",
 		"Do not append query strings, fragments, action names, credentials, authorities, or extra path segments",
-		"only inside a currently running AO desktop app",
+		"only inside a currently running Orchestrator desktop app",
 		"never sends a message, executes a command, or performs another action",
 	} {
 		if !strings.Contains(text, required) {
@@ -267,6 +267,24 @@ func TestEmbeddedRenderGuidanceSeparatesRendersFromArtifacts(t *testing.T) {
 	} {
 		if !strings.Contains(guidance, want) {
 			t.Fatalf("render guidance missing %q", want)
+		}
+	}
+}
+
+// AO_SESSION_ARTIFACTS_DIR is set only in cloud sandboxes, and these docs run on
+// local sessions too, where it would expand to nothing.
+func TestArtifactGuidanceUsesPathsThatWorkInLocalSessions(t *testing.T) {
+	body, err := files.ReadFile("using-ao/commands/artifact.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), "AO_SESSION_ARTIFACTS_DIR") {
+		t.Fatal("artifact guidance names a variable local sessions do not set")
+	}
+	guidance := strings.Join(strings.Fields(string(body)), " ")
+	for _, want := range []string{"ao artifact add report.html", "`artifact: true` in `html_render`"} {
+		if !strings.Contains(guidance, want) {
+			t.Fatalf("artifact guidance missing %q", want)
 		}
 	}
 }

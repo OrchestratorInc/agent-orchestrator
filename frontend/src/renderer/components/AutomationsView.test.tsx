@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent } from "@testing-library/react";
 import { AUTOMATION_TEMPLATES } from "../lib/automation-templates";
 import { AutomationsView } from "./AutomationsView";
+import { TooltipProvider } from "./ui/tooltip";
 
 vi.mock("./NotificationCenter", () => ({ NotificationCenter: () => <button type="button" aria-label="Notifications" /> }));
 
@@ -20,6 +21,7 @@ const mocks = vi.hoisted(() => ({
 	fallbackAmp: false,
 	workerTuning: {} as { model?: string; mode?: string; effort?: string },
 	baseTuning: {} as { model?: string; mode?: string; effort?: string },
+	workspaces: [] as Array<Record<string, unknown>>,
 }));
 
 vi.mock("../lib/telemetry", async (importOriginal) => ({
@@ -37,7 +39,7 @@ const ampSnapshot = { ...codexSnapshot, id: "amp", label: "Amp" };
 const cursorSnapshot = { id: "cursor", label: "Cursor", installation: { state: "not_installed", freshness: "fresh" }, authentication: { state: "unknown", freshness: "stale" }, effectiveReadiness: "not_ready", usageCount: 0, lastUsedAt: null };
 vi.mock("../hooks/useAgentReadinessQuery", () => ({ useAgentReadinessQuery: () => ({ data: { agents: [mocks.fallbackAmp ? { ...codexSnapshot, effectiveReadiness: "not_ready" } : codexSnapshot, cursorSnapshot, ampSnapshot] } }) }));
 vi.mock("../hooks/useProjectDefaultWorker", () => ({ useProjectWorkerDefaults: () => ({ loaded: mocks.defaultsLoaded, harness: mocks.defaultWorker, agentConfig: mocks.baseTuning, worker: { agent: mocks.defaultWorker, agentConfig: mocks.workerTuning } }) }));
-vi.mock("../hooks/useWorkspaceQuery", () => ({ useWorkspaceQuery: () => ({ data: [{ id: "demo", name: "Demo" }] }) }));
+vi.mock("../hooks/useWorkspaceQuery", () => ({ useWorkspaceQuery: () => ({ data: mocks.workspaces }) }));
 vi.mock("../hooks/useAgentModelsQuery", () => ({
 	agentModelsQueryKey: (agentId: string, projectId: string) => ["agent-models", agentId, projectId],
 	agentModelsQueryOptions: (agentId: string, projectId: string) => ({
@@ -64,17 +66,32 @@ vi.mock("../hooks/useAutomations", () => ({
 
 function renderView(ui: ReactNode = <AutomationsView />) {
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-	return render(ui, { wrapper: ({ children }) => <QueryClientProvider client={client}>{children}</QueryClientProvider> });
+	return render(ui, { wrapper: ({ children }) => <QueryClientProvider client={client}><TooltipProvider>{children}</TooltipProvider></QueryClientProvider> });
+}
+
+/** Opens a blank create form through the page's New automation menu. */
+async function openBlankCreate(user: Pick<typeof userEvent, "click">) {
+	// With automations the toolbar's menu holds the action; the empty state has a single plain button.
+	const trigger = screen.getByRole("button", { name: "New automation" });
+	await user.click(trigger);
+	if (trigger.getAttribute("aria-haspopup") === "menu") await user.click(await screen.findByRole("menuitem", { name: "Start from scratch" }));
 }
 
 describe("AutomationsView", () => {
-	beforeEach(() => { mocks.defaultWorker = "codex"; mocks.defaultsLoaded = true; mocks.fallbackAmp = false; mocks.workerTuning = {}; mocks.baseTuning = {}; mocks.automations = []; mocks.runsError = null; mocks.create.mockReset(); mocks.update.mockReset(); mocks.capture.mockReset(); });
+	beforeEach(() => { mocks.workspaces = [{ id: "demo", name: "Demo" }]; mocks.defaultWorker = "codex"; mocks.defaultsLoaded = true; mocks.fallbackAmp = false; mocks.workerTuning = {}; mocks.baseTuning = {}; mocks.automations = []; mocks.runsError = null; mocks.create.mockReset(); mocks.update.mockReset(); mocks.capture.mockReset(); });
 
 	it("shows a discoverable empty state and create action", () => {
 		renderView();
 		expect(screen.getByRole("heading", { name: "Automations" })).toBeInTheDocument();
 		expect(screen.getByText("No automations yet")).toBeInTheDocument();
-		expect(screen.getAllByRole("button", { name: /new automation/i })).not.toHaveLength(0);
+		// The empty state owns the only create action; the toolbar waits for a list.
+		expect(screen.getAllByRole("button", { name: "New automation" })).toHaveLength(1);
+		expect(screen.queryByRole("button", { name: "Search automations" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Filter automations" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Sort" })).not.toBeInTheDocument();
+		// Starters lead the page; the empty message sits below them.
+		const starters = screen.getByRole("heading", { name: "Start with a template" });
+		expect(starters.compareDocumentPosition(screen.getByText("No automations yet")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 	});
 
 	it("always shows the page title in the topbar", () => {
@@ -82,19 +99,72 @@ describe("AutomationsView", () => {
 		const title = screen.getByRole("heading", { name: "Automations" });
 		expect(title).not.toHaveClass("sr-only");
 		expect(title.closest("header")).toHaveClass("workspace-topbar-container");
+		expect(screen.queryByRole("tab")).not.toBeInTheDocument();
+	});
+
+	it("offers a blank form and every starter from the New automation menu once automations exist", async () => {
+		const user = userEvent.setup();
+		mocks.automations = [{ id: "a1", projectId: "demo", displayName: "Morning triage", prompt: "Review", kind: "worker", rrule: "FREQ=DAILY;BYHOUR=9;BYMINUTE=0;BYSECOND=0", timezone: "UTC", enabled: true }];
+		renderView();
+		await user.click(screen.getByRole("button", { name: "New automation" }));
+		expect(await screen.findByRole("menuitem", { name: "Start from scratch" })).toBeInTheDocument();
+		for (const name of ["PR review inbox", "Daily issue triage", "Weekly release notes"]) {
+			expect(screen.getByRole("menuitem", { name })).toBeInTheDocument();
+		}
+		await user.click(screen.getByRole("menuitem", { name: "Weekly release notes" }));
+		expect(within(screen.getByRole("dialog")).getByRole("textbox", { name: "Name" })).toHaveValue("Weekly release notes");
+	});
+
+	it("opens a blank form from the empty state's New automation button", async () => {
+		const user = userEvent.setup();
+		renderView();
+		await user.click(screen.getByRole("button", { name: "New automation" }));
+		expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+		expect(within(screen.getByRole("dialog")).getByRole("textbox", { name: "Name" })).toHaveValue("");
+	});
+
+	it("keeps the starters at the top of the page before and after automations exist", () => {
+		const { unmount } = renderView();
 		expect(screen.getByRole("heading", { name: "Start with a template" })).toBeInTheDocument();
+		expect(screen.getByText("Pick a starting point, make it yours, and let your agent take it from there.")).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "PR review inbox" })).toHaveTextContent("Weekdays at 9:00 AM");
+		expect(screen.getByRole("button", { name: "Daily issue triage" })).toHaveTextContent("Daily at 9:15 AM");
+		expect(screen.getByRole("button", { name: "Weekly release notes" })).toHaveTextContent("Every Friday at 4:00 PM");
+		unmount();
+		mocks.automations = [{ id: "a1", projectId: "demo", displayName: "Morning triage", prompt: "Review", kind: "worker", rrule: "FREQ=DAILY;BYHOUR=9;BYMINUTE=0;BYSECOND=0", timezone: "UTC", enabled: true }];
+		renderView();
+		const row = screen.getByRole("heading", { name: "Morning triage" });
+		const starters = screen.getByRole("heading", { name: "Start with a template" });
 		expect(screen.getByRole("button", { name: "PR review inbox" })).toBeInTheDocument();
+		// Starters stay first; the list and its toolbar follow them.
+		expect(starters.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+		expect(starters.compareDocumentPosition(screen.getByRole("group", { name: "Status" })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+		expect(screen.queryByText("No automations yet")).not.toBeInTheDocument();
 	});
 
 	it("preselects the project's resolved default worker like New Task", async () => {
 		renderView();
-		await userEvent.click(screen.getAllByRole("button", { name: /new automation/i })[0]);
+		await openBlankCreate(userEvent);
 
 		const dialog = screen.getByRole("dialog", { name: "Create automation" });
 		expect(within(dialog).getByRole("combobox", { name: "Agent" })).toHaveTextContent("Codex");
 		expect(await within(dialog).findByRole("button", { name: "Model" })).toHaveTextContent("GPT-5");
 		expect(screen.queryByRole("option", { name: "Project default" })).not.toBeInTheDocument();
 		expect(screen.queryByRole("combobox", { name: "Session kind" })).not.toBeInTheDocument();
+	});
+
+	it("offers no Cloud standalone agent as an automation's project", async () => {
+		mocks.workspaces = [
+			{ id: "demo", name: "Demo" },
+			{ id: "agent-1", name: "Fix the flaky test", kind: "cloud", standaloneAgent: true, sessions: [] },
+		];
+		const user = userEvent.setup();
+		renderView();
+		await openBlankCreate(user);
+		const dialog = screen.getByRole("dialog", { name: "Create automation" });
+		await user.click(within(dialog).getByRole("combobox", { name: "Project" }));
+		expect(await screen.findByRole("option", { name: "Demo" })).toBeInTheDocument();
+		expect(screen.queryByRole("option", { name: "Fix the flaky test" })).not.toBeInTheDocument();
 	});
 
 	it("edits an automation from its card action", async () => {
@@ -135,7 +205,7 @@ describe("AutomationsView", () => {
 	it("saves model and effort overrides for a new automation", async () => {
 		const user = userEvent.setup();
 		renderView();
-		await user.click(screen.getAllByRole("button", { name: /new automation/i })[0]);
+		await openBlankCreate(user);
 		const dialog = screen.getByRole("dialog", { name: "Create automation" });
 		await user.click(within(dialog).getByRole("combobox", { name: "Project" }));
 		await user.click(screen.getByRole("option", { name: "Demo" }));
@@ -219,7 +289,7 @@ describe("AutomationsView", () => {
 		mocks.defaultWorker = "";
 		const user = userEvent.setup();
 		const view = renderView();
-		await user.click(screen.getAllByRole("button", { name: /new automation/i })[0]);
+		await openBlankCreate(user);
 		const dialog = screen.getByRole("dialog", { name: "Create automation" });
 		await user.click(within(dialog).getByRole("combobox", { name: "Project" }));
 		await user.click(screen.getByRole("option", { name: "Demo" }));
@@ -328,7 +398,7 @@ describe("AutomationsView", () => {
 	it("creates a weekly automation on the chosen weekday", async () => {
 		const user = userEvent.setup();
 		renderView();
-		await user.click(screen.getAllByRole("button", { name: /new automation/i })[0]);
+		await openBlankCreate(user);
 
 		const dialog = screen.getByRole("dialog", { name: "Create automation" });
 		await user.click(within(dialog).getByRole("combobox", { name: "Project" }));
@@ -357,8 +427,8 @@ describe("AutomationsView", () => {
 	it("reports the create funnel from dialog open through success", async () => {
 		const user = userEvent.setup();
 		renderView();
-		await user.click(screen.getAllByRole("button", { name: /new automation/i })[0]);
-		expect(mocks.capture).toHaveBeenCalledWith("ao.renderer.automation_create_opened");
+		await openBlankCreate(user);
+		expect(mocks.capture).toHaveBeenCalledWith("ao.automations.create_opened");
 
 		const dialog = screen.getByRole("dialog", { name: "Create automation" });
 		await user.click(within(dialog).getByRole("combobox", { name: "Project" }));
@@ -377,7 +447,7 @@ describe("AutomationsView", () => {
 		const user = userEvent.setup();
 		mocks.create.mockRejectedValueOnce(new Error("daemon unreachable"));
 		renderView();
-		await user.click(screen.getAllByRole("button", { name: /new automation/i })[0]);
+		await openBlankCreate(user);
 
 		const dialog = screen.getByRole("dialog", { name: "Create automation" });
 		await user.click(within(dialog).getByRole("combobox", { name: "Project" }));
@@ -404,7 +474,7 @@ describe("AutomationsView", () => {
 	it("creates a custom weekly automation on the chosen weekday", async () => {
 		const user = userEvent.setup();
 		renderView();
-		await user.click(screen.getAllByRole("button", { name: /new automation/i })[0]);
+		await openBlankCreate(user);
 
 		const dialog = screen.getByRole("dialog", { name: "Create automation" });
 		await user.click(within(dialog).getByRole("combobox", { name: "Project" }));
@@ -525,7 +595,7 @@ describe("AutomationsView", () => {
 
 	it("uses AO popup controls instead of native browser selects", async () => {
 		const view = renderView();
-		await userEvent.click(screen.getAllByRole("button", { name: /new automation/i })[0]);
+		await openBlankCreate(userEvent);
 
 		const dialog = screen.getByRole("dialog", { name: "Create automation" });
 		expect(dialog.querySelector('select:not([aria-hidden="true"])')).toBeNull();
@@ -539,7 +609,7 @@ describe("AutomationsView", () => {
 	it("uses a 24-hour text time field that only accepts clock digits", async () => {
 		const user = userEvent.setup();
 		renderView();
-		await user.click(screen.getAllByRole("button", { name: /new automation/i })[0]);
+		await openBlankCreate(user);
 
 		const dialog = screen.getByRole("dialog", { name: "Create automation" });
 		const time = within(dialog).getByLabelText("Time");
@@ -553,7 +623,7 @@ describe("AutomationsView", () => {
 	it("rejects out-of-range time digits while typing", async () => {
 		const user = userEvent.setup();
 		renderView();
-		await user.click(screen.getAllByRole("button", { name: /new automation/i })[0]);
+		await openBlankCreate(user);
 
 		const time = within(screen.getByRole("dialog", { name: "Create automation" })).getByLabelText("Time");
 		await user.clear(time);
@@ -573,7 +643,7 @@ describe("AutomationsView", () => {
 	it("rejects an empty time before create", async () => {
 		const user = userEvent.setup();
 		renderView();
-		await user.click(screen.getAllByRole("button", { name: /new automation/i })[0]);
+		await openBlankCreate(user);
 
 		const time = screen.getByLabelText("Time");
 		await user.clear(time);
@@ -586,7 +656,7 @@ describe("AutomationsView", () => {
 
 	it("uses AO's shared centered dialog without a purpose selector", async () => {
 		renderView();
-		await userEvent.click(screen.getByRole("button", { name: "New automation" }));
+		await openBlankCreate(userEvent);
 		const dialog = screen.getByRole("dialog", { name: "Create automation" });
 		expect(dialog).toHaveClass("border-(--color-border-overlay)", "bg-popover", "rounded-lg");
 		expect(dialog.querySelector(".border-b")).toBeNull();
@@ -604,7 +674,7 @@ describe("AutomationsView", () => {
 	it("shows AO-styled inline feedback when required fields are missing", async () => {
 		const user = userEvent.setup();
 		renderView();
-		await user.click(screen.getAllByRole("button", { name: /new automation/i })[0]);
+		await openBlankCreate(user);
 		await user.click(screen.getByRole("button", { name: "Create automation" }));
 
 		const dialog = screen.getByRole("dialog", { name: "Create automation" });
@@ -620,7 +690,7 @@ describe("AutomationsView", () => {
 	it("clears a field error as soon as the field is corrected", async () => {
 		const user = userEvent.setup();
 		renderView();
-		await user.click(screen.getAllByRole("button", { name: /new automation/i })[0]);
+		await openBlankCreate(user);
 		await user.click(screen.getByRole("button", { name: "Create automation" }));
 
 		const project = screen.getByRole("combobox", { name: "Project" });
@@ -635,7 +705,7 @@ describe("AutomationsView", () => {
 	it("keeps inline feedback until a text field has meaningful content", async () => {
 		const user = userEvent.setup();
 		renderView();
-		await user.click(screen.getAllByRole("button", { name: /new automation/i })[0]);
+		await openBlankCreate(user);
 		await user.click(screen.getByRole("button", { name: "Create automation" }));
 
 		const name = screen.getByRole("textbox", { name: "Name" });
@@ -650,7 +720,7 @@ describe("AutomationsView", () => {
 		vi.useFakeTimers({ shouldAdvanceTime: true });
 		vi.setSystemTime(new Date(2026, 8, 22, 14, 7, 0));
 		renderView();
-		await userEvent.click(screen.getAllByRole("button", { name: /new automation/i })[0]);
+		await openBlankCreate(userEvent);
 		expect(screen.getByLabelText("Time")).toHaveValue("14:07");
 		vi.useRealTimers();
 	});
@@ -660,22 +730,63 @@ describe("AutomationsView", () => {
 		mocks.automations = [{ ...base, id: "active", displayName: "Friday review", enabled: true }, { ...base, id: "paused", displayName: "Paused review", enabled: false }];
 		renderView();
 		expect(screen.getAllByText("Demo")).toHaveLength(2);
-		expect(screen.getAllByText(/Friday ·/)).toHaveLength(2);
-		await userEvent.click(screen.getByRole("button", { name: /Paused 1/ }));
+		expect(screen.getAllByText("Every Friday at 9:30 AM")).toHaveLength(2);
+		const status = screen.getByRole("group", { name: "Status" });
+		expect(within(status).getByRole("button", { name: "All 2" })).toHaveAttribute("aria-pressed", "true");
+		await userEvent.click(within(status).getByRole("button", { name: "Paused 1" }));
+		expect(within(status).getByRole("button", { name: "Paused 1" })).toHaveAttribute("aria-pressed", "true");
 		expect(screen.queryByRole("heading", { name: "Friday review" })).not.toBeInTheDocument();
 		expect(screen.getByRole("heading", { name: "Paused review" })).toBeInTheDocument();
-		expect(screen.getByRole("button", { name: /Paused 1/ })).toHaveAttribute("aria-pressed", "true");
+		// The pressed pill is the status cue, so no status chip repeats it.
+		expect(screen.queryByRole("button", { name: /Remove filter Status/ })).not.toBeInTheDocument();
+		await userEvent.click(within(status).getByRole("button", { name: "Enabled 1" }));
+		expect(screen.getByRole("heading", { name: "Friday review" })).toBeInTheDocument();
+		expect(screen.queryByRole("heading", { name: "Paused review" })).not.toBeInTheDocument();
+	});
+
+	it("offers a project filter only when automations span more than one project", async () => {
+		const user = userEvent.setup();
+		const base = { prompt: "Review", kind: "worker", rrule: "FREQ=DAILY;BYHOUR=9;BYMINUTE=0;BYSECOND=0", timezone: "UTC", enabled: true };
+		mocks.automations = [{ ...base, id: "a", projectId: "demo", displayName: "Demo triage" }];
+		const { unmount } = renderView();
+		expect(screen.queryByRole("button", { name: "Filter automations" })).not.toBeInTheDocument();
+		unmount();
+		mocks.automations = [{ ...base, id: "a", projectId: "demo", displayName: "Demo triage" }, { ...base, id: "b", projectId: "other", displayName: "Other triage" }];
+		renderView();
+		await user.click(screen.getByRole("button", { name: "Filter automations" }));
+		expect(screen.queryByRole("menuitemradio", { name: /Paused/ })).not.toBeInTheDocument();
+		await user.click(await screen.findByRole("menuitemradio", { name: "Demo" }));
+		expect(screen.getByRole("heading", { name: "Demo triage" })).toBeInTheDocument();
+		expect(screen.queryByRole("heading", { name: "Other triage" })).not.toBeInTheDocument();
+		await user.click(screen.getByRole("button", { name: "Remove filter Project: Demo" }));
+		expect(screen.getByRole("heading", { name: "Other triage" })).toBeInTheDocument();
+	});
+
+	it("sorts by next run with paused automations last, or by name", async () => {
+		const base = { projectId: "demo", prompt: "Review", kind: "worker", rrule: "FREQ=DAILY;BYHOUR=9;BYMINUTE=0;BYSECOND=0", timezone: "UTC" };
+		mocks.automations = [
+			{ ...base, id: "a", displayName: "Alpha", enabled: false, nextRunAt: "2026-11-11T08:00:00Z" },
+			{ ...base, id: "b", displayName: "Bravo", enabled: true, nextRunAt: "2026-11-12T09:00:00Z" },
+			{ ...base, id: "c", displayName: "Charlie", enabled: true, nextRunAt: "2026-11-11T09:00:00Z" },
+		];
+		renderView();
+		const names = () => screen.getAllByRole("article").map((row) => within(row).getByRole("heading", { level: 2 }).textContent);
+		expect(names()).toEqual(["Charlie", "Bravo", "Alpha"]);
+		await userEvent.click(screen.getByRole("button", { name: "Sort" }));
+		await userEvent.click(await screen.findByRole("menuitemradio", { name: "Name" }));
+		expect(names()).toEqual(["Alpha", "Bravo", "Charlie"]);
 	});
 
 	it.each([
-		["FREQ=DAILY;BYHOUR=8;BYMINUTE=30;BYSECOND=0", /daily · 8:30 AM/i],
-		["FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9;BYMINUTE=0;BYSECOND=0", /Mon–Fri · 9:00 AM/],
-		["FREQ=WEEKLY;BYDAY=MO,WE,FR;BYHOUR=10;BYMINUTE=0;BYSECOND=0", /Mon, Wed, Fri · 10:00 AM/],
-		["FREQ=MONTHLY;BYMONTHDAY=1;BYHOUR=10;BYMINUTE=0;BYSECOND=0", /Monthly · day 1 · 10:00 AM/],
+		["FREQ=DAILY;BYHOUR=8;BYMINUTE=30;BYSECOND=0", "Daily at 8:30 AM"],
+		["FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9;BYMINUTE=0;BYSECOND=0", "Weekdays at 9:00 AM"],
+		["FREQ=WEEKLY;BYDAY=MO,WE,FR;BYHOUR=10;BYMINUTE=0;BYSECOND=0", "Every Mon, Wed, Fri at 10:00 AM"],
+		["FREQ=MONTHLY;BYMONTHDAY=1;BYHOUR=10;BYMINUTE=0;BYSECOND=0", "Monthly on day 1 at 10:00 AM"],
+		["FREQ=HOURLY", "Repeats hourly"],
 	])("shows the complete schedule from a canonical daemon rule %s", (rule, label) => {
 		mocks.automations = [{ id: "canonical", projectId: "demo", displayName: "Scheduled review", prompt: "Review", kind: "worker", rrule: `DTSTART;TZID=Asia/Kolkata:20261001T183600\nRRULE:${rule}`, timezone: "Asia/Kolkata", enabled: true }];
 		renderView();
-		expect(screen.getByText(label)).toBeInTheDocument();
+		expect(within(screen.getByRole("article")).getByText(label)).toBeInTheDocument();
 	});
 
 	it("exposes details with expansion state and surfaces failed toggles", async () => {
@@ -733,7 +844,7 @@ describe("automation starters", () => {
 	it("creates a custom automation without asking for a purpose", async () => {
 		const user = userEvent.setup();
 		renderView();
-		await user.click(screen.getAllByRole("button", { name: /new automation/i })[0]);
+		await openBlankCreate(user);
 		const dialog = screen.getByRole("dialog");
 		expect(within(dialog).queryByRole("combobox", { name: "Start from" })).not.toBeInTheDocument();
 		expect(within(dialog).getByRole("textbox", { name: "Prompt" })).toHaveValue("");
@@ -770,21 +881,22 @@ describe("automation starters", () => {
 		expect(within(dialog).getByRole("textbox", { name: "Name" })).toHaveValue("Daily issue triage");
 		expect(within(dialog).getByRole("textbox", { name: "Prompt" })).toHaveValue(AUTOMATION_TEMPLATES[1].prompt);
 		await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
-		await user.click(screen.getByRole("button", { name: "New automation" }));
+		await openBlankCreate(user);
 		dialog = screen.getByRole("dialog");
 		expect(within(dialog).getByRole("textbox", { name: "Name" })).toHaveValue("");
 		expect(within(dialog).getByRole("textbox", { name: "Prompt" })).toHaveValue("");
 		expect(mocks.create).not.toHaveBeenCalled();
 	});
 
-	it("filters saved automations by name and project while keeping starters discoverable", async () => {
+	it("searches saved automations by name and project", async () => {
 		const user = userEvent.setup();
 		mocks.automations = [{ id: "a1", projectId: "demo", displayName: "Morning triage", prompt: "Review", kind: "worker", harness: "codex", rrule: "FREQ=DAILY;BYHOUR=9;BYMINUTE=0", timezone: "UTC", enabled: true, createdAt: "2026-10-15T08:00:00Z", updatedAt: "2026-10-15T08:00:00Z" }];
 		renderView();
-		const search = screen.getByRole("searchbox", { name: "Search automations…" });
+		await user.click(screen.getByRole("button", { name: "Search automations" }));
+		const search = screen.getByRole("searchbox", { name: "Search automations" });
 		await user.type(search, "missing");
 		expect(screen.queryByText("Morning triage")).not.toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "PR review inbox" })).toBeInTheDocument();
+		expect(screen.getByText("No automations match")).toBeInTheDocument();
 		await user.clear(search);
 		await user.type(search, "DEMO");
 		expect(screen.getByText("Morning triage")).toBeInTheDocument();

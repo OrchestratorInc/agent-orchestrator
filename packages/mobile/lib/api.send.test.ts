@@ -40,8 +40,9 @@ describe("sendMessage", () => {
 describe("user-initiated sends", () => {
 	it.each([
 		["the terminal composer", "./session/TerminalSessionScreen.tsx", "await sendMessage(activeConfig, id, text, { userAuthored: true });"],
-		["Send review to worker", "../app/review/[sessionId].tsx", "await sendMessage(config, sessionId, formatReviewSummaryMessage(run), { userAuthored: true });"],
-		["Send feedback to worker", "../app/sheets/review-actions.tsx", "await sendMessage(config, sessionId, message, { userAuthored: true });"],
+		// The review page and its actions sheet send through the review backend.
+		["Send review or feedback to worker", "./reviewBackend.ts", "sendToWorker: async (sessionId, text) => { await sendMessage(config, sessionId, text, { userAuthored: true }); },"],
+		["Send a finished review to worker", "./reviewBackend.ts", "sendRun: async (sessionId, run) => { await sendMessage(config, sessionId, formatReviewSummaryMessage(run), { userAuthored: true }); },"],
 	])("%s sends as userAuthored", (_name, path, call) => {
 		expect(readFileSync(new URL(path, import.meta.url), "utf8")).toContain(call);
 	});

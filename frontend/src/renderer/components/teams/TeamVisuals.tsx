@@ -1,4 +1,4 @@
-import { Mail } from "lucide-react";
+import { Mail } from "@/components/app-icons";
 import { cn } from "../../lib/utils";
 import { avatarInitials, teamInitials } from "../../hooks/useTeams";
 

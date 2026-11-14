@@ -275,6 +275,8 @@ export function useSessionInterfaceSwitch(sessionId: string, session: WorkspaceS
 	// An account move keeps the mode. It is not an arrival: the conversation or
 	// terminal on screen stays while the agent restarts under the new account.
 	const accountMoveTarget = activeTransition || settling ? interfaceSwitch.transition?.targetAccountId || undefined : undefined;
+	const accountMoveQueues = Boolean(accountMoveTarget) &&
+		["source_stopped", "target_starting", "activating", "completed"].includes(interfaceSwitch.transition?.phase ?? "");
 	const optimisticTarget = isCloud || localDrainWaiting || accountMoveTarget || interfaceTransitionNeedsRestart(interfaceSwitch.transition)
 		? undefined
 		: pendingTarget ?? (interfaceSwitch.starting
@@ -541,6 +543,7 @@ export function useSessionInterfaceSwitch(sessionId: string, session: WorkspaceS
 	</>;
 
 	return {
+		accountMoveQueues,
 		accountMoveTarget,
 		activeTransition,
 		agentInputDisabled: Boolean((interfaceSwitch.starting || activeTransition) && !cloudDrainWaiting && session?.mode === "tui"),
@@ -553,6 +556,8 @@ export function useSessionInterfaceSwitch(sessionId: string, session: WorkspaceS
 		notice,
 		onConversationWorkChange,
 		switchControl,
+		// A switch is being requested, reconciled or running, so its control shows its progress.
+		switchPending: Boolean(switchControl && (interfaceSwitch.starting || showStatus || chatLeaveLocked)),
 		// For a menu: the same switch as a plain action, absent while one is running.
 		switchAction: session && showAction && !showStatus ? {
 			disabled: !(Boolean(interfaceSwitch.status?.supported) && (isCloud || !chatLeaveLocked)) || interfaceSwitch.starting || activeTransition || chatLeaveLocked,

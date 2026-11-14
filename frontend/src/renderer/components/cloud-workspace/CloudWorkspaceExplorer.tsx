@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Columns2, Maximize2, Minimize2, Rows3, Search } from "lucide-react";
+import { Columns2, Maximize2, Minimize2, Rows3, Search } from "@/components/app-icons";
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useCloudCp } from "../../hooks/useCloudCp";

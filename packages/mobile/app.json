@@ -2,7 +2,7 @@
 	"expo": {
 		"name": "Orchestrator",
 		"slug": "ao-mobile",
-		"version": "2.3.0",
+		"version": "2.4.0",
 		"runtimeVersion": {
 			"policy": "fingerprint"
 		},
@@ -119,6 +119,7 @@
 			[
 				"expo-notifications",
 				{
+					"icon": "./assets/notification-icon.png",
 					"color": "#4d8dff"
 				}
 			],

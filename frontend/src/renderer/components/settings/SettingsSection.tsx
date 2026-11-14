@@ -90,8 +90,10 @@ export function SettingsSection({
 			{toolbar !== undefined ? (
 				// The wrapper stays whenever the prop is passed, even as null, so a toolbar
 				// that comes and goes does not remount the body. A search-first page (no
-				// visible title) tucks up under the page heading.
-				<div className={cn("flex w-full flex-col", toolbar && !showTitle && "-mt-6")}>
+				// visible title) starts at the page body's top padding like any other
+				// first row: the page title lives in the top bar, so there is no in-body
+				// heading to tuck under.
+				<div className="flex w-full flex-col">
 					{toolbar}
 					{body}
 				</div>

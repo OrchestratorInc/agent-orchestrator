@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { aoBridge } from "../lib/bridge";
 import { connectHost, connectedHosts, disconnectHost } from "../lib/host-clients";
 import { useCloudSession } from "../lib/cloud-session";
-import { listAccountRemoteHosts } from "../lib/account-remote-hosts";
 import { useSettings } from "./useSettings";
 import { useUiStore } from "../stores/ui-store";
 
@@ -27,8 +26,14 @@ export type RemoteHost = {
 	failureReason?: "unauthorized" | "incompatible";
 };
 
-/** listed: hosts holds the saved list, not the empty one before the first read. */
-export function useRemoteHosts(): { hosts: RemoteHost[]; listed: boolean; refresh: () => Promise<void> } {
+/**
+ * listed: hosts holds the saved list, not the empty one before the first read.
+ * settled: the host-list attempt has concluded — disabled, signed out, or
+ * listed. Consumers that must wait for remote workspace data (the session
+ * deep-link gate) settle on this instead of restating the enable rule, so the
+ * two can never drift apart.
+ */
+export function useRemoteHosts(): { hosts: RemoteHost[]; listed: boolean; settled: boolean; refresh: () => Promise<void> } {
 	const remoteHostsEnabled = useUiStore((state) => state.remoteHosts);
 	const { status, session } = useCloudSession();
 	const accountId = session?.user.id ?? "";
@@ -55,10 +60,7 @@ export function useRemoteHosts(): { hosts: RemoteHost[]; listed: boolean; refres
 		let saved = await aoBridge.remotes.list();
 		if (cloudBaseUrl) {
 			try {
-				const accountHosts = await listAccountRemoteHosts(cloudBaseUrl);
-				if (!current()) return;
-				for (const host of accountHosts) await aoBridge.remotes.importAccountHost(accountId, { ...host, password: host.token });
-				await aoBridge.remotes.pruneAccountHosts(accountId, accountHosts.map((host) => host.hostId));
+				await aoBridge.remotes.syncAccountHosts(accountId);
 				saved = await aoBridge.remotes.list();
 			} catch { /* Cloud outage must not hide locally paired machines. */ }
 		}
@@ -155,5 +157,12 @@ export function useRemoteHosts(): { hosts: RemoteHost[]; listed: boolean; refres
 		return () => clearInterval(timer);
 	}, [enabled, cloudBaseUrl, refresh]);
 
-	return { hosts: enabled ? hosts : NO_HOSTS, listed: enabled && listed, refresh };
+	return {
+		hosts: enabled ? hosts : NO_HOSTS,
+		listed: enabled && listed,
+		// Concluded, per the doc comment above. Deliberately mirrors the
+		// `enabled` computation's inputs so the two cannot drift.
+		settled: !remoteHostsEnabled || status === "unauthenticated" || listed,
+		refresh,
+	};
 }

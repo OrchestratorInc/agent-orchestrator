@@ -243,7 +243,7 @@ export function CloudLocalSignInDialog() {
 
 				<div className={cn(onboardingFooterActionsEndClass, "px-4 pb-4")}>
 					<DialogClose asChild>
-						<Button type="button" variant="outline" disabled={busy}>
+						<Button type="button" variant="secondary" disabled={busy}>
 							{t("cloudLocalAuth.cancel")}
 						</Button>
 					</DialogClose>

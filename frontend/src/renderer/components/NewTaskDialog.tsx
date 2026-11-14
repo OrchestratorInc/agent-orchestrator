@@ -1,7 +1,7 @@
 import { apiErrorException } from "../lib/api-error-exception";
 import * as Dialog from "@radix-ui/react-dialog";
 import { useQueries } from "@tanstack/react-query";
-import { StickyNote } from "lucide-react";
+import { StickyNote } from "@/components/app-icons";
 import { useEffect, useMemo } from "react";
 import { useUiStore } from "../stores/ui-store";
 import { useTranslation } from "react-i18next";
@@ -9,7 +9,7 @@ import { useRemoteWorkspaces, useWorkspaceQuery } from "../hooks/useWorkspaceQue
 import { labelForHost } from "../lib/host-clients";
 import { apiClient } from "../lib/api-client";
 import { TaskComposer } from "./TaskComposer";
-import { CLOUD_PROJECT_KIND, STANDALONE_WORKSPACE_ID } from "../types/workspace";
+import { CLOUD_PROJECT_KIND, isScratchpadWorkspace, STANDALONE_WORKSPACE_ID } from "../types/workspace";
 import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
 import { type CanonicalGitHubRepo, repositoryOwnerAvatar } from "../lib/repository-avatar";
 
@@ -48,7 +48,8 @@ export function NewTaskDialog({ open, projectId, hostId, onProjectChange, onCrea
 	const workspaces = hostId ? remoteWorkspaces.filter((workspace) => workspace.hostId === hostId) : localWorkspaces;
 	// This dialog serves cloud projects only for now; every other project starts
 	// from the new chat page.
-	const projects = useMemo(() => workspaces.filter((workspace) => workspace.kind === CLOUD_PROJECT_KIND), [workspaces]);
+	// Cloud standalone agents are the Scratchpad's, not projects to start a task in.
+	const projects = useMemo(() => workspaces.filter((workspace) => workspace.kind === CLOUD_PROJECT_KIND && !isScratchpadWorkspace(workspace)), [workspaces]);
 	const localProjects = useMemo(() => hostId ? [] : projects.filter((project) => project.kind !== CLOUD_PROJECT_KIND), [hostId, projects]);
 	const localProjectDetails = useQueries({
 		queries: localProjects.map((project) => ({
@@ -110,13 +111,14 @@ export function NewTaskDialog({ open, projectId, hostId, onProjectChange, onCrea
 					{/* The selected project is the dialog title; the composer remains the main surface. */}
 					<Dialog.Title className="settings-dialog-title flex flex-wrap items-center gap-x-1.5 px-3 pt-3">
 						<SettingsOptionMenu
+							triggerVariant="ghost"
 							aria-label={t("newTask.project")}
 							value={selectedProjectId}
 							options={projectOptions}
 							onChange={(value) => onProjectChange?.(value)}
 							menuAlign="start"
 							menuClassName="w-48 max-h-72"
-							triggerClassName="w-fit max-w-[45vw] min-w-0 gap-1 rounded-md bg-transparent! px-1! py-0! text-[length:inherit]! font-semibold leading-[inherit]! text-foreground hover:bg-interactive-hover! hover:text-foreground data-[state=open]:bg-transparent! data-[state=open]:hover:bg-interactive-hover! data-[state=open]:text-foreground"
+							triggerClassName="w-fit max-w-[45vw] min-w-0 gap-1 rounded-md px-1! py-0! text-[length:inherit]! font-semibold leading-[inherit]! text-foreground"
 							menuItemClassName="gap-1!"
 							renderTrigger={() => (
 								<span className="inline-flex min-w-0 items-center gap-1.5">
