@@ -326,7 +326,9 @@ A session whose agent is working or waiting on an approval is refused.
 `--force` stops the current turn, cancels queued messages and pending
 approvals, and switches anyway. Use it when the agent is stuck.
 
-Switching to the agent already running succeeds and changes nothing. Run
+Switching to the agent already running changes nothing, unless `--model`,
+`--effort` or `--permission` name new settings: a Chat agent takes them in
+place. A session whose agent exited is started again to hand over. Run
 `ao agent ls` for the agents you can switch to.
 
 **Syntax:**

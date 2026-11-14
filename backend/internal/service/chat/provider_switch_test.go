@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -159,10 +160,14 @@ func TestForcedProviderSwitchStopsTheRunningTurnAndQueue(t *testing.T) {
 	if !errors.As(err, &refusal) || refusal.Kind != domain.ProviderSwitchRefusalBusy {
 		t.Fatalf("plain switch = %v, want a busy refusal", err)
 	}
-	if err := h.svc.SwitchProvider(ctx, testSession, domain.ProviderSwitchRequest{
+	result, err := h.svc.SwitchProviderReport(ctx, testSession, domain.ProviderSwitchRequest{
 		TargetHarness: domain.HarnessClaudeCode, IdempotencyKey: "forced", Force: true,
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("forced switch: %v", err)
+	}
+	if !result.StoppedTurn || result.CancelledQueued != 1 {
+		t.Fatalf("result = %+v, want the running turn stopped and one queued message cancelled", result)
 	}
 
 	if record, found, err := h.st.GetSession(ctx, testSession); err != nil || !found || record.Harness != domain.HarnessClaudeCode {
@@ -177,8 +182,8 @@ func TestForcedProviderSwitchStopsTheRunningTurnAndQueue(t *testing.T) {
 		t.Fatalf("read snapshot: %v", err)
 	}
 	for _, turn := range snapshot.Turns {
-		if turn.State == domain.TurnStateRunning || turn.State == domain.TurnStateQueued {
-			t.Fatalf("turn %s is still %s after a forced switch", turn.ID, turn.State)
+		if turn.State != domain.TurnStateInterrupted {
+			t.Fatalf("turn %s is %s after a forced switch, want interrupted", turn.ID, turn.State)
 		}
 	}
 }
@@ -868,5 +873,55 @@ func TestProviderSwitchRefusesAnUnknownAgentAndSession(t *testing.T) {
 	err = h.svc.SwitchProvider(ctx, "no-such-session", domain.ProviderSwitchRequest{TargetHarness: domain.HarnessCodex, IdempotencyKey: "missing"})
 	if !errors.Is(err, ports.ErrSessionNotFound) {
 		t.Fatalf("unknown session = %v, want ErrSessionNotFound", err)
+	}
+}
+
+func TestSwitchToTheRunningAgentAppliesNewSettingsInPlace(t *testing.T) {
+	h, _, _ := newEditHarness(t, false)
+	ctx := context.Background()
+	source, err := h.svc.Controller(testSession)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, _, err := h.st.GetSession(ctx, testSession)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current := record.Harness
+	result, err := h.svc.SwitchProviderReport(ctx, testSession, domain.ProviderSwitchRequest{TargetHarness: current, Model: "picked-model"})
+	if err != nil || !result.SettingsUpdated {
+		t.Fatalf("result = %+v err = %v, want the settings applied", result, err)
+	}
+	if got := source.Settings().Model; got != "picked-model" {
+		t.Fatalf("model = %q, want picked-model", got)
+	}
+	if _, err := h.svc.SwitchProviderReport(ctx, testSession, domain.ProviderSwitchRequest{TargetHarness: current, Model: "picked-model"}); !errors.Is(err, domain.ErrProviderAlreadyActive) {
+		t.Fatalf("unchanged picks = %v, want already active", err)
+	}
+}
+
+func TestSwitchFromAnExitedAgentStartsItToHandOver(t *testing.T) {
+	h, _, _ := newEditHarness(t, false)
+	ctx := context.Background()
+	if err := h.svc.Stop(ctx, testSession); err != nil {
+		t.Fatal(err)
+	}
+	if h.svc.HasLiveChatController(testSession) {
+		t.Fatal("controller still live after stop")
+	}
+	resumeErr := errors.New("claude binary missing")
+	var resumed []domain.SessionID
+	h.svc.SetResumeAgentCallback(func(_ context.Context, id domain.SessionID) error {
+		resumed = append(resumed, id)
+		return resumeErr
+	})
+	_, err := h.svc.SwitchProviderReport(ctx, testSession, domain.ProviderSwitchRequest{TargetHarness: domain.HarnessCodex, Force: true})
+	var refusal *domain.ProviderSwitchError
+	if !errors.As(err, &refusal) || refusal.Kind != domain.ProviderSwitchRefusalRecoveryRequired || !errors.Is(err, resumeErr) ||
+		!strings.Contains(refusal.Detail, "has exited") {
+		t.Fatalf("err = %v, want a recovery refusal naming the exited agent", err)
+	}
+	if !slices.Equal(resumed, []domain.SessionID{testSession}) {
+		t.Fatalf("resumed = %v, want the exited session resumed once", resumed)
 	}
 }

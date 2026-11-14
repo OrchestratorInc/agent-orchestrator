@@ -16,6 +16,7 @@ type switchCommandCalls struct {
 	busySends    int
 	busyCode     string
 	refusedSends int
+	switchBody   string
 }
 
 func switchCommandServer(t *testing.T, status int, code string) (*httptest.Server, *switchCommandCalls) {
@@ -33,7 +34,7 @@ func switchCommandServer(t *testing.T, status int, code string) (*httptest.Serve
 				_, _ = w.Write([]byte(`{"error":"conflict","code":"` + code + `","message":"refused"}`))
 				return
 			}
-			_, _ = w.Write([]byte(`{"status":"ok"}`))
+			_, _ = w.Write([]byte(cmp.Or(calls.switchBody, `{"status":"ok"}`)))
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/sessions/demo-1/send":
 			var in map[string]any
 			_ = json.NewDecoder(r.Body).Decode(&in)
@@ -196,5 +197,28 @@ func TestSessionSwitchWithNoDaemonSaysNothingChanged(t *testing.T) {
 	_, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return false }}, "session", "switch", "demo-1", "--agent", "codex")
 	if err == nil || strings.Contains(err.Error(), "may still have completed") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestSessionSwitchSaysWhatItStoppedAndWarns(t *testing.T) {
+	cfg := setConfigEnv(t)
+	srv, calls := switchCommandServer(t, 0, "")
+	calls.switchBody = `{"status":"ok","stoppedTurn":true,"cancelledQueuedMessages":2,"failedPendingApprovals":true,"warnings":["gpt-x is not in codex's model list; the agent may refuse it"]}`
+	writeRunFileFor(t, cfg, srv)
+	out, errOut, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "session", "switch", "demo-1", "--agent", "codex", "--model", "gpt-x", "--force")
+	if err != nil || !strings.Contains(out, "switched demo-1 to codex (stopped the running turn, cancelled 2 queued messages, declined the pending approval)") ||
+		!strings.Contains(errOut, "warning: gpt-x is not in codex's model list") {
+		t.Fatalf("out = %q stderr = %q err = %v", out, errOut, err)
+	}
+}
+
+func TestSessionSwitchToTheRunningAgentWithNewSettings(t *testing.T) {
+	cfg := setConfigEnv(t)
+	srv, calls := switchCommandServer(t, 0, "")
+	calls.switchBody = `{"status":"ok","settingsUpdated":true}`
+	writeRunFileFor(t, cfg, srv)
+	out, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "session", "switch", "demo-1", "--agent", "claude-code", "--model", "opus", "--effort", "high")
+	if err != nil || !strings.Contains(out, "demo-1 is already on claude-code; updated model opus, effort high") {
+		t.Fatalf("out = %q err = %v", out, err)
 	}
 }

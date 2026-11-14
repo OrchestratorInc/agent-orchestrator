@@ -418,7 +418,7 @@ func adoptProvisioningQueue(
 		latest += source.LatestSequence
 		// Only a turn whose prompt already reached the target stays behind. Settle
 		// it so nothing queued is left where no lookup can find it.
-		if err := q.CancelAllQueuedConversationTurns(ctx, gen.CancelAllQueuedConversationTurnsParams{
+		if _, err := q.CancelAllQueuedConversationTurns(ctx, gen.CancelAllQueuedConversationTurnsParams{
 			CompletedAt: timeToNullTime(now), ConversationID: source.ID,
 		}); err != nil {
 			return 0, fmt.Errorf("settle duplicate turns in %s: %w", source.ID, err)
@@ -2944,16 +2944,17 @@ func (s *Store) CancelAllQueuedTurns(
 	ctx context.Context,
 	conversationID string,
 	now time.Time,
-) error {
+) (int, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	if err := s.qw.CancelAllQueuedConversationTurns(ctx, gen.CancelAllQueuedConversationTurnsParams{
+	rows, err := s.qw.CancelAllQueuedConversationTurns(ctx, gen.CancelAllQueuedConversationTurnsParams{
 		CompletedAt:    sql.NullTime{Time: now, Valid: true},
 		ConversationID: conversationID,
-	}); err != nil {
-		return fmt.Errorf("cancel all queued turns for %s: %w", conversationID, err)
+	})
+	if err != nil {
+		return 0, fmt.Errorf("cancel all queued turns for %s: %w", conversationID, err)
 	}
-	return nil
+	return int(rows), nil
 }
 
 // CancelQueuedTurnByID removes one undispatched queue item without disturbing

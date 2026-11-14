@@ -3484,8 +3484,13 @@ type ProviderSwitchRequest struct {
 // ProviderSwitchResponse reports a completed switch, and the send of a message
 // that came with it.
 type ProviderSwitchResponse struct {
-	Status  string                           `json:"status"`
-	Message *SendConversationMessageResponse `json:"message,omitempty"`
+	Status                  string                           `json:"status"`
+	Message                 *SendConversationMessageResponse `json:"message,omitempty"`
+	StoppedTurn             bool                             `json:"stoppedTurn,omitempty"`
+	CancelledQueuedMessages int                              `json:"cancelledQueuedMessages,omitempty"`
+	FailedPendingApprovals  bool                             `json:"failedPendingApprovals,omitempty"`
+	SettingsUpdated         bool                             `json:"settingsUpdated,omitempty"`
+	Warnings                []string                         `json:"warnings,omitempty"`
 }
 
 // SessionHistoryQuery pages GET /api/v1/sessions/{sessionId}/history.

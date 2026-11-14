@@ -120,7 +120,7 @@ type Store interface {
 	CompleteEditDelivery(ctx context.Context, conversationID, clientMessageID, sourceBranchID, activeBranchID string, turn domain.ConversationTurn, now time.Time) error
 	RejectEditDelivery(ctx context.Context, conversationID, clientMessageID string, kind domain.ConversationEditRejectionKind, message string, now time.Time) error
 	CancelQueuedTurns(ctx context.Context, conversationID string, cutoff, now time.Time) error
-	CancelAllQueuedTurns(ctx context.Context, conversationID string, now time.Time) error
+	CancelAllQueuedTurns(ctx context.Context, conversationID string, now time.Time) (int, error)
 	CancelQueuedTurnByID(ctx context.Context, conversationID, turnID string, now time.Time) error
 	QueuedTurnMessage(ctx context.Context, conversationID, turnID string) (domain.ConversationMessage, error)
 	QueuedEditDelivery(ctx context.Context, conversationID, clientMessageID string) (string, bool, error)
@@ -2461,7 +2461,7 @@ func (c *Controller) BeginHandoff(
 		c.mu.Lock()
 		active := c.pendingTurnID != ""
 		c.mu.Unlock()
-		err := c.store.CancelAllQueuedTurns(ctx, c.conversation.ID, c.now())
+		_, err := c.store.CancelAllQueuedTurns(ctx, c.conversation.ID, c.now())
 		c.sendMu.Unlock()
 		if err != nil {
 			c.AbortHandoff()
@@ -2560,7 +2560,7 @@ func (c *Controller) BeginIdleBranchHandoff(ctx context.Context) error {
 }
 
 // BeginForcedBranchHandoff fences intake even mid-turn, cancelling the queue and interrupting the turn.
-func (c *Controller) BeginForcedBranchHandoff(ctx context.Context) error {
+func (c *Controller) BeginForcedBranchHandoff(ctx context.Context) (domain.ProviderSwitchResult, error) {
 	restoreSteers := func() {}
 	if withdrawer, ok := c.conv.(ports.ChatSteerWithdrawer); ok {
 		if restore := withdrawer.WithdrawPendingSteers(); restore != nil {
@@ -2571,19 +2571,19 @@ func (c *Controller) BeginForcedBranchHandoff(ctx context.Context) error {
 	if c.handoff != controllerHandoffNone {
 		c.mu.Unlock()
 		restoreSteers()
-		return ErrControllerHandoff
+		return domain.ProviderSwitchResult{}, ErrControllerHandoff
 	}
 	c.handoff = controllerHandoffIdleBranch
 	c.branchHandoffDone = make(chan struct{})
 	c.mu.Unlock()
 	terminated := false
-	fail := func(err error) error {
+	fail := func(err error) (domain.ProviderSwitchResult, error) {
 		restoreSteers()
 		if terminated {
-			return errors.Join(ErrForcedHandoffStoppedSource, err)
+			return domain.ProviderSwitchResult{}, errors.Join(ErrForcedHandoffStoppedSource, err)
 		}
 		c.AbortHandoff()
-		return err
+		return domain.ProviderSwitchResult{}, err
 	}
 	if !lockWithin(ctx, &c.sendMu, forcedHandoffInterruptLimit) {
 		c.prepareBranchHandoffStop()
@@ -2598,19 +2598,31 @@ func (c *Controller) BeginForcedBranchHandoff(ctx context.Context) error {
 	c.mu.Lock()
 	active := c.pendingTurnID != ""
 	c.mu.Unlock()
-	err := c.store.CancelAllQueuedTurns(ctx, c.conversation.ID, c.now())
+	var result domain.ProviderSwitchResult
+	running, err := c.store.ListVisibleRunningTurnProviderIDs(ctx, c.conversation.ID)
+	if err == nil {
+		result.CancelledQueued, err = c.store.CancelAllQueuedTurns(ctx, c.conversation.ID, c.now())
+	}
+	for _, providerTurnID := range running {
+		if err != nil {
+			break
+		}
+		err = c.store.SettleTurn(ctx, c.conversation.ID, providerTurnID, domain.TurnStateInterrupted, "", c.now())
+		result.StoppedTurn = true
+	}
 	c.sendMu.Unlock()
 	if err != nil {
-		return fail(fmt.Errorf("cancel queued turns before forced handoff: %w", err))
+		return fail(fmt.Errorf("stop turns before forced handoff: %w", err))
 	}
 	if active {
+		result.StoppedTurn = true
 		interruptCtx, cancel := context.WithTimeout(ctx, forcedHandoffInterruptLimit)
 		defer cancel()
 		if err := c.interruptForHandoff(interruptCtx); err != nil {
 			c.log.Warn("interrupt before forced handoff failed", "session", c.sessionID, "error", err)
 		}
 	}
-	return nil
+	return result, nil
 }
 
 var forcedHandoffInterruptLimit = 5 * time.Second

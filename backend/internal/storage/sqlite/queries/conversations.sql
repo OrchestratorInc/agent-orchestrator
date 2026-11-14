@@ -1243,7 +1243,7 @@ WHERE conversation_id = ? AND state = 'queued' AND requested_at <= ?;
 -- lock before this runs. There can be no later accepted row to preserve, so the
 -- correct operation is independent of wall-clock ordering and cancels the whole
 -- durable queue.
--- name: CancelAllQueuedConversationTurns :exec
+-- name: CancelAllQueuedConversationTurns :execrows
 UPDATE conversation_turns
 SET state = 'interrupted', completed_at = ?
 WHERE conversation_id = ? AND state = 'queued';

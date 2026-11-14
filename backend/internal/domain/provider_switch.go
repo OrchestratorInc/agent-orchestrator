@@ -20,6 +20,15 @@ const (
 	ProviderSwitchRefusalAlreadyActive      ProviderSwitchRefusalKind = "already_active"
 )
 
+// ProviderSwitchResult is what a completed switch did on the way.
+type ProviderSwitchResult struct {
+	StoppedTurn     bool
+	CancelledQueued int
+	FailedApprovals bool
+	SettingsUpdated bool
+	Warnings        []string
+}
+
 // ProviderSwitchRequest is what a switch to another provider asks for.
 type ProviderSwitchRequest struct {
 	TargetHarness  AgentHarness

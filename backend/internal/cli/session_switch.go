@@ -25,6 +25,45 @@ type sessionSwitchOptions struct {
 	force      bool
 }
 
+type sessionSwitchResponse struct {
+	StoppedTurn             bool     `json:"stoppedTurn"`
+	CancelledQueuedMessages int      `json:"cancelledQueuedMessages"`
+	FailedPendingApprovals  bool     `json:"failedPendingApprovals"`
+	SettingsUpdated         bool     `json:"settingsUpdated"`
+	Warnings                []string `json:"warnings"`
+}
+
+func (r sessionSwitchResponse) stopped() string {
+	var parts []string
+	if r.StoppedTurn {
+		parts = append(parts, "stopped the running turn")
+	}
+	switch r.CancelledQueuedMessages {
+	case 0:
+	case 1:
+		parts = append(parts, "cancelled 1 queued message")
+	default:
+		parts = append(parts, fmt.Sprintf("cancelled %d queued messages", r.CancelledQueuedMessages))
+	}
+	if r.FailedPendingApprovals {
+		parts = append(parts, "declined the pending approval")
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return " (" + strings.Join(parts, ", ") + ")"
+}
+
+func (o sessionSwitchOptions) picks() string {
+	var parts []string
+	for _, pick := range [][2]string{{"model", o.model}, {"effort", o.effort}, {"permission mode", o.permission}} {
+		if value := strings.TrimSpace(pick[1]); value != "" {
+			parts = append(parts, pick[0]+" "+value)
+		}
+	}
+	return strings.Join(parts, ", ")
+}
+
 type sessionSwitchRequest struct {
 	TargetHarness  string `json:"targetHarness"`
 	IdempotencyKey string `json:"idempotencyKey"`
@@ -50,7 +89,9 @@ outage.
 
 --message is sent to the new agent once the switch completes, as ao send would.
 
-Switching to the agent already running succeeds without changing anything.
+Switching to the agent already running changes nothing, unless --model,
+--effort or --permission name new settings: a Chat agent takes them in place.
+A session whose agent exited is started again to hand over.
 Run ao agent ls for the agents you can switch to.`,
 		Example: `  ao session switch ao-12 --agent codex
   ao session switch ao-12 --agent codex --force --message "Claude is down. Take over."
@@ -88,16 +129,26 @@ func (c *commandContext) switchSession(ctx context.Context, cmd *cobra.Command, 
 		return usageError{fmt.Errorf("usage: --permission must be default, accept-edits, auto or bypass-permissions, got %q", opts.permission)}
 	}
 	out := cmd.OutOrStdout()
+	var result sessionSwitchResponse
 	err = c.doJSONPathWithHeadersAndTimeout(ctx, http.MethodPost, "/api/v1/sessions/"+url.PathEscape(id)+"/provider-switch", sessionSwitchRequest{
 		TargetHarness: agent, IdempotencyKey: uuid.NewString(),
 		Model: strings.TrimSpace(opts.model), Effort: strings.TrimSpace(opts.effort),
 		PermissionMode: opts.permission, Force: opts.force,
-	}, nil, nil, 0)
+	}, &result, nil, 0)
 	var responseErr apiResponseError
 	hasResponseErr := errors.As(err, &responseErr)
 	switch {
 	case err == nil:
-		if _, err := fmt.Fprintf(out, "switched %s to %s\n", id, agent); err != nil {
+		for _, warning := range result.Warnings {
+			if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "warning: %s\n", warning); err != nil {
+				return err
+			}
+		}
+		line := fmt.Sprintf("switched %s to %s%s", id, agent, result.stopped())
+		if result.SettingsUpdated {
+			line = fmt.Sprintf("%s is already on %s; updated %s", id, agent, opts.picks())
+		}
+		if _, err := fmt.Fprintln(out, line); err != nil {
 			return err
 		}
 	case hasResponseErr && responseErr.ErrorBody.Code == "PROVIDER_SWITCH_already_active":
