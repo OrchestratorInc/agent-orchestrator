@@ -616,7 +616,7 @@ func TestRestoreResumesTitledConversationWithoutCreating(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("ok=%v err=%v", ok, err)
 	}
-	if want := []string{binary, "chat", "--cli", "--in", "/workspace", "--continue", "ao-ao-1-abc", "--yolo"}; !slices.Equal(cmd, want) {
+	if want := []string{binary, "chat", "--cli", "--in", "/workspace", "--continue", "20261020_native", "--yolo"}; !slices.Equal(cmd, want) {
 		t.Fatalf("restore = %v, want %v", cmd, want)
 	}
 	id, found, err := New().ResolveNativeSessionID(t.Context(), ports.NativeSessionResolveConfig{DataDir: data, SessionID: "ao-1"})

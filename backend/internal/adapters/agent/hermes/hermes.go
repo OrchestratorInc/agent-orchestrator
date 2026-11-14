@@ -808,15 +808,17 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 }
 func sessionDir(data, id string) string { return filepath.Join(data, "agents", "hermes", id) }
 
-// sessionCommand starts or resumes the native conversation AO titled for this
-// session. Hermes records the title as user-provided, so auto-titling never
-// renames it, and resolves it forward through context compression itself.
-func (p *Plugin) sessionCommand(ctx context.Context, cfg ports.LaunchConfig, title string, create bool) ([]string, error) {
+// sessionCommand starts a conversation under a new AO title, or resumes one by
+// its exact native ID. Hermes tries --continue as an ID first and follows
+// context compression forward from it. A resume must not pass a title:
+// Hermes prefers the newest "<title> #N" row over an exact title match, and it
+// gives an unrelated conversation that suffix when auto-titling collides.
+func (p *Plugin) sessionCommand(ctx context.Context, cfg ports.LaunchConfig, conversation string, create bool) ([]string, error) {
 	binary, err := p.ResolveBinary(ctx)
 	if err != nil {
 		return nil, err
 	}
-	cmd := []string{binary, "chat", "--cli", "--in", cfg.WorkspacePath, "--continue", title}
+	cmd := []string{binary, "chat", "--cli", "--in", cfg.WorkspacePath, "--continue", conversation}
 	// Creation overrides ride only fresh launches. Hermes rejects them on
 	// resume — "Resume retains gateway session policy; creation overrides are
 	// unsupported on resume. -m/--model, --provider differ from this session's
@@ -1580,12 +1582,13 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	if err != nil {
 		return nil, false, fmt.Errorf("hermes: Orchestrator native session title unavailable: %w", err)
 	}
-	if _, err := p.titledSessionID(ctx, cfg.DataDir, cfg.Session.ID, title); err != nil {
+	nativeID, err := p.titledSessionID(ctx, cfg.DataDir, cfg.Session.ID, title)
+	if err != nil {
 		return nil, false, err
 	}
 	// Without --create-if-missing, a conversation renamed or deleted after this
 	// check fails loudly instead of silently starting a fresh one.
-	cmd, err := p.sessionCommand(ctx, launch, title, false)
+	cmd, err := p.sessionCommand(ctx, launch, nativeID, false)
 	if err != nil {
 		return nil, false, err
 	}

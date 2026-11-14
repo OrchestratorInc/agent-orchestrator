@@ -11,9 +11,9 @@ import (
 )
 
 // PrepareNativeTerminalResume materializes the terminal's resume identity for a
-// native conversation that a Chat (ACP) session created. The terminal restores
-// through `hermes chat --continue <title>`, keyed by the AO-recorded native
-// title that only terminal launches write — so a conversation that has lived
+// native conversation that a Chat (ACP) session created. GetRestoreCommand finds
+// the conversation through the AO-recorded native title that only terminal
+// launches write, then resumes its exact ID — so a conversation that has lived
 // only in Chat has no resume identity yet. Reading the conversation's own row
 // from Hermes' state.db by its exact id, verifying it belongs to this session's
 // workspace and resolves back unambiguously by title, then persisting that
@@ -57,7 +57,7 @@ func (p *Plugin) PrepareNativeTerminalResume(ctx context.Context, dataDir, aoSes
 	if workspacePath != "" && filepath.Clean(cwd) != filepath.Clean(workspacePath) {
 		return false, nil
 	}
-	// The restore resolves the conversation by title, taking the oldest row.
+	// The restore finds its native ID by this title, taking the oldest row.
 	// If that is not this exact conversation, the title is ambiguous and
 	// resuming it could land in a stranger's transcript: start fresh instead.
 	var byTitle string
