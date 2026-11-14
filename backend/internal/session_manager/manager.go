@@ -521,7 +521,7 @@ type Manager struct {
 	interfaceRecoveryMu       sync.Mutex
 	deferredInterfaceRecovery map[domain.SessionID]string
 	inputLeases               map[domain.SessionID]int
-	serializedInput           map[domain.SessionID]bool
+	guardedPaste              map[domain.SessionID]bool
 	inputDrained              map[domain.SessionID]chan struct{}
 	// inputLeaseSince is when a session's current run of input leases began,
 	// for diagnosing an operation that cannot drain them.
@@ -7235,9 +7235,6 @@ func (m *Manager) prepareWorkspace(ctx context.Context, agent ports.Agent, id do
 }
 
 func (m *Manager) prepareRuntimeLaunch(ctx context.Context, agent ports.Agent, id domain.SessionID, workspacePath, systemPrompt, systemPromptFile string, agentConfig ports.AgentConfig, env map[string]string, restore workspaceRestoreContext) error {
-	if _, guarded := agent.(ports.TerminalMessageInputGuard); guarded {
-		m.enableSerializedInput(id)
-	}
 	preparer, ok := agent.(runtimeLaunchPreparer)
 	if !ok {
 		return nil
