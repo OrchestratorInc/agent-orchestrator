@@ -53,6 +53,6 @@ One email can have accounts in several organizations. Tell them apart by the
 
 ```bash
 ao account ls --agent claude-code
-ao spawn --agent claude-code --account <account-id> --prompt "..."
+ao spawn --agent claude-code --account <account-id> --name "account-worker" --prompt "..."
 ao account switch mer-3 <account-id> --wait
 ```
