@@ -254,6 +254,9 @@ func TestSessionOptionsSplitAModelIDIntoCursorSettings(t *testing.T) {
 	opt := func(id, value string) acpdriver.SessionOption {
 		return acpdriver.SessionOption{ID: id, Value: value, Optional: id != "model"}
 	}
+	fast := func(value string, optional bool) acpdriver.SessionOption {
+		return acpdriver.SessionOption{ID: "fast", Value: value, Optional: optional}
+	}
 	effort := func(value, reasoning string) []acpdriver.SessionOption {
 		return []acpdriver.SessionOption{opt("effort", value), opt("reasoning_effort", value), opt("reasoning", reasoning)}
 	}
@@ -267,21 +270,23 @@ func TestSessionOptionsSplitAModelIDIntoCursorSettings(t *testing.T) {
 		{"auto is Cursor's default", ports.ChatTurnSettings{Model: "auto"},
 			[]acpdriver.SessionOption{opt("model", "default")}},
 		{"command-line id with every setting", ports.ChatTurnSettings{Model: "claude-opus-4-8-thinking-high-fast"},
-			append([]acpdriver.SessionOption{opt("model", "claude-opus-4-8"), opt("thinking", "true"), opt("fast", "true")}, effort("high", "high")...)},
+			append([]acpdriver.SessionOption{opt("model", "claude-opus-4-8"), opt("thinking", "true"), fast("true", false)}, effort("high", "high")...)},
 		{"a setting the id leaves out is off", ports.ChatTurnSettings{Model: "claude-opus-4-8-low"},
-			append([]acpdriver.SessionOption{opt("model", "claude-opus-4-8"), opt("thinking", "false"), opt("fast", "false")}, effort("low", "low")...)},
+			append([]acpdriver.SessionOption{opt("model", "claude-opus-4-8"), opt("thinking", "false"), fast("false", true)}, effort("low", "low")...)},
 		{"effort before thinking", ports.ChatTurnSettings{Model: "claude-4.6-opus-high-thinking"},
-			append([]acpdriver.SessionOption{opt("model", "claude-opus-4-6"), opt("thinking", "true"), opt("fast", "false")}, effort("high", "high")...)},
+			append([]acpdriver.SessionOption{opt("model", "claude-opus-4-6"), opt("thinking", "true"), fast("false", true)}, effort("high", "high")...)},
 		{"an older Claude is named family first", ports.ChatTurnSettings{Model: "claude-4.6-opus-max-thinking"},
-			append([]acpdriver.SessionOption{opt("model", "claude-opus-4-6"), opt("thinking", "true"), opt("fast", "false")}, effort("max", "max")...)},
+			append([]acpdriver.SessionOption{opt("model", "claude-opus-4-6"), opt("thinking", "true"), fast("false", true)}, effort("max", "max")...)},
 		{"an older Claude with no settings in its id", ports.ChatTurnSettings{Model: "claude-4-sonnet-thinking"},
-			[]acpdriver.SessionOption{opt("model", "claude-sonnet-4"), opt("thinking", "true"), opt("fast", "false")}},
+			[]acpdriver.SessionOption{opt("model", "claude-sonnet-4"), opt("thinking", "true"), fast("false", true)}},
 		{"extra high is an effort", ports.ChatTurnSettings{Model: "gpt-5.5-extra-high-fast"},
-			append([]acpdriver.SessionOption{opt("model", "gpt-5.5"), opt("thinking", "false"), opt("fast", "true")}, effort("xhigh", "extra-high")...)},
+			append([]acpdriver.SessionOption{opt("model", "gpt-5.5"), opt("thinking", "false"), fast("true", false)}, effort("xhigh", "extra-high")...)},
 		{"grok drops the command-line prefix", ports.ChatTurnSettings{Model: "cursor-grok-4.6-high"},
-			append([]acpdriver.SessionOption{opt("model", "grok-4.6"), opt("thinking", "false"), opt("fast", "false")}, effort("high", "high")...)},
-		{"an older session's bracket id", ports.ChatTurnSettings{Model: "gpt-5.5[context=272k,reasoning=medium,fast=false]"},
-			append([]acpdriver.SessionOption{opt("model", "gpt-5.5"), opt("fast", "false")}, effort("medium", "medium")...)},
+			append([]acpdriver.SessionOption{opt("model", "grok-4.6"), opt("thinking", "false"), fast("false", true)}, effort("high", "high")...)},
+		{"configured Grok settings preserve explicit fast false", ports.ChatTurnSettings{Model: "grok-4.7[context=256k,reasoning_effort=high,fast=false]"},
+			append([]acpdriver.SessionOption{opt("model", "grok-4.7"), fast("false", false)}, effort("high", "high")...)},
+		{"empty Thinking stays omitted", ports.ChatTurnSettings{Model: "grok-4.7[thinking=]"},
+			[]acpdriver.SessionOption{opt("model", "grok-4.7")}},
 		{"a chosen effort wins", ports.ChatTurnSettings{Model: "gpt-5.5[reasoning=medium]", Effort: "high"},
 			append([]acpdriver.SessionOption{opt("model", "gpt-5.5")}, effort("high", "high")...)},
 		{"a model whose name ends in a number", ports.ChatTurnSettings{Model: "gpt-5-mini"},
@@ -291,6 +296,30 @@ func TestSessionOptionsSplitAModelIDIntoCursorSettings(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := sessionOptions(tt.settings); !reflect.DeepEqual(got, tt.want) {
 				t.Fatalf("options = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestValidateTurnSettingsValidatesFastParameterOnly(t *testing.T) {
+	tests := []struct {
+		name    string
+		model   string
+		wantErr bool
+	}{
+		{name: "invalid Fast value", model: "grok-4.7[fast=disabled]", wantErr: true},
+		{name: "empty Fast value", model: "grok-4.7[fast=]", wantErr: true},
+		{name: "Thinking stays best-effort", model: "grok-4.7[thinking=disabled]"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateTurnSettings(ports.PermissionModeDefault, ports.ChatTurnSettings{Model: tt.model})
+			if tt.wantErr {
+				if err == nil || !strings.Contains(err.Error(), `model parameter "fast" must be true or false`) {
+					t.Fatalf("validation error = %v, want invalid fast parameter error", err)
+				}
+			} else if err != nil {
+				t.Fatalf("validation error = %v, want nil", err)
 			}
 		})
 	}

@@ -1,4 +1,7 @@
+import { isExcerptSnapshot, isFlowchartOnlySnapshot, type ChatExcerptSnapshot } from "../../shared/chat-excerpt";
+import type { ChatFileReference } from "../../shared/chat-file-reference";
 import type { ConversationContentSummary } from "../types/conversation";
+import { isCloudAttachmentReference } from "./cloud-attachment-reference";
 
 /**
  * Renderer-owned, session-scoped Chat drafts.
@@ -10,7 +13,7 @@ import type { ConversationContentSummary } from "../types/conversation";
  * the daemon has durably staged those bytes in the session worktree.
  */
 
-export const CHAT_DRAFT_SCHEMA_VERSION = 2 as const;
+export const CHAT_DRAFT_SCHEMA_VERSION = 3 as const;
 const CHAT_DRAFT_SCOPE_SCHEMA_VERSION = 1 as const;
 
 /**
@@ -24,6 +27,12 @@ export interface ChatDraftScope {
 }
 
 type ChatDraftScopeInput = string | ChatDraftScope;
+
+/** The new chat page's composer draft; one per host, shared by every project on it. */
+export function newChatDraftScope(hostId?: string): ChatDraftScope {
+	const id = `new-chat:${hostId ?? "local"}`;
+	return { sessionId: id, incarnation: id };
+}
 
 type ChatDraftScopeLease = {
 	schemaVersion: typeof CHAT_DRAFT_SCOPE_SCHEMA_VERSION;
@@ -51,8 +60,6 @@ export interface ChatDraftInlineEdit {
 	turnId: string;
 	text: string;
 	content: ConversationContentSummary[];
-	/** True when the edit replays portable history instead of using a native fork. */
-	reconstructedContext?: boolean;
 }
 
 export interface ChatDraftQueuedEdit {
@@ -85,6 +92,8 @@ export interface ChatDraftRetainedAttachment {
 export type ChatDraftDeliveryState = "dispatching" | "accepted";
 
 export interface ChatComposerDelivery {
+	/** Absent on legacy frozen receipts, which must keep their original prompt. */
+	fileReferenceFormat?: "quoted-v1";
 	/** Original request mode, kept across capability changes during recovery. */
 	nativeImages?: boolean;
 	kind: "send" | "steer";
@@ -99,15 +108,31 @@ export interface ChatComposerDelivery {
 	draft?: { text: string; attachments: ChatDraftAttachment[] };
 	/** Exact verified transcript excerpts attached to this delivery. */
 	excerpts?: ChatDraftExcerptReference[];
+	fileReferences?: ChatFileReference[];
 }
 
 export interface ChatDraftExcerptReference {
+ snapshot?: ChatExcerptSnapshot;
+	order?: number;
 	id: string;
 	conversationId: string;
 	messageId: string;
 	revision: number;
 	text: string;
+	comment?: string;
 	role: "user" | "assistant";
+}
+
+export type ChatDraftAnnotation =
+ | { kind: "chat"; reference: ChatDraftExcerptReference }
+ | { kind: "file"; reference: ChatFileReference };
+
+export function chatDraftAnnotations(composer: ChatSessionDraft["composer"]): ChatDraftAnnotation[] {
+ const annotations: ChatDraftAnnotation[] = [
+  ...(composer.excerpts ?? []).map(reference => ({ kind: "chat" as const, reference })),
+  ...(composer.fileReferences ?? []).map(reference => ({ kind: "file" as const, reference })),
+ ];
+ return annotations.sort((a,b) => (a.reference.order ?? 0) - (b.reference.order ?? 0));
 }
 
 export interface ChatInlineEditDelivery {
@@ -132,9 +157,17 @@ export interface ChatSessionDraft {
 		text: string;
 		attachments: ChatDraftAttachment[];
 		excerpts?: ChatDraftExcerptReference[];
+	fileReferences?: ChatFileReference[];
 		/** Durable delivery journal. Present until acceptance is durably cleared. */
 		delivery?: ChatComposerDelivery;
 	};
+	/**
+	 * A send whose outcome is unknown and that nothing is sending now (an app
+	 * restart or a lost answer). It sits beside the composer, always with its own
+	 * `draft`, so the person can type while they retry it with the same id or
+	 * discard it.
+	 */
+	unsent?: ChatComposerDelivery;
 	queuedEdit?: ChatDraftQueuedEdit;
 	inlineEdit?: ChatDraftInlineEdit;
 	/** Durable delivery journal for an inline branch edit. */
@@ -160,6 +193,7 @@ export interface PrepareChatComposerDeliveryInput {
 	composerText: string;
 	attachments: ChatDraftAttachment[];
 	excerpts?: ChatDraftExcerptReference[];
+	fileReferences?: ChatFileReference[];
 	requestText: string;
 	clientMessageId: string;
 }
@@ -705,7 +739,8 @@ function isAttachment(value: unknown): value is ChatDraftAttachment {
 		typeof attachment.id === "string" &&
 		attachment.id.length > 0 &&
 		typeof attachment.path === "string" &&
-		(attachment.path === "" || attachment.path.startsWith(".ao/attachments/")) &&
+		(attachment.path === "" || attachment.path.startsWith(".ao/attachments/") ||
+			isCloudAttachmentReference(attachment.path)) &&
 		typeof attachment.name === "string" &&
 		typeof attachment.mimeType === "string" &&
 		typeof attachment.bytes === "number" &&
@@ -722,7 +757,9 @@ function isExcerptReference(value: unknown): value is ChatDraftExcerptReference 
 		typeof excerpt.conversationId === "string" && excerpt.conversationId.length > 0 &&
 		typeof excerpt.messageId === "string" && excerpt.messageId.length > 0 &&
 		typeof excerpt.revision === "number" && Number.isSafeInteger(excerpt.revision) && excerpt.revision >= 0 &&
-		typeof excerpt.text === "string" && excerpt.text.trim().length > 0 &&
+		typeof excerpt.text === "string" && (excerpt.text.trim().length > 0 || isFlowchartOnlySnapshot(excerpt.snapshot)) &&
+		(excerpt.snapshot === undefined || isExcerptSnapshot(excerpt.snapshot)) &&
+		(excerpt.comment === undefined || typeof excerpt.comment === "string") &&
 		(excerpt.role === "user" || excerpt.role === "assistant")
 	);
 }
@@ -736,8 +773,6 @@ function isInlineEdit(value: unknown): value is ChatDraftInlineEdit {
 			typeof edit.turnId === "string" &&
 			edit.turnId.length > 0 &&
 			typeof edit.text === "string" &&
-			(edit.reconstructedContext === undefined ||
-				typeof edit.reconstructedContext === "boolean") &&
 			Array.isArray(edit.content) &&
 			edit.content.every(isContentSummary)
 	);
@@ -759,6 +794,8 @@ function isComposerDelivery(value: unknown): value is ChatComposerDelivery {
 		typeof delivery.clientMessageId === "string" &&
 		delivery.clientMessageId.length > 0 &&
 		typeof delivery.requestText === "string" &&
+		(delivery.fileReferenceFormat === undefined || delivery.fileReferenceFormat === "quoted-v1") &&
+		(delivery.fileReferences === undefined || (Array.isArray(delivery.fileReferences) && delivery.fileReferences.every(isFileReference))) &&
 		(delivery.excerpts === undefined ||
 			(Array.isArray(delivery.excerpts) && delivery.excerpts.every(isExcerptReference))) &&
 		(!("nativeImages" in delivery) || typeof delivery.nativeImages === "boolean") &&
@@ -791,6 +828,16 @@ function draftEditRevision(): string {
 	return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
+function isFileReference(value: unknown): value is ChatFileReference {
+ if (!value || typeof value !== "object") return false;
+ const ref = value as ChatFileReference;
+ return typeof ref.id === "string" && typeof ref.path === "string" && typeof ref.sessionId === "string" && Number.isSafeInteger(ref.order) &&
+  Number.isSafeInteger(ref.line) && ref.line > 0 && Number.isSafeInteger(ref.endLine) && ref.endLine > 0 &&
+  ["file", "old", "new"].includes(ref.side) && ["workspace", "pull_request", "artifact"].includes(ref.source?.kind) &&
+  typeof ref.truncated === "boolean" && Array.isArray(ref.lines) && ref.lines.length > 0 && ref.lines.length <= 8000 &&
+  ref.lines.every(row => row && typeof row.text === "string" && ["context", "add", "del"].includes(row.kind));
+}
+
 function isChatSessionDraft(value: unknown, scope: ChatDraftScope): value is ChatSessionDraft {
 	if (!value || typeof value !== "object") return false;
 	const draft = value as Partial<ChatSessionDraft>;
@@ -808,7 +855,10 @@ function isChatSessionDraft(value: unknown, scope: ChatDraftScope): value is Cha
 		composer.attachments.every(isAttachment) &&
 		(composer.excerpts === undefined ||
 			(Array.isArray(composer.excerpts) && composer.excerpts.every(isExcerptReference))) &&
+		(composer.fileReferences === undefined || (Array.isArray(composer.fileReferences) && composer.fileReferences.every(isFileReference))) &&
 		(composer.delivery === undefined || isComposerDelivery(composer.delivery)) &&
+		(draft.unsent === undefined || (isComposerDelivery(draft.unsent) &&
+			draft.unsent.kind === "send" && draft.unsent.state === "dispatching" && draft.unsent.draft !== undefined)) &&
 		(draft.queuedEdit === undefined || (draft.queuedEdit !== null &&
 			typeof draft.queuedEdit.revision === "string" && draft.queuedEdit.revision.length > 0 &&
 			typeof draft.queuedEdit.turnId === "string" && draft.queuedEdit.turnId.length > 0 &&
@@ -869,9 +919,10 @@ export function loadChatSessionDraft(
 		"incarnation" in parsed &&
 		(parsed as { incarnation?: unknown }).incarnation !== scope.incarnation
 	) return { ok: false, draft: empty };
-	return {
-		ok: true,
-		draft: isChatSessionDraft(parsed, scope) ? parsed : empty,
+ if (parsed && typeof parsed === "object" && "schemaVersion" in parsed && parsed.schemaVersion === 2) parsed = { ...parsed, schemaVersion: CHAT_DRAFT_SCHEMA_VERSION };
+ return {
+  ok: true,
+  draft: isChatSessionDraft(parsed, scope) ? parsed : empty,
 	};
 }
 
@@ -887,7 +938,9 @@ function hasContent(draft: ChatSessionDraft): boolean {
 		draft.composer.text !== "" ||
 		draft.composer.attachments.length > 0 ||
 		(draft.composer.excerpts?.length ?? 0) > 0 ||
+		(draft.composer.fileReferences?.length ?? 0) > 0 ||
 		Boolean(draft.composer.delivery) ||
+		Boolean(draft.unsent) ||
 		Boolean(draft.queuedEdit) ||
 		Boolean(draft.inlineEdit) ||
 		Boolean(draft.inlineEditDelivery)
@@ -1003,16 +1056,18 @@ export function prepareChatComposerDelivery(
 			: { ok: false, recovered: true, draft: loaded.draft };
 	}
 	const excerpts = input.excerpts ?? [];
+	const fileReferences = input.fileReferences ?? [];
 	const exact =
 		loaded.draft.composer.text === input.composerText &&
 		attachmentsEqual(loaded.draft.composer.attachments, input.attachments) &&
-		JSON.stringify(loaded.draft.composer.excerpts ?? []) === JSON.stringify(excerpts);
+		JSON.stringify(loaded.draft.composer.excerpts ?? []) === JSON.stringify(excerpts) && JSON.stringify(loaded.draft.composer.fileReferences ?? []) === JSON.stringify(fileReferences);
 	const revision = exact
 		? loaded.draft.composer.revision
 		: loaded.draft.composer.revision + 1;
 	// shortcut: excerpt sends stay locked, enable optimism when refused references can be edited separately.
-	const optimistic = input.optimistic && input.kind === "send" && excerpts.length === 0;
+	const optimistic = input.optimistic && input.kind === "send" && excerpts.length === 0 && fileReferences.length === 0;
 	const mutation: ChatComposerDelivery = {
+		fileReferenceFormat: "quoted-v1",
 		...(input.nativeImages === undefined ? {} : { nativeImages: input.nativeImages }),
 		kind: input.kind,
 		state: "dispatching",
@@ -1021,6 +1076,7 @@ export function prepareChatComposerDelivery(
 		requestText: input.requestText,
 		...(optimistic ? { draft: { text: input.composerText, attachments: input.attachments } } : {}),
 		excerpts,
+		fileReferences,
 	};
 	const next: ChatSessionDraft = {
 		...loaded.draft,
@@ -1029,6 +1085,7 @@ export function prepareChatComposerDelivery(
 			text: optimistic ? "" : input.composerText,
 			attachments: optimistic ? [] : input.attachments,
 			excerpts,
+			fileReferences,
 			delivery: mutation,
 		},
 	};
@@ -1100,6 +1157,7 @@ export function clearRejectedChatComposerDelivery(
 			text: delivery.draft?.text ?? loaded.draft.composer.text,
 			attachments: delivery.draft?.attachments ?? loaded.draft.composer.attachments,
 			excerpts: loaded.draft.composer.excerpts,
+			fileReferences: loaded.draft.composer.fileReferences,
 		},
 	};
 	const result = persistDraftProven(next, storage);
@@ -1137,9 +1195,118 @@ export function clearUncertainChatComposerDelivery(
 			text: loaded.draft.composer.text,
 			attachments: loaded.draft.composer.attachments,
 			excerpts: loaded.draft.composer.excerpts,
+			fileReferences: loaded.draft.composer.fileReferences,
 		},
 	};
 	const result = persistDraftProven(next, storage);
+	return result.ok ? result : { ok: false, draft: loaded.draft };
+}
+
+/**
+ * Move a send that nothing is sending (no live mutation) out of the composer into
+ * `unsent`, so the composer is free again. A send prepared without its own copy of
+ * the text takes the composer's text, attachments and references with it.
+ */
+/**
+ * Whether an unanswered delivery can wait in the unsent slot.
+ * ponytail: excerpt and file-reference sends keep the locked retry, as they do for optimistic sends; park them once the strip can show those chips.
+ */
+export function isParkableChatComposerDelivery(delivery: ChatComposerDelivery | undefined): delivery is ChatComposerDelivery {
+	return delivery?.kind === "send" && delivery.state === "dispatching" &&
+		!delivery.excerpts?.length && !delivery.fileReferences?.length;
+}
+
+export function parkChatComposerDelivery(
+	scope: ChatDraftScopeInput,
+	clientMessageId: string,
+	storage: DraftStorage | undefined = rendererStorage(),
+): DraftWriteResult {
+	const loaded = loadChatSessionDraft(scope, storage);
+	const delivery = loaded.draft.composer.delivery;
+	if (
+		!loaded.ok ||
+		getChatComposerMutation(scope).pending ||
+		!isParkableChatComposerDelivery(delivery) ||
+		delivery.clientMessageId !== clientMessageId ||
+		// ponytail: one unsent slot; a second unanswered send stays in the composer until the first is resolved.
+		loaded.draft.unsent
+	) {
+		return { ok: false, draft: loaded.draft };
+	}
+	const composer = loaded.draft.composer;
+	const next: ChatSessionDraft = {
+		...loaded.draft,
+		unsent: { ...delivery, draft: delivery.draft ?? { text: composer.text, attachments: composer.attachments } },
+		composer: delivery.draft
+			? {
+				revision: composer.revision,
+				text: composer.text,
+				attachments: composer.attachments,
+				excerpts: composer.excerpts,
+				fileReferences: composer.fileReferences,
+			}
+			: { revision: composer.revision + 1, text: "", attachments: [], excerpts: [], fileReferences: [] },
+	};
+	const result = persistDraftProven(next, storage);
+	return result.ok ? result : { ok: false, draft: loaded.draft };
+}
+
+/** Put the unsent message back in the composer's delivery slot for a retry with the same id. */
+export function reviveUnsentChatComposerDelivery(
+	scope: ChatDraftScopeInput,
+	clientMessageId: string,
+	storage: DraftStorage | undefined = rendererStorage(),
+): DraftWriteResult {
+	const loaded = loadChatSessionDraft(scope, storage);
+	const unsent = loaded.draft.unsent;
+	if (
+		!loaded.ok ||
+		getChatComposerMutation(scope).pending ||
+		!unsent ||
+		unsent.clientMessageId !== clientMessageId ||
+		loaded.draft.composer.delivery
+	) {
+		return { ok: false, draft: loaded.draft };
+	}
+	const next: ChatSessionDraft = { ...loaded.draft, composer: { ...loaded.draft.composer, delivery: unsent } };
+	delete next.unsent;
+	const result = persistDraftProven(next, storage);
+	return result.ok ? result : { ok: false, draft: loaded.draft };
+}
+
+/** Drop the unsent message. If it did arrive, the chat already shows it. */
+export function discardUnsentChatComposerDelivery(
+	scope: ChatDraftScopeInput,
+	clientMessageId: string,
+	storage: DraftStorage | undefined = rendererStorage(),
+): DraftWriteResult {
+	const loaded = loadChatSessionDraft(scope, storage);
+	if (!loaded.ok || loaded.draft.unsent?.clientMessageId !== clientMessageId) {
+		return { ok: false, draft: loaded.draft };
+	}
+	const next: ChatSessionDraft = { ...loaded.draft };
+	delete next.unsent;
+	const result = persistDraftProven(next, storage);
+	return result.ok ? result : { ok: false, draft: loaded.draft };
+}
+
+/** Undo a discard, unless another unsent message has taken the slot since. */
+export function restoreUnsentChatComposerDelivery(
+	scope: ChatDraftScopeInput,
+	delivery: ChatComposerDelivery,
+	storage: DraftStorage | undefined = rendererStorage(),
+): DraftWriteResult {
+	const loaded = loadChatSessionDraft(scope, storage);
+	if (
+		!loaded.ok ||
+		loaded.draft.unsent ||
+		loaded.draft.composer.delivery?.clientMessageId === delivery.clientMessageId ||
+		delivery.kind !== "send" ||
+		!delivery.draft
+	) {
+		return { ok: false, draft: loaded.draft };
+	}
+	const result = persistDraftProven({ ...loaded.draft, unsent: { ...delivery, state: "dispatching" } }, storage);
 	return result.ok ? result : { ok: false, draft: loaded.draft };
 }
 
@@ -1169,7 +1336,6 @@ export function prepareChatInlineEditDelivery(
 	const exact =
 			current?.turnId === input.turnId &&
 			current.text === input.text &&
-			current.reconstructedContext === input.reconstructedContext &&
 			JSON.stringify(current.content) === JSON.stringify(input.content);
 	const inlineEdit: ChatDraftInlineEdit = exact
 		? current
@@ -1177,7 +1343,6 @@ export function prepareChatInlineEditDelivery(
 					turnId: input.turnId,
 					text: input.text,
 					content: input.content,
-					reconstructedContext: input.reconstructedContext,
 					revision: draftEditRevision(),
 			};
 	const mutation: ChatInlineEditDelivery = {
@@ -1349,8 +1514,40 @@ export function writeChatExcerptReferences(
 			...draft,
 			composer: {
 				...draft.composer,
-				revision: draft.composer.revision + 1,
+				revision: draft.composer.delivery && !draft.composer.delivery.draft ? draft.composer.revision : draft.composer.revision + 1,
 				excerpts,
+			},
+		}),
+		storage,
+		loaded,
+	);
+	if (result.ok) {
+		invalidateAcceptedDraftMutation(scope, "composer");
+		emitComposerDraftChange(scope);
+	}
+	return result;
+}
+
+export function writeChatFileReferences(
+	scope: ChatDraftScopeInput,
+	fileReferences: ChatFileReference[],
+	storage: DraftStorage | undefined = rendererStorage(),
+): DraftWriteResult {
+	const loaded = loadChatSessionDraft(scope, storage);
+	// Preparation owns an exact snapshot before asynchronous attachment reads.
+	// Refuse a new selection rather than letting that snapshot overwrite it.
+	if (getChatComposerMutation(scope).pending) return { ok: false, draft: loaded.draft };
+	if (loaded.ok && JSON.stringify(loaded.draft.composer.fileReferences ?? []) === JSON.stringify(fileReferences)) {
+		return { ok: true, draft: loaded.draft };
+	}
+	const result = mutateDraft(
+		scope,
+		(draft) => ({
+			...draft,
+			composer: {
+				...draft.composer,
+				revision: draft.composer.revision + 1,
+				fileReferences,
 			},
 		}),
 		storage,
@@ -1468,7 +1665,8 @@ export function clearAcceptedChatComposer(
 				attachments: current.composer.delivery.draft
 					? current.composer.attachments
 					: current.composer.attachments.filter((attachment) => !acceptedAttachmentIds.includes(attachment.id)),
-				excerpts: current.composer.excerpts,
+				excerpts: current.composer.excerpts?.filter(ref => !current.composer.delivery?.excerpts?.some(sent => sent.id === ref.id && sent.comment === ref.comment)),
+				fileReferences: current.composer.fileReferences?.filter(ref => !current.composer.delivery?.fileReferences?.some(sent => sent.id === ref.id)),
 			},
 		};
 		const result = persistDraftProven(next, storage);
@@ -1480,13 +1678,15 @@ export function clearAcceptedChatComposer(
 			}
 			: { ok: false, cleared: false, draft: current };
 	}
+	const sent = current.composer.delivery;
 	const next: ChatSessionDraft = {
 		...current,
 		composer: {
 			revision: current.composer.revision + 1,
 			text: "",
 			attachments: [],
-			excerpts: [],
+			excerpts: sent ? current.composer.excerpts?.filter(ref => !sent.excerpts?.some(item => item.id === ref.id && item.comment === ref.comment)) ?? [] : [],
+			fileReferences: [],
 		},
 	};
 	const result = persistDraftProven(next, storage);

@@ -57,11 +57,17 @@ func (c *conversation) RequestPermission(
 	if len(params.Options) == 0 {
 		return acpsdk.RequestPermissionResponse{Outcome: acpsdk.NewRequestPermissionOutcomeCancelled()}, nil
 	}
+	if isQwenUserQuestion(params.ToolCall) {
+		return c.handleQwenUserQuestion(ctx, params)
+	}
 	c.mu.Lock()
 	policy, mode := c.permissionFor, c.permissionMode
 	c.mu.Unlock()
 	if policy != nil {
 		if selected, handled := policy(mode, params); handled {
+			if selected == CancelPermission {
+				return acpsdk.RequestPermissionResponse{Outcome: acpsdk.NewRequestPermissionOutcomeCancelled()}, nil
+			}
 			for _, option := range params.Options {
 				if option.OptionId == selected {
 					return acpsdk.RequestPermissionResponse{
@@ -178,7 +184,7 @@ func approvalToolDetail(tool acpsdk.ToolCallUpdate, activityKind domain.Activity
 		"subjectKind": string(activityKind),
 	}
 	if tool.RawInput != nil {
-		detail["input"] = cappedInput(tool.RawInput)
+		detail["input"] = cappedPayload(tool.RawInput)
 	}
 	if claude := nestedMap(tool.Meta, "claudeCode"); claude != nil {
 		copyDetail(detail, claude, "toolName", "providerToolName")
@@ -424,15 +430,24 @@ func validateInputResponse(request ports.ChatInputRequest, response ports.ChatIn
 }
 
 func validateFormContent(schema, content map[string]any) error {
+	properties, _ := schema["properties"].(map[string]any)
+	customAnswers := formCustomAnswers(properties)
 	for _, name := range formRequired(schema["required"]) {
 		if name == "" {
 			continue
 		}
-		if _, present := content[name]; !present {
-			return fmt.Errorf("required input %q is missing", name)
+		if _, present := content[name]; present {
+			continue
 		}
+		// A typed "Other" answer stands in for the choice it replaces; the adapter
+		// records it as the question's answer.
+		if custom, ok := customAnswers[name]; ok {
+			if text, _ := content[custom].(string); strings.TrimSpace(text) != "" {
+				continue
+			}
+		}
+		return fmt.Errorf("required input %q is missing", name)
 	}
-	properties, _ := schema["properties"].(map[string]any)
 	for name, value := range content {
 		rawProperty, known := properties[name]
 		if !known {
@@ -488,6 +503,34 @@ func validateFormValue(value any, property map[string]any) error {
 		return fmt.Errorf("uses unsupported type %q", typeName)
 	}
 	return nil
+}
+
+// askUserQuestionCustomAnswerMetaKey marks the free-text "Other" field an
+// AskUserQuestion bridge (claude-agent-acp) adds after each question, naming the
+// question it answers. Only this marker makes a field an alternative answer, so a
+// generic form's required fields stay strictly required.
+const askUserQuestionCustomAnswerMetaKey = "_askUserQuestionCustomAnswer"
+
+// formCustomAnswers maps each marked question to the field that answers it in free text.
+func formCustomAnswers(properties map[string]any) map[string]string {
+	var out map[string]string
+	for name, raw := range properties {
+		property, _ := raw.(map[string]any)
+		meta, _ := property["_meta"].(map[string]any)
+		marker, _ := meta[askUserQuestionCustomAnswerMetaKey].(map[string]any)
+		question, _ := marker["questionId"].(string)
+		if marker["isCustomAnswer"] != true || question == "" || question == name {
+			continue
+		}
+		if _, known := properties[question]; !known {
+			continue
+		}
+		if out == nil {
+			out = map[string]string{}
+		}
+		out[question] = name
+	}
+	return out
 }
 
 func formRequired(value any) []string {
@@ -571,8 +614,11 @@ func (c *conversation) handleNotification(method string, params json.RawMessage)
 		if err == nil {
 			err = c.SessionUpdate(context.Background(), update)
 		}
-	case persistenthost.ACPPromptResultMethod, persistenthost.ACPInteractionCommandMethod:
+	case persistenthost.ACPPromptResultMethod, persistenthost.ACPPromptHandoffMethod,
+		persistenthost.ACPInteractionCommandMethod:
 		_, err = c.HandleExtensionMethod(context.Background(), method, params)
+	case claudeSDKMessageMethod:
+		err = c.handleClaudeSDKMessage(params)
 	default:
 		return false
 	}
@@ -580,6 +626,60 @@ func (c *conversation) handleNotification(method string, params json.RawMessage)
 		c.log.Error("failed to handle ACP notification", "method", method, "err", err)
 	}
 	return true
+}
+
+// claudeSDKMessageMethod carries the raw Claude Agent SDK messages a session
+// asked for with _meta.claudeCode.emitRawSDKMessages.
+const claudeSDKMessageMethod = "_claude/sdkMessage"
+
+// handleClaudeSDKMessage reports the SDK's running and idle states. Claude Code
+// starts cycles on its own after an AO turn, for example to answer a finished
+// background task, and those cycles have no ACP prompt, so no turn events.
+func (c *conversation) handleClaudeSDKMessage(params json.RawMessage) error {
+	var payload struct {
+		SessionID string `json:"sessionId"`
+		Message   struct {
+			Type    string `json:"type"`
+			Subtype string `json:"subtype"`
+			State   string `json:"state"`
+		} `json:"message"`
+		Meta map[string]any `json:"_meta"`
+	}
+	if err := json.Unmarshal(params, &payload); err != nil {
+		return err
+	}
+	if payload.Message.Type != "system" || payload.Message.Subtype != "session_state_changed" {
+		return nil
+	}
+	var status domain.ThreadStatus
+	switch payload.Message.State {
+	case "running":
+		status = domain.ThreadStatusActive
+	case "idle":
+		status = domain.ThreadStatusIdle
+	default:
+		// requires_action: the approval or input request already reports it.
+		return nil
+	}
+	c.mu.Lock()
+	sessionID := c.sessionID
+	c.mu.Unlock()
+	if sessionID == "" || payload.SessionID != sessionID {
+		return nil
+	}
+	// Only the live state means anything; history replay must not carry one.
+	c.historyMu.Lock()
+	loadingHistory := c.history != nil
+	c.historyMu.Unlock()
+	if loadingHistory {
+		return nil
+	}
+	event := ports.ChatEvent{Kind: ports.ChatEventProviderState, ThreadState: &ports.ChatThreadState{Status: status}}
+	if eventID := stableACPEventID(payload.Meta); eventID != "" {
+		event.ProviderEventID = eventID + ":0"
+	}
+	c.emit(event)
+	return nil
 }
 
 // processUpdate runs the full ACP -> AO normalization for one update: live
@@ -615,8 +715,14 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 	}
 	switch {
 	case update.AgentMessageChunk != nil:
+		if c.steerAcknowledgement(turnID, contentText(update.AgentMessageChunk.Content)) {
+			// The agent's note that it took a steer prompt; the "↳ Steered" mark
+			// already says so.
+			break
+		}
 		c.mu.Lock()
 		isCompacting := c.compactingTurnID != "" && c.compactingTurnID == turnID
+		segment := c.steerSegment
 		c.mu.Unlock()
 		if isCompacting {
 			if delta := contentText(update.AgentMessageChunk.Content); delta != "" {
@@ -626,9 +732,14 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 			}
 			break
 		}
-		id := c.providerItemID(messageID(update.AgentMessageChunk.MessageId, "assistant", turnID))
+		parentID := c.providerItemID(parentToolUseID(update.AgentMessageChunk.Meta))
+		if parentID != "" {
+			// A steer goes to the parent turn, so a subagent's reply stays one message.
+			segment = 0
+		}
+		id := c.providerItemID(segmentedMessageID(update.AgentMessageChunk.MessageId, "assistant", turnID, segment))
 		if delta := contentText(update.AgentMessageChunk.Content); delta != "" {
-			if parentID := c.providerItemID(parentToolUseID(update.AgentMessageChunk.Meta)); parentID != "" {
+			if parentID != "" {
 				c.mu.Lock()
 				item, existed := c.nestedMessages[id]
 				item.text += delta
@@ -653,11 +764,12 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 	case update.AgentThoughtChunk != nil:
 		c.mu.Lock()
 		isCompacting := c.compactingTurnID != "" && c.compactingTurnID == turnID
+		segment := c.steerSegment
 		c.mu.Unlock()
 		if isCompacting {
 			break
 		}
-		id := c.providerItemID(messageID(update.AgentThoughtChunk.MessageId, "thought", turnID))
+		id := c.providerItemID(segmentedMessageID(update.AgentThoughtChunk.MessageId, "thought", turnID, segment))
 		if delta := contentText(update.AgentThoughtChunk.Content); delta != "" {
 			c.mu.Lock()
 			_, existed := c.thoughts[id]
@@ -692,7 +804,9 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 		emit(c.toolEvent(turnID, tool, toolTerminal(tool.status)))
 		c.emitDiffs(turnID, tool.id, tool.content, emit)
 	case update.Plan != nil:
-		emit(ports.ChatEvent{Kind: ports.ChatEventPlanUpdated, ProviderTurnID: turnID, Plan: normalizePlan(update.Plan.Entries)})
+		plan := normalizePlan(update.Plan.Entries)
+		plan.SpansTurns = c.plansSpanTurns
+		emit(ports.ChatEvent{Kind: ports.ChatEventPlanUpdated, ProviderTurnID: turnID, Plan: plan})
 	case update.SessionInfoUpdate != nil:
 		if update.SessionInfoUpdate.Title != nil {
 			emit(ports.ChatEvent{Kind: ports.ChatEventThreadRenamed, Title: *update.SessionInfoUpdate.Title})
@@ -701,6 +815,7 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 			if event, ok := c.sessionFailureEvent(turnID, sourceID, update.SessionInfoUpdate.Meta); ok {
 				emit(event)
 			}
+			c.trackCompactionStatus(turnID, update.SessionInfoUpdate.Meta)
 		}
 	case update.ConfigOptionUpdate != nil:
 		// The update is a complete replacement, not a delta. Model changes can
@@ -726,6 +841,7 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 		if limits := claudeRateLimits(update.UsageUpdate.Meta); limits != nil {
 			emit(ports.ChatEvent{Kind: ports.ChatEventRateLimits, RateLimits: limits})
 		}
+		c.trackClaudeRateLimit(update.UsageUpdate.Meta, time.Now())
 	}
 	return nil
 }
@@ -742,9 +858,16 @@ func contentText(content acpsdk.ContentBlock) string {
 	return content.Text.Text
 }
 
-func messageID(id *string, prefix, turnID string) string {
+// segmentedMessageID names a streamed message. An agent that sends no message
+// id streams the whole turn as one message, so each steer the turn takes starts
+// a new one: otherwise the reply written after the steer would grow the message
+// that sits above it in the timeline.
+func segmentedMessageID(id *string, prefix, turnID string, segment int) string {
 	if id != nil && *id != "" {
 		return *id
+	}
+	if segment > 0 {
+		return fmt.Sprintf("%s-%s-%d", prefix, turnID, segment)
 	}
 	return prefix + "-" + turnID
 }
@@ -795,10 +918,38 @@ func (c *conversation) toolEvent(turnID string, tool *toolState, completed bool)
 	activityKind := activityKindFromTool(tool.kind)
 	// The detail is rewritten on every tool update and carried by every snapshot,
 	// so a page an agent hands html_render and the screenshot html_preview hands
-	// back are not stored whole.
+	// back are not stored whole, and neither is output or a diff that a provider
+	// re-sends in full on every update.
+	output, outputCut := commanddetail.TailChars(output, commanddetail.MaxOutputChars)
+	var content any = contentWithoutImageData(tool.content)
+	if activityKind != domain.ActivityKindMCPTool {
+		// Only an MCP-style row renders its content, and for a read or a fetch that
+		// is all the timeline shows of the result. Other rows render other fields (a
+		// command its output, a file change its files), so their content is held to
+		// the tool payload cap.
+		content = cappedPayload(content)
+	}
 	detailMap := map[string]any{
 		"protocol": "acp", "toolKind": tool.kind, "locations": tool.locations,
-		"input": cappedInput(tool.rawInput), "output": output, "content": contentWithoutImageData(tool.content),
+		"input": cappedPayload(tool.rawInput), "output": output, "content": content,
+	}
+	if outputCut {
+		detailMap["outputTruncated"] = true
+	}
+	if c.harness == domain.HarnessHermes {
+		// Hermes omits tool payloads on delegation updates. Keep those fields
+		// absent, and use the timeline's arguments key without changing other
+		// ACP providers' persisted input contract.
+		delete(detailMap, "input")
+		if input, err := json.Marshal(tool.rawInput); err == nil && string(input) != "null" {
+			detailMap["arguments"] = cappedPayload(tool.rawInput)
+		}
+		if len(tool.locations) == 0 {
+			delete(detailMap, "locations")
+		}
+		if len(tool.content) == 0 {
+			delete(detailMap, "content")
+		}
 	}
 	if activityKind == domain.ActivityKindFileChange {
 		files := make([]map[string]any, 0)
@@ -807,12 +958,24 @@ func (c *conversation) toolEvent(turnID string, tool *toolState, completed bool)
 				continue
 			}
 			stats := diffFileFromSnapshot(item.Diff.Path, item.Diff.OldText, item.Diff.NewText)
-			files = append(files, map[string]any{
+			patch := acpFilePatch(item.Diff.Path, item.Diff.OldText, item.Diff.NewText)
+			file := map[string]any{
 				"path": item.Diff.Path, "status": stats.Status,
 				"additions": stats.Additions, "deletions": stats.Deletions,
-				"patch":   acpFilePatch(item.Diff.Path, item.Diff.OldText, item.Diff.NewText),
-				"oldText": item.Diff.OldText, "newText": item.Diff.NewText,
-			})
+				"patch": patch, "oldText": item.Diff.OldText, "newText": item.Diff.NewText,
+			}
+			if len(patch) > commanddetail.MaxPatchChars {
+				// A client reads the full texts only for a file with no patch, so
+				// past the cap they are not stored.
+				capped, cut := cappedACPPatch(item.Diff.Path, item.Diff.OldText, item.Diff.NewText)
+				file["patch"] = capped
+				if cut {
+					file["patchTruncated"] = true
+				}
+				delete(file, "oldText")
+				delete(file, "newText")
+			}
+			files = append(files, file)
 		}
 		if len(files) > 0 {
 			detailMap["files"] = files
@@ -885,11 +1048,72 @@ func (c *conversation) toolEvent(turnID string, tool *toolState, completed bool)
 }
 
 func acpFilePatch(path string, oldText *string, newText string) string {
-	oldLines := []string{}
+	oldLines, newLines := acpPatchLines(oldText, newText)
+	return acpPatch(path, oldLines, newLines)
+}
+
+func acpPatchLines(oldText *string, newText string) (oldLines, newLines []string) {
+	oldLines = []string{}
 	if oldText != nil {
 		oldLines = strings.Split(strings.ReplaceAll(*oldText, "\r\n", "\n"), "\n")
 	}
-	newLines := strings.Split(strings.ReplaceAll(newText, "\r\n", "\n"), "\n")
+	return oldLines, strings.Split(strings.ReplaceAll(newText, "\r\n", "\n"), "\n")
+}
+
+// cappedACPPatch is the patch for a file past the per-file cap. The full form lists
+// every old line before any new one, so cutting it would keep only removals and read
+// as though the file had been emptied. Lines both sides share at the start and the
+// end are dropped first; if the rest still does not fit, the removed and the added
+// lines share the budget, each side keeping its first lines. Reports whether any of
+// the change itself was cut.
+func cappedACPPatch(path string, oldText *string, newText string) (string, bool) {
+	oldLines, newLines := acpPatchLines(oldText, newText)
+	for len(oldLines) > 0 && len(newLines) > 0 && oldLines[0] == newLines[0] {
+		oldLines, newLines = oldLines[1:], newLines[1:]
+	}
+	for len(oldLines) > 0 && len(newLines) > 0 && oldLines[len(oldLines)-1] == newLines[len(newLines)-1] {
+		oldLines, newLines = oldLines[:len(oldLines)-1], newLines[:len(newLines)-1]
+	}
+	// The full path is stored separately; reserve room for both sides of the change.
+	if len(path) > commanddetail.MaxPatchChars/4 {
+		path = commanddetail.Head(path, commanddetail.MaxPatchChars/4-3) + "..."
+	}
+	if patch := acpPatch(path, oldLines, newLines); len(patch) <= commanddetail.MaxPatchChars {
+		return patch, false
+	}
+	budget := commanddetail.MaxPatchChars - len(acpPatch(path, nil, nil))
+	// Half each, and whatever one side does not need goes to the other.
+	oldBudget := max(min(patchLinesSize(oldLines), budget/2), budget-patchLinesSize(newLines))
+	return acpPatch(path, keepPatchLines(oldLines, oldBudget), keepPatchLines(newLines, budget-oldBudget)), true
+}
+
+// patchLinesSize is what lines add to a patch: each line, its marker and a newline.
+func patchLinesSize(lines []string) int {
+	size := 0
+	for _, line := range lines {
+		size += len(line) + 2
+	}
+	return size
+}
+
+// keepPatchLines keeps the first lines that fit in budget bytes of patch. A first
+// line that alone does not fit is cut on a character boundary.
+func keepPatchLines(lines []string, budget int) []string {
+	kept := 0
+	for _, line := range lines {
+		if len(line)+2 > budget {
+			break
+		}
+		budget -= len(line) + 2
+		kept++
+	}
+	if kept == 0 && len(lines) > 0 && budget > 2 {
+		return []string{commanddetail.Head(lines[0], budget-2)}
+	}
+	return lines[:kept]
+}
+
+func acpPatch(path string, oldLines, newLines []string) string {
 	lines := make([]string, 0, 2+len(oldLines)+len(newLines))
 	lines = append(lines, "--- "+path, "+++ "+path)
 	for _, line := range oldLines {
@@ -901,9 +1125,10 @@ func acpFilePatch(path string, oldText *string, newText string) string {
 	return strings.Join(lines, "\n")
 }
 
-// cappedInput keeps a tool's input only while it fits the tool payload cap,
-// as the Codex driver does for MCP arguments.
-func cappedInput(raw any) any {
+// cappedPayload keeps a tool payload (its input, or content its row does not
+// render) only while it fits the tool payload cap, as the Codex driver does for
+// MCP arguments and results.
+func cappedPayload(raw any) any {
 	encoded, err := json.Marshal(raw)
 	if err != nil {
 		return nil
@@ -1095,6 +1320,34 @@ func (c *conversation) sessionFailureEvent(
 	return event, true
 }
 
+// trackCompactionStatus records the outcome OpenCode reports for a /compact turn.
+// OpenCode ends a failed compaction with a normal end_turn, so this update is the
+// only sign that the history was left as it was.
+func (c *conversation) trackCompactionStatus(turnID string, meta map[string]any) {
+	compaction := nestedMap(meta, "opencode/compaction")
+	if compaction == nil {
+		return
+	}
+	failure := ""
+	switch status, _ := compaction["status"].(string); status {
+	case "started", "completed":
+	case "failed":
+		failure, _ = nestedMap(compaction, "error")["message"].(string)
+		if failure = strings.TrimSpace(failure); failure == "" {
+			failure = "Compaction failed"
+		}
+	default:
+		// OpenCode only sends the three statuses above. Leave the recorded
+		// outcome alone rather than guess what a new one means.
+		return
+	}
+	c.mu.Lock()
+	if c.compactingTurnID == turnID {
+		c.compactionFailure = failure
+	}
+	c.mu.Unlock()
+}
+
 func sessionFailure(meta map[string]any) map[string]any {
 	air := nestedMap(nestedMap(meta, "jetbrains"), "air")
 	version, versionOK := number(air["version"])
@@ -1174,6 +1427,61 @@ func claudeRateLimits(meta map[string]any) *ports.ChatRateLimits {
 		limits.PlanLabel = strings.ReplaceAll(kind, "_", " ")
 	}
 	return limits
+}
+
+const claudeUsageLimitMaxWait = 31 * 24 * time.Hour
+
+func (c *conversation) trackClaudeRateLimit(meta map[string]any, now time.Time) {
+	info := nestedMap(meta, "_claude/rateLimit")
+	if info == nil {
+		return
+	}
+	kind, _ := info["rateLimitType"].(string)
+	if kind == "" {
+		kind = "unknown"
+	}
+	status, _ := info["status"].(string)
+	overageStatus, _ := info["overageStatus"].(string)
+	usingOverage, _ := info["isUsingOverage"].(bool)
+	overageInUse, _ := info["overageInUse"].(bool)
+	overage := overageStatus == "allowed" || overageStatus == "allowed_warning" || usingOverage || overageInUse
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	switch {
+	case status == "rejected" && !overage:
+		var reset time.Time
+		if seconds, ok := number(info["resetsAt"]); ok && seconds > 0 {
+			if at := time.Unix(int64(seconds), 0).UTC(); at.Sub(now) <= claudeUsageLimitMaxWait {
+				reset = at
+			}
+		}
+		if c.claudeRejectedLimits == nil {
+			c.claudeRejectedLimits = make(map[string]time.Time)
+		}
+		c.claudeRejectedLimits[kind] = reset
+	case status == "allowed" || status == "allowed_warning" || overage:
+		delete(c.claudeRejectedLimits, kind)
+	}
+}
+
+func (c *conversation) claudeUsageLimitReset(now time.Time) (time.Time, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for kind, reset := range c.claudeRejectedLimits {
+		if !reset.IsZero() && !reset.After(now) {
+			delete(c.claudeRejectedLimits, kind)
+		}
+	}
+	var latest time.Time
+	for _, reset := range c.claudeRejectedLimits {
+		if reset.IsZero() {
+			return time.Time{}, false
+		}
+		if reset.After(latest) {
+			latest = reset
+		}
+	}
+	return latest, !latest.IsZero()
 }
 
 func number(value any) (float64, bool) {

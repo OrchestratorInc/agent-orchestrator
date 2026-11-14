@@ -124,9 +124,10 @@ func (*Plugin) GetPromptDeliveryStrategy(ctx context.Context, _ ports.LaunchConf
 	return ports.PromptDeliveryAfterStart, ctx.Err()
 }
 
-// PromptReadinessHints implements the scoped native adapter contract.
+// PromptReadinessHints waits for the native composer. Its "You> " row is
+// unterminated, so it only appears in the rendered current viewport.
 func (*Plugin) PromptReadinessHints(ctx context.Context, _ ports.LaunchConfig) (ports.PromptReadinessHints, error) {
-	return ports.PromptReadinessHints{Patterns: []string{"You>"}, Timeout: 60 * time.Second, PollInterval: 100 * time.Millisecond, Lines: 40}, ctx.Err()
+	return ports.PromptReadinessHints{Patterns: []string{"You>"}, Timeout: 60 * time.Second, PollInterval: 100 * time.Millisecond, Lines: 40, RenderedScreen: true}, ctx.Err()
 }
 
 // GetRestoreCommand implements the scoped native adapter contract.

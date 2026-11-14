@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime"
 	"time"
 
 	"github.com/google/uuid"
@@ -21,10 +22,9 @@ const FileName = "telemetry_policy.json"
 // Snapshot is one read of the policy file. Present is false when the app has
 // not written one yet.
 type Snapshot struct {
-	Present                  bool
-	EventsEnabled            bool
-	ConsentGeneration        string
-	ConsentProductionEnabled bool
+	Present           bool
+	EventsEnabled     bool
+	ConsentGeneration string
 }
 
 // Reader reads one fixed telemetry-policy authority path.
@@ -45,7 +45,7 @@ func (r *Reader) Read(ctx context.Context) (Snapshot, error) {
 		}
 		return Snapshot{}, fmt.Errorf("inspect telemetry policy authority: %w", err)
 	}
-	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 {
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || (runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0) {
 		return Snapshot{}, errors.New("telemetry policy authority is unsafe")
 	}
 	file, err := os.Open(r.path)
@@ -74,7 +74,6 @@ func (r *Reader) Read(ctx context.Context) (Snapshot, error) {
 	}
 	return Snapshot{
 		Present: true, EventsEnabled: record.EventsEnabled, ConsentGeneration: record.ConsentGeneration,
-		ConsentProductionEnabled: record.ConsentProductionEnabled != nil && *record.ConsentProductionEnabled,
 	}, nil
 }
 
@@ -102,9 +101,8 @@ func validTimestamp(value string) bool {
 	return err == nil && parsed.Location() == time.UTC
 }
 
-// EventsAllowed reports whether the daemon may record events. The environment
-// must allow them explicitly, and a policy file, when present, must too. A file
-// that cannot be trusted or read closes the gate.
+// EventsAllowed reports whether the daemon may send error events. A missing
+// policy permits sending; a recorded opt-out or environment veto stops it.
 func (r *Reader) EventsAllowed(ctx context.Context, envEvents, envExplicit bool) bool {
 	if !envEvents || !envExplicit {
 		return false
@@ -114,22 +112,4 @@ func (r *Reader) EventsAllowed(ctx context.Context, envEvents, envExplicit bool)
 		return false
 	}
 	return !snapshot.Present || snapshot.EventsEnabled
-}
-
-// Watch re-reads the policy every interval and reports each change, so an
-// opt-out in the app closes the daemon's capture without a restart.
-func (r *Reader) Watch(ctx context.Context, interval time.Duration, envEvents, envExplicit, current bool, onChange func(bool)) {
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			if next := r.EventsAllowed(ctx, envEvents, envExplicit); next != current {
-				current = next
-				onChange(next)
-			}
-		}
-	}
 }

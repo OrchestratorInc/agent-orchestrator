@@ -4,6 +4,7 @@ package deepseekharnessacp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -28,10 +29,29 @@ func New(plugin nativeacp.Plugin, log *slog.Logger) ports.ChatDriver {
 		Harness:              domain.HarnessDeepSeek,
 		Configure:            configure,
 		SessionOptions:       sessionOptions,
+		PromptFailureCode:    promptFailureCode,
 		SessionPreamble:      SessionPreamble,
 		PermissionPolicy:     permissionPolicy,
 		ValidateTurnSettings: validateTurnSettings,
 	}, log)
+}
+
+// The harness reports a missing key as a generic ACP internal error. Only its
+// explicit route-specific diagnostic is safe to turn into setup guidance.
+func promptFailureCode(err error) domain.ConversationFailureCode {
+	var requestErr *acpsdk.RequestError
+	if !errors.As(err, &requestErr) || requestErr.Code != -32603 {
+		return ""
+	}
+	detail, _ := requestErr.Data.(string)
+	if detail == "" && strings.HasPrefix(requestErr.Message, "Internal error: ") {
+		detail = strings.TrimPrefix(requestErr.Message, "Internal error: ")
+	}
+	if !strings.HasPrefix(strings.TrimSpace(detail),
+		`turn failed: llm-deepseek: no API key for provider route "deepseek-official";`) {
+		return ""
+	}
+	return domain.ConversationFailureProviderKeyMissing
 }
 
 func configure(_ context.Context, _ acpdriver.LaunchConfig) ([]string, map[string]string, error) {

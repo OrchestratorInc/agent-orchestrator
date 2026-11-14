@@ -15,33 +15,18 @@ import (
 // checkSessionHealth observes existing controllers. Startup must never create a
 // provider, restore a worktree, or replay a task to discover whether it is alive.
 func (m *Manager) checkSessionHealth(ctx context.Context, rec domain.SessionRecord) error {
-	if rec.ProvisionState.WithDefault() != domain.SessionProvisionReady {
+	// An imported history has no workspace until it is opened; it is not an interrupted spawn.
+	if rec.ProvisionState.WithDefault() != domain.SessionProvisionReady || rec.NeedsImportResume() {
 		return nil
 	}
 	project, err := m.loadProject(ctx, rec.ProjectID)
 	if err != nil {
 		return err
 	}
-	if interruptedClientSetup(rec) {
-		release := sync.OnceFunc(m.acquireWorkspaceGate(rec.ProjectID))
-		defer release()
-		ctx = context.WithValue(ctx, spawnWorkspaceGateKey{}, release)
-		current, found, err := m.store.GetSession(ctx, rec.ID)
-		if err != nil || !found {
+	if legacyInterruptedClientSetup(rec) {
+		settled, current, err := m.rollbackLegacyClientSetup(ctx, rec)
+		if err != nil || settled {
 			return err
-		}
-		// An initial spawn can finish while this pass waits for the project gate.
-		if current.CreatedAt.Equal(rec.CreatedAt) && interruptedClientSetup(current) {
-			var info *ports.WorkspaceProjectInfo
-			if project.Kind.WithDefault() == domain.ProjectKindWorkspace {
-				rows, _, err := m.workspaceProjectRows(ctx, current)
-				if err != nil {
-					return err
-				}
-				info = &ports.WorkspaceProjectInfo{Root: workspaceInfo(current), Worktrees: rows}
-			}
-			m.rollbackSeedSpawnWorkspace(ctx, current, workspaceInfo(current), info, false, false)
-			return nil
 		}
 		rec = current
 	}
@@ -71,7 +56,7 @@ func (m *Manager) checkSessionHealth(ctx context.Context, rec domain.SessionReco
 	}
 	handle := runtimeHandle(rec.Metadata)
 	if handle.ID == "" {
-		return m.recordAgentExited(ctx, rec)
+		return m.recordTerminalStoppedAtStartup(ctx, rec)
 	}
 	alive, err := m.runtime.IsAlive(ctx, handle)
 	if err != nil {
@@ -81,6 +66,17 @@ func (m *Manager) checkSessionHealth(ctx context.Context, rec domain.SessionReco
 		// The start hook may fail without stopping the TUI. Keep a live runtime
 		// intact; its unverified identity will not qualify for native restore.
 		return nil
+	}
+	return m.recordTerminalStoppedAtStartup(ctx, rec)
+}
+
+// recordTerminalStoppedAtStartup keeps a terminal whose runtime ended while AO
+// was down (a reboot, a crash, a quit that stopped its agents) stopped and
+// resumable, like a Chat whose host is gone. Releasing the launch first stops
+// the reaper from reading that death as a crash and archiving the session.
+func (m *Manager) recordTerminalStoppedAtStartup(ctx context.Context, rec domain.SessionRecord) error {
+	if err := m.releaseTerminalRuntime(ctx, rec); err != nil {
+		return fmt.Errorf("check session %s: %w", rec.ID, err)
 	}
 	return m.recordAgentExited(ctx, rec)
 }
@@ -173,11 +169,44 @@ func (m *Manager) retryStartupChatCheck(ctx context.Context, id domain.SessionID
 	return retry
 }
 
-// Setup's durable completion is written before any controller may launch.
-func interruptedClientSetup(rec domain.SessionRecord) bool {
+// legacyInterruptedClientSetup matches a synchronous client start that a build
+// from before background branch naming checkpointed setup for and then lost to
+// a restart. Nothing creates this state any more; such a start was never
+// acknowledged, so it is rolled back to keep its client request retryable.
+// ponytail: upgrade path for older builds; delete once they are no longer in use.
+func legacyInterruptedClientSetup(rec domain.SessionRecord) bool {
 	return rec.ClientRequestID != "" && !rec.ClientRequestCommitted && !rec.IsTerminated &&
 		rec.Metadata.RuntimeHandleID == "" && rec.Metadata.ProviderConversationID == "" &&
 		slices.ContainsFunc(rec.ProvisionSteps, func(step domain.SessionProvisionStep) bool {
 			return step.ID == domain.SessionProvisionStepSetup && step.Status == domain.SessionProvisionStepRunning
 		})
+}
+
+// rollbackLegacyClientSetup reports settled when the session is gone or was
+// rolled back; otherwise it returns the current record for the normal check.
+func (m *Manager) rollbackLegacyClientSetup(ctx context.Context, rec domain.SessionRecord) (bool, domain.SessionRecord, error) {
+	release := sync.OnceFunc(m.acquireWorkspaceGate(rec.ProjectID))
+	defer release()
+	ctx = context.WithValue(ctx, spawnWorkspaceGateKey{}, release)
+	current, found, err := m.store.GetSession(ctx, rec.ID)
+	if err != nil || !found {
+		return true, current, err
+	}
+	// An initial spawn can finish while this pass waits for the project gate.
+	if !current.CreatedAt.Equal(rec.CreatedAt) || !legacyInterruptedClientSetup(current) {
+		return false, current, nil
+	}
+	rows, isProject, err := m.workspaceProjectRows(ctx, current)
+	if err != nil {
+		return true, current, err
+	}
+	var info *ports.WorkspaceProjectInfo
+	if isProject {
+		info = &ports.WorkspaceProjectInfo{Root: workspaceInfo(current), Worktrees: rows}
+	}
+	// The old build saved this unacknowledged path; clear it so the seed row
+	// can be deleted once the worktree is gone.
+	m.clearProvisionedWorkspace(ctx, current.ID, current.Metadata.WorkspacePath)
+	m.rollbackSeedSpawnWorkspace(ctx, current, workspaceInfo(current), info, false, false)
+	return true, current, nil
 }

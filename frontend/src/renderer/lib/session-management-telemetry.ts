@@ -137,7 +137,9 @@ export class SessionManagementAccumulator {
 	constructor(
 		private readonly storage: Storage,
 		private readonly now: () => number = Date.now,
-		private readonly capture: (event: string, properties: Record<string, unknown>) => Promise<void> = captureRendererEvent,
+		private readonly capture: (event: string, properties: Record<string, unknown>) => Promise<void> = async (event, properties) => {
+			await captureRendererEvent(event, properties);
+		},
 	) {
 		const current = now();
 		this.state = loadState(storage, current);

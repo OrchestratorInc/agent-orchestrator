@@ -20,7 +20,7 @@ const (
 // `copilot --version`, which would start a second CLI process per probe.
 func validateInitialize(init acpsdk.InitializeResponse) error {
 	if init.AgentInfo == nil {
-		return fmt.Errorf("ACP agent did not identify itself; AO requires GitHub Copilot CLI %s or newer",
+		return fmt.Errorf("ACP agent did not identify itself; Orchestrator requires GitHub Copilot CLI %s or newer",
 			minimumCopilotVersion)
 	}
 	if init.AgentInfo.Name != copilotAgentName {
@@ -28,12 +28,12 @@ func validateInitialize(init acpsdk.InitializeResponse) error {
 	}
 	installed, ok := parseVersion(init.AgentInfo.Version)
 	if !ok {
-		return fmt.Errorf("unrecognized GitHub Copilot CLI version %q (AO requires %s or newer)",
+		return fmt.Errorf("unrecognized GitHub Copilot CLI version %q (Orchestrator requires %s or newer)",
 			init.AgentInfo.Version, minimumCopilotVersion)
 	}
 	minimum, _ := parseVersion(minimumCopilotVersion)
 	if installed.less(minimum) {
-		return fmt.Errorf("GitHub Copilot CLI %s is older than AO's tested minimum %s",
+		return fmt.Errorf("GitHub Copilot CLI %s is older than Orchestrator's tested minimum %s",
 			init.AgentInfo.Version, minimumCopilotVersion)
 	}
 	return nil

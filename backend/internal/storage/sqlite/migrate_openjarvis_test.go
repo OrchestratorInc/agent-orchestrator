@@ -16,7 +16,7 @@ func TestMigrationAllowsOpenJarvisAndReversesBothHistoricalSchemas(t *testing.T)
 			name = "legacy_qm"
 		}
 		t.Run(name, func(t *testing.T) {
-			db := openMigratedDatabaseCopy(t, 20261021230230412)
+			db := openMigratedDatabaseCopy(t, 20261114072016988)
 			if legacyQM {
 				// The retained legacy 'qm' fixture harness sits before
 				// 'codewhale' in every variant this migration rewrites, so anchor
@@ -25,7 +25,7 @@ func TestMigrationAllowsOpenJarvisAndReversesBothHistoricalSchemas(t *testing.T)
 				mustExec(t, db, `UPDATE sqlite_master SET sql = replace(sql, '''openhands'', ''codewhale''', '''openhands'', ''qm'', ''codewhale''') WHERE type = 'table' AND name = 'sessions'`)
 				mustExec(t, db, `PRAGMA writable_schema = RESET`)
 			}
-			upTo(t, db, 20261021230230412)
+			upTo(t, db, 20261114072016988)
 			var before string
 			if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE name = 'sessions'`).Scan(&before); err != nil {
 				t.Fatal(err)
@@ -37,20 +37,20 @@ func TestMigrationAllowsOpenJarvisAndReversesBothHistoricalSchemas(t *testing.T)
 			if legacyQM {
 				mustExec(t, db, insert, "existing-qm", 2, "qm")
 			}
-			upTo(t, db, 20261022042122070)
+			upTo(t, db, 20261114171639069)
 			if _, err := db.Exec(insert, "cc-session", 3, "openjarvis"); err != nil {
 				t.Fatalf("insert openjarvis session after migration: %v", err)
 			}
 			var version int
-			if err := db.QueryRow(`SELECT MAX(version_id) FROM goose_db_version WHERE is_applied = 1`).Scan(&version); err != nil || version != 20261022042122070 {
-				t.Fatalf("migration version = %d, err = %v; want 20261022042122070", version, err)
+			if err := db.QueryRow(`SELECT MAX(version_id) FROM goose_db_version WHERE is_applied = 1`).Scan(&version); err != nil || version != 20261114171639069 {
+				t.Fatalf("migration version = %d, err = %v; want 20261114171639069", version, err)
 			}
 			if _, err := db.Exec(insert, "unknown", 4, "unknown-agent"); err == nil {
 				t.Fatal("unknown harness bypassed the CHECK constraint")
 			}
 			// Clear the new harness value before downgrading to the older contract.
 			mustExec(t, db, `UPDATE sessions SET harness = '' WHERE harness = 'openjarvis'`)
-			downTo(t, db, 20261021230230412)
+			downTo(t, db, 20261114072016988)
 			var after string
 			if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE name = 'sessions'`).Scan(&after); err != nil || after != before {
 				t.Fatalf("down migration did not restore original schema: %v", err)

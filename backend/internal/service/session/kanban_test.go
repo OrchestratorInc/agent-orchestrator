@@ -2,12 +2,14 @@ package session
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/lifecycle"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
@@ -147,11 +149,27 @@ func TestSessionListDerivesDisplayStatus(t *testing.T) {
 			want:   contract.DisplayReviewing,
 		},
 		{
-			name:   "a cancelled pass leaves the review pending",
+			name:   "a cancelled pass is reported as cancelled",
 			record: domain.SessionRecord{ID: "mer-1", ProjectID: "mer", AutoReviewEnabled: true},
 			pr:     &domain.PRFacts{URL: "pr1", HeadSHA: "head1"},
 			runs:   []domain.CurrentHeadReviewRun{{PRURL: "pr1", Status: domain.ReviewRunCancelled}},
-			want:   contract.DisplayReviewPending,
+			want:   contract.DisplayReviewCancelled,
+		},
+		{
+			name:   "a failed pass with retries left is retrying",
+			record: domain.SessionRecord{ID: "mer-1", ProjectID: "mer", AutoReviewEnabled: true},
+			pr:     &domain.PRFacts{URL: "pr1", HeadSHA: "head1"},
+			runs:   []domain.CurrentHeadReviewRun{{PRURL: "pr1", Status: domain.ReviewRunFailed, FailedAutoRuns: 1}},
+			want:   contract.DisplayRetryingReview,
+		},
+		{
+			name:   "a failed pass at the retry limit has failed",
+			record: domain.SessionRecord{ID: "mer-1", ProjectID: "mer", AutoReviewEnabled: true},
+			pr:     &domain.PRFacts{URL: "pr1", HeadSHA: "head1"},
+			runs: []domain.CurrentHeadReviewRun{{
+				PRURL: "pr1", Status: domain.ReviewRunFailed, FailedAutoRuns: domain.AutoReviewFailedRetryLimit,
+			}},
+			want: contract.DisplayReviewFailed,
 		},
 		{
 			name: "failing checks on the current head are being fixed",
@@ -339,8 +357,222 @@ func TestSessionGetUsesLatestCurrentHeadRunPerHarness(t *testing.T) {
 	if got.KanbanColumn != domain.KanbanNeedsReview {
 		t.Fatalf("kanban column = %q, want %q after approved rerun on same head", got.KanbanColumn, domain.KanbanNeedsReview)
 	}
-	if got.DisplayStatus != contract.DisplayNeedsHumanReview {
-		t.Fatalf("display status = %q, want %q after approved rerun on same head", got.DisplayStatus, contract.DisplayNeedsHumanReview)
+	if got.DisplayStatus != contract.DisplayAwaitingReview {
+		t.Fatalf("display status = %q, want %q after approved rerun on same head", got.DisplayStatus, contract.DisplayAwaitingReview)
+	}
+}
+
+// The store counts every failed auto pass on the current head, not just the
+// latest one per harness, so the board knows when auto review stops retrying.
+func TestSessionGetCountsFailedAutoReviewPassesOnTheCurrentHead(t *testing.T) {
+	st := newSQLiteKanbanTestStore(t)
+	ctx := context.Background()
+	seedKanbanTestProject(t, st, "mer")
+	now := time.Now().UTC().Truncate(time.Second)
+
+	rec, err := st.CreateSession(ctx, domain.SessionRecord{
+		ProjectID:         "mer",
+		Kind:              domain.KindWorker,
+		Harness:           domain.HarnessClaudeCode,
+		AutoReviewEnabled: true,
+		CreatedAt:         now,
+		UpdatedAt:         now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.WriteSCMObservation(ctx, domain.PullRequest{
+		URL: "pr/1", SessionID: rec.ID, Number: 1, HeadSHA: "head1", UpdatedAt: now, ObservedAt: now,
+	}, nil, nil, nil, nil, ports.ReviewWritePreserve); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpsertReview(ctx, domain.Review{
+		ID: "rev", SessionID: rec.ID, ProjectID: "mer", Harness: "claude-code",
+		PRURL: "pr/1", CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	failAuto := func(i int) {
+		t.Helper()
+		if err := st.InsertReviewRun(ctx, domain.ReviewRun{
+			ID: fmt.Sprintf("run-%d", i), ReviewID: "rev", SessionID: rec.ID, Harness: "claude-code",
+			PRURL: "pr/1", TargetSHA: "head1", Status: domain.ReviewRunFailed,
+			TriggerSource: domain.ReviewTriggerAuto, CreatedAt: now.Add(time.Duration(i) * time.Second),
+		}); err != nil {
+			t.Fatalf("insert run %d: %v", i, err)
+		}
+	}
+	svc := &Service{store: st}
+
+	failAuto(1)
+	got, err := svc.Get(ctx, rec.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.KanbanColumn != domain.KanbanValidating || got.DisplayStatus != contract.DisplayRetryingReview {
+		t.Fatalf("after one failure = %q/%q, want %q/%q", got.KanbanColumn, got.DisplayStatus, domain.KanbanValidating, contract.DisplayRetryingReview)
+	}
+
+	for i := 2; i <= domain.AutoReviewFailedRetryLimit; i++ {
+		failAuto(i)
+	}
+	got, err = svc.Get(ctx, rec.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.KanbanColumn != domain.KanbanValidating || got.DisplayStatus != contract.DisplayReviewFailed {
+		t.Fatalf("at the retry limit = %q/%q, want %q/%q", got.KanbanColumn, got.DisplayStatus, domain.KanbanValidating, contract.DisplayReviewFailed)
+	}
+}
+
+// The label must agree with the coordinator, which stops on any cancelled or
+// decided pass for the head and harness, not just the latest one.
+func TestSessionGetDoesNotPromiseARetryAutoReviewWillNotRun(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		earlierHarness domain.ReviewerHarness
+		earlierStatus  domain.ReviewRunStatus
+		earlierVerdict domain.ReviewVerdict
+		wantDisplay    contract.DisplayStatus
+	}{
+		{
+			name: "cancelled pass before a failed rerun", earlierHarness: "claude-code",
+			earlierStatus: domain.ReviewRunCancelled, wantDisplay: contract.DisplayReviewFailed,
+		},
+		{
+			name: "approved pass before a failed rerun", earlierHarness: "claude-code",
+			earlierStatus: domain.ReviewRunComplete, earlierVerdict: domain.VerdictApproved, wantDisplay: contract.DisplayReviewFailed,
+		},
+		{
+			name: "changes requested before a failed rerun", earlierHarness: "claude-code",
+			earlierStatus: domain.ReviewRunComplete, earlierVerdict: domain.VerdictChangesRequested, wantDisplay: contract.DisplayReviewFailed,
+		},
+		{
+			name: "another harness cancelled does not stop this one", earlierHarness: "codex",
+			earlierStatus: domain.ReviewRunCancelled, wantDisplay: contract.DisplayRetryingReview,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := newSQLiteKanbanTestStore(t)
+			ctx := context.Background()
+			seedKanbanTestProject(t, st, "mer")
+			now := time.Now().UTC().Truncate(time.Second)
+			rec, err := st.CreateSession(ctx, domain.SessionRecord{
+				ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode,
+				AutoReviewEnabled: true, CreatedAt: now, UpdatedAt: now,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := st.WriteSCMObservation(ctx, domain.PullRequest{
+				URL: "pr/1", SessionID: rec.ID, Number: 1, HeadSHA: "head1", UpdatedAt: now, ObservedAt: now,
+			}, nil, nil, nil, nil, ports.ReviewWritePreserve); err != nil {
+				t.Fatal(err)
+			}
+			harnesses := map[domain.ReviewerHarness]string{"claude-code": "rev-claude"}
+			harnesses[tc.earlierHarness] = "rev-earlier"
+			for harness, reviewID := range harnesses {
+				if err := st.UpsertReview(ctx, domain.Review{
+					ID: reviewID, SessionID: rec.ID, ProjectID: "mer", Harness: harness,
+					PRURL: "pr/1", CreatedAt: now, UpdatedAt: now,
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for i, run := range []domain.ReviewRun{
+				{ID: "earlier", ReviewID: harnesses[tc.earlierHarness], Harness: tc.earlierHarness, Status: tc.earlierStatus, Verdict: tc.earlierVerdict, TriggerSource: domain.ReviewTriggerAuto},
+				{ID: "failed-rerun", ReviewID: harnesses["claude-code"], Harness: "claude-code", Status: domain.ReviewRunFailed, TriggerSource: domain.ReviewTriggerManual},
+			} {
+				run.SessionID, run.PRURL, run.TargetSHA = rec.ID, "pr/1", "head1"
+				run.CreatedAt = now.Add(time.Duration(i) * time.Second)
+				if err := st.InsertReviewRun(ctx, run); err != nil {
+					t.Fatalf("insert run %s: %v", run.ID, err)
+				}
+			}
+			svc := &Service{store: st}
+			got, err := svc.Get(ctx, rec.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.KanbanColumn != domain.KanbanValidating || got.DisplayStatus != tc.wantDisplay {
+				t.Fatalf("presentation = %q/%q, want %q/%q", got.KanbanColumn, got.DisplayStatus, domain.KanbanValidating, tc.wantDisplay)
+			}
+		})
+	}
+}
+
+type kanbanRecordingMessenger struct{ messages []string }
+
+func (m *kanbanRecordingMessenger) Send(_ context.Context, _ domain.SessionID, message string) error {
+	m.messages = append(m.messages, message)
+	return nil
+}
+
+// An AO review posts as COMMENT and reaches the worker only as inline comment
+// nudges. Delivering them does not mean the worker is addressing them: an idle
+// worker still reads "Changes requested" after the real lifecycle delivery.
+func TestSessionKanbanIdleWorkerAfterAOReviewDeliveryRequestsChanges(t *testing.T) {
+	st := newSQLiteKanbanTestStore(t)
+	ctx := context.Background()
+	seedKanbanTestProject(t, st, "mer")
+	now := time.Now().UTC().Truncate(time.Second)
+	rec, err := st.CreateSession(ctx, domain.SessionRecord{
+		ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode,
+		Activity: domain.Activity{State: domain.ActivityIdle}, AutoInjectReview: true,
+		CreatedAt: now, UpdatedAt: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const providerReviewID = "4876751117"
+	if err := st.WriteSCMObservation(ctx, domain.PullRequest{
+		URL: "pr/1", SessionID: rec.ID, Number: 1, HeadSHA: "head1", UpdatedAt: now, ObservedAt: now,
+	}, nil, []domain.PullRequestReview{{
+		ID: "PRR_kwDOnode", Author: "ao", State: domain.ReviewNone, TargetSHA: "head1", SubmittedAt: now,
+	}}, nil, []domain.PullRequestComment{{
+		ID: "PRRC_kwDOnode", ThreadID: "PRRT_kwDOnode", ReviewID: providerReviewID, Author: "ao",
+		File: "a.go", Line: 1, Body: "fix this", CreatedAt: now, AutoInjectReview: true,
+	}}, ports.ReviewWriteReplace); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpsertReview(ctx, domain.Review{
+		ID: "rev", SessionID: rec.ID, ProjectID: "mer", Harness: "claude-code",
+		PRURL: "pr/1", CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.InsertReviewRun(ctx, domain.ReviewRun{
+		ID: "current", ReviewID: "rev", SessionID: rec.ID, Harness: "claude-code",
+		PRURL: "pr/1", TargetSHA: "head1", GithubReviewID: providerReviewID,
+		Status: domain.ReviewRunComplete, Verdict: domain.VerdictChangesRequested,
+		AutoInjectReview: true, CreatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := &Service{store: st}
+	display := func() contract.DisplayStatus {
+		t.Helper()
+		got, err := svc.Get(ctx, rec.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got.DisplayStatus
+	}
+	if got := display(); got != contract.DisplayChangesRequested {
+		t.Fatalf("before delivery = %q, want %q", got, contract.DisplayChangesRequested)
+	}
+
+	messenger := &kanbanRecordingMessenger{}
+	manager := lifecycle.New(st, messenger)
+	if err := manager.ApplyPRObservation(ctx, rec.ID, ports.PRObservation{Fetched: true, URL: "pr/1", Review: domain.ReviewNone}); err != nil {
+		t.Fatal(err)
+	}
+	if len(messenger.messages) != 1 {
+		t.Fatalf("nudges = %v, want the one inline comment", messenger.messages)
+	}
+	if got := display(); got != contract.DisplayChangesRequested {
+		t.Fatalf("after delivery = %q, want %q", got, contract.DisplayChangesRequested)
 	}
 }
 

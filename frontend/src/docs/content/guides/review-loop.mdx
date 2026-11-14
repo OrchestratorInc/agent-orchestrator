@@ -61,7 +61,7 @@ An Orchestrator reviewer result is not the same as a human or repository-host ap
 Approval plus passing checks contributes to merge readiness. Orchestrator creates a durable merge-ready notification but does not automatically merge from a reaction rule. Merge explicitly in the desktop or with:
 
 ```bash
-ao pr merge <pr-number>
+ao pr merge <pr-number> --url <pr-url> --expected-head-sha <sha>
 ```
 
 Resolve review comments explicitly when appropriate:

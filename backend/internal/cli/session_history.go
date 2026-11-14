@@ -35,7 +35,7 @@ func newSessionHistoryCommand(ctx *commandContext) *cobra.Command {
 				id = strings.TrimSpace(args[0])
 			}
 			if id == "" {
-				return usageError{errors.New("session id is required outside an AO session (AO_SESSION_ID is not set)")}
+				return usageError{errors.New("session id is required outside an Orchestrator-managed session (AO_SESSION_ID is not set)")}
 			}
 			if offset < 0 || limit < 1 {
 				return usageError{errors.New("--offset must be 0 or more and --limit must be 1 or more")}

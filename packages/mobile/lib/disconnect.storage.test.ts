@@ -17,7 +17,8 @@ vi.mock("./push", () => ({ unpairFromServer: async () => {}, retryPendingUnpairs
 vi.mock("./pendingUnpair", () => ({ markMachineUnpaired: async () => {} }));
 vi.mock("./chat/eventCursor", () => ({ clearEventCursorsForHost: async () => {} }));
 
-import { forgetPairedHost } from "./disconnect";
+import { forgetPairedHost, forgetServer } from "./disconnect";
+import { rememberedTurnOptions, rememberTurnOptions } from "./chat/lastTurnOptions";
 import { loadConfig, saveConfig } from "./config";
 import { activeHost, loadHosts, migrateLegacyConfig, persistResolvedConfig, saveHost } from "./hosts";
 import { resolveActiveConfig } from "./resolveConfig";
@@ -74,4 +75,17 @@ it("clears an already-writing connection before Forget finishes", async () => {
 	await migrateLegacyConfig();
 	expect(await loadHosts()).toEqual([]);
 	expect((await loadConfig()).password).toBe("");
+});
+
+it("drops remembered turn-setting catalogs when a machine is forgotten", async () => {
+	const catalog = { models: [], configOptions: [{ id: "model", name: "Model", type: "select" as const, currentValue: "opus", choices: [{ value: "opus", name: "Opus 5.5" }] }] };
+	await saveHost(host);
+	rememberTurnOptions("chat-on-one", catalog);
+	await forgetPairedHost(host, { ignoreAccount: false });
+	expect(rememberedTurnOptions("chat-on-one")).toBeUndefined();
+
+	await saveHost(host);
+	rememberTurnOptions("chat-on-one", catalog);
+	await forgetServer(host);
+	expect(rememberedTurnOptions("chat-on-one")).toBeUndefined();
 });

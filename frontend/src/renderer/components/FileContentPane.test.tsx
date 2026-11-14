@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { useUiStore } from "../stores/ui-store";
+import { AppBrowserLinkContext } from "./AppLink";
 import { FileContentPane } from "./FileContentPane";
 import type { FileAnnotationModel } from "./WorkspaceDiffView";
 import { TooltipProvider } from "./ui/tooltip";
@@ -19,6 +20,7 @@ vi.mock("../hooks/usePierreFileHighlight", () => ({
 vi.mock("../lib/api-client", () => ({
 	apiClient: { GET: getMock, PUT: putMock },
 	getApiBaseUrl: () => "",
+	apiErrorCode: () => undefined,
 	apiErrorMessage: (error: unknown, fallback = "Request failed") => {
 		if (error instanceof Error) return error.message;
 		return fallback;
@@ -26,7 +28,7 @@ vi.mock("../lib/api-client", () => ({
 }));
 
 vi.mock("./ReadOnlyFileView", () => ({
-	ReadOnlyFileView: ({ detail, side, editing, onEditChange }: { side?: string; detail: { content: string; path: string; imageMediaType?: string }; editing?: boolean; onEditChange?: (content: string) => void }) => detail.imageMediaType ? (
+	ReadOnlyFileView: ({ detail, side, editing, onEditChange, annotationReady }: { annotationReady?: boolean; side?: string; detail: { content: string; path: string; imageMediaType?: string }; editing?: boolean; onEditChange?: (content: string) => void }) => detail.imageMediaType ? (
 		<img alt={detail.path} src="/api/v1/sessions/sess-1/workspace/file/blob" />
 	) : editing ? (
 		<textarea
@@ -34,7 +36,7 @@ vi.mock("./ReadOnlyFileView", () => ({
 			defaultValue={detail.content}
 			onChange={(event) => onEditChange?.(event.target.value)}
 		/>
-	) : <code data-side={side}>{detail.content}</code>,
+	) : <code data-side={side} data-annotation-ready={String(annotationReady)}>{detail.content}</code>,
 }));
 
 function renderWithQuery(children: ReactNode) {
@@ -90,6 +92,36 @@ describe("FileContentPane", () => {
 		view.rerender(pane(true));
 		fireEvent.keyDown(window, { key: "s", metaKey: true });
 		await waitFor(() => expect(putMock).toHaveBeenCalledOnce());
+	});
+
+	it("renders the feedback Send bar in the host's footer instead of sticking it to scaled content", async () => {
+		getMock.mockResolvedValue({
+			data: {
+				sessionId: "sess-1",
+				path: "src/App.tsx",
+				status: "unmodified",
+				content: "complete source",
+				size: 15,
+				binary: false,
+				deleted: false,
+				contentTruncated: false,
+				diff: "",
+				diffTruncated: false,
+			},
+		});
+		// Two written comments bring the bar up.
+		const targets = [
+			{ path: "src/App.tsx", side: "file", surface: "focused", line: 1 },
+			{ path: "src/App.tsx", side: "file", surface: "focused", line: 2 },
+		];
+		const annotation = { ...noopAnnotation(), targets, draftFor: () => "tighten this" } as unknown as FileAnnotationModel;
+		const footer = document.createElement("div");
+		document.body.append(footer);
+		renderWithQuery(<FileContentPane annotation={annotation} footerHost={footer} initialMode="file" path="src/App.tsx" sessionId="sess-1" split={false} toolbarHost={null} />);
+		const bar = await screen.findByTestId("file-feedback-bar");
+		expect(footer).toContainElement(bar);
+		expect(bar).not.toHaveClass("sticky");
+		footer.remove();
 	});
 
 	it("offers center navigation from a full-file preview", async () => {
@@ -388,6 +420,35 @@ describe("FileContentPane", () => {
 		renderWithQuery(<FileContentPane annotation={noopAnnotation()} path="README.md" sessionId="sess-1" split={false} />);
 
 		expect(await screen.findByText("hello")).toBeInTheDocument();
+	});
+
+	it("opens a workspace HTML file in the session Browser from its toolbar", async () => {
+		getMock.mockResolvedValue({
+			data: {
+				sessionId: "sess-1",
+				path: "reports/index.html",
+				status: "unmodified",
+				additions: 0,
+				deletions: 0,
+				size: 20,
+				binary: false,
+				deleted: false,
+				content: "<h1>Report</h1>\n",
+				contentTruncated: false,
+				diff: "",
+				diffTruncated: false,
+			},
+		});
+		const openInBrowser = vi.fn();
+
+		renderWithQuery(
+			<AppBrowserLinkContext.Provider value={openInBrowser}>
+				<FileContentPane annotation={noopAnnotation()} path="reports/index.html" sessionId="sess-1" split={false} />
+			</AppBrowserLinkContext.Provider>,
+		);
+
+		await userEvent.click(await screen.findByRole("button", { name: "Open in Orchestrator Browser" }));
+		expect(openInBrowser).toHaveBeenCalledExactlyOnceWith("reports/index.html");
 	});
 
 	it("renders an image without waiting for syntax highlighting", async () => {
@@ -960,4 +1021,52 @@ describe("FileContentPane", () => {
 			expect(await screen.findByRole("tab", { name: "File" })).toHaveAttribute("aria-selected", "true");
 		});
 	});
+});
+
+
+it("resumes annotation readiness when Retry succeeds after the initial refresh fails", async () => {
+	const client=new QueryClient({defaultOptions:{queries:{retry:false}}});
+	const detail={sessionId:"sess-1",path:"src/retry.ts",status:"modified",content:"captured();",size:11,binary:false,deleted:false,contentTruncated:false,diff:"",diffTruncated:false};
+	let failing=true;
+	getMock.mockImplementation(async(path:string)=>failing?{error:{message:"temporary failure"}}:{data:path.endsWith("/revision")?{exists:true,binary:false,truncated:false,content:detail.content,size:11,revision:"fresh"}:detail});
+	const range={requestKey:10,side:"file" as const,line:1,endLine:1,lines:[{kind:"context" as const,oldNo:1,newNo:1,text:"captured();"}]};
+	renderWithQuery(<FileContentPane annotation={noopAnnotation()} sessionId="sess-1" path="src/retry.ts" split={false} initialMode="file" annotationRange={range}/>);
+	const retry=await screen.findByRole("button",{name:"Retry"});
+	failing=false;
+	await userEvent.click(retry);
+	await waitFor(()=>expect(screen.getByText("captured();")).toHaveAttribute("data-annotation-ready","true"));
+	client.clear();
+});
+
+it("waits for fresh content on an annotation open instead of verifying cached rows", async () => {
+ const client=new QueryClient({defaultOptions:{queries:{retry:false}}});
+ const old={sessionId:"sess-1",path:"src/demo.ts",status:"modified",content:"cached row",size:10,binary:false,deleted:false,contentTruncated:false,diff:"",diffTruncated:false,fileFingerprint:"old"};
+ getMock.mockImplementation(async (path:string)=>({data:path.endsWith("/revision")?{exists:true,binary:false,truncated:false,content:old.content,size:10,revision:"old"}:old}));
+ const panel=(range?:import("../../shared/chat-file-reference").FileAnnotationRange)=><QueryClientProvider client={client}><TooltipProvider><FileContentPane annotation={noopAnnotation()} sessionId="sess-1" path="src/demo.ts" split={false} initialMode="file" annotationRange={range}/></TooltipProvider></QueryClientProvider>;
+ const view=render(panel());
+ await screen.findByText("cached row");
+ const pending:Array<()=>void>=[];
+ getMock.mockImplementation((path:string)=>new Promise(resolve=>pending.push(()=>resolve({data:path.endsWith("/revision")?{exists:true,binary:false,truncated:false,content:"captured();",size:11,revision:"fresh"}:{...old,content:"captured();",size:11,fileFingerprint:"fresh"}}))));
+ const range={requestKey:9,side:"file" as const,line:2,endLine:2,lines:[{kind:"context" as const,oldNo:2,newNo:2,text:"captured();"}]};
+ view.rerender(panel(range));
+ await waitFor(()=>expect(pending.length).toBeGreaterThan(0));
+ expect(screen.getByText("cached row")).toHaveAttribute("data-annotation-ready","false");
+ await act(async()=>{for(const finish of pending)finish()});
+ await waitFor(()=>expect(screen.getByText("captured();")).toHaveAttribute("data-annotation-ready","true"));
+});
+
+
+it("offers Retry when only the live revision fails during annotation navigation", async () => {
+ const detail={sessionId:"sess-1",path:"src/revision.ts",status:"modified",content:"captured();",size:11,binary:false,deleted:false,contentTruncated:false,diff:"",diffTruncated:false};
+ let failing=true;
+ getMock.mockImplementation(async(path:string)=>path.endsWith("/revision")
+  ? failing?{error:new Error("revision failed")}:{data:{exists:true,binary:false,truncated:false,content:detail.content,size:11,revision:"fresh"}}
+  :{data:detail});
+ const range={requestKey:21,side:"file" as const,line:1,endLine:1,lines:[{kind:"context" as const,oldNo:1,newNo:1,text:"captured();"}]};
+ renderWithQuery(<FileContentPane annotation={noopAnnotation()} sessionId="sess-1" path={detail.path} split={false} initialMode="file" annotationRange={range}/>);
+ const retry=await screen.findByRole("button",{name:"Retry"});
+ expect(screen.getByText("revision failed")).toBeInTheDocument();
+ expect(retry.closest('[data-file-annotation-retry]')).toHaveAttribute("data-file-annotation-retry","21");
+ failing=false;await userEvent.click(retry);
+ await waitFor(()=>expect(screen.getByText("captured();")).toHaveAttribute("data-annotation-ready","true"));
 });

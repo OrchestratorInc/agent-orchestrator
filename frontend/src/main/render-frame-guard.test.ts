@@ -29,6 +29,17 @@ describe("blocksRenderFrameNavigation", () => {
 		expect(blocksRenderFrameNavigation(inline, "https://phish.example/login")).toBe(true);
 	});
 
+	it("keeps a cloud artifact frame under its access prefix", () => {
+		const prefix = "https://api.aoagents.dev/api/cloud/v1/artifact-files/token-1/";
+		const page = `${prefix}report.html?v=2026-10-16T09%3A55%3A07Z`;
+		expect(blocksRenderFrameNavigation(page, `${prefix}appendix/notes.html`)).toBe(false);
+		expect(blocksRenderFrameNavigation(page, `${page}#totals`)).toBe(false);
+		expect(blocksRenderFrameNavigation(page, "https://api.aoagents.dev/api/cloud/v1/artifact-files/token-2/report.html")).toBe(true);
+		expect(blocksRenderFrameNavigation(page, "https://api.aoagents.dev/api/cloud/v1/me")).toBe(true);
+		expect(blocksRenderFrameNavigation(page, "http://127.0.0.1:3002/api/v1/sessions")).toBe(true);
+		expect(blocksRenderFrameNavigation(page, "https://phish.example/login")).toBe(true);
+	});
+
 	it("leaves every other frame alone", () => {
 		expect(blocksRenderFrameNavigation("https://docs.example/", "https://elsewhere.example/")).toBe(false);
 	});

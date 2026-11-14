@@ -2,6 +2,7 @@ package domain
 
 import (
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -16,7 +17,22 @@ type ConversationUsageLimit struct {
 	ResumeError string     `json:"resumeError,omitempty"`
 }
 
-var usageLimitMessage = regexp.MustCompile(`(?i)^(?:you(?:'ve| have) (?:hit|reached) your (?:session |weekly |daily |usage |individual spend )?limit\b|usage limit (?:reached|exceeded)\b|(?:session|weekly|daily) usage limit (?:reached|exceeded)\b|the Claude account has no available quota\b)`)
+var claudeUsageLimitPrefixes = []string{
+	"You've hit your",
+	"You've reached your",
+	"You're out of usage credits",
+	"Your org is out of usage · add funds to continue",
+	"Your org is out of usage · contact your admin",
+	"Your seat type doesn't include usage credits",
+	"Your seat type doesn't include usage",
+	"Your usage allocation has been disabled by your admin",
+	"Your group's usage limit is set to $0",
+	"Fable 5 requires usage credits",
+	"You're out of extra usage",
+	"Your seat type doesn't include extra usage",
+}
+
+var usageLimitMessage = regexp.MustCompile(`(?i)^(?:usage limit (?:reached|exceeded)\b|(?:session|weekly|daily) usage limit (?:reached|exceeded)\b|the Claude account has no available quota\b)`)
 var usageLimitResetClock = regexp.MustCompile(`(?i)\bresets?(?:\s+at)?\s+(?:(tomorrow)\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)\s*\(([^)]+)\)`)
 var usageLimitResetISO = regexp.MustCompile(`(?i)\bresets?(?:\s+at)?\s+(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:Z|[+-]\d{2}:\d{2}))`)
 
@@ -25,7 +41,9 @@ var usageLimitResetISO = regexp.MustCompile(`(?i)\bresets?(?:\s+at)?\s+(\d{4}-\d
 // zone and are anchored to the failure, so rereading history cannot move them.
 func ParseConversationUsageLimit(message string, failedAt *time.Time) *ConversationUsageLimit {
 	message = strings.TrimSpace(strings.ReplaceAll(message, "’", "'"))
-	if !usageLimitMessage.MatchString(message) {
+	if !usageLimitMessage.MatchString(message) && !slices.ContainsFunc(claudeUsageLimitPrefixes, func(prefix string) bool {
+		return strings.HasPrefix(message, prefix)
+	}) {
 		return nil
 	}
 	limit := &ConversationUsageLimit{}
