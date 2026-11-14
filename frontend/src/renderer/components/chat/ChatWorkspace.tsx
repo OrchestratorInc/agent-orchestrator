@@ -5,6 +5,7 @@ import { FileAnnotationContext } from "./FileAnnotationPreview";
 import { useChatFind } from "../../hooks/useChatFind";
 import { occurrenceKey, type FindOccurrence } from "../../lib/chat-find";
 import "./chat-find.css";
+import { ForkableTurnContext, ForkTextCopyNotice, LatestForkTurnContext } from "../SessionForkControls";
 import type { ChatFileReference, OpenFileAnnotation } from "../../../shared/chat-file-reference";
 import { TurnWorkSummary } from "./TurnWorkSummary";
 import { TurnSettleSnapshot } from "./TurnSettleSnapshot";
@@ -66,7 +67,7 @@ import { isShownAORender } from "../../lib/mcp-tool";
 import { isOrchestratorPlumbing } from "./activity-step";
 import { cn } from "../../lib/utils";
 import { sessionBranchPresentation } from "../../lib/session-branch";
-import { annotationBody, annotationTextMatches, annotationReferenceRange, annotationDiagramBlock, highlightChatAnnotation } from "../../lib/chat-annotation-navigation";
+import { annotationBody, annotationTextMatches, annotationReferenceRange, annotationDiagramBlock, highlightChatAnnotation, revealFoldedRange } from "../../lib/chat-annotation-navigation";
 import {
 	acknowledgeChatInlineEditMutation,
 	beginChatInlineEditMutation,
@@ -149,6 +150,7 @@ import {
 	TurnOutcome,
 	LiveResponseStatus,
 	LiveStepChoices,
+	RevealedChatActivity,
 	isLiveStepKind,
 	isModelReroute,
 	liveTaskLabel,
@@ -378,12 +380,23 @@ function useQueuedMessages(snapshot: ConversationSnapshot, excludeTurnId?: strin
 	}, [excludeTurnId, snapshot.items, snapshot.turns]);
 }
 
+/** A request to open find in chat; see ChatWorkspaceProps.findRequest. */
+export type ChatFindRequest = { id: string; query: string; messageId?: string };
+
 export interface ChatWorkspaceProps {
 	onAddToSideChat?: (excerpt: ChatDraftExcerptReference) => void | Promise<void>;
 	checkingSideChatAvailability?: boolean;
-	annotationNavigationRequest?: { id: string; text: string; snapshot?: ChatExcerptSnapshot; messageId?: string; revision?: number };
+	annotationNavigationRequest?: { id: string; text: string; snapshot?: ChatExcerptSnapshot; messageId?: string; revision?: number; activitySequence?: number };
 	/** Called once the chat applied annotationNavigationRequest, so its owner drops it rather than have a later mount replay it. */
 	onAnnotationNavigationHandled?: (id: string) => void;
+	/**
+	 * Opens find in chat with this query, its first match in messageId: a
+	 * session search result handing its search to the session it opens. A new
+	 * id opens it again.
+	 */
+	findRequest?: ChatFindRequest;
+	/** Called once the chat applied findRequest, so its owner drops it rather than have a later mount open find again. */
+	onFindRequestHandled?: (id: string) => void;
 	snapshot: ConversationSnapshot;
 	promptSuggestion?: ComposerPromptSuggestion;
 	/** Renderer-owned state identity; the snapshot's sessionId remains the daemon wire ID. */
@@ -510,6 +523,7 @@ export interface ChatWorkspaceProps {
 	 * stay available.
 	 */
 	composerLockedPlaceholder?: string;
+	sendBlockedReason?: string;
 	/** The snapshot is a saved copy, so its controller state says nothing about the agent now. */
 	savedCopy?: boolean;
 	importBlock?: AgentBlock;
@@ -760,6 +774,8 @@ function ChatWorkspaceContent({
 	checkingSideChatAvailability,
 	annotationNavigationRequest,
 	onAnnotationNavigationHandled,
+	findRequest,
+	onFindRequestHandled,
 	snapshot,
 	promptSuggestion,
 	sessionTitle,
@@ -833,6 +849,7 @@ function ChatWorkspaceContent({
 	agentSwitch,
 	composerNotice,
 	composerLockedPlaceholder,
+	sendBlockedReason,
 	savedCopy = false,
 	importBlock,
 	settingsLocked = false,
@@ -1502,8 +1519,8 @@ function ChatWorkspaceContent({
 		const { composer } = readChatSessionDraft(draftScope);
 		return !composer.text.trim() && composer.attachments.length === 0 && !composer.excerpts?.length;
 	});
-	const annotationNavigationRef = useRef<((annotation: { text: string; snapshot?: ChatExcerptSnapshot; messageId?: string; revision?: number }) => void) | null>(null);
-	const navigateToAnnotation = useCallback((annotation: { text: string; snapshot?: ChatExcerptSnapshot; messageId?: string; revision?: number }) => {
+	const annotationNavigationRef = useRef<((annotation: { text: string; snapshot?: ChatExcerptSnapshot; messageId?: string; revision?: number; activitySequence?: number }) => void) | null>(null);
+	const navigateToAnnotation = useCallback((annotation: { text: string; snapshot?: ChatExcerptSnapshot; messageId?: string; revision?: number; activitySequence?: number }) => {
 		annotationNavigationRef.current?.(annotation);
 	}, []);
 	// This content remounts per session (it is keyed by the draft scope), so a
@@ -2157,10 +2174,13 @@ function ChatWorkspaceContent({
 							<ChatHostId.Provider value={activeRemoteHostId}>
 							<ChatTokenSkills.Provider value={skills ?? NO_SKILLS}>
 
+								{conversationEmpty ? <ForkTextCopyNotice /> : null}
 								<Timeline
 									shownAt={panelShownAt}
 							onAddToSideChat={onAddToSideChat}
 									checkingSideChatAvailability={checkingSideChatAvailability}
+									findRequest={findRequest}
+									onFindRequestHandled={onFindRequestHandled}
 									workerUpdates={sessionRole === "orchestrator"}
 									annotationNavigationRef={annotationNavigationRef}
 									key={draftScopeKey}
@@ -2319,10 +2339,13 @@ function ChatWorkspaceContent({
 												: undefined
 										}
 										starting={orchestratorStarting || arrivingInChat || cloudStarting || composerStarting}
-										disabled={(orchestratorBlocksComposer || (openingStarting && !session) || loadingQuietly || (snapshot.controller.state === "stopped" && !suppressStopped && !accountMoveQueues && (!resumingAgent || session?.provisionState === "failed" || terminated)) || (controllerTransitioning && !accountMoveQueues) || newWorkDisabled || composerLockedPlaceholder !== undefined) && !queueEdit?.clientMessageId}
+										disabled={(orchestratorBlocksComposer || (openingStarting && !session) || loadingQuietly || (snapshot.controller.state === "stopped" && !suppressStopped && !accountMoveQueues && (!resumingAgent || session?.provisionState === "failed" || terminated)) || (controllerTransitioning && !accountMoveQueues) || (newWorkDisabled && sendBlockedReason === undefined) || composerLockedPlaceholder !== undefined) && !queueEdit?.clientMessageId}
+										sendBlockedReason={sendBlockedReason}
 										disabledPlaceholder={
 											composerLockedPlaceholder !== undefined
 												? composerLockedPlaceholder
+												: sendBlockedReason !== undefined
+												? sendBlockedReason
 												: arrivingInChat
 												? arrivingPlaceholder
 												: (openingStarting && !session) || pendingInPlaceStart
@@ -3146,6 +3169,8 @@ export function Timeline({
 	openingStartupLabel,
 	controllerStopped = false,
 	shownAt,
+	findRequest,
+	onFindRequestHandled,
 }: {
 	/** The agent controller is really gone; a turn still marked running settles with an unknown outcome. */
 	controllerStopped?: boolean;
@@ -3159,7 +3184,7 @@ export function Timeline({
 	onAnnotationsChange?: (annotations: ChatDraftExcerptReference[]) => void | Promise<void>;
 	/** Handles annotations whose source is another conversation. */
 	onForeignAnnotation?: (annotation: { text: string; snapshot?: ChatExcerptSnapshot; messageId?: string; revision?: number; conversationId?: string }) => void;
-	annotationNavigationRef: MutableRefObject<((annotation: { text: string; snapshot?: ChatExcerptSnapshot; messageId?: string; revision?: number }) => void) | null>;
+	annotationNavigationRef: MutableRefObject<((annotation: { text: string; snapshot?: ChatExcerptSnapshot; messageId?: string; revision?: number; activitySequence?: number }) => void) | null>;
 	snapshot: ConversationSnapshot;
 	assetBaseUrl?: string;
 	remoteHost?: boolean;
@@ -3201,6 +3226,9 @@ export function Timeline({
 	openingStartedAt?: string;
 	/** Names the opening start in place of its timer while the sandbox comes up. */
 	openingStartupLabel?: string;
+	/** Opens find in chat with a query; see ChatWorkspaceProps.findRequest. */
+	findRequest?: ChatFindRequest;
+	onFindRequestHandled?: ChatWorkspaceProps["onFindRequestHandled"];
 }) {
 	const findSurface = useRef<HTMLDivElement>(null);
 	const scroller = useRef<HTMLDivElement>(null);
@@ -3209,6 +3237,18 @@ export function Timeline({
 	const findPausedFollow = useRef(false);
 	const [findTarget, setFindTarget] = useState<FindOccurrence>();
 	const find = useChatFind({ source: sourceSnapshot, root: findSurface, viewport: scroller, hostId: useContext(ChatHostId), unavailable: findUnavailable, sideChat, pauseFollow: () => pauseFindFollow.current(), onScrollWritten: (top) => findScrollWritten.current(top), reveal: (hit) => setFindTarget({ ...hit }) });
+	// One open per request. openWith changes identity as find opens and closes,
+	// so it is read through a ref: only a new request may open find again. The
+	// owner is told, so it drops the request: this timeline remounts when its
+	// conversation reloads, and a request still held would open find again
+	// after the reader closed it.
+	const openFind = useRef(find.openWith);
+	openFind.current = find.openWith;
+	useEffect(() => {
+		if (!findRequest) return;
+		openFind.current(findRequest.query, findRequest.messageId);
+		onFindRequestHandled?.(findRequest.id);
+	}, [findRequest, onFindRequestHandled]);
 	const snapshot = find.snapshot;
 	const hasTranscript = snapshot.items.length > 0;
 	const arrivedEmpty = useRef(false);
@@ -3308,6 +3348,7 @@ export function Timeline({
 		releaseFollow();
 	};
 	const dropFindWindow = find.dropWindow;
+	const showFindWindowAt = find.showWindowAt;
 	const requestGlideToEnd = useCallback(() => {
 		findPausedFollow.current = false;
 		dropFindWindow();
@@ -3340,7 +3381,7 @@ export function Timeline({
 	const dismissedSelection = useRef<typeof selectionAction>(null);
 	const dismissedEscapePress = useRef(false);
 	useEffect(() => { dismissedSelection.current = null; clearSelectionAction(); closeEditingAnnotation(); }, [snapshot.conversationId, clearSelectionAction, closeEditingAnnotation]);
-	const [annotationTarget, setAnnotationTarget] = useState<{ text: string; snapshot?: ChatExcerptSnapshot; messageId?: string; revision?: number }>();
+	const [annotationTarget, setAnnotationTarget] = useState<{ text: string; snapshot?: ChatExcerptSnapshot; messageId?: string; revision?: number; activitySequence?: number }>();
 	const [annotationNavigationError, setAnnotationNavigationError] = useState<string>();
 	const annotationHighlightCleanup = useRef<(() => void) | undefined>(undefined);
 	const annotationHighlightTimer = useRef<number | undefined>(undefined);
@@ -3349,7 +3390,11 @@ export function Timeline({
 	// that adds nothing (a failed page or a source outside this branch) must end
 	// the search instead of requesting the same page again.
 	const annotationOlderRequestGroups = useRef<number | undefined>(undefined);
-	const selectAnnotation = useCallback((annotation: { text: string; snapshot?: ChatExcerptSnapshot; messageId?: string; revision?: number; conversationId?: string }) => {
+	// A search match in a tool call or command: the activity whose folds open, and
+	// the history window asked for around it (done once its request settled).
+	const [revealedActivity, setRevealedActivity] = useState<string>();
+	const annotationWindow = useRef<{ sequence: number; done: boolean } | undefined>(undefined);
+	const selectAnnotation = useCallback((annotation: { text: string; snapshot?: ChatExcerptSnapshot; messageId?: string; revision?: number; activitySequence?: number; conversationId?: string }) => {
 		if (onForeignAnnotation && annotation.conversationId && annotation.conversationId !== snapshot.conversationId) {
 			// The source lives in another conversation (a side chat quoting the main
 			// chat); its host navigates there instead of searching this transcript.
@@ -3360,6 +3405,7 @@ export function Timeline({
 		setAnnotationNavigationError(undefined);
 		annotationRetryCount.current = 0;
 		annotationOlderRequestGroups.current = undefined;
+		annotationWindow.current = undefined;
 		if (!annotation.messageId) {
 			const source = Array.from(scrollContent.current?.querySelectorAll<HTMLElement>("[data-chat-message-id]") ?? [])
 				.find((element) => annotationTextMatches(annotationBody(element), annotation.text));
@@ -4369,11 +4415,78 @@ export function Timeline({
 	renderedVirtualHeight.current = virtualHeight;
 	const findGapGroupKey = find.gapBeforeSequence === undefined ? undefined
 		: groups.find((group) => group.items.some((item) => item.sequence >= find.gapBeforeSequence!))?.key;
+	// Fork is offered on finished turns; the latest is marked because every
+	// agent can fork it, while older turns need one that cuts its copy.
+	const latestForkTurnId = useMemo(() => {
+		for (let i = groups.length - 1; i >= 0; i--) {
+			const group = groups[i];
+			if (forkableGroup(group)) return group.turnId as string;
+		}
+		return undefined;
+	}, [groups]);
 	const renderedGroups = virtualized
 		? virtualRows.map((row) => ({ group: groups[row.index]!, row, index: row.index }))
 		: groups.map((group, index) => ({ group, row: undefined, index }));
 	useEffect(() => {
 		if (!annotationTarget) return;
+		const activitySequence = annotationTarget.activitySequence;
+		if (activitySequence !== undefined) {
+			// A search match in a tool call or command: open the folds that hold its
+			// row and mark the word there. Anything that fails falls back to the turn.
+			const toTurn = () => setAnnotationTarget((current) => current && { ...current, activitySequence: undefined });
+			const retry = () => setAnnotationTarget((current) => current && { ...current });
+			const index = groups.findIndex((group) => group.items.some((item) => item.kind === "activity" && item.sequence === activitySequence));
+			if (index < 0) {
+				// Not loaded: one window around the row, rather than paging back
+				// through everything newer than it.
+				// A stream update while the window loads runs this again: wait for it, and
+				// fall back to the turn only once it settled without the row.
+				const request = annotationWindow.current;
+				if (request?.sequence === activitySequence) return request.done ? toTurn() : undefined;
+				const pending = { sequence: activitySequence, done: false };
+				annotationWindow.current = pending;
+				void showFindWindowAt(activitySequence).then(() => {
+					pending.done = true;
+					retry();
+				});
+				return;
+			}
+			const activity = groups[index]!.items.find((item) => item.kind === "activity" && item.sequence === activitySequence)!;
+			setRevealedActivity(activity.id);
+			const disclosureKey = `${groups[index]!.key}:worked`;
+			if (!activityDisclosureOverrides[disclosureKey]) setActivityDisclosureOverrides((current) => ({ ...current, [disclosureKey]: true }));
+			const row = Array.from(scrollContent.current?.querySelectorAll<HTMLElement>("[data-chat-activity-id]") ?? [])
+				.find((element) => element.dataset.chatActivityId === activity.id);
+			const range = row ? annotationReferenceRange(row, annotationTarget) : undefined;
+			// The row mounts once its folds open, and its output a moment later. Output
+			// shows only its tail, so a word earlier in a long log marks the whole row.
+			if (!row || !range) {
+				if (!row && virtualized) virtualizer.scrollToIndex(index, { align: "center" });
+				if (annotationRetryCount.current++ >= (row ? 5 : 20)) {
+					if (!row) return toTurn();
+				} else {
+					const retryTimer = window.setTimeout(retry, 80);
+					return () => window.clearTimeout(retryTimer);
+				}
+			}
+			const frame = requestAnimationFrame(() => {
+				window.clearTimeout(annotationHighlightTimer.current);
+				annotationHighlightCleanup.current?.();
+				annotationHighlightCleanup.current = highlightChatAnnotation(row!, annotationTarget.text);
+				const scrollerNode = scroller.current;
+				const view = scrollerNode?.getBoundingClientRect();
+				if (scrollerNode && view) {
+					const delta = activityRevealScrollDelta((range ?? row!).getBoundingClientRect(), view, Boolean(range));
+					if (delta !== 0) scrollerNode.scrollTo({ top: scrollerNode.scrollTop + delta, behavior: "auto" });
+				}
+				annotationHighlightTimer.current = window.setTimeout(() => {
+					annotationHighlightCleanup.current?.();
+					setRevealedActivity(undefined);
+				}, 2200);
+				setAnnotationTarget(undefined);
+			});
+			return () => cancelAnimationFrame(frame);
+		}
 		const index = groups.findIndex((group) => group.items.some((item) => item.id === annotationTarget.messageId));
 		if (index < 0) {
 			if (loadingOlder) return;
@@ -4412,6 +4525,13 @@ export function Timeline({
 			const scrollerNode = scroller.current;
 			const diagram = annotationDiagramBlock(source, annotationTarget);
 			let range = annotationReferenceRange(source, annotationTarget);
+			if (range && annotationRetryCount.current < 20 && revealFoldedRange(range)) {
+				// The match was below a long message's fold, which is opening: measure
+				// once it has rendered rather than center text the fold still clips.
+				annotationRetryCount.current++;
+				setAnnotationTarget((current) => current ? { ...current } : current);
+				return;
+			}
 			if (diagram && scrollerNode) {
 				const alignDiagram = () => {
 					if (!diagram.isConnected) return;
@@ -4470,7 +4590,7 @@ export function Timeline({
 			setAnnotationTarget(undefined);
 		});
 		return () => cancelAnimationFrame(frame);
-	}, [annotationTarget, groups, hasOlder, loadingOlder, onLoadOlder, virtualized, virtualizer, virtualRows, activityDisclosureOverrides]);
+	}, [annotationTarget, groups, hasOlder, loadingOlder, onLoadOlder, virtualized, virtualizer, virtualRows, activityDisclosureOverrides, showFindWindowAt]);
 	useEffect(() => {
 		const node = scroller.current;
 		const content = virtualized ? virtualContent.current
@@ -5161,6 +5281,7 @@ export function Timeline({
 	return (
 		<ChatOpeningRef.Provider value={chatOpening}>
 		<ChatEntrance.Provider value={entranceGate}>
+		<RevealedChatActivity.Provider value={revealedActivity}>
 		<LiveStepChoices.Provider value={liveStepChoices}>
 		<div
 			ref={findSurface}
@@ -5264,6 +5385,8 @@ export function Timeline({
 								{group.key === findGapGroupKey ? <div role="note" className="py-3 text-center text-caption text-muted-foreground">{t("chat.find.gap")}</div> : null}
 								<WorkerUpdateIndexContext.Provider value={workerUpdateIndex}>
 								<BatchedReportsContext.Provider value={batchedReports}>
+								<LatestForkTurnContext.Provider value={latestForkTurnId}>
+								<ForkableTurnContext.Provider value={forkableGroup(group) ? (group.turnId as string) : null}>
 								<TurnGroup
 									group={group}
 									harness={snapshot.harness}
@@ -5311,6 +5434,8 @@ export function Timeline({
 									busy={turnShowsApproval(group) ? busy : undefined}
 									queued={Boolean(group.turnId && queued.has(group.turnId))}
 								/>
+								</ForkableTurnContext.Provider>
+								</LatestForkTurnContext.Provider>
 								</BatchedReportsContext.Provider>
 								</WorkerUpdateIndexContext.Provider>
 							</div>
@@ -5481,6 +5606,7 @@ export function Timeline({
 			) : null}
 		</div>
 		</LiveStepChoices.Provider>
+		</RevealedChatActivity.Provider>
 		</ChatEntrance.Provider>
 		</ChatOpeningRef.Provider>
 	);
@@ -6358,6 +6484,13 @@ function useStableValue<T>(value: T): T {
 }
 
 /** A settling turn's rows from just before the fold, and the one at the top of the view. */
+// A turn a fork can copy: finished, not still running.
+function forkableGroup(group: TimelineGroup): boolean {
+	if (!group.turnId || group.live) return false;
+	const state = group.outcome?.state;
+	return state === "completed" || state === "recovered";
+}
+
 type SettleAnchor = {
 	turn: HTMLElement;
 	rows: HTMLElement[];
@@ -6467,6 +6600,29 @@ function retrySourceTurnIds(snapshot: ConversationSnapshot): Set<string> {
 }
 
 /** How tall the trailing spacer must be to park `anchorOffset` near the top when scrolled to the end. */
+/**
+ * How far to scroll so a revealed tool or command match is readable.
+ *
+ * A matched word (hasRange) is centred when it is not already well inside the
+ * view. Without one, only the row is known, and its body is still animating
+ * open below its header: measured now, a header at the bottom edge looks
+ * visible while the output then opens out of sight. So the header goes to the
+ * upper quarter of the view, leaving the output room below it.
+ */
+export function activityRevealScrollDelta(
+	rect: { top: number; bottom: number; height: number },
+	view: { top: number; bottom: number; height: number },
+	hasRange: boolean,
+): number {
+	const padding = 12;
+	if (hasRange) {
+		if (rect.top >= view.top + padding && rect.bottom <= view.bottom - padding) return 0;
+		return rect.top + rect.height / 2 - (view.top + view.height / 2);
+	}
+	if (rect.top >= view.top + padding && rect.top <= view.top + view.height / 2) return 0;
+	return rect.top - (view.top + view.height / 4);
+}
+
 export function promptSpacerHeight({
 	viewportHeight,
 	contentHeightWithoutSpacer,

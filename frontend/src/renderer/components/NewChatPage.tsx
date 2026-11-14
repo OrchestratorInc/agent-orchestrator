@@ -32,6 +32,8 @@ import { useUiStore } from "../stores/ui-store";
 import { BareTopbarDragStrip } from "./BareTopbarDragStrip";
 import { SessionTabsTopbar } from "./PageTopbar";
 import { useTaskLaunch, type LaunchReplay } from "./TaskComposer";
+import { agentAccountLabel, useAgentAccounts, withoutSameLogins } from "../hooks/useAgentAccounts";
+import type { AccountChoice } from "./chat/AgentSwitchPicker";
 import { Button } from "./ui/button";
 import { cn } from "../lib/utils";
 import { MAX_CLOUD_CP_BINARY_BYTES } from "../../shared/cloud-binary";
@@ -49,9 +51,22 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 	const queryClient = useQueryClient();
 	// A Cloud task's session starts spinning up as the page opens (not Coder's).
 	const task = useTaskLaunch({ projectId, hostId });
+	const hostAccounts = useAgentAccounts(Boolean(task.account), hostId);
+	const providerRows = task.account ? (hostAccounts.data ?? []).filter((row) => row.provider === task.account?.provider) : [];
+	const accountRows = withoutSameLogins(providerRows, task.account?.value ?? providerRows.find((row) => row.default)?.id);
+	const accountChoice: AccountChoice | undefined = task.account && accountRows.length > 0 ? {
+		options: accountRows.map((row) => ({ id: row.id, label: agentAccountLabel(row, accountRows, t), disabled: !row.signedIn })),
+		value: task.account.value ?? accountRows.find((row) => row.default)?.id,
+		onPick: task.account.choose,
+		disabled: accountRows.length < 2,
+	} : undefined;
 	// Sends read the latest render's launch, not the one they started in.
 	const taskRef = useRef(task);
 	taskRef.current = task;
+	const stalePick = Boolean(task.account?.value && hostAccounts.data && !accountRows.some((row) => row.id === task.account?.value && row.signedIn));
+	useEffect(() => {
+		if (stalePick) taskRef.current.account?.choose(undefined);
+	}, [stalePick]);
 	// The page this render shows. A send is bound to the page it started on.
 	const targetRef = useRef({ projectId, hostId });
 	targetRef.current = { projectId, hostId };
@@ -491,6 +506,7 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 								onPendingChange: (next) => {
 									if (next) task.switchAgent(next.harness, { model: next.model, effort: next.effort ?? next.shownEffort });
 								},
+								account: accountChoice,
 							}}
 							autoSelectEffortOnOpen
 						/>

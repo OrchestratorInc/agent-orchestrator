@@ -2,7 +2,8 @@ import { apiErrorException } from "../lib/api-error-exception";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../api/schema";
-import { apiClient } from "../lib/api-client";
+import { clientForSessionHost } from "../lib/host-clients";
+import { LOCAL_HOST, type HostId } from "../lib/hosts";
 import type { AgentReadinessSnapshot } from "./useAgentReadinessQuery";
 import { sessionInterfaceTransitionQueryKey } from "./useSessionInterfaceTransition";
 
@@ -13,8 +14,14 @@ export type AgentAccountLogin = components["schemas"]["StartAgentAccountLoginRes
 export type AgentAccountUsageRow = components["schemas"]["AgentAccountUsageRow"];
 
 export const agentAccountsQueryKey = ["agent-accounts"] as const;
-const usageQueryKey = ["agent-accounts", "usage"] as const;
-const sessionAccountsKey = (sessionId: string) => ["agent-accounts", "session", sessionId] as const;
+const remoteHost = (hostId?: HostId) => (hostId && hostId !== LOCAL_HOST ? hostId : undefined);
+export const agentAccountsQueryKeyFor = (hostId?: HostId) => {
+	const host = remoteHost(hostId);
+	return host ? [...agentAccountsQueryKey, "host", host] : agentAccountsQueryKey;
+};
+const usageQueryKey = (hostId?: HostId) => [...agentAccountsQueryKeyFor(hostId), "usage"];
+const sessionAccountsKey = (sessionId: string, hostId?: HostId) => [...agentAccountsQueryKeyFor(hostId), "session", sessionId];
+const client = (hostId?: HostId) => clientForSessionHost(remoteHost(hostId));
 
 /** The account a harness signs in with, or null when it has none. */
 export function agentAccountProviderFor(harness: string | undefined): AgentAccountProvider | null {
@@ -34,13 +41,13 @@ function unwrap<T>({ data, error }: { data?: T; error?: unknown }): T {
 	return data as T;
 }
 
-export async function fetchAgentAccounts(refresh = false) {
-	return unwrap(await apiClient.GET("/api/v1/agents/accounts", { params: { query: refresh ? { refresh: true } : {} } }))?.accounts ?? [];
+export async function fetchAgentAccounts(refresh = false, hostId?: HostId) {
+	return unwrap(await client(hostId).GET("/api/v1/agents/accounts", { params: { query: refresh ? { refresh: true } : {} } }))?.accounts ?? [];
 }
 
 /** Every account with its limits. The daemon reuses a reading for five minutes. */
-export function useAgentAccounts(enabled = true) {
-	return useQuery({ queryKey: agentAccountsQueryKey, queryFn: () => fetchAgentAccounts(), refetchInterval: 60_000, enabled });
+export function useAgentAccounts(enabled = true, hostId?: HostId) {
+	return useQuery({ queryKey: agentAccountsQueryKeyFor(hostId), queryFn: () => fetchAgentAccounts(false, hostId), refetchInterval: 60_000, enabled });
 }
 
 export const agentAccountProviderNames: Record<AgentAccountProvider, string> = { claude: "Claude Code", codex: "Codex" };
@@ -77,72 +84,72 @@ export function agentAccountLabel(account: Pick<AgentAccount, "id" | "email" | "
 }
 
 /** Names an account by id in status text, such as "Moved from … to …". */
-export function useAgentAccountLabel(enabled = true) {
+export function useAgentAccountLabel(enabled = true, hostId?: HostId) {
 	const { t } = useTranslation();
-	const accounts = useAgentAccounts(enabled);
+	const accounts = useAgentAccounts(enabled, hostId);
 	return (id: string | undefined) => {
 		const account = accounts.data?.find((candidate) => candidate.id === id);
 		return account ? agentAccountName(account, t) : t("settings.agentAccounts.removedAccount");
 	};
 }
 
-export function useAgentAccountUsage(days = 30) {
+export function useAgentAccountUsage(days = 30, hostId?: HostId) {
 	return useQuery({
-		queryKey: [...usageQueryKey, days],
-		queryFn: async () => unwrap(await apiClient.GET("/api/v1/agents/accounts/usage", { params: { query: { days } } }))?.usage ?? [],
+		queryKey: [...usageQueryKey(hostId), days],
+		queryFn: async () => unwrap(await client(hostId).GET("/api/v1/agents/accounts/usage", { params: { query: { days } } }))?.usage ?? [],
 		refetchInterval: 60_000,
 	});
 }
 
-export function useSessionAgentAccounts(sessionId: string | undefined) {
+export function useSessionAgentAccounts(sessionId: string | undefined, hostId?: HostId) {
 	return useQuery({
-		queryKey: sessionAccountsKey(sessionId ?? ""),
+		queryKey: sessionAccountsKey(sessionId ?? "", hostId),
 		enabled: Boolean(sessionId),
-		queryFn: async () => unwrap(await apiClient.GET("/api/v1/agents/accounts/sessions/{sessionId}", { params: { path: { sessionId: sessionId ?? "" } } })) ?? { stayOnAccount: false },
+		queryFn: async () => unwrap(await client(hostId).GET("/api/v1/agents/accounts/sessions/{sessionId}", { params: { path: { sessionId: sessionId ?? "" } } })) ?? { stayOnAccount: false },
 	});
 }
 
-export function useAgentAccountActions() {
+export function useAgentAccountActions(hostId?: HostId) {
 	const queryClient = useQueryClient();
-	const setAccounts = (accounts: AgentAccount[]) => queryClient.setQueryData(agentAccountsQueryKey, accounts);
+	const setAccounts = (accounts: AgentAccount[]) => queryClient.setQueryData(agentAccountsQueryKeyFor(hostId), accounts);
 	return {
-		refresh: async () => setAccounts(await fetchAgentAccounts(true)),
+		refresh: async () => setAccounts(await fetchAgentAccounts(true, hostId)),
 		startLogin: async (provider: AgentAccountProvider) =>
-			unwrap(await apiClient.POST("/api/v1/agents/accounts/login", { body: { provider } })),
+			unwrap(await client(hostId).POST("/api/v1/agents/accounts/login", { body: { provider } })),
 		/** Signs a saved account in again in its own folder; verify and cancel are the same as a new sign-in. */
 		signInAgain: async (accountId: string) =>
-			unwrap(await apiClient.POST("/api/v1/agents/accounts/{accountId}/login", { params: { path: { accountId } } })),
+			unwrap(await client(hostId).POST("/api/v1/agents/accounts/{accountId}/login", { params: { path: { accountId } } })),
 		verifyLogin: async (operationId: string) => {
-			const result = unwrap(await apiClient.POST("/api/v1/agents/accounts/login/{operationId}/verify", { params: { path: { operationId } } }));
-			if (result.status === "complete") await queryClient.invalidateQueries({ queryKey: agentAccountsQueryKey });
+			const result = unwrap(await client(hostId).POST("/api/v1/agents/accounts/login/{operationId}/verify", { params: { path: { operationId } } }));
+			if (result.status === "complete") await queryClient.invalidateQueries({ queryKey: agentAccountsQueryKeyFor(hostId) });
 			return result;
 		},
 		cancelLogin: async (operationId: string) => {
-			const { error } = await apiClient.POST("/api/v1/agents/accounts/login/{operationId}/cancel", { params: { path: { operationId } } });
+			const { error } = await client(hostId).POST("/api/v1/agents/accounts/login/{operationId}/cancel", { params: { path: { operationId } } });
 			if (error) throw apiErrorException(error);
 		},
 		makeDefault: async (accountId: string) =>
-			setAccounts(unwrap(await apiClient.POST("/api/v1/agents/accounts/{accountId}/default", { params: { path: { accountId } } })).accounts),
+			setAccounts(unwrap(await client(hostId).POST("/api/v1/agents/accounts/{accountId}/default", { params: { path: { accountId } } })).accounts),
 		remove: async (accountId: string) =>
-			setAccounts(unwrap(await apiClient.DELETE("/api/v1/agents/accounts/{accountId}", { params: { path: { accountId } } })).accounts),
+			setAccounts(unwrap(await client(hostId).DELETE("/api/v1/agents/accounts/{accountId}", { params: { path: { accountId } } })).accounts),
 		useReset: async (accountId: string) => {
-			const result = unwrap(await apiClient.POST("/api/v1/agents/accounts/{accountId}/reset-credit", {
+			const result = unwrap(await client(hostId).POST("/api/v1/agents/accounts/{accountId}/reset-credit", {
 				params: { path: { accountId } }, body: { idempotencyKey: crypto.randomUUID() },
 			}));
-			await queryClient.invalidateQueries({ queryKey: agentAccountsQueryKey });
+			await queryClient.invalidateQueries({ queryKey: agentAccountsQueryKeyFor(hostId) });
 			return result.outcome;
 		},
 		/** Starts the durable move; the shared interface-transition status shows its progress. */
 		switchSession: async (sessionId: string, accountId: string, stopTurn = false) => {
-			const result = unwrap(await apiClient.PUT("/api/v1/agents/accounts/sessions/{sessionId}", {
+			const result = unwrap(await client(hostId).PUT("/api/v1/agents/accounts/sessions/{sessionId}", {
 				params: { path: { sessionId } }, body: { accountId, ...(stopTurn ? { stopTurn: true } : {}) },
 			}));
-			await queryClient.invalidateQueries({ queryKey: sessionInterfaceTransitionQueryKey(sessionId) });
+			await queryClient.invalidateQueries({ queryKey: sessionInterfaceTransitionQueryKey(sessionId, remoteHost(hostId)) });
 			return result.transition;
 		},
-		refreshSession: (sessionId: string) => queryClient.invalidateQueries({ queryKey: sessionAccountsKey(sessionId) }),
+		refreshSession: (sessionId: string) => queryClient.invalidateQueries({ queryKey: sessionAccountsKey(sessionId, hostId) }),
 		setStayOnAccount: async (sessionId: string, stay: boolean) =>
-			queryClient.setQueryData(sessionAccountsKey(sessionId), unwrap(await apiClient.PUT("/api/v1/agents/accounts/sessions/{sessionId}/stay", {
+			queryClient.setQueryData(sessionAccountsKey(sessionId, hostId), unwrap(await client(hostId).PUT("/api/v1/agents/accounts/sessions/{sessionId}/stay", {
 				params: { path: { sessionId } }, body: { stay },
 			}))),
 	};

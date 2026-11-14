@@ -1289,7 +1289,8 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 	);
 	const sendTargetsCurrentSession = send.variables?.targetSessionId === sessionId;
 	// A refused agent switch shows in the composer's own switch notice, not again as a send error.
-	const sendError = sendTargetsCurrentSession && !(send.error instanceof ProviderSwitchFailed) ? send.error : undefined;
+	const sendCode = apiErrorCode(send.error);
+	const sendError = sendTargetsCurrentSession && !(send.error instanceof ProviderSwitchFailed) && sendCode !== undefined && !HOST_UNREACHABLE_CODES.has(sendCode) ? send.error : undefined;
 	const interruptTargetsCurrentSession = interrupt.variables?.targetSessionId === sessionId;
 	const retryTargetsCurrentSession = retryTurn.variables?.targetSessionId === sessionId;
 	const autoResumeTargetsCurrentSession = autoResume.variables?.targetSessionId === sessionId;
@@ -1544,8 +1545,10 @@ function steerRefusal(error: unknown): string | undefined {
 			return "The turn finished before this landed. Send it as a message instead.";
 		case "CHAT_INTERFACE_TRANSITION":
 			return "The session is switching interfaces. This guidance was not delivered; send it after the switch finishes.";
-		case "CHAT_TURN_NOT_STEERABLE":
-			return `${apiErrorMessage(error)} Try again once it finishes.`;
+		case "CHAT_TURN_NOT_STEERABLE": {
+			const message = apiErrorMessage(error).trim();
+			return `${/[.!?]$/.test(message) ? message : `${message}.`} Try again once it finishes.`;
+		}
 		case "CHAT_STEER_UNSUPPORTED":
 			// Answered by hiding the control, so there is nothing to say.
 			return undefined;
@@ -1778,11 +1781,11 @@ export function useConversationConfigOptions(sessionId: string | undefined, enab
 
 	return {
 		options: query.data ?? [],
-		loaded: query.isSuccess,
+		loaded: query.data !== undefined,
 		setOption: async (optionId: string, value: ChatConfigOptionValue) =>
 			(await mutation.mutateAsync({ optionId, value })).options,
 		pending: mutation.isPending,
-		error: mutation.error || query.error ? apiErrorMessage(mutation.error ?? query.error) : undefined,
+		error: mutation.error || (query.error && !query.data) ? apiErrorMessage(mutation.error ?? query.error) : undefined,
 	};
 }
 

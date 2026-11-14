@@ -871,6 +871,8 @@ type fakeAgent struct {
 	cancelErr           error
 	cancelCalls         int
 	customPrompt        func(ctx context.Context, params acpsdk.PromptRequest) (acpsdk.PromptResponse, error)
+	// agentInfo, when set, is reported as the handshake's agentInfo.
+	agentInfo           *acpsdk.Implementation
 	mode                string
 	modeNotFound        bool // SetSessionMode returns -32601
 	modeRequiresOption  SessionOption
@@ -888,6 +890,11 @@ type fakeAgent struct {
 	steerOut            string
 	steerMethodNotFound bool // HandleExtensionMethod returns -32601 for steering
 	steerExtensionErr   error
+	// extension, when set, answers every agent extension method instead of
+	// the default _session/steering handler.
+	extension func(method string, raw json.RawMessage) (any, error)
+	// initMeta, when set, replaces the initialize response's top-level _meta.
+	initMeta map[string]any
 }
 
 type legacyKimiAgent struct {
@@ -1031,6 +1038,7 @@ func (a *fakeAgent) Initialize(_ context.Context, params acpsdk.InitializeReques
 	a.initParams = params
 	initErr := a.initErr
 	caps := a.capabilities
+	agentInfo := a.agentInfo
 	a.mu.Unlock()
 	if initErr != nil {
 		return acpsdk.InitializeResponse{}, initErr
@@ -1038,6 +1046,9 @@ func (a *fakeAgent) Initialize(_ context.Context, params acpsdk.InitializeReques
 	meta := map[string]any(nil)
 	if a.steering {
 		meta = map[string]any{"steering": map[string]any{"supported": true}}
+	}
+	if a.initMeta != nil {
+		meta = a.initMeta
 	}
 	defaultCaps := acpsdk.AgentCapabilities{
 		SessionCapabilities: acpsdk.SessionCapabilities{Resume: &acpsdk.SessionResumeCapabilities{}},
@@ -1049,10 +1060,17 @@ func (a *fakeAgent) Initialize(_ context.Context, params acpsdk.InitializeReques
 		ProtocolVersion:   acpsdk.ProtocolVersionNumber,
 		Meta:              meta,
 		AgentCapabilities: defaultCaps,
+		AgentInfo:         agentInfo,
 	}, nil
 }
 
 func (a *fakeAgent) HandleExtensionMethod(_ context.Context, method string, raw json.RawMessage) (any, error) {
+	a.mu.Lock()
+	extension := a.extension
+	a.mu.Unlock()
+	if extension != nil {
+		return extension(method, raw)
+	}
 	if method != steeringMethod {
 		return nil, acpsdk.NewMethodNotFound(method)
 	}
@@ -2563,7 +2581,7 @@ func TestConversationCapabilitiesTreatLoadSessionAsResume(t *testing.T) {
 	init := acpsdk.InitializeResponse{AgentCapabilities: acpsdk.AgentCapabilities{
 		LoadSession: true,
 	}}
-	if !conversationCapabilities(configured, init)[ports.ChatCapabilityResume] {
+	if !conversationCapabilities(configured, init, steeringFor(Config{}))[ports.ChatCapabilityResume] {
 		t.Fatal("loadSession-only ACP agent was reported as non-resumable")
 	}
 }

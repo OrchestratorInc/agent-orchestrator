@@ -851,6 +851,17 @@ type SessionCleanupFact struct {
 	ReportOnly           bool
 }
 
+type SessionFork struct {
+	ForkSessionID   string
+	SourceSessionID string
+	RootSessionID   string
+	SourceTurnID    string
+	SourceTitle     string
+	ContextMode     string
+	ForkNumber      int64
+	CreatedAt       time.Time
+}
+
 type SessionHarnessRelease struct {
 	SessionID string
 	Launch    string
@@ -900,6 +911,15 @@ type SessionInterfaceTransitionMessage struct {
 type SessionNumFloor struct {
 	IDPrefix string
 	MaxNum   int64
+}
+
+type SessionSearchDeleted struct {
+	SessionID string
+}
+
+type SessionSearchOwner struct {
+	ID    int64
+	Token string
 }
 
 type SessionTelemetry struct {
