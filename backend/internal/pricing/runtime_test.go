@@ -178,6 +178,62 @@ func TestEstimateLeavesInputUnknownWhenAPricedWriteSplitIsMissing(t *testing.T) 
 	assertCost(t, "total", priced.TotalNanos, 4_995_000)
 }
 
+func TestEstimateReadsAOCacheWriteUsage(t *testing.T) {
+	snapshot := decodeTestSnapshot(t, map[string][]testModel{
+		"anthropic": {{ID: "claude-test", Input: "0.000001", Read: strptr("0.0000001"), Write: strptr("0.000002"), Output: "0.000003"}},
+		"openai":    {{ID: "gpt-test", Input: "0.000001", Read: strptr("0.0000001"), Write: strptr("0.000002"), Output: "0.000003"}},
+		"zai":       {{ID: "glm-test", Input: "0.1", Output: "0.2"}},
+	})
+	for _, tc := range []struct {
+		name       string
+		providerID domain.UsageProviderID
+		billingID  string
+		modelID    string
+	}{
+		{name: "Anthropic vocabulary", providerID: domain.UsageProviderAnthropic, billingID: "anthropic", modelID: "claude-test"},
+		{name: "OpenAI vocabulary", providerID: domain.UsageProviderOpenAI, billingID: "openai", modelID: "gpt-test"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			estimate, err := snapshot.Estimate(domain.ModelUsageEvent{
+				ProviderID: tc.providerID, BillingProviderID: tc.billingID, ModelID: tc.modelID,
+				Tokens:            pricingTokens(1000, 400, 600, 200),
+				ProviderUsageJSON: `{"input":500,"cacheRead":400,"cacheWrite":100,"output":200,"ao_derived_cache_write_input_tokens":100}`,
+			})
+			if err != nil {
+				t.Fatalf("Estimate: %v", err)
+			}
+			assertCost(t, "input", estimate.InputNanos, 700_000)
+			assertCost(t, "cached input", estimate.CachedInputNanos, 40_000)
+			assertCost(t, "output", estimate.OutputNanos, 600_000)
+			assertCost(t, "total", estimate.TotalNanos, 1_340_000)
+		})
+	}
+}
+
+func TestEstimateReadsAOOneHourCacheWriteUsage(t *testing.T) {
+	snapshot := decodeTestSnapshot(t, map[string][]testModel{
+		"anthropic": {{
+			ID: "claude-test", Input: "0.000001", Read: strptr("0.0000001"),
+			Write: strptr("0.000002"), Write1H: strptr("0.000004"), Output: "0.000003",
+		}},
+		"openai": {{ID: "gpt-test", Input: "0.1", Output: "0.2"}},
+		"zai":    {{ID: "glm-test", Input: "0.1", Output: "0.2"}},
+	})
+	estimate, err := snapshot.Estimate(domain.ModelUsageEvent{
+		ProviderID: domain.UsageProviderAnthropic, BillingProviderID: "anthropic", ModelID: "claude-test",
+		Tokens: pricingTokens(1000, 400, 600, 200),
+		ProviderUsageJSON: `{"input":500,"cacheRead":400,"cacheWrite":100,"cacheWrite1h":40,"output":200,` +
+			`"ao_derived_cache_write_input_tokens":100,"ao_derived_cache_write_1h_input_tokens":40}`,
+	})
+	if err != nil {
+		t.Fatalf("Estimate: %v", err)
+	}
+	assertCost(t, "input", estimate.InputNanos, 780_000)
+	assertCost(t, "cached input", estimate.CachedInputNanos, 40_000)
+	assertCost(t, "output", estimate.OutputNanos, 600_000)
+	assertCost(t, "total", estimate.TotalNanos, 1_420_000)
+}
+
 func TestEstimateKeepsUnknownBucketsUnknownAndZeroBucketsKnown(t *testing.T) {
 	snapshot := decodeTestSnapshot(t, map[string][]testModel{
 		"anthropic": {{ID: "claude-test", Input: "0.1", Output: "0.2"}},
@@ -223,6 +279,94 @@ func TestEstimateKeepsUnknownBucketsUnknownAndZeroBucketsKnown(t *testing.T) {
 	}
 	if unpriced.InputNanos != nil || unpriced.TotalNanos != nil {
 		t.Fatalf("unpriced model must leave input unknown: %#v", unpriced)
+	}
+}
+
+func TestEstimatePricesTheReportedServiceTier(t *testing.T) {
+	snapshot := decodeTestSnapshot(t, map[string][]testModel{
+		"anthropic": {
+			{ID: "claude-test", Input: "0.000001", Output: "0.000002"},
+			{ID: "claude-test#fast", Input: "0.000002", Output: "0.000004"},
+		},
+		"openai": {
+			{ID: "gpt-test", Input: "0.000001", Output: "0.000002"},
+			{ID: "gpt-test#priority", Input: "0.000002", Output: "0.000004"},
+		},
+		"zai": {{ID: "glm-test", Input: "0.000001", Output: "0.000002"}},
+	})
+	const standard, doubled = 3_000_000, 6_000_000
+	for _, tc := range []struct {
+		name     string
+		provider domain.UsageProviderID
+		billing  string
+		model    string
+		tier     string
+		want     int64
+	}{
+		{"codex reported no tier", domain.UsageProviderOpenAI, "openai", "gpt-test", "", standard},
+		{"codex default", domain.UsageProviderOpenAI, "openai", "gpt-test", "default", standard},
+		{"codex priority", domain.UsageProviderOpenAI, "openai", "gpt-test", "priority", doubled},
+		{"codex config alias", domain.UsageProviderOpenAI, "openai", "gpt-test", "fast", doubled},
+		{"codex tier without a row", domain.UsageProviderOpenAI, "openai", "gpt-test", "flex", -1},
+		{"codex unknown tier", domain.UsageProviderOpenAI, "openai", "gpt-test", "scale", -1},
+		{"claude standard", domain.UsageProviderAnthropic, "anthropic", "claude-test", "standard", standard},
+		{"claude fast", domain.UsageProviderAnthropic, "anthropic", "claude-test", "fast", doubled},
+		{"claude fast on a route without a fast row", domain.UsageProviderAnthropic, "zai", "glm-test", "fast", -1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			estimate, err := snapshot.Estimate(domain.ModelUsageEvent{
+				ProviderID: tc.provider, BillingProviderID: tc.billing, ModelID: tc.model,
+				ServiceTier: tc.tier, Tokens: pricingTokens(1000, 0, 1000, 1000),
+			})
+			if err != nil {
+				t.Fatalf("Estimate: %v", err)
+			}
+			if tc.want < 0 {
+				if estimate.TotalNanos != nil {
+					t.Fatalf("total = %d, want unknown", *estimate.TotalNanos)
+				}
+				return
+			}
+			assertCost(t, "total", estimate.TotalNanos, tc.want)
+		})
+	}
+}
+
+func TestEstimatePricesLongContextPastItsSize(t *testing.T) {
+	snapshot := decodeTestSnapshot(t, map[string][]testModel{
+		"anthropic": {{ID: "claude-test", Input: "0.000001", Output: "0.000002"}},
+		"openai": {
+			{ID: "gpt-flat", Input: "0.000001", Output: "0.000002"},
+			{ID: "gpt-test", Input: "0.000001", Output: "0.000002"},
+			{ID: "gpt-test#above272k", Input: "0.000002", Output: "0.000003"},
+			{ID: "gpt-test#priority", Input: "0.000002", Output: "0.000004"},
+			{ID: "gpt-test#priority#above272k", Input: "0.000004", Output: "0.000006"},
+		},
+		"zai": {{ID: "glm-test", Input: "0.000001", Output: "0.000002"}},
+	})
+	for _, tc := range []struct {
+		name  string
+		model string
+		tier  string
+		input int64
+		want  int64
+	}{
+		{"at the size", "gpt-test", "", 272_000, 274_000_000},
+		{"past the size", "gpt-test", "", 272_001, 547_002_000},
+		{"priority at the size", "gpt-test", "priority", 272_000, 548_000_000},
+		{"priority past the size", "gpt-test", "priority", 300_000, 1_206_000_000},
+		{"model with no long-context row", "gpt-flat", "", 300_000, 302_000_000},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			estimate, err := snapshot.Estimate(domain.ModelUsageEvent{
+				ProviderID: domain.UsageProviderOpenAI, BillingProviderID: "openai", ModelID: tc.model,
+				ServiceTier: tc.tier, Tokens: pricingTokens(tc.input, 0, tc.input, 1000),
+			})
+			if err != nil {
+				t.Fatalf("Estimate: %v", err)
+			}
+			assertCost(t, "total", estimate.TotalNanos, tc.want)
+		})
 	}
 }
 

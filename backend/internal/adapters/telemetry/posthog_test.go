@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -31,11 +33,12 @@ func TestPostHogSinkCapturesEvent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewPostHogSink: %v", err)
 	}
+	sink.SetLifetimeSessions(func(context.Context) (int64, error) { return 2, nil })
 
 	projectID := domain.ProjectID("proj-1")
 	sessionID := domain.SessionID("sess-1")
 	sink.Emit(context.Background(), ports.TelemetryEvent{
-		Name:       "ao.session.spawned",
+		Name:       "ao.sessions.spawned",
 		Source:     "session_service",
 		OccurredAt: time.Unix(1700000000, 0).UTC(),
 		Level:      ports.TelemetryLevelInfo,
@@ -52,8 +55,8 @@ func TestPostHogSinkCapturesEvent(t *testing.T) {
 
 	select {
 	case req := <-requests:
-		if got := req["event"]; got != "ao.session.spawned" {
-			t.Fatalf("event = %#v, want ao.session.spawned", got)
+		if got := req["event"]; got != "ao.sessions.spawned" {
+			t.Fatalf("event = %#v, want ao.sessions.spawned", got)
 		}
 		props, ok := req["properties"].(map[string]any)
 		if !ok {
@@ -62,8 +65,20 @@ func TestPostHogSinkCapturesEvent(t *testing.T) {
 		if props["kind"] != "worker" {
 			t.Fatalf("properties.kind = %#v, want worker", props["kind"])
 		}
+		if props["install_id"] != sink.Identity().InstallID() {
+			t.Fatalf("install_id = %#v, want persisted installation id", props["install_id"])
+		}
 		if props["project_id_hash"] == "" || props["session_id_hash"] == "" {
 			t.Fatalf("hashed ids missing from properties: %#v", props)
+		}
+		if props["project_id_hash"] == sha256String(string(projectID)) {
+			t.Fatal("project hash is guessable without the installation salt")
+		}
+		if props["lifetime_sessions"] != float64(2) || props["days_since_install"] != float64(0) {
+			t.Fatalf("shared metadata missing or incorrect: %#v", props)
+		}
+		if props["is_signed_in"] != false {
+			t.Fatalf("is_signed_in = %#v, want false without a Cloud binding", props["is_signed_in"])
 		}
 		if props["$process_person_profile"] != false {
 			t.Fatalf("properties.$process_person_profile = %#v, want false", props["$process_person_profile"])
@@ -76,6 +91,239 @@ func TestPostHogSinkCapturesEvent(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("PostHog sink did not send request")
+	}
+}
+
+func TestLifetimeSessionCountUsesEnqueueTime(t *testing.T) {
+	var count atomic.Int64
+	count.Store(1)
+	firstStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	requests := make(chan map[string]any, 2)
+	sink, err := NewPostHogSink(t.TempDir(), "phc_test", "https://us.i.posthog.com", "", "", roundTripClient(func(req *http.Request) (*http.Response, error) {
+		defer req.Body.Close()
+		var body map[string]any
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			return nil, err
+		}
+		if body["event"] == "ao.daemon.started" {
+			close(firstStarted)
+			<-releaseFirst
+		}
+		requests <- body
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: http.NoBody}, nil
+	}), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sink.SetLifetimeSessions(func(context.Context) (int64, error) { return count.Load(), nil })
+	sink.Emit(context.Background(), ports.TelemetryEvent{Name: "ao.daemon.started", OccurredAt: time.Now()})
+	select {
+	case <-firstStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first export did not start")
+	}
+	count.Store(2)
+	sink.Emit(context.Background(), ports.TelemetryEvent{Name: "ao.sessions.spawned", OccurredAt: time.Now()})
+	count.Store(3)
+	close(releaseFirst)
+	if err := sink.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	<-requests
+	spawn := <-requests
+	props, ok := spawn["properties"].(map[string]any)
+	if !ok || props["lifetime_sessions"] != float64(2) {
+		t.Fatalf("queued spawn count = %#v, want 2", spawn["properties"])
+	}
+}
+
+func TestProjectHashIsInstallationScoped(t *testing.T) {
+	first, err := NewIdentity(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := NewIdentity(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	projectID := domain.ProjectID("ao")
+	event := ports.TelemetryEvent{Name: "ao.sessions.spawned", ProjectID: &projectID}
+	a := (&PostHogSink{ident: first}).properties(event)["project_id_hash"]
+	b := (&PostHogSink{ident: second}).properties(event)["project_id_hash"]
+	if a == b || a == sha256String(string(projectID)) {
+		t.Fatalf("project hash is not installation scoped: %v %v", a, b)
+	}
+}
+
+func TestUsageEventWaitsForPostHogBufferCapacity(t *testing.T) {
+	for _, name := range []string{"ao.usage.messages_sent", "ao.prs.closed"} {
+		t.Run(name, func(t *testing.T) {
+			sink := &PostHogSink{ch: make(chan queuedPostHogEvent, 1), log: slog.Default()}
+			sink.ch <- queuedPostHogEvent{event: ports.TelemetryEvent{Name: "queued"}}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			done := make(chan struct{})
+			go func() {
+				sink.Emit(ctx, ports.TelemetryEvent{Name: name})
+				close(done)
+			}()
+			select {
+			case <-done:
+				t.Fatal("durable event dropped while the queue was full")
+			case <-time.After(20 * time.Millisecond):
+			}
+			<-sink.ch
+			select {
+			case <-done:
+			case <-ctx.Done():
+				t.Fatal("durable event did not enter the queue after capacity opened")
+			}
+			if entry := <-sink.ch; entry.event.Name != name {
+				t.Fatalf("queued event = %q", entry.event.Name)
+			}
+		})
+	}
+}
+
+func TestUsageEventPayloadAllowlistRejectsContentAndInvalidIdentifiers(t *testing.T) {
+	projectID := "e484ce2d-1eb9-445a-ae52-a2e088870328"
+	sessionID := "0123456789abcdef0123456789abcdef"
+	for _, name := range []string{"ao.usage.messages_sent", "ao.usage.worker_pr_associated", "ao.usage.worker_pr_merged", "ao.prs.closed"} {
+		got := sanitizeRemotePayload(name, map[string]any{
+			"project_telemetry_id": projectID,
+			"session_telemetry_id": sessionID,
+			"count":                int64(3),
+			"historical":           true,
+			"repo":                 "private/repo",
+			"url":                  "https://github.com/private/repo/pull/1",
+			"title":                "private PR title",
+			"text":                 "private message",
+		})
+		if got["project_telemetry_id"] != projectID || got["count"] != int64(3) {
+			t.Fatalf("%s required payload = %#v", name, got)
+		}
+		for _, forbidden := range []string{"repo", "url", "title", "text"} {
+			if _, ok := got[forbidden]; ok {
+				t.Fatalf("%s leaked %s", name, forbidden)
+			}
+		}
+	}
+	if got := sanitizeRemotePayload("ao.usage.messages_sent", map[string]any{
+		"project_telemetry_id": "/private/repo", "session_telemetry_id": "worker-1",
+	}); len(got) != 0 {
+		t.Fatalf("invalid identifiers exported: %#v", got)
+	}
+}
+
+func TestMergedViaOnlyExportsKnownSurfaces(t *testing.T) {
+	for _, via := range []string{"desktop", "mobile", "cli", "github"} {
+		got := sanitizeRemotePayload("ao.usage.worker_pr_merged", map[string]any{"merged_via": via})
+		if got["merged_via"] != via {
+			t.Fatalf("merged_via %q = %#v", via, got)
+		}
+	}
+	for _, via := range []string{"other", "mobile_swipe", "https://example.com/private"} {
+		got := sanitizeRemotePayload("ao.usage.worker_pr_merged", map[string]any{"merged_via": via})
+		if _, ok := got["merged_via"]; ok {
+			t.Fatalf("merged_via %q escaped sanitization: %#v", via, got)
+		}
+	}
+}
+
+func TestRenamedEventAllowlists(t *testing.T) {
+	ended := sanitizeRemotePayload("ao.sessions.ended", map[string]any{
+		"kind": "standalone", "duration_ms": int64(1500), "duration_s": int64(1), "text": "private",
+	})
+	if ended["kind"] != "standalone" || ended["duration_ms"] != int64(1500) || len(ended) != 2 {
+		t.Fatalf("ended payload = %#v", ended)
+	}
+	closed := sanitizeRemotePayload("ao.prs.closed", map[string]any{
+		"kind": "worker", "count": int64(1), "title": "private",
+	})
+	if closed["kind"] != "worker" || closed["count"] != int64(1) || len(closed) != 2 {
+		t.Fatalf("closed payload = %#v", closed)
+	}
+}
+
+// Each renamed daemon event goes on the wire under its new name, with its
+// property allowlist moved to that name. No old name keeps an allowlist entry,
+// so a reintroduced old emit site would lose its properties and stand out.
+func TestRenamedDaemonEventsExportUnderNewName(t *testing.T) {
+	requests := make(chan map[string]any, len(legacyEventNames))
+	sink, err := NewPostHogSink(t.TempDir(), "phc_test", "https://us.i.posthog.com", "", "", roundTripClient(func(req *http.Request) (*http.Response, error) {
+		defer req.Body.Close()
+		var body map[string]any
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			return nil, err
+		}
+		requests <- body
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: http.NoBody}, nil
+	}), nil)
+	if err != nil {
+		t.Fatalf("NewPostHogSink: %v", err)
+	}
+	for name, legacy := range legacyEventNames {
+		for _, old := range legacy {
+			if _, ok := remotePayloadAllowlist[old]; ok {
+				t.Errorf("legacy name %q still has an allowlist entry", old)
+			}
+		}
+		sink.Emit(context.Background(), ports.TelemetryEvent{Name: name, Source: "test", OccurredAt: time.Now().UTC(), Level: ports.TelemetryLevelInfo})
+	}
+	if err := sink.Close(context.Background()); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	close(requests)
+	seen := map[string]bool{}
+	for req := range requests {
+		name, _ := req["event"].(string)
+		if _, ok := legacyEventNames[name]; !ok {
+			t.Errorf("exported %q, want one of the renamed names", name)
+		}
+		seen[name] = true
+	}
+	if len(seen) != len(legacyEventNames) {
+		t.Fatalf("exported %d distinct names, want %d", len(seen), len(legacyEventNames))
+	}
+}
+
+func TestPostHogSinkExportsForeignEventNames(t *testing.T) {
+	var names []string
+	sink, err := NewPostHogSink(t.TempDir(), "phc_test", "https://us.i.posthog.com", "", "", roundTripClient(func(req *http.Request) (*http.Response, error) {
+		defer req.Body.Close()
+		var body struct {
+			Event string `json:"event"`
+		}
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			return nil, err
+		}
+		names = append(names, body.Event)
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: http.NoBody}, nil
+	}), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"to.open", "ddragon.event", "maestro.event", "tools.call", "ao.sessions.spawned"} {
+		sink.Emit(context.Background(), ports.TelemetryEvent{Name: name, OccurredAt: time.Now()})
+	}
+	if err := sink.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(names) != 5 {
+		t.Fatalf("exported names = %v", names)
+	}
+}
+
+func TestSampleRateIsNotARemoteProperty(t *testing.T) {
+	for _, name := range []string{"ao.http.5xx"} {
+		got := sanitizeRemotePayload(name, map[string]any{"sample_rate": 0.01, "count": 3, "raw_error": "/private/path"})
+		if _, kept := got["sample_rate"]; kept || got["count"] != int64(3) {
+			t.Fatalf("%s payload = %#v, want count without sample_rate", name, got)
+		}
+		if _, leaked := got["raw_error"]; leaked {
+			t.Fatalf("%s leaked raw error", name)
+		}
 	}
 }
 
@@ -165,7 +413,7 @@ func TestPostHogSinkSanitizesAppActivePayload(t *testing.T) {
 	}
 
 	sink.Emit(context.Background(), ports.TelemetryEvent{
-		Name:       "ao.app.active",
+		Name:       "ao.cli.active",
 		Source:     "cli",
 		OccurredAt: time.Unix(1700000000, 0).UTC(),
 		Level:      ports.TelemetryLevelInfo,
@@ -186,18 +434,18 @@ func TestPostHogSinkSanitizesAppActivePayload(t *testing.T) {
 
 	select {
 	case req := <-requests:
-		if got := req["event"]; got != "ao.v2.app.active" {
-			t.Fatalf("event = %#v, want ao.v2.app.active", got)
+		if got := req["event"]; got != "ao.cli.active" {
+			t.Fatalf("event = %#v, want ao.cli.active", got)
 		}
 		props, ok := req["properties"].(map[string]any)
 		if !ok {
 			t.Fatalf("properties type = %T, want map[string]any", req["properties"])
 		}
-		if props["legacy_event_name"] != "ao.app.active" {
-			t.Fatalf("legacy_event_name = %#v, want ao.app.active", props["legacy_event_name"])
+		if _, ok := props["legacy_event_name"]; ok {
+			t.Fatalf("legacy_event_name = %#v, want absent after the rename", props["legacy_event_name"])
 		}
-		if props["telemetry_schema_version"] != float64(2) {
-			t.Fatalf("telemetry_schema_version = %#v, want 2", props["telemetry_schema_version"])
+		if props["telemetry_schema_version"] != float64(3) {
+			t.Fatalf("telemetry_schema_version = %#v, want 3", props["telemetry_schema_version"])
 		}
 		if props["channel"] != "cli" || props["command"] != "spawn" || props["command_path"] != "ao spawn" {
 			t.Fatalf("sanitized properties = %#v, want active CLI metadata", props)
@@ -241,7 +489,7 @@ func TestPostHogSinkStampsAppVersionWhenSupplied(t *testing.T) {
 
 	emit := func(sink *PostHogSink) map[string]any {
 		sink.Emit(context.Background(), ports.TelemetryEvent{
-			Name:       "ao.session.spawn_failed",
+			Name:       "ao.sessions.spawn_failed",
 			Source:     "session_service",
 			OccurredAt: time.Unix(1700000000, 0).UTC(),
 			Level:      ports.TelemetryLevelError,
@@ -282,10 +530,10 @@ func TestPostHogSinkStampsAppVersionWhenSupplied(t *testing.T) {
 // failure, and nothing ties the emit sites to this map at compile time.
 func TestReviewPayloadAllowlistCoversTheReviewFunnel(t *testing.T) {
 	want := map[string][]string{
-		"ao.review.triggered":      {"harness", "created_runs", "reused", "trigger", "rerun"},
-		"ao.review.trigger_failed": {"error_kind", "trigger"},
-		"ao.review.submitted":      {"harness", "verdict", "duration_ms", "posted_to_provider", "trigger", "body_bytes", "auto_inject"},
-		"ao.review.cancelled":      {"cancelled_runs"},
+		"ao.reviews.triggered":      {"harness", "created_runs", "trigger", "rerun"},
+		"ao.reviews.trigger_failed": {"error_kind", "trigger"},
+		"ao.reviews.submitted":      {"harness", "verdict", "duration_ms", "posted_to_provider", "trigger", "body_bytes", "auto_inject"},
+		"ao.reviews.cancelled":      {"cancelled_runs"},
 	}
 	for name, keys := range want {
 		allowed, ok := remotePayloadAllowlist[name]
@@ -321,17 +569,49 @@ func TestReviewPayloadAllowlistRejectsIdentifyingKeys(t *testing.T) {
 	}
 }
 
+// The harness-update rollout dashboards read these keys; a key missing here
+// would export stripped.
+func TestHarnessUpdatePayloadAllowlistCoversTheRolloutMetrics(t *testing.T) {
+	want := map[string][]string{
+		"ao.harnesses.updated":          {"harness", "level", "live_sessions", "result"},
+		"ao.harness.update_idle_wait":   {"harness", "sessions", "wait_ms"},
+		"ao.harnesses.version_switched": {"harness", "latency_ms", "mode", "result"},
+	}
+	for name, keys := range want {
+		allowed, ok := remotePayloadAllowlist[name]
+		if !ok {
+			t.Errorf("%s has no allowlist entry", name)
+			continue
+		}
+		if len(allowed) != len(keys) {
+			t.Errorf("%s allowlist has %d keys, want %v", name, len(allowed), keys)
+		}
+		for _, key := range keys {
+			if _, ok := allowed[key]; !ok {
+				t.Errorf("%s is missing allowlisted key %q", name, key)
+			}
+		}
+	}
+}
+
 // properties is pure, so the person-property derivation is exercised directly
 // rather than through the HTTP fixture. When the sanitized payload carries the
 // operator's GitHub handle, the sink mirrors it into $set and flips this one
 // event to identified so a breakdown by github_actor is possible.
 func TestPropertiesDerivesPersonSetFromGithubActor(t *testing.T) {
-	sink := &PostHogSink{}
-	props := sink.properties(ports.TelemetryEvent{
-		Name:    "ao.session.spawned",
+	sink, err := NewPostHogSink(t.TempDir(), "phc_test", "https://us.i.posthog.com", "", "", roundTripClient(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Body: http.NoBody}, nil
+	}), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = sink.Close(context.Background()) }()
+	event := ports.TelemetryEvent{
+		Name:    "ao.sessions.spawned",
 		Source:  "session_service",
 		Payload: map[string]any{"kind": "worker", "github_actor": "octocat"},
-	})
+	}
+	props := sink.properties(event)
 	if props["github_actor"] != "octocat" {
 		t.Fatalf("properties.github_actor = %#v, want octocat", props["github_actor"])
 	}
@@ -346,14 +626,10 @@ func TestPropertiesDerivesPersonSetFromGithubActor(t *testing.T) {
 		t.Fatalf("$set.github_actor = %#v, want octocat", set["github_actor"])
 	}
 
-	// The handle is stable, so a second spawn keeps the event property but does
-	// not resend the identified person $set: only the first event per process
-	// pays the identified rate.
-	next := sink.properties(ports.TelemetryEvent{
-		Name:    "ao.session.spawned",
-		Source:  "session_service",
-		Payload: map[string]any{"kind": "worker", "github_actor": "octocat"},
-	})
+	// A successful send records the identity. The next event carries the
+	// handle but does not repeat its person properties.
+	sink.send(context.Background(), event)
+	next := sink.properties(event)
 	if next["github_actor"] != "octocat" {
 		t.Fatalf("second properties.github_actor = %#v, want octocat", next["github_actor"])
 	}
@@ -366,7 +642,7 @@ func TestPropertiesDerivesPersonSetFromGithubActor(t *testing.T) {
 }
 
 func TestSanitizeRemotePayloadDropsUnlistedReviewKeys(t *testing.T) {
-	got := sanitizeRemotePayload("ao.review.submitted", map[string]any{
+	got := sanitizeRemotePayload("ao.reviews.submitted", map[string]any{
 		"verdict": "changes_requested",
 		"trigger": "auto",
 		"body":    "leaks credentials in src/config/prod.ts",
@@ -380,6 +656,20 @@ func TestSanitizeRemotePayloadDropsUnlistedReviewKeys(t *testing.T) {
 	}
 	if _, ok := got["pr_url"]; ok {
 		t.Fatalf("pr_url survived sanitization: %#v", got)
+	}
+}
+
+func TestSanitizeRemotePayloadKeepsWriteLockHolder(t *testing.T) {
+	got := sanitizeRemotePayload("ao.daemon.write_lock_held", map[string]any{
+		"caller":      "store.(*Store).DeleteTerminatedSession:933 | session.(*Service).DeleteExpired:1215",
+		"duration_ms": int64(110482),
+		"session_id":  "agent-orchestrator-1-374",
+	})
+	if got["caller"] != "store.(*Store).DeleteTerminatedSession:933 | session.(*Service).DeleteExpired:1215" || got["duration_ms"] != int64(110482) {
+		t.Fatalf("write lock fields were dropped: %#v", got)
+	}
+	if _, ok := got["session_id"]; ok {
+		t.Fatalf("session_id survived sanitization: %#v", got)
 	}
 }
 
@@ -402,7 +692,7 @@ func TestPostHogSinkClearsStalePersonProperties(t *testing.T) {
 	}
 	for range 2 {
 		sink.Emit(context.Background(), ports.TelemetryEvent{
-			Name:    "ao.session.spawned",
+			Name:    "ao.sessions.spawned",
 			Source:  "session_service",
 			Payload: map[string]any{"github_actor": "octocat"},
 		})
@@ -442,5 +732,26 @@ func TestPostHogSinkClearsStalePersonProperties(t *testing.T) {
 	}
 	if second["$process_person_profile"] != false {
 		t.Errorf("second event $process_person_profile = %#v, want false", second["$process_person_profile"])
+	}
+}
+
+func TestAutomationCreationPayloadIsClosedVocabulary(t *testing.T) {
+	got := sanitizeRemotePayload("ao.automation.created", map[string]any{
+		"template_id": "daily_pr_review_v1", "use_case": "pr_review",
+		"prompt": "private", "display_name": "private", "project_id": "private",
+		"repository": "private", "output": "private", "automation_id": "private",
+	})
+	if len(got) != 2 || got["template_id"] != "daily_pr_review_v1" || got["use_case"] != "pr_review" {
+		t.Fatalf("payload = %#v", got)
+	}
+	for _, hostile := range []any{"private prompt", "PR_REVIEW", " pr_review ", 42, true, []string{"pr_review"}, map[string]any{"use_case": "pr_review"}} {
+		got = sanitizeRemotePayload("ao.automation.created", map[string]any{"template_id": hostile, "use_case": hostile})
+		if len(got) != 0 {
+			t.Fatalf("accepted %#v: %#v", hostile, got)
+		}
+	}
+	got = sanitizeRemotePayload("ao.automation.created", map[string]any{"template_id": "custom", "use_case": "unknown"})
+	if len(got) != 2 {
+		t.Fatalf("legacy defaults lost: %#v", got)
 	}
 }

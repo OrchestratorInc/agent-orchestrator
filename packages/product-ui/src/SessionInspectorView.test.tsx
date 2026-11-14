@@ -10,6 +10,7 @@ import {
   InspectorActivityTimelineView,
   InspectorPullRequestCardView,
   InspectorReviewsView,
+  InspectorSection,
   SessionInspectorShellView,
   SessionInspectorSummaryView,
   type InspectorReviewLabels,
@@ -79,6 +80,15 @@ describe("SessionInspectorShellView", () => {
     const body = screen.getByTestId("side-slot").parentElement;
     expect(body).toHaveClass("p-0", "overflow-hidden");
     expect(body).not.toHaveClass("p-3", "pb-4", "overflow-y-auto");
+  });
+  it("makes summary and review details selectable but leaves the browser's drag chrome alone (#4268)", () => {
+    const slots = { summaryView: <div data-testid="slot" />, reviewsView: <div data-testid="slot" />, browserView: <div data-testid="slot" /> };
+    const { rerender } = render(<SessionInspectorShellView activeView="summary" ariaLabel="Session inspector" browserPoppedOut={false} tabs={tabs} onViewChange={vi.fn()} {...slots} />);
+    expect(screen.getByTestId("slot").parentElement).toHaveClass("select-text");
+    rerender(<SessionInspectorShellView activeView="reviews" ariaLabel="Session inspector" browserPoppedOut={false} tabs={tabs} onViewChange={vi.fn()} {...slots} />);
+    expect(screen.getByTestId("slot").parentElement).toHaveClass("select-text");
+    rerender(<SessionInspectorShellView activeView="browser" ariaLabel="Session inspector" browserPoppedOut={false} tabs={tabs} onViewChange={vi.fn()} {...slots} />);
+    expect(screen.getByTestId("slot").parentElement).not.toHaveClass("select-text");
   });
   it("renders the artifacts view under its own tab", () => {
     const withArtifacts = [...tabs, { id: "artifacts" as const, icon: <svg />, label: "Artifacts" }];
@@ -205,6 +215,24 @@ describe("portable inspector presentations", () => {
     expect(Boolean(context.compareDocumentPosition(pullRequest) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
   });
 
+  it("places the Setup and Cleanup sections before the activity and lets a section start collapsed", () => {
+    render(
+      <SessionInspectorSummaryView
+        activity={<div>activity</div>}
+        activityTitle="Activity"
+        scripts={<InspectorSection defaultOpen={false} surface={false} title="Setup"><div>setup log</div></InspectorSection>}
+      />,
+    );
+
+    const setup = screen.getByRole("button", { name: "Setup" });
+    expect(setup).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("setup log")).toBeNull();
+    expect(Boolean(setup.compareDocumentPosition(screen.getByText("activity")) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
+    fireEvent.click(setup);
+    expect(setup).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("setup log")).toBeInTheDocument();
+  });
+
   it("omits the PR/artifacts section entirely when no title is given", () => {
     render(
       <SessionInspectorSummaryView
@@ -214,6 +242,39 @@ describe("portable inspector presentations", () => {
     );
 
     expect(screen.queryAllByTestId("inspector-section")).toHaveLength(1);
+  });
+
+  it("drops the frame, title and number when the host draws its own header", () => {
+    render(
+      <InspectorPullRequestCardView
+        countNounLabel={(count, noun) => `${count} ${noun}s`}
+        description={<p>Body preview</p>}
+        externalLink={ExternalLink}
+        headerless
+        openLabel="Open PR #12"
+        pr={{
+          additions: 4,
+          author: "ada",
+          card: { primary: { key: "merge", label: "Ready to merge", links: [], tone: "success" }, supporting: [] },
+          changedFiles: 2,
+          deletions: 1,
+          href: "https://example.com/pull/12",
+          number: 12,
+          provider: "github",
+          sourceBranch: "feature",
+          state: "open",
+          stateLabel: "open",
+          targetBranch: "main",
+          title: "Portable inspector",
+        }}
+      />,
+    );
+
+    expect(screen.queryByRole("link", { name: "Portable inspector" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Open PR #12" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("article")).not.toBeInTheDocument();
+    expect(screen.getByText("Body preview")).toBeInTheDocument();
+    expect(screen.getByText("ada")).toBeInTheDocument();
   });
 
   it("renders PR facts and host-owned actions from a neutral view model", () => {

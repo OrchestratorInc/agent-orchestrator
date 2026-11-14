@@ -20,7 +20,7 @@ invariants.
 
 | Area               | Decision                                                                                        | Status                 | Rationale                                                                                                                           |
 | ------------------ | ----------------------------------------------------------------------------------------------- | ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| Backend language   | Go 1.27.1                                                                                       | Implemented            | Matches `backend/go.mod`; small daemon, strong stdlib, easy local distribution.                                                     |
+| Backend language   | Go 1.27.4                                                                                       | Implemented            | Matches `backend/go.mod`; small daemon, strong stdlib, easy local distribution.                                                     |
 | Backend core       | Go stdlib                                                                                       | Implemented            | Domain, lifecycle, session, and adapter contracts should stay dependency-light.                                                     |
 | Frontend shell     | Electron + TypeScript                                                                           | Implemented            | Local desktop control plane paired with the daemon.                                                                                 |
 | Runtime adapter    | Native detached PTY host for new macOS/Linux sessions, `tmux` for legacy handles and startup fallback, ConPTY host on Windows | Implemented            | `runtimeselect` creates new macOS/Linux sessions on the native PTY host, routes persisted legacy handles to tmux, and falls back to tmux if the host cannot start. |
@@ -60,7 +60,11 @@ PRAGMA journal_mode = WAL;
 PRAGMA busy_timeout = 5000;
 PRAGMA foreign_keys = ON;
 PRAGMA synchronous = NORMAL;
+PRAGMA journal_size_limit = 33554432; -- 32 MiB
 ```
+
+`journal_size_limit` is per connection: the writer cuts the `-wal` file back to
+that size when it resets the log.
 
 ### Config model
 

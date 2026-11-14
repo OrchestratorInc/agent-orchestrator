@@ -156,3 +156,15 @@ func (d *deferredPTY) PID() int {
 	}
 	return d.conn.PID()
 }
+
+// ForegroundPGID forwards to the started PTY; shell terminals start on attach.
+func (d *deferredPTY) ForegroundPGID() (int, bool) {
+	d.mu.Lock()
+	conn := d.conn
+	d.mu.Unlock()
+	reader, ok := conn.(foregroundReader)
+	if !ok {
+		return 0, false
+	}
+	return reader.ForegroundPGID()
+}

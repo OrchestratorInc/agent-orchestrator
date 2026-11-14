@@ -15,7 +15,7 @@ Ask only when the request does not make the desired data source clear.
 - Use **real-data mode** only when the user explicitly asks to see this machine's actual AO projects or sessions. Start the checkout's dev daemon on the isolated dev port/run file while pointing `AO_DATA_DIR` at the real AO data directory. This is a separate daemon process using real data; do not describe it as the installed app's daemon.
 - Never try to attach an unpackaged Electron app directly to a packaged daemon from another checkout. The supervisor intentionally rejects daemon identity mismatches.
 - Warn before actions in real-data mode that create, terminate, rename, or otherwise mutate sessions. Merely opening and inspecting the UI is expected.
-- Real-data mode reads the same database as the installed app, so both windows show the same projects and sessions. Quit the packaged app first where possible: two daemons sharing one SQLite database can cross-talk, and acting on the wrong window runs unmerged code against real sessions. The dev window is marked with an `Agent Orchestrator (dev)` title, the default Electron dock icon, and an in-app `dev` badge — verify those markers before acting.
+- Real-data mode reads the same database as the installed app, and only one daemon can own a data directory. Quit the packaged app first: while its daemon runs, the dev daemon waits for the data-dir lock (9 x `AO_SHUTDOWN_TIMEOUT` + 18s, 108s by default) and then exits with code 75. The dev window is marked with an `Agent Orchestrator (dev)` title, an orange-badged `DEV` dock icon, and an in-app `dev` badge — verify those markers before acting.
 
 ## Preflight
 
@@ -75,7 +75,7 @@ $env:AO_DATA_DIR = $realAoData
 npm run dev
 ```
 
-Do not print unrelated environment variables: AO sessions may carry credentials. It is safe to report only `AO_DATA_DIR`, `AO_RUN_FILE`, and `AO_PORT`.
+Do not print unrelated environment variables: Orchestrator-managed sessions may carry credentials. It is safe to report only `AO_DATA_DIR`, `AO_RUN_FILE`, and `AO_PORT`.
 
 ## Confirm the correct app is ready
 
@@ -125,7 +125,7 @@ Once one PR merges, prefer rebasing the remaining PR onto current `main`; the no
 
 ## Common mistakes
 
-- `ao preview` controls the AO Browser panel; it does not launch the desktop shell.
+- `ao preview` controls the Orchestrator Browser panel; it does not launch the desktop shell.
 - `npm run dev:web` is useful for browser-only renderer work but does not provide Electron APIs or native chrome.
 - Renderer URLs can move from `5173` when a port is occupied. Trust Forge's printed URL rather than assuming one.
 - Multiple dev instances share `~/.ao/dev/electron` by default, and Chromium's

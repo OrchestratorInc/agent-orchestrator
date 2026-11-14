@@ -1,0 +1,72 @@
+/* Keep the Markdown structure, with colors inherited from the active AO theme. */
+.markdown-body.ao-markdown {
+	--fontStack-sansSerif: var(--font-family-base);
+	--fontStack-monospace: var(--font-family-mono);
+	--fgColor-default: var(--color-text-primary);
+	--fgColor-muted: var(--color-text-muted);
+	--fgColor-accent: var(--color-text-markdown-link);
+	--fgColor-attention: var(--color-warning);
+	--fgColor-danger: var(--color-danger);
+	--fgColor-done: var(--color-purple);
+	--fgColor-success: var(--color-success);
+	--bgColor-default: var(--document-canvas);
+	--bgColor-muted: var(--solid-muted, var(--muted));
+	--bgColor-neutral-muted: var(--solid-muted, var(--muted));
+	--borderColor-default: var(--color-border);
+	--borderColor-muted: var(--color-border);
+	--borderColor-neutral-muted: var(--color-border);
+	--borderColor-accent-emphasis: var(--color-text-markdown-link);
+	--borderColor-attention-emphasis: var(--color-warning);
+	--borderColor-danger-emphasis: var(--color-danger);
+	--borderColor-done-emphasis: var(--color-purple);
+	--borderColor-success-emphasis: var(--color-success);
+	--focus-outlineColor: var(--ring);
+	color-scheme: inherit;
+	max-width: 52rem;
+	margin-inline: auto;
+	padding: var(--space-8) var(--space-6) var(--space-10);
+	font-family: var(--font-family-base);
+	font-size: 16px;
+	line-height: 1.65;
+}
+
+.markdown-body.ao-markdown :is(h1, h2, h3, h4, h5, h6) {
+	margin-top: 1.6em;
+	margin-bottom: 0.65em;
+	padding-bottom: 0;
+	border-bottom: 0;
+	color: var(--color-text-primary);
+	font-weight: 600;
+	line-height: 1.25;
+	letter-spacing: -0.015em;
+}
+
+.markdown-body.ao-markdown h1 { font-size: 2.5em; }
+.markdown-body.ao-markdown h2 { font-size: 1.875em; }
+.markdown-body.ao-markdown h3 { font-size: 1.5em; }
+.markdown-body.ao-markdown h4 { font-size: 1.25em; }
+.markdown-body.ao-markdown h5 { font-size: 1.125em; }
+.markdown-body.ao-markdown h6 { font-size: 1em; }
+
+.markdown-body.ao-markdown :is(p, blockquote, ul, ol, dl, table, pre, details) {
+	margin-bottom: 1.15em;
+}
+
+.markdown-body.ao-markdown li + li { margin-top: 0.4em; }
+
+.markdown-body.ao-markdown a:hover { color: var(--color-text-markdown-link-hover); }
+
+.markdown-body.ao-markdown :is(code, kbd, pre) {
+	font-family: var(--font-family-mono);
+}
+
+.markdown-body.ao-markdown :not(pre) > code {
+	border-radius: var(--radius-sm);
+	color: var(--color-text-primary);
+}
+
+.markdown-body.ao-markdown hr {
+	height: 1px;
+	margin-block: 2em;
+	background-color: var(--color-border);
+}

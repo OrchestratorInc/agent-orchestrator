@@ -27,29 +27,14 @@ describe("TelemetryPolicyAuthority", () => {
 		expect(snapshot.acknowledged).toBe(true);
 		expect(mode).toBe(0o600);
 		expect(JSON.parse(await readFile(policyPath, "utf8"))).toEqual({
-			schema_version: 2,
+			schema_version: 1,
 			events_enabled: true,
 			consent_generation: snapshot.consentGeneration,
-			consent_production_enabled: false,
 			updated_at: snapshot.updatedAt,
 		});
 	});
 
-	it("records whether the release gate was open when a choice is written", async () => {
-		const dataDir = await makeDir();
-		const policyPath = path.join(dataDir, "telemetry_policy.json");
-		const gated = new TelemetryPolicyAuthority({ dataDir, packagedDefault: false, platform: "linux", productionEnabled: false });
-		await gated.load();
-		await gated.setEventsEnabled(true);
-		expect(JSON.parse(await readFile(policyPath, "utf8"))).toMatchObject({ events_enabled: true, consent_production_enabled: false });
-
-		const open = new TelemetryPolicyAuthority({ dataDir, packagedDefault: false, platform: "linux", productionEnabled: true });
-		await open.load();
-		await open.setEventsEnabled(true);
-		expect(JSON.parse(await readFile(policyPath, "utf8"))).toMatchObject({ events_enabled: true, consent_production_enabled: true });
-	});
-
-	it("does not resume a version 1 opt-in once the release gate opens, and leaves the file alone", async () => {
+	it("keeps a version 1 opt-in enabled without rewriting it", async () => {
 		const dataDir = await makeDir();
 		const policyPath = path.join(dataDir, "telemetry_policy.json");
 		const raw = JSON.stringify({
@@ -59,13 +44,22 @@ describe("TelemetryPolicyAuthority", () => {
 			updated_at: "2026-08-28T10:15:30.000Z",
 		});
 		await writeFile(policyPath, raw, { mode: 0o600 });
-
-		const closed = await new TelemetryPolicyAuthority({ dataDir, packagedDefault: true, platform: "linux", productionEnabled: false }).load();
-		expect(closed).toMatchObject({ eventsEnabled: true, acknowledged: true });
-
-		const opened = await new TelemetryPolicyAuthority({ dataDir, packagedDefault: true, platform: "linux", productionEnabled: true }).load();
-		expect(opened).toMatchObject({ eventsEnabled: false, acknowledged: true, consentGeneration: "7f80c8a9-ec67-4a16-a067-a444ffcc5cca" });
+		const snapshot = await new TelemetryPolicyAuthority({ dataDir, packagedDefault: true, platform: "linux" }).load();
+		expect(snapshot).toMatchObject({ eventsEnabled: true, acknowledged: true });
 		expect(await readFile(policyPath, "utf8")).toBe(raw);
+	});
+
+	it("keeps a legacy version 2 opt-out despite its obsolete production flag", async () => {
+		const dataDir = await makeDir();
+		await writeFile(path.join(dataDir, "telemetry_policy.json"), JSON.stringify({
+			schema_version: 2,
+			events_enabled: false,
+			consent_generation: "7f80c8a9-ec67-4a16-a067-a444ffcc5cca",
+			consent_production_enabled: true,
+			updated_at: "2026-08-28T10:15:30.000Z",
+		}), { mode: 0o600 });
+		const snapshot = await new TelemetryPolicyAuthority({ dataDir, packagedDefault: true, platform: "linux" }).load();
+		expect(snapshot).toMatchObject({ eventsEnabled: false, acknowledged: true });
 	});
 
 	it.each(["symlink", "group-readable", "malformed"])("fails closed without replacing an unsafe %s authority", async (kind) => {
@@ -138,13 +132,34 @@ describe("TelemetryPolicyAuthority", () => {
 		expect(syncAttempts).toBe(2);
 	});
 
-	it("keeps Windows fail closed until a write-through replacement helper exists", async () => {
+	it("supports Windows defaults and durable opt-out replacements", async () => {
 		const dataDir = await makeDir();
 		const authority = new TelemetryPolicyAuthority({ dataDir, packagedDefault: true, platform: "win32" });
-		const snapshot = await authority.load();
-		expect(snapshot).toMatchObject({ eventsEnabled: false, acknowledged: false });
-		await expect(authority.setEventsEnabled(true)).rejects.toThrow("unsupported on Windows");
+		expect(authority.durabilitySupported).toBe(true);
+		expect(await authority.load()).toMatchObject({ eventsEnabled: true, acknowledged: true });
+		expect(await authority.setEventsEnabled(false)).toMatchObject({ eventsEnabled: false, acknowledged: true });
+		expect(await new TelemetryPolicyAuthority({ dataDir, packagedDefault: true, platform: "win32" }).load()).toMatchObject({ eventsEnabled: false, acknowledged: true });
 	});
+
+	it.each(["EPERM", "EBUSY"])("retries a Windows %s replacement without changing the policy generation", async (code) => {
+		const dataDir = await makeDir();
+		const base = nodeTelemetryPolicyFileSystem;
+		let attempts = 0;
+		const authority = new TelemetryPolicyAuthority({
+			dataDir, packagedDefault: true, platform: "win32",
+			fs: { ...base, rename: async (from, to) => {
+				attempts++;
+				if (attempts === 2) throw Object.assign(new Error("locked"), { code });
+				await base.rename(from, to);
+			} },
+		});
+		await authority.load();
+		const disabled = await authority.setEventsEnabled(false);
+		expect(disabled).toMatchObject({ eventsEnabled: false, acknowledged: true });
+		expect(attempts).toBe(3);
+		expect((await new TelemetryPolicyAuthority({ dataDir, packagedDefault: true, platform: "win32" }).load()).consentGeneration).toBe(disabled.consentGeneration);
+	});
+
 });
 
 it("resolves one absolute data directory against the daemon launch cwd", () => {

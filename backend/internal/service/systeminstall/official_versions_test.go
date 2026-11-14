@@ -21,7 +21,8 @@ func TestParseOfficialVersionReadsEachVendorFormat(t *testing.T) {
 		{name: "prefixed json tag", target: TargetCodex, body: `{"assets":[],"tag_name":"rust-v0.160.1"}`, want: "0.160.1"},
 		{name: "json manifest", target: TargetDevin, body: `{"version":"3000.11.3","platforms":{}}`, want: "3000.11.3"},
 		{name: "revisioned channel", target: TargetMuse, body: `{"channel":"muse-stable","version":"1.4.3-R5018.1"}`, want: "1.4.3-R5018.1"},
-		{name: "github release", target: TargetOpencode, body: `{"tag_name":"v1.18.34"}`, want: "1.18.34"},
+		{name: "github release", target: TargetMemcode, body: `{"tag_name":"v0.47.4"}`, want: "0.47.4"},
+		{name: "opencode 2 release document", target: TargetOpencodeV2, body: `{"channel":"latest","name":"cli","distribution":"npm","version":"2.1.4","metadata":{"package":"@opencode/cli"}}`, want: "2.1.4"},
 		{name: "install script url", target: TargetCursor, body: `DOWNLOAD_URL="https://downloads.cursor.com/lab/2026.10.01-e373342/${OS}/${ARCH}/agent-cli-package.tar.gz"`, want: "2026.10.01-e373342"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -59,8 +60,23 @@ func TestOfficialSourceForSelectsAntigravityPlatformManifest(t *testing.T) {
 	if _, ok := officialSourceFor(TargetAgy, "windows", "amd64"); ok {
 		t.Fatal("windows has no verified Antigravity manifest")
 	}
-	if _, ok := officialSourceFor(TargetQwen, "darwin", "arm64"); ok {
-		t.Fatal("Qwen has no verified official release source")
+	if _, ok := officialSourceFor(TargetAuggie, "darwin", "arm64"); ok {
+		t.Fatal("Auggie has no verified official release source")
+	}
+}
+
+// Every harness AO updates with its official installer into a release of its
+// own needs the release that installer would pick, or the notice never
+// offers the update.
+func TestOfficialManagedRecipesHaveAReleaseSource(t *testing.T) {
+	for target := range officialManagedRecipes {
+		for _, goarch := range []string{"amd64", "arm64"} {
+			for _, goos := range []string{"darwin", "linux"} {
+				if _, ok := officialSourceFor(target, goos, goarch); !ok {
+					t.Errorf("%s has no release source on %s/%s", target, goos, goarch)
+				}
+			}
+		}
 	}
 }
 
@@ -115,9 +131,9 @@ func TestUpdateAdvisoryPrefersOwningPackageOverOfficialRelease(t *testing.T) {
 
 func TestUpdateAdvisoryUnknownWithoutOfficialSource(t *testing.T) {
 	s := newTestService("darwin")
-	s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) { return VerifyResult{Output: "qwen 0.1.0"}, nil })
+	s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) { return VerifyResult{Output: "auggie 0.1.0"}, nil })
 	s.officialVersion = func(context.Context, Target) (string, error) { return "", errNoOfficialSource }
-	advisory, err := s.UpdateAdvisory(context.Background(), TargetQwen, false)
+	advisory, err := s.UpdateAdvisory(context.Background(), TargetAuggie, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,14 +204,14 @@ func TestOfficialGitHubVersionReadsReleaseRedirect(t *testing.T) {
 	client := &http.Client{Transport: managerRoundTripFunc(func(request *http.Request) (*http.Response, error) {
 		requests = append(requests, request.Method+" "+request.URL.String())
 		response := managerHTTPResponse(http.StatusFound, "")
-		response.Header.Set("Location", "https://github.com/anomalyco/opencode/releases/tag/v1.18.35")
+		response.Header.Set("Location", "https://github.com/memcode-ai/memcode/releases/tag/v0.47.4")
 		return response, nil
 	})}
-	got, err := officialReleaseVersionWith(client, "darwin", "arm64")(context.Background(), TargetOpencode)
-	if err != nil || got != "1.18.35" {
+	got, err := officialReleaseVersionWith(client, "darwin", "arm64")(context.Background(), TargetMemcode)
+	if err != nil || got != "0.47.4" {
 		t.Fatalf("version=%q err=%v", got, err)
 	}
-	if want := []string{"HEAD https://github.com/anomalyco/opencode/releases/latest"}; !slices.Equal(requests, want) {
+	if want := []string{"HEAD https://github.com/memcode-ai/memcode/releases/latest"}; !slices.Equal(requests, want) {
 		t.Fatalf("requests = %v, want %v", requests, want)
 	}
 }
@@ -230,6 +246,56 @@ func TestOfficialGitHubVersionFallsBackToAPIWithoutReleaseRedirect(t *testing.T)
 	}
 }
 
+// opencode.ai/install refuses OpenCode 2, so OpenCode 1 never pins it, from
+// GitHub's Latest release or from npm.
+func TestOpencodeOneNeverPinsAnOpencodeTwoRelease(t *testing.T) {
+	client := &http.Client{Transport: managerRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.Host != "registry.npmjs.org" {
+			t.Fatalf("OpenCode 1 release read from %s", request.URL)
+		}
+		return managerHTTPResponse(http.StatusOK, `{"latest":"2.0.0"}`), nil
+	})}
+	if got, err := officialReleaseVersionWith(client, "darwin", "arm64")(context.Background(), TargetOpencode); err == nil {
+		t.Fatalf("version = %q, want an error for an OpenCode 2 release", got)
+	}
+}
+
+// Qwen's repository also publishes SDK and desktop releases, and GitHub's
+// Latest can be one of them: sdk-typescript-v0.1.23 while the CLI is at
+// v0.26.1. Read as the CLI's release, it hid the update as ahead of latest.
+func TestQwenAdvisoryReadsTheCLIRelease(t *testing.T) {
+	for _, tt := range []struct {
+		name, npmLatest string
+		wantStatus      UpdateStatus
+		wantLatest      string
+	}{
+		{name: "cli release", npmLatest: "0.26.1", wantStatus: UpdateStatusBehindLatest, wantLatest: "0.26.1"},
+		{name: "preview is never offered", npmLatest: "0.26.2-preview.0", wantStatus: UpdateStatusUnknown},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			client := &http.Client{Transport: managerRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+				if request.URL.Host != "registry.npmjs.org" {
+					response := managerHTTPResponse(http.StatusFound, "")
+					response.Header.Set("Location", "https://github.com/QwenLM/qwen-code/releases/tag/sdk-typescript-v0.1.23")
+					return response, nil
+				}
+				return managerHTTPResponse(http.StatusOK, `{"latest":"`+tt.npmLatest+`","preview":"0.26.2-preview.0"}`), nil
+			})}
+			s := newTestService("linux", "bash")
+			s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) {
+				return VerifyResult{ResolvedPath: "/Users/me/.local/bin/qwen", Output: "0.26.0"}, nil
+			})
+			s.ownsInstallation = func(context.Context, string, string, string, bool) (bool, error) { return false, nil }
+			s.managedVersion = fixedManagedVersion("9.9.9", nil)
+			s.officialVersion = officialReleaseVersionWith(client, "linux", "amd64")
+			advisory, err := s.UpdateAdvisory(context.Background(), TargetQwen, false)
+			if err != nil || advisory.Status != tt.wantStatus || advisory.LatestVersion != tt.wantLatest {
+				t.Fatalf("advisory = %+v, %v; want %s at %q", advisory, err, tt.wantStatus, tt.wantLatest)
+			}
+		})
+	}
+}
+
 func TestOfficialRegistrySourcesShareThePackageLookups(t *testing.T) {
 	for _, tt := range []struct {
 		target Target
@@ -239,6 +305,7 @@ func TestOfficialRegistrySourcesShareThePackageLookups(t *testing.T) {
 	}{
 		{target: TargetAider, url: "https://pypi.org/pypi/aider-chat/json", body: `{"info":{"version":"0.86.2"}}`, want: "0.86.2"},
 		{target: TargetDroid, url: "https://registry.npmjs.org/-/package/droid/dist-tags", body: `{"latest":"0.234.0","next":"0.235.0-beta.1"}`, want: "0.234.0"},
+		{target: TargetOpencode, url: "https://registry.npmjs.org/-/package/opencode-ai/dist-tags", body: `{"latest":"1.19.4","latest-1":"1.1.4"}`, want: "1.19.4"},
 	} {
 		t.Run(string(tt.target), func(t *testing.T) {
 			client := &http.Client{Transport: managerRoundTripFunc(func(request *http.Request) (*http.Response, error) {

@@ -2,13 +2,11 @@ package mobilebridge
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
-	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -22,40 +20,24 @@ import (
 // it across push-token rotations, so a rotated Expo push token updates the
 // existing row instead of creating a second one. It does not survive a full
 // uninstall/reinstall, since it's stored in AsyncStorage, which uninstall
-// wipes. Muted devices stay registered and listed but are skipped by the
-// dispatcher.
+// wipes.
 type PushDevice struct {
 	InstallID  string    `json:"installId"`
 	Token      string    `json:"token,omitempty"`
 	Platform   string    `json:"platform,omitempty"`
 	DeviceName string    `json:"deviceName,omitempty"`
 	HostName   string    `json:"hostName,omitempty"`
-	Muted      bool      `json:"muted,omitempty"`
 	CreatedAt  time.Time `json:"createdAt"`
 	LastSeenAt time.Time `json:"lastSeenAt"`
 }
 
-// removedDevice is a tombstone recording a device the desktop explicitly
-// removed. If that device (matched by InstallID or Token) ever registers
-// again, it comes back muted rather than silently active, since there is no
-// per-device credential to revoke — every phone shares the same connection
-// password, so removal cannot stop it from reconnecting.
-type removedDevice struct {
-	InstallID string    `json:"installId"`
-	Token     string    `json:"token,omitempty"`
-	RemovedAt time.Time `json:"removedAt"`
-}
-
 // pushDevicesFile is the on-disk shape, wrapped in a struct (rather than a bare
-// array) so future fields can be added without breaking older files.
+// array) so future fields can be added without breaking older files. Files
+// written by older daemons may still carry a per-device "muted" flag and a
+// "removed" list; both are ignored on load and dropped on the next save.
 type pushDevicesFile struct {
-	Devices []PushDevice    `json:"devices"`
-	Removed []removedDevice `json:"removed,omitempty"`
+	Devices []PushDevice `json:"devices"`
 }
-
-// maxTombstones caps how many removal tombstones persist, so the file cannot
-// grow without bound. Oldest tombstones are dropped first.
-const maxTombstones = 50
 
 // expoPushTokenRE matches the two Expo push-token spellings with a non-empty body.
 var expoPushTokenRE = regexp.MustCompile(`^Expo(nent)?PushToken\[[^\]]+\]$`)
@@ -65,12 +47,6 @@ var expoPushTokenRE = regexp.MustCompile(`^Expo(nent)?PushToken\[[^\]]+\]$`)
 func ValidPushToken(tok string) bool {
 	return expoPushTokenRE.MatchString(tok)
 }
-
-// ErrDeviceNotFound reports that no row carries the requested install ID.
-// Callers distinguish it from a persistence failure — the API answers 404 for
-// the former and a 500-class error for the latter, since "unknown device" would
-// misdescribe a full disk and send the user looking in the wrong place.
-var ErrDeviceNotFound = errors.New("device not found")
 
 // LegacyInstallIDPrefix marks an install ID the daemon synthesized rather than
 // received from a phone: rows migrated from before install IDs existed, and
@@ -92,7 +68,6 @@ type DeviceRegistry struct {
 	mu      sync.RWMutex
 	path    string
 	devices map[string]PushDevice // keyed by InstallID
-	removed []removedDevice       // tombstones from explicit Delete calls, newest last
 }
 
 // LoadRegistry reads the registry at path into memory, keyed by install ID. A
@@ -130,7 +105,6 @@ func LoadRegistry(path string) (*DeviceRegistry, error) {
 		}
 		reg.devices[d.InstallID] = d
 	}
-	reg.removed = file.Removed
 	if migrated {
 		reg.mu.Lock()
 		err := reg.persistLocked()
@@ -162,9 +136,9 @@ func LoadRegistry(path string) (*DeviceRegistry, error) {
 // The token lookup is skipped when the incoming token is empty — otherwise
 // every tokenless announce would adopt an arbitrary tokenless row.
 //
-// CreatedAt, Muted, and (when the incoming Token is empty) the existing Token
-// always survive, so neither a reinstall, a token rotation, nor a plain
-// identity announce can silently unmute a device or blank a working token.
+// CreatedAt and (when the incoming Token is empty) the existing Token always
+// survive, so neither a token rotation nor a plain identity announce can reset
+// "paired since" or blank a working token.
 //
 // A row represents a paired phone, not a push registration: Token is optional.
 // When non-empty it must still be a well-formed Expo push token.
@@ -187,40 +161,25 @@ func (r *DeviceRegistry) Upsert(dev PushDevice) error {
 			// Same phone, two identities. Fold them together before writing, so the
 			// token is never left behind on the row being abandoned.
 			merged := mergeIdentities(byInstall, byToken)
-			dev.CreatedAt, dev.Muted, dev.Token = carryOver(merged, dev)
+			dev.CreatedAt, dev.Token = carryOver(merged, dev)
 			if dev.HostName == "" {
 				dev.HostName = merged.HostName
 			}
 			delete(r.devices, tokenKey)
 		case hasInstall:
-			dev.CreatedAt, dev.Muted, dev.Token = carryOver(byInstall, dev)
+			dev.CreatedAt, dev.Token = carryOver(byInstall, dev)
 			if dev.HostName == "" {
 				dev.HostName = byInstall.HostName
 			}
 		case hasToken:
-			dev.CreatedAt, dev.Muted, dev.Token = carryOver(byToken, dev)
+			dev.CreatedAt, dev.Token = carryOver(byToken, dev)
 			if dev.HostName == "" {
 				dev.HostName = byToken.HostName
 			}
 			delete(r.devices, tokenKey) // re-key from the legacy/synthesized id
 		}
-		r.consumeTombstoneLocked(&dev)
 		r.devices[dev.InstallID] = dev
 	})
-}
-
-// consumeTombstoneLocked mutes dev and removes the first matching tombstone
-// (by InstallID or Token) if one exists. The match is consumed so a device
-// the user later unmutes is never re-muted by a stale tombstone. Callers
-// must hold r.mu.
-func (r *DeviceRegistry) consumeTombstoneLocked(dev *PushDevice) {
-	for i, t := range r.removed {
-		if t.InstallID == dev.InstallID || (dev.Token != "" && t.Token == dev.Token) {
-			dev.Muted = true
-			r.removed = append(r.removed[:i], r.removed[i+1:]...)
-			return
-		}
-	}
 }
 
 // findByTokenLocked returns the row holding token, ignoring the row already
@@ -242,9 +201,7 @@ func (r *DeviceRegistry) findByTokenLocked(token, skipInstallID string) (key str
 
 // mergeIdentities folds two rows that turn out to be the same phone into the
 // one that survives. The oldest CreatedAt wins so "paired since" never jumps
-// forward, the newest LastSeenAt wins, and Muted is sticky: if EITHER identity
-// was muted the merged row stays muted, so reconciling can never silently
-// re-enable notifications the user turned off. Descriptive fields fill in from
+// forward, and the newest LastSeenAt wins. Descriptive fields fill in from
 // whichever row has them, since a tokenless announce may carry a device name
 // the legacy row lacks.
 func mergeIdentities(primary, other PushDevice) PushDevice {
@@ -255,7 +212,6 @@ func mergeIdentities(primary, other PushDevice) PushDevice {
 	if other.LastSeenAt.After(out.LastSeenAt) {
 		out.LastSeenAt = other.LastSeenAt
 	}
-	out.Muted = primary.Muted || other.Muted
 	if out.Token == "" {
 		out.Token = other.Token
 	}
@@ -272,11 +228,11 @@ func mergeIdentities(primary, other PushDevice) PushDevice {
 }
 
 // carryOver preserves the fields an incoming registration must never reset:
-// CreatedAt and Muted always survive from the existing row, and an incoming
+// CreatedAt always survives from the existing row, and an incoming
 // empty Token never blanks an existing one — an identity announce (no token)
 // must not silently disable notifications on a phone that already had them
 // working.
-func carryOver(existing, incoming PushDevice) (createdAt time.Time, muted bool, token string) {
+func carryOver(existing, incoming PushDevice) (createdAt time.Time, token string) {
 	created := incoming.CreatedAt
 	if !existing.CreatedAt.IsZero() {
 		created = existing.CreatedAt
@@ -285,31 +241,21 @@ func carryOver(existing, incoming PushDevice) (createdAt time.Time, muted bool, 
 	if token == "" {
 		token = existing.Token
 	}
-	return created, existing.Muted, token
+	return created, token
 }
 
-// Delete removes a device by install ID (the desktop's remove action) and
-// records a tombstone so a re-registration comes back muted instead of
-// silently active — there is no per-device credential to actually revoke.
-// Deleting an unknown id is a no-op.
+// Delete removes a device by install ID (the desktop's remove action).
+// Deleting an unknown id is a no-op. Nothing about the device is remembered:
+// every phone shares the same connection password, so removal cannot stop a
+// phone that is still in use from reconnecting, and when it does it registers
+// as a fresh device with notifications on.
 func (r *DeviceRegistry) Delete(installID string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	dev, ok := r.devices[installID]
-	if !ok {
+	if _, ok := r.devices[installID]; !ok {
 		return nil
 	}
-	return r.commitLocked(func() {
-		delete(r.devices, installID)
-		r.removed = append(r.removed, removedDevice{
-			InstallID: dev.InstallID,
-			Token:     dev.Token,
-			RemovedAt: time.Now().UTC(),
-		})
-		if len(r.removed) > maxTombstones {
-			r.removed = r.removed[len(r.removed)-maxTombstones:]
-		}
-	})
+	return r.commitLocked(func() { delete(r.devices, installID) })
 }
 
 // UnregisterToken detaches a push token from whichever row holds it. Used by the
@@ -318,8 +264,8 @@ func (r *DeviceRegistry) Delete(installID string) error {
 // install ID. Unknown tokens are a no-op.
 //
 // A row represents a paired phone, not a push registration, so losing a token
-// must NOT delete the phone: it stays listed as "notifications off" and keeps
-// its mute state and paired-since. Only the desktop's Delete removes a row.
+// must NOT delete the phone: it stays listed and keeps its paired-since. Only
+// the desktop's Delete removes a row.
 //
 // The exception is a row whose install ID was synthesized (see
 // LegacyInstallIDPrefix). That ID is a placeholder standing in for an identity
@@ -355,11 +301,6 @@ func (r *DeviceRegistry) UnregisterToken(token string) error {
 // without a token. Choosing "Disconnect & forget server", or pairing with a
 // different desktop, means the phone is genuinely gone: leaving the row behind
 // would have the old desktop listing a device that is no longer its own.
-//
-// Unlike the desktop's Delete this writes NO tombstone. A tombstone exists to
-// re-mute a device the user removed from the desktop against that device's
-// wishes; here the phone is the one asking, so a later deliberate re-pair should
-// come back clean rather than silently muted.
 func (r *DeviceRegistry) Unpair(id string) error {
 	if id == "" {
 		return nil
@@ -373,23 +314,6 @@ func (r *DeviceRegistry) Unpair(id string) error {
 		if dev.Token == id {
 			return r.commitLocked(func() { delete(r.devices, key) })
 		}
-	}
-	return nil
-}
-
-// SetMuted flips a device's mute flag. Unknown install ids return an error so
-// the API can answer 404 rather than silently succeeding.
-func (r *DeviceRegistry) SetMuted(installID string, muted bool) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	before, ok := r.devices[installID]
-	if !ok {
-		return fmt.Errorf("%w: %q", ErrDeviceNotFound, installID)
-	}
-	after := before
-	after.Muted = muted
-	if err := r.commitLocked(func() { r.devices[installID] = after }); err != nil {
-		return fmt.Errorf("persist mute: %w", err)
 	}
 	return nil
 }
@@ -423,11 +347,9 @@ func (r *DeviceRegistry) List() []PushDevice {
 // worth more than the copy. Callers must hold r.mu.
 func (r *DeviceRegistry) commitLocked(mutate func()) error {
 	devices := maps.Clone(r.devices)
-	removed := slices.Clone(r.removed)
 	mutate()
 	if err := r.persistLocked(); err != nil {
 		r.devices = devices
-		r.removed = removed
 		return err
 	}
 	return nil
@@ -442,7 +364,7 @@ func (r *DeviceRegistry) persistLocked() error {
 	}
 	sort.Slice(devices, func(i, j int) bool { return devices[i].Token < devices[j].Token })
 
-	b, err := json.MarshalIndent(pushDevicesFile{Devices: devices, Removed: r.removed}, "", "  ")
+	b, err := json.MarshalIndent(pushDevicesFile{Devices: devices}, "", "  ")
 	if err != nil {
 		return err
 	}

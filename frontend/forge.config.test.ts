@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MachOParseError } from "./makers/macho-archs";
+import MakerNSIS from "./makers/maker-nsis";
+import appPackage from "./package.json";
 
 // postMake's dmg/zip branches only need to prove they call the right
 // maker-dmg functions with the right gates; the functions' own behavior
@@ -11,7 +13,8 @@ import { MachOParseError } from "./makers/macho-archs";
 // suite from spawning codesign/xcrun/bash indirectly through the real chain.
 // vi.mock's factory is hoisted above the rest of the file (including plain
 // const declarations), so the mock fns themselves must go through vi.hoisted.
-const { sealDmg, verifyDmg, verifyMacArtifact, isSigningConfigured } = vi.hoisted(() => ({
+const { sealDmg, verifyDmg, verifyMacArtifact, isSigningConfigured, checkMacDmgLayout } = vi.hoisted(() => ({
+	checkMacDmgLayout: vi.fn<(path: string) => Promise<void>>(async () => undefined),
 	sealDmg: vi.fn<(path: string) => Promise<boolean>>(),
 	verifyDmg: vi.fn<(path: string) => Promise<void>>(async () => undefined),
 	verifyMacArtifact: vi.fn<(path: string) => Promise<void>>(async () => undefined),
@@ -21,8 +24,14 @@ vi.mock("./makers/maker-dmg", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("./makers/maker-dmg")>();
 	return { ...actual, sealDmg, verifyDmg, verifyMacArtifact, isSigningConfigured };
 });
+// The layout check mounts the dmg with hdiutil; its behavior is covered by
+// scripts/build-mac-dmg.test.mjs and the mac-dmg-layout CI job.
+vi.mock("./scripts/build-mac-dmg.mjs", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("./scripts/build-mac-dmg.mjs")>();
+	return { ...actual, checkMacDmgLayout };
+});
 
-import config, { extraResourcesForPlatform, macSignOptionsForFile } from "./forge.config";
+import config, { extraResourcesForPlatform, labelMacBundle, macSignOptionsForFile, WINDOWS_DISPLAY_NAME } from "./forge.config";
 
 // Minimal synthetic Mach-O headers (thin little-endian + fat big-endian), the
 // two on-disk layouts the signing selector must tell apart. Full parser
@@ -96,14 +105,71 @@ describe("native runtime resources", () => {
 
 	it("bundles the native update helper only on macOS", () => {
 		expect(extraResourcesForPlatform("darwin")).toContain("update-helper");
+		for (const platform of ["darwin", "linux", "win32"] as const) {
+			expect(extraResourcesForPlatform(platform)).toContain("browser-extension");
+		}
 		expect(extraResourcesForPlatform("linux")).not.toContain("update-helper");
 		expect(extraResourcesForPlatform("win32")).not.toContain("update-helper");
+	});
+
+	it("bundles both menu bar wake icon resolutions", () => {
+		expect(extraResourcesForPlatform("darwin")).toEqual(expect.arrayContaining([
+			"assets/trayAwakeIconTemplate.png",
+			"assets/trayAwakeIconTemplate@2x.png",
+		]));
+	});
+
+	it("ships the Liquid Glass icon catalog only on macOS and names it in Info.plist", () => {
+		expect(extraResourcesForPlatform("darwin")).toContain("assets/Assets.car");
+		expect(extraResourcesForPlatform("linux")).not.toContain("assets/Assets.car");
+		expect(extraResourcesForPlatform("win32")).not.toContain("assets/Assets.car");
+		expect(config.packagerConfig?.extendInfo).toMatchObject({ CFBundleIconName: "AppIcon" });
+		// The .icns stays as CFBundleIconFile for macOS before 26.
+		expect(config.packagerConfig?.icon).toBe("assets/icon");
 	});
 
 	it("bundles the wake coordinator only on macOS", () => {
 		expect(extraResourcesForPlatform("darwin")).toContain("wake-helper");
 		expect(extraResourcesForPlatform("linux")).not.toContain("wake-helper");
 		expect(extraResourcesForPlatform("win32")).not.toContain("wake-helper");
+	});
+
+	it("bundles the dictation helper only on macOS", () => {
+		expect(extraResourcesForPlatform("darwin")).toContain("dictation-helper");
+		expect(extraResourcesForPlatform("linux")).not.toContain("dictation-helper");
+		expect(extraResourcesForPlatform("win32")).not.toContain("dictation-helper");
+	});
+
+	it("bundles cloudflared only on macOS", () => {
+		expect(extraResourcesForPlatform("darwin")).toContain("cloudflared");
+		expect(extraResourcesForPlatform("linux")).not.toContain("cloudflared");
+		expect(extraResourcesForPlatform("win32")).not.toContain("cloudflared");
+	});
+
+	it("fails packaging when the Liquid Glass icon catalog was not copied into Resources", async () => {
+		const resources = join(fixtureDir, "AO.app", "Contents", "Resources");
+		mkdirSync(join(resources, "update-helper"), { recursive: true });
+		mkdirSync(join(resources, "wake-helper"), { recursive: true });
+		writeFileSync(join(resources, "update-helper", "ao-update-progress"), "");
+		writeFileSync(join(resources, "wake-helper", "ao-wake"), "");
+		const hook = config.hooks?.postPackage;
+		if (typeof hook !== "function") throw new Error("postPackage hook missing");
+		await expect(hook(config, { platform: "darwin", arch: "arm64", outputPaths: [fixtureDir] })).rejects.toThrow("packaged macOS app icon catalog missing");
+	});
+
+	it("fails packaging when cloudflared was not copied into Resources", async () => {
+		const resources = join(fixtureDir, "AO.app", "Contents", "Resources");
+		mkdirSync(join(resources, "update-helper"), { recursive: true });
+		mkdirSync(join(resources, "wake-helper"), { recursive: true });
+		writeFileSync(join(resources, "update-helper", "ao-update-progress"), "");
+		writeFileSync(join(resources, "wake-helper", "ao-wake"), "");
+		writeFileSync(join(resources, "Assets.car"), "");
+		const dictationHelper = join(resources, "dictation-helper", "Orchestrator.app", "Contents", "MacOS");
+		mkdirSync(dictationHelper, { recursive: true });
+		writeFileSync(join(dictationHelper, "Orchestrator"), "");
+		const hook = config.hooks?.postPackage;
+		if (typeof hook !== "function") throw new Error("postPackage hook missing");
+		await expect(hook(config, { platform: "darwin", arch: "arm64", outputPaths: [fixtureDir] })).rejects.toThrow("packaged cloudflared missing");
 	});
 
 	it.each(["darwin", "linux"] as const)("bundles tmux on %s", (platform) => {
@@ -138,6 +204,7 @@ afterEach(() => {
 	verifyDmg.mockReset().mockImplementation(async () => undefined);
 	verifyMacArtifact.mockReset().mockImplementation(async () => undefined);
 	isSigningConfigured.mockReset();
+	checkMacDmgLayout.mockReset().mockImplementation(async () => undefined);
 });
 
 describe("macOS signing", () => {
@@ -155,6 +222,22 @@ describe("macOS signing", () => {
 	it("keeps the override for a universal binary carrying an x86_64 slice", () => {
 		expect(macSignOptionsForFile(acpNodeWith(fatMachO([CPU_TYPE_X86_64, CPU_TYPE_ARM64])))).toEqual({
 			entitlements: NODE_ENTITLEMENTS,
+		});
+	});
+
+	it("lets the dictation helper bundle and its executable record audio", () => {
+		const helper = "/Applications/Orchestrator.app/Contents/Resources/dictation-helper/Orchestrator.app";
+		const audio = { entitlements: ["com.apple.security.device.audio-input"] };
+		expect(macSignOptionsForFile(helper)).toEqual(audio);
+		expect(macSignOptionsForFile(`${helper}/Contents/MacOS/Orchestrator`)).toEqual(audio);
+	});
+
+	it("gives the app the dictation helper's usage strings", () => {
+		// Signed and nested in the app, the helper is checked against the app's
+		// Info.plist; a missing speech string makes macOS kill it.
+		expect(config.packagerConfig?.extendInfo).toMatchObject({
+			NSSpeechRecognitionUsageDescription: expect.any(String),
+			NSMicrophoneUsageDescription: expect.any(String),
 		});
 	});
 
@@ -252,6 +335,20 @@ describe("postMake artifact verification", () => {
 		expect(verifyMacArtifact).not.toHaveBeenCalled();
 	});
 
+	// A dmg without its install window layout must fail the build, before any
+	// signing or notarization time is spent on it, signed or not.
+	it("checks the dmg layout before sealing and stops the build when it is missing", async () => {
+		const makeResults = darwinResult(["/out/make/app.dmg"]);
+		await config.hooks?.postMake?.({} as never, makeResults);
+		expect(checkMacDmgLayout).toHaveBeenCalledWith("/out/make/app.dmg");
+		expect(checkMacDmgLayout.mock.invocationCallOrder[0]).toBeLessThan(sealDmg.mock.invocationCallOrder[0]);
+
+		sealDmg.mockClear();
+		checkMacDmgLayout.mockRejectedValueOnce(new Error("no usable install window layout"));
+		await expect(config.hooks?.postMake?.({} as never, makeResults)).rejects.toThrow(/install window layout/);
+		expect(sealDmg).not.toHaveBeenCalled();
+	});
+
 	it("verifies both the dmg and the zip when a make run produces both", async () => {
 		isSigningConfigured.mockReturnValue(true);
 		sealDmg.mockResolvedValue(true);
@@ -284,11 +381,43 @@ describe("postMake artifact verification", () => {
 	});
 });
 
+describe("Windows app labels", () => {
+	it("matches the installer display name without renaming the executable or bundle", async () => {
+		expect(WINDOWS_DISPLAY_NAME).toBe("Orchestrator.inc");
+		expect(appPackage.author).toBe(WINDOWS_DISPLAY_NAME);
+		expect(config.packagerConfig?.win32metadata).toEqual({
+			FileDescription: WINDOWS_DISPLAY_NAME,
+			InternalName: WINDOWS_DISPLAY_NAME,
+			ProductName: WINDOWS_DISPLAY_NAME,
+		});
+		const windowsInstaller = config.makers?.find((maker) => maker instanceof MakerNSIS);
+		await windowsInstaller?.prepareConfig("x64");
+		expect(windowsInstaller?.config.productName).toBe(WINDOWS_DISPLAY_NAME);
+		expect(windowsInstaller?.config.appId).toBe("dev.agent-orchestrator.desktop");
+		expect(appPackage.name).toBe("agent-orchestrator");
+		expect(appPackage.productName).toBe("Orchestrator");
+		expect(config.packagerConfig?.executableName).toBe("agent-orchestrator");
+		expect(config.packagerConfig?.name).toBe("Agent Orchestrator");
+		expect(config.packagerConfig?.appBundleId).toBe("dev.agent-orchestrator.desktop");
+	});
+});
+
+describe("Linux package maintainer", () => {
+	it("uses the publisher label from package metadata", () => {
+		const makers = config.makers as Array<{
+			name?: string;
+			config?: { options?: { maintainer?: string } };
+		}>;
+		const deb = makers.find((maker) => maker.name === "@electron-forge/maker-deb");
+		expect(deb?.config?.options?.maintainer).toBe(appPackage.author);
+	});
+});
+
 describe("packaged authentication callback registration", () => {
 	it("declares ao-app in the macOS bundle and Linux package metadata", () => {
 		expect(config.packagerConfig?.protocols).toEqual([
 			{
-				name: "Agent Orchestrator authentication callback",
+				name: "Orchestrator authentication callback",
 				schemes: ["ao-app"],
 			},
 		]);
@@ -316,6 +445,10 @@ describe("packaged native dependencies", () => {
 		if (typeof ignore !== "function") return;
 
 		expect(ignore("/.vite/build/main.js")).toBe(false);
+		// Release source maps go to Sentry, never into the app.
+		expect(ignore("/.vite/build/main.js.map")).toBe(true);
+		expect(ignore("/.vite/renderer/main_window/assets/index-RzpjvxTk.js.map")).toBe(true);
+		expect(ignore("/.vite/renderer/main_window/assets/index-RzpjvxTk.js")).toBe(false);
 		expect(ignore("/node_modules")).toBe(false);
 		expect(ignore("/node_modules/better-sqlite3/build/Release/better_sqlite3.node")).toBe(false);
 		expect(ignore("/node_modules/bindings/bindings.js")).toBe(false);
@@ -323,5 +456,39 @@ describe("packaged native dependencies", () => {
 		expect(ignore("/node_modules/react/index.js")).toBe(true);
 		expect(ignore("/src/main.ts")).toBe(true);
 		expect(config.hooks?.prePackage).toBeTypeOf("function");
+	});
+});
+
+describe("macOS bundle display label", () => {
+	let buildPath: string;
+	beforeEach(() => {
+		buildPath = mkdtempSync(join(tmpdir(), "ao-label-"));
+	});
+	afterEach(() => rmSync(buildPath, { recursive: true, force: true }));
+
+	it("labels the bundle the packager builds and copies the label into every lproj", () => {
+		const packagerName = config.packagerConfig?.name;
+		expect(packagerName).toBeTypeOf("string");
+		const resources = join(buildPath, `${packagerName}.app`, "Contents", "Resources");
+		for (const locale of ["en", "fr", "zh_CN"]) mkdirSync(join(resources, `${locale}.lproj`), { recursive: true });
+		writeFileSync(join(resources, "en.lproj", "InfoPlist.strings"), 'CFBundleDisplayName = "Orchestrator";\n');
+		writeFileSync(join(resources, "fr.lproj", "InfoPlist.strings"), "stale");
+
+		const setDisplayName = vi.fn();
+		labelMacBundle(buildPath, setDisplayName);
+
+		expect(setDisplayName).toHaveBeenCalledWith(
+			join(buildPath, `${packagerName}.app`, "Contents", "Info.plist"),
+			packagerName,
+		);
+		for (const locale of ["en", "fr", "zh_CN"]) {
+			expect(readFileSync(join(resources, `${locale}.lproj`, "InfoPlist.strings"), "utf8")).toBe(
+				'CFBundleDisplayName = "Orchestrator";\n',
+			);
+		}
+	});
+
+	it("fails when the packaged bundle is missing instead of silently skipping the label", () => {
+		expect(() => labelMacBundle(buildPath, vi.fn())).toThrow();
 	});
 });

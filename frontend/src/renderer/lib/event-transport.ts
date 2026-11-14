@@ -1,30 +1,34 @@
 import type { QueryClient, QueryKey } from "@tanstack/react-query";
 import { aoBridge } from "./bridge";
-import { getApiBaseUrl, hasTrustedApiBaseUrl, subscribeApiBaseUrl } from "./api-client";
+import { eventStreamBaseUrl, getApiBaseUrl, hasTrustedApiBaseUrl, subscribeApiBaseUrl } from "./api-client";
 import { setEventsConnectionState } from "./events-connection";
 import { computeSseRetryDelayMs } from "./sse-backoff";
 import { workspaceQueryKey } from "../hooks/useWorkspaceQuery";
 import { sessionScmSummaryQueryKey } from "../hooks/useSessionScmSummary";
-import { conversationQueryKey, conversationQueryRoot, refreshRemoteConversation } from "../hooks/useConversation";
+import { conversationQueryKey, conversationQueryRoot, conversationSettled, refreshRemoteConversationOnce } from "../hooks/useConversation";
 import {
 	reviewerConversationQueryKey,
 	reviewerConversationQueryRoot,
 } from "../hooks/useReviewerConversation";
-import { agentSwitchesQueryRoot } from "../hooks/useAgentSwitches";
 import { sessionReviewsQueryKey } from "./session-reviews";
 import { sessionUsageQueryRoot } from "../hooks/useSessionUsageSummaries";
-import { agentSwitchVisibility } from "./agent-switch-visibility";
-import { codexAccountsQueryKey, writeCodexAccounts } from "../hooks/codex-accounts-state";
-import type { components } from "../../api/schema";
 import { editorHandoffQueryKey, editorHandoffQueryRoot } from "../hooks/useEditorHandoff";
+import { shellTerminalsQueryKey, shellTerminalsQueryKeyForHost } from "../hooks/useShellTerminals";
 import { baseUrlForHost, connectedHosts, subscribeConnectedHosts } from "./host-clients";
 import { probeRemoteSse } from "./remote-sse-probe";
+import { persistRemoteCache } from "./remote-chat-cache";
 
 export type EventTransport = {
 	connect: () => () => void;
 };
 
 const INVALIDATE_WINDOW_MS = 150;
+// A session_updated that carries only the session id comes from usage
+// bookkeeping (rarely an agent switch, cleanup fact or reported PR) and cannot
+// say whether the board changed. During long agent runs these arrive faster than
+// the window above and refetched the whole workspace every window for hours
+// (#6763), so they refresh it at most once per this interval.
+const ID_ONLY_WORKSPACE_REFRESH_MS = 5_000;
 // EventSource.CLOSED, referenced numerically so test stubs without the static
 // constants still work.
 const EVENTSOURCE_CLOSED = 2;
@@ -74,6 +78,11 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 			// refreshed by their own events. A fresh stream starts at the newest event,
 			// so a lifecycle refresh must cover whatever changed in the gap.
 			let allEventScopedCachesInvalidationPending = false;
+			// An id-only update waits here until the workspace is a full
+			// ID_ONLY_WORKSPACE_REFRESH_MS old; any workspace refresh covers it.
+			let idOnlyWorkspaceRefreshPending = false;
+			let idOnlyWorkspaceTimer: ReturnType<typeof setTimeout> | undefined;
+			let lastWorkspaceRefreshAt = Number.NEGATIVE_INFINITY;
 			let retryTimer: ReturnType<typeof setTimeout> | undefined;
 			let source: EventSource | undefined;
 			let sourceBaseUrl: string | undefined;
@@ -90,29 +99,31 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 					// A supporting daemon answers with an open stream; do not keep it.
 					.finally(() => controller.abort());
 			};
-			let accountSource: EventSource | undefined;
-			let accountSourceBaseUrl: string | undefined;
+			const stopPersistingRemoteCache = persistRemoteCache(queryClient);
 			let disposed = false;
-			const remoteSources = new Map<string, {
+			type RemoteConnection = {
 				base: string;
 				close?: () => void;
 				pollTimer?: ReturnType<typeof setInterval>;
-			}>();
-			const remoteConversationRefreshes = new Map<string, { dirty: boolean }>();
-			const refreshRemoteConversationOnce = (hostId: string, sessionId: string) => {
-				const key = `${hostId}\0${sessionId}`;
-				const running = remoteConversationRefreshes.get(key);
-				if (running) { running.dirty = true; return; }
-				const state = { dirty: false };
-				remoteConversationRefreshes.set(key, state);
-				void (async () => {
-					do {
-						state.dirty = false;
-						try { await refreshRemoteConversation(queryClient, sessionId, hostId); }
-						catch { /* A later event or the polling fallback can retry. */ }
-					} while (state.dirty && !disposed && baseUrlForHost(hostId));
-					remoteConversationRefreshes.delete(key);
-				})();
+				lastRefreshAt: number;
+				idOnlyTimer?: ReturnType<typeof setTimeout>;
+				// Stream failures since it last delivered a frame, and the pending reopen.
+				failures: number;
+				reopenTimer?: ReturnType<typeof setTimeout>;
+			};
+			const remoteSources = new Map<string, RemoteConnection>();
+			// Only a chat someone is looking at is read over the tunnel. A closed one
+			// reads what changed when it opens again.
+			const refreshOpenRemoteChat = (hostId: string, sessionId: string) => {
+				if (disposed || !baseUrlForHost(hostId)) return;
+				if (!queryClient.getQueryCache().find({ queryKey: conversationQueryKey(sessionId, hostId), type: "active" })) return;
+				refreshRemoteConversationOnce(queryClient, sessionId, hostId);
+			};
+			const refreshOpenRemoteChats = (hostId: string) => {
+				for (const query of queryClient.getQueryCache().findAll({ queryKey: ["remote-conversation", hostId], type: "active" })) {
+					const sessionId = query.queryKey[2];
+					if (typeof sessionId === "string") refreshRemoteConversationOnce(queryClient, sessionId, hostId);
+				}
 			};
 			// Do not repeatedly cancel a slow fetch under continuous CDC traffic. A
 			// key receives at most one in-flight refresh and one queued catch-up.
@@ -141,6 +152,8 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 				void queryClient.invalidateQueries({ queryKey }, { cancelRefetch: false }).then(settled, settled);
 			};
 			const refreshRemote = (hostId: string, reconnect = false) => {
+				const connection = remoteSources.get(hostId);
+				if (connection) connection.lastRefreshAt = Date.now();
 				invalidate(["remote-workspaces", hostId]);
 				invalidate(["project", hostId]);
 				invalidate(["project-config", hostId]);
@@ -150,57 +163,103 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 				invalidate(["session-reviews", hostId]);
 				invalidate(["session-usage", hostId]);
 				invalidate(["session-usage", "detail", hostId]);
-				invalidate(["remote-session-agent-switches", hostId]);
 				invalidate(["session-interface-transition", hostId]);
 				invalidate(["agent-readiness", hostId]);
 				invalidate(["agent-models", hostId]);
+			};
+			// While the stream is down, poll what the stream would have refreshed.
+			const pollRemote = (hostId: string) => {
+				refreshRemote(hostId);
+				invalidate(["reviewer-conversation", hostId]);
+				refreshOpenRemoteChats(hostId);
+			};
+			// An id-only session update refreshes the host's lists at most once per
+			// ID_ONLY_WORKSPACE_REFRESH_MS, as it does for the local daemon.
+			const refreshRemoteForIdOnlyUpdate = (hostId: string, connection: RemoteConnection) => {
+				const wait = connection.lastRefreshAt + ID_ONLY_WORKSPACE_REFRESH_MS - Date.now();
+				if (wait <= 0) {
+					refreshRemote(hostId);
+					return;
+				}
+				connection.idOnlyTimer ??= setTimeout(() => {
+					connection.idOnlyTimer = undefined;
+					if (!disposed && remoteSources.get(hostId) === connection) refreshRemote(hostId);
+				}, wait);
 			};
 			const connectRemote = (hostId: string) => {
 				if (disposed) return;
 				const base = baseUrlForHost(hostId);
 				if (!base) return;
 				if (remoteSources.get(hostId)?.base === base) return;
-				const connection: { base: string; close?: () => void; pollTimer?: ReturnType<typeof setInterval> } = { base };
+				const connection: RemoteConnection = { base, lastRefreshAt: Number.NEGATIVE_INFINITY, failures: 0 };
 				remoteSources.set(hostId, connection);
 				refreshRemote(hostId, true);
-				connection.pollTimer = setInterval(() => {
-					refreshRemote(hostId);
-					invalidate(["reviewer-conversation", hostId]);
-				}, 2_000);
-				connection.close = probeRemoteSse(
+				connection.pollTimer = setInterval(() => pollRemote(hostId), 2_000);
+				const openStream = () => { connection.close = probeRemoteSse(
 					`${base.replace(/\/+$/, "")}/api/v1/events?after=latest`,
 					CDC_EVENT_TYPES,
 					(event) => {
 						if (disposed || remoteSources.get(hostId) !== connection) return;
-						refreshRemote(hostId);
-						if (!("data" in event)) return;
-						try {
-							const decoded = JSON.parse(String((event as MessageEvent).data)) as { sessionId?: unknown; payload?: { conversationId?: unknown; reviewId?: unknown } };
-							if (typeof decoded.sessionId === "string" && typeof decoded.payload?.conversationId === "string" && typeof decoded.payload.reviewId !== "string") {
-								refreshRemoteConversationOnce(hostId, decoded.sessionId);
+						// The same routing as the local stream: a conversation event refreshes
+						// only that chat, and an id-only session update is rate limited.
+						let conversationOnly = false;
+						let idOnlySessionUpdate = false;
+						if ("data" in event) {
+							try {
+								const decoded = JSON.parse(String((event as MessageEvent).data)) as {
+									type?: unknown;
+									sessionId?: unknown;
+									payload?: { conversationId?: unknown; reviewId?: unknown; interfaceTransitionId?: unknown; shellTerminalHandleId?: unknown };
+								};
+								const payload = typeof decoded.payload === "object" && decoded.payload !== null ? decoded.payload : undefined;
+								const sessionId = typeof decoded.sessionId === "string" && decoded.sessionId ? decoded.sessionId : undefined;
+								if (typeof payload?.reviewId === "string") {
+									invalidate(["reviewer-conversation", hostId, payload.reviewId]);
+									conversationOnly = typeof payload.conversationId === "string";
+								} else if (sessionId && typeof payload?.conversationId === "string") {
+									refreshOpenRemoteChat(hostId, sessionId);
+									conversationOnly = true;
+								} else if (typeof payload?.shellTerminalHandleId === "string") {
+									invalidate(shellTerminalsQueryKeyForHost(hostId));
+									conversationOnly = true;
+								} else if (decoded.type === "session_updated" && sessionId && typeof payload?.interfaceTransitionId !== "string") {
+									idOnlySessionUpdate = payload !== undefined && Object.keys(payload).every((key) => key === "id" || key === "sessionId");
+									// A chat that is starting or waking leaves "connecting" on a
+									// session update; a ready chat learns nothing from an id-only one.
+									if (!idOnlySessionUpdate || !conversationSettled(queryClient, sessionId, hostId)) refreshOpenRemoteChat(hostId, sessionId);
+								}
+							} catch {
+								// A malformed event still refreshes the host's lists below.
 							}
-							if (typeof decoded.payload?.reviewId === "string") {
-								invalidate(["reviewer-conversation", hostId, decoded.payload.reviewId]);
-							}
-						} catch {
-							// The host's project/session cache still refreshes after a malformed event.
 						}
+						if (conversationOnly) return;
+						if (idOnlySessionUpdate) refreshRemoteForIdOnlyUpdate(hostId, connection);
+						else refreshRemote(hostId);
 					},
 					() => {
 						if (remoteSources.get(hostId) !== connection) return;
+						connection.failures = 0;
 						if (connection.pollTimer !== undefined) clearInterval(connection.pollTimer);
 						connection.pollTimer = undefined;
 						refreshRemote(hostId, true);
+						// Only a live-page read clears a failed read's alert, and an idle chat
+						// has no event to prompt one.
+						refreshOpenRemoteChats(hostId);
 					},
 					() => {
 						if (remoteSources.get(hostId) !== connection) return;
-						if (connection.pollTimer === undefined) connection.pollTimer = setInterval(() => {
-							refreshRemote(hostId);
-							invalidate(["reviewer-conversation", hostId]);
-						}, 2_000);
+						if (connection.pollTimer === undefined) connection.pollTimer = setInterval(() => pollRemote(hostId), 2_000);
 						refreshRemote(hostId);
+						// A host that stays connected never rebuilds its stream, so without a
+						// reopen one dropped link would leave it on the 2 s poll for good.
+						connection.failures += 1;
+						connection.reopenTimer ??= setTimeout(() => {
+							connection.reopenTimer = undefined;
+							if (!disposed && remoteSources.get(hostId) === connection) openStream();
+						}, computeSseRetryDelayMs(connection.failures));
 					},
-				);
+				); };
+				openStream();
 			};
 			const syncRemoteSources = () => {
 				const active = new Set(connectedHosts());
@@ -208,18 +267,10 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 					if (active.has(hostId) && connection.base === baseUrlForHost(hostId)) continue;
 					connection.close?.();
 					if (connection.pollTimer !== undefined) clearInterval(connection.pollTimer);
+					if (connection.idOnlyTimer !== undefined) clearTimeout(connection.idOnlyTimer);
 					remoteSources.delete(hostId);
 				}
 				for (const hostId of active) connectRemote(hostId);
-			};
-			const applyAccountEvent = (event: Event) => {
-				if (disposed || !("data" in event)) return;
-				try {
-					const decoded = JSON.parse(String((event as MessageEvent).data)) as components["schemas"]["CodexAccountsResponse"];
-					writeCodexAccounts(queryClient, decoded, "replace");
-				} catch {
-					// A malformed transient event cannot replace the cached safe snapshot.
-				}
 			};
 			// The scheduled flush body. Extracted so a leading-edge event can run
 			// it immediately without waiting out a full window.
@@ -232,10 +283,11 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 				}
 				if (workspaceInvalidationPending) {
 					invalidate(workspaceQueryKey);
-					invalidate(agentSwitchesQueryRoot);
 					invalidate(sessionScmSummaryQueryKey());
 					invalidate(sessionUsageQueryRoot);
 					workspaceInvalidationPending = false;
+					lastWorkspaceRefreshAt = Date.now();
+					idOnlyWorkspaceRefreshPending = false;
 				}
 				if (allEventScopedCachesInvalidationPending) {
 					invalidate(["session-reviews"]);
@@ -270,18 +322,56 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 				}
 				pendingInterfaceTransitionSessions.clear();
 				for (const scope of pendingModelCatalogScopes.values()) {
-					// Project pickers can resolve to the global catalog in the daemon.
-					// A global update must refresh those views and Settings together.
-					invalidate(scope.projectId
-						? ["agent-models", scope.agentId, scope.projectId]
-						: ["agent-models", scope.agentId]);
+					// Catalogs are device-wide: pickers key them by agent, not by the
+					// project the event names, so refresh every view of this agent
+					// (pickers and Settings) together.
+					invalidate(["agent-models", scope.agentId]);
 				}
 				pendingModelCatalogScopes.clear();
+			};
+			// A busy stream must not postpone visible updates until traffic
+			// stops, and the first event after a quiet period must not wait out
+			// a full window either. Flush on the leading edge when the last
+			// flush is at least one window old; otherwise coalesce this and
+			// later events into a single trailing flush. invalidate() still
+			// dedups the resulting refetches per key, so the leading edge
+			// cannot start a refetch storm.
+			const scheduleFlush = () => {
+				if (refreshTimer !== undefined) return;
+				const sinceLastFlush = Date.now() - lastFlushAt;
+				if (sinceLastFlush >= INVALIDATE_WINDOW_MS) {
+					lastFlushAt = Date.now();
+					flushPending();
+					return;
+				}
+				refreshTimer = setTimeout(() => {
+					refreshTimer = undefined;
+					lastFlushAt = Date.now();
+					flushPending();
+				}, INVALIDATE_WINDOW_MS - sinceLastFlush);
+			};
+			// Marks the workspace for the next flush once it is a full interval
+			// old; until then a single timer waits for that moment.
+			const queueIdOnlyWorkspaceRefresh = () => {
+				idOnlyWorkspaceRefreshPending = true;
+				const wait = lastWorkspaceRefreshAt + ID_ONLY_WORKSPACE_REFRESH_MS - Date.now();
+				if (wait <= 0) {
+					workspaceInvalidationPending = true;
+					return;
+				}
+				if (idOnlyWorkspaceTimer !== undefined) return;
+				idOnlyWorkspaceTimer = setTimeout(() => {
+					idOnlyWorkspaceTimer = undefined;
+					if (!idOnlyWorkspaceRefreshPending) return;
+					queueIdOnlyWorkspaceRefresh();
+					if (workspaceInvalidationPending) scheduleFlush();
+				}, wait);
 			};
 			const refreshWorkspaces = (event?: Event) => {
 				if (disposed) return;
 				let conversationOnly = false;
 				let modelCatalogOnly = false;
+				let idOnlySessionUpdate = false;
 				if (event === undefined) {
 					// A lifecycle refresh -- reconnect, daemon status change, base-URL change --
 					// carries no event, so we cannot know which conversations moved. Normally the
@@ -311,11 +401,18 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 										conversationId?: unknown;
 										reviewId?: unknown;
 										interfaceTransitionId?: unknown;
+										activity?: unknown;
+										shellTerminalHandleId?: unknown;
 										kind?: unknown;
 										agentId?: unknown;
 										projectId?: unknown;
 								  })
 								: undefined;
+						// A shell's program title changed; only the shell list shows it.
+						if (typeof payload?.shellTerminalHandleId === "string") {
+							void queryClient.invalidateQueries({ queryKey: shellTerminalsQueryKey });
+							conversationOnly = true;
+						}
 						// A review run can start or finish without this window asking for
 						// it: an agent ran `ao review trigger`, auto-review fired, or a
 						// reviewer submitted. Refresh that session's reviews so the
@@ -364,12 +461,27 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 							typeof decoded.sessionId === "string" &&
 							decoded.sessionId &&
 							typeof payload?.conversationId !== "string" &&
-							typeof payload?.interfaceTransitionId !== "string"
+							typeof payload?.interfaceTransitionId !== "string" &&
+							typeof payload?.shellTerminalHandleId !== "string"
 						) {
+							idOnlySessionUpdate =
+								payload !== undefined && Object.keys(payload).every((key) => key === "id" || key === "sessionId");
 							// Async chat startup changes the session's provisionState, but
-							// does not emit a conversationId. Refresh the open conversation
-							// so its controller state can leave "connecting".
-							pendingConversationSessions.add(decoded.sessionId);
+							// does not emit a conversationId, and the controller turning
+							// ready writes nothing of its own: whichever session update
+							// follows is what lets an open chat leave "connecting". Once the
+							// chat is ready or working, an id-only update (usage bookkeeping,
+							// cleanup facts, agent-switch rows) changes nothing in it, and
+							// refetching for each one reloaded its whole page every few seconds.
+							if (!idOnlySessionUpdate || !conversationSettled(queryClient, decoded.sessionId)) {
+								pendingConversationSessions.add(decoded.sessionId);
+							}
+							// Native identity and provisioning changes carry the session-row
+							// activity field. Recheck switch readiness even after its poll
+							// budget expires, without reacting to id-only usage updates.
+							if (typeof payload?.activity === "string") {
+								pendingInterfaceTransitionSessions.add(decoded.sessionId);
+							}
 							pendingEditorHandoffSessions.add(decoded.sessionId);
 						}
 					} catch {
@@ -377,26 +489,9 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 						// cannot target a conversation cache precisely.
 					}
 				}
-				if (!conversationOnly && !modelCatalogOnly) workspaceInvalidationPending = true;
-				// A busy stream must not postpone visible updates until traffic
-				// stops, and the first event after a quiet period must not wait out
-				// a full window either. Flush on the leading edge when the last
-				// flush is at least one window old; otherwise coalesce this and
-				// later events into a single trailing flush. invalidate() still
-				// dedups the resulting refetches per key, so the leading edge
-				// cannot start a refetch storm.
-				if (refreshTimer !== undefined) return;
-				const sinceLastFlush = Date.now() - lastFlushAt;
-				if (sinceLastFlush >= INVALIDATE_WINDOW_MS) {
-					lastFlushAt = Date.now();
-					flushPending();
-					return;
-				}
-				refreshTimer = setTimeout(() => {
-					refreshTimer = undefined;
-					lastFlushAt = Date.now();
-					flushPending();
-				}, INVALIDATE_WINDOW_MS - sinceLastFlush);
+				if (idOnlySessionUpdate) queueIdOnlyWorkspaceRefresh();
+				else if (!conversationOnly && !modelCatalogOnly) workspaceInvalidationPending = true;
+				scheduleFlush();
 			};
 
 			// Consecutive scheduled rebuilds since the stream last opened. Paces
@@ -419,32 +514,12 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 				if (!hasTrustedApiBaseUrl()) {
 					healthAttempt += 1;
 					source?.close();
-					accountSource?.close();
 					source = undefined;
-					accountSource = undefined;
 					sourceBaseUrl = undefined;
-					accountSourceBaseUrl = undefined;
 					setEventsConnectionState("disconnected");
-					agentSwitchVisibility.setTransportHealthy("active", false);
-					agentSwitchVisibility.setTransportHealthy("history", false);
 					return;
 				}
 				const baseUrl = getApiBaseUrl();
-				if (!accountSource || accountSourceBaseUrl !== baseUrl || accountSource.readyState === EVENTSOURCE_CLOSED) {
-					accountSource?.close();
-					accountSourceBaseUrl = baseUrl;
-					try {
-						accountSource = new EventSource(`${baseUrl.replace(/\/+$/, "")}/api/v1/agents/codex/accounts/events`);
-						accountSource.onopen = () => {
-							if (disposed) return;
-							void queryClient.invalidateQueries({ queryKey: codexAccountsQueryKey });
-						};
-						accountSource.onerror = () => { if (accountSource?.readyState === EVENTSOURCE_CLOSED) scheduleRetry(); };
-						accountSource.addEventListener("codex_account", applyAccountEvent);
-					} catch {
-						accountSource = undefined;
-					}
-				}
 				// Keep a still-usable source on the same base URL; replace one the
 				// browser abandoned (CLOSED) or one bound to a stale port.
 				if (source && sourceBaseUrl === baseUrl && source.readyState !== EVENTSOURCE_CLOSED) return;
@@ -462,7 +537,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 					// sends a cursor id, so the browser's own reconnect replays only the gap.
 					// A daemon from before the cursor existed answers 400; that base URL
 					// falls back to the cursorless stream (see probeCursorSupport).
-					const streamUrl = `${baseUrl.replace(/\/+$/, "")}/api/v1/events`;
+					const streamUrl = `${eventStreamBaseUrl(baseUrl)}/api/v1/events`;
 					const useCursor = cursorUnsupportedBaseUrl !== baseUrl;
 					source = new EventSource(useCursor ? `${streamUrl}?after=latest` : streamUrl);
 					const connectedSource = source;
@@ -473,8 +548,6 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 						healthAttempt += 1;
 						retries = 0;
 						setEventsConnectionState("connected");
-						agentSwitchVisibility.setTransportHealthy("active", true);
-						agentSwitchVisibility.setTransportHealthy("history", true);
 						// Events emitted during the gap were lost; refetch once on (re)open.
 						refreshWorkspaces();
 					};
@@ -496,13 +569,9 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 						).then(
 							() => {
 								if (attempt !== healthAttempt || source !== connectedSource) return;
-								agentSwitchVisibility.setTransportHealthy("active", true);
-								agentSwitchVisibility.setTransportHealthy("history", true);
 							},
 							() => {
 								if (attempt !== healthAttempt || source !== connectedSource) return;
-								agentSwitchVisibility.setTransportHealthy("active", false);
-								agentSwitchVisibility.setTransportHealthy("history", false);
 							},
 						);
 					};
@@ -540,6 +609,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 				healthAttempt += 1;
 				disposed = true;
 				if (refreshTimer !== undefined) clearTimeout(refreshTimer);
+				if (idOnlyWorkspaceTimer !== undefined) clearTimeout(idOnlyWorkspaceTimer);
 				pendingConversationSessions.clear();
 				pendingReviewSessions.clear();
 				pendingInterfaceTransitionSessions.clear();
@@ -550,12 +620,13 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 				removeBaseUrlListener();
 				removeConnectedHostsListener();
 				source?.close();
-				accountSource?.close();
 				for (const connection of remoteSources.values()) {
 					connection.close?.();
 					if (connection.pollTimer !== undefined) clearInterval(connection.pollTimer);
+					if (connection.idOnlyTimer !== undefined) clearTimeout(connection.idOnlyTimer);
 				}
 				remoteSources.clear();
+				stopPersistingRemoteCache();
 				setEventsConnectionState("idle");
 			};
 		},

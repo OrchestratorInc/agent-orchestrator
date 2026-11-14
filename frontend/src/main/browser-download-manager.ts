@@ -44,7 +44,7 @@ type DownloadShell = {
 	trashItem: (filePath: string) => Promise<void>;
 };
 
-type StoredDownload = BrowserDownload & { savePath: string };
+type StoredDownload = Omit<BrowserDownload, "fileRemovable"> & { savePath: string; superseded?: boolean };
 
 type BrowserDownloadManagerOptions = {
 	downloadsDirectory: string;
@@ -80,8 +80,8 @@ function downloadSource(url: string): string {
 }
 
 function publicDownload(download: StoredDownload): BrowserDownload {
-	const { savePath: _savePath, ...safe } = download;
-	return safe;
+	const { savePath, superseded, ...safe } = download;
+	return { ...safe, fileRemovable: download.status === "completed" && superseded !== true && existsSync(savePath) };
 }
 
 function safeFilename(value: string): string {
@@ -151,6 +151,7 @@ export function createBrowserDownloadManager(options: BrowserDownloadManagerOpti
 		done: (event: unknown, state: "completed" | "cancelled" | "interrupted") => void;
 	}>();
 	const reservedPaths = new Set<string>();
+	const removingItems = new Set<string>();
 	let disposed = false;
 	let downloads: StoredDownload[] = [];
 	let error = "";
@@ -158,16 +159,23 @@ export function createBrowserDownloadManager(options: BrowserDownloadManagerOpti
 	try {
 		const parsed = JSON.parse(readFileSync(options.historyPath, "utf8")) as unknown;
 		if (Array.isArray(parsed)) {
+			const seenPaths = new Set<string>();
 			downloads = parsed
 				.filter((download): download is StoredDownload =>
 					isStoredDownload(download) && isInsideDirectory(options.downloadsDirectory, download.savePath))
-				.map((download) => ({
-					...download,
-					fileName: path.basename(download.savePath),
-					status: download.status === "progressing" || download.status === "paused" ? "interrupted" : download.status,
-					active: false,
-					resumable: false,
-				}));
+				.map((download) => {
+					const key = download.savePath;
+					const superseded = download.superseded === true || seenPaths.has(key);
+					seenPaths.add(key);
+					return {
+						...download,
+						superseded,
+						fileName: path.basename(download.savePath),
+						status: download.status === "progressing" || download.status === "paused" ? "interrupted" : download.status,
+						active: false,
+						resumable: false,
+					};
+				});
 		}
 	} catch {
 		// A missing or malformed optional history file starts with an empty list.
@@ -318,6 +326,9 @@ export function createBrowserDownloadManager(options: BrowserDownloadManagerOpti
 		error = "";
 		const now = (options.now ?? Date.now)();
 		reservedPaths.add(savePath.toLowerCase());
+		downloads = downloads.map((download) => download.savePath === savePath
+			? { ...download, superseded: true }
+			: download);
 		activeItems.set(id, item);
 		const download: StoredDownload = {
 			id,
@@ -440,17 +451,26 @@ export function createBrowserDownloadManager(options: BrowserDownloadManagerOpti
 					return state();
 				case "remove": {
 					if (item) throw new Error("Active downloads cannot be removed");
+					if (removingItems.has(input.id)) throw new Error("Download removal is already in progress");
+					const key = download.savePath.toLowerCase();
+					let reserved = false;
+					removingItems.add(input.id);
 					try {
-						if (existsSync(download.savePath)) {
+						if (download.status === "completed" && download.superseded !== true && !reservedPaths.has(key) && existsSync(download.savePath)) {
 							if (!isInsideDirectory(options.downloadsDirectory, download.savePath)) {
 								throw new Error(DOWNLOAD_DELETE_ERROR);
 							}
 							const file = lstatSync(download.savePath);
 							if (!file.isFile() && !file.isSymbolicLink()) throw new Error(DOWNLOAD_DELETE_ERROR);
+							reservedPaths.add(key);
+							reserved = true;
 							await options.shell.trashItem(download.savePath);
 						}
 					} catch {
 						throw new Error(DOWNLOAD_DELETE_ERROR);
+					} finally {
+						if (reserved) reservedPaths.delete(key);
+						removingItems.delete(input.id);
 					}
 					blockedRequests.delete(input.id);
 					approvals.delete(input.id);

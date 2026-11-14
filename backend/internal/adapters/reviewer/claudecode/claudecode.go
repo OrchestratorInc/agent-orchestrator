@@ -8,6 +8,9 @@ package claudecode
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -32,84 +35,116 @@ func (r *Reviewer) Harness() domain.ReviewerHarness {
 	return domain.ReviewerClaudeCode
 }
 
+// InvalidateBinaryResolution forgets the worker plugin's cached executable, so
+// the next review runs the release an install just switched to.
+func (r *Reviewer) InvalidateBinaryResolution() {
+	if invalidator, ok := r.agent.(ports.AgentBinaryResolutionInvalidator); ok {
+		invalidator.InvalidateBinaryResolution()
+	}
+}
+
 var _ ports.Reviewer = (*Reviewer)(nil)
 var _ ports.ReviewerCanceller = (*Reviewer)(nil)
 var _ ports.ReviewerRestorer = (*Reviewer)(nil)
+var _ ports.ReviewerChatProfile = (*Reviewer)(nil)
 
-// reviewerAllowedTools is the read-only tool allowlist the reviewer launches
-// with. The reviewer runs headless (no human to approve prompts) but must stay
-// read-only, so instead of bypassPermissions — which skips the permission
-// system entirely and ignores allow/deny rules — it launches in the default
-// mode where these rules are honored: allow rules auto-approve without
-// prompting, so the reviewer can read the checkout and run the few commands it
-// needs (git diff/log/show to inspect the PR, gh pr view/diff/checks to read
-// PR metadata, printf to pipe review JSON into the downstream commands without
-// writing a worktree file, and `ao review submit` to record the verdict).
-// Claude Code ≥ 2.1.257 still prompts on Bash commands its analyzer cannot
-// verify statically even when an allow rule matches; the PermissionRequest
-// hook AO installs answers those for reviewers (see
-// cli.reviewerPermissionDecision) so the pane never stalls. That hook is also
-// the only route for the `gh api --method POST .../reviews` call that posts
-// the review: a blanket Bash(gh:*) allow rule would admit merges, closes, and
-// arbitrary API mutations that a prefix deny list cannot enumerate (flag
-// spellings, flag order, graphql).
-var reviewerAllowedTools = []string{
-	"Read",
-	"Grep",
-	"Glob",
-	"Bash(printf:*)",
-	"Bash(gh pr view:*)",
-	"Bash(gh pr diff:*)",
-	"Bash(gh pr checks:*)",
-	"Bash(git diff:*)",
-	"Bash(git log:*)",
-	"Bash(git show:*)",
-	"Bash(git status:*)",
-	"Bash(ao review submit:*)",
-}
-
-// reviewerDisallowedTools hard-denies the write paths as defense in depth, so a
-// misbehaving model cannot edit files or move the branch even if a future
-// allowlist entry would otherwise admit it.
-var reviewerDisallowedTools = []string{
-	"Edit",
-	"Write",
-	"NotebookEdit",
-	"Bash(git push:*)",
-	"Bash(git commit:*)",
-	// The reviewer must never merge. No allow rule admits it, so this only
-	// documents the intent and survives a future broader gh allow entry.
-	"Bash(gh pr merge:*)",
-}
+// ReviewChatHarness runs review passes in Claude Code's typed Chat. The review
+// conversation is read-only, so the Chat launches with the same tool lists and
+// answers permission prompts with the same submit-command rule as the pane.
+func (r *Reviewer) ReviewChatHarness() domain.AgentHarness { return domain.HarnessClaudeCode }
 
 // ReviewCommand builds a claude-code invocation that reviews the worker's
 // checkout for the PR. Production launches provide the standing instructions
 // through an AO-owned prompt file so only the short task-file reference is
 // terminal-visible.
 func (r *Reviewer) ReviewCommand(ctx context.Context, inv ports.ReviewInvocation) (ports.ReviewCommandSpec, error) {
-	agentSessionID := workeragent.SessionUUID(inv.ReviewerID)
+	agentSessionID, err := r.freshSessionID(ctx, inv)
+	if err != nil {
+		return ports.ReviewCommandSpec{}, err
+	}
 	argv, err := r.agent.GetLaunchCommand(ctx, ports.LaunchConfig{
 		Config: inv.Config,
-		// Pin the same deterministic reviewer-native id we persist. Hooks can
-		// later replace it with Claude's reported id, but restore must never start
-		// from an id that the process was not launched with.
+		// Pin the same reviewer-native id we persist. Hooks can later replace
+		// it with Claude's reported id, but restore must never start from an id
+		// that the process was not launched with.
 		SessionID:        inv.ReviewerID,
 		NativeSessionID:  agentSessionID,
 		WorkspacePath:    inv.WorkspacePath,
 		Prompt:           inv.Prompt,
 		SystemPrompt:     inv.SystemPrompt,
 		SystemPromptFile: inv.SystemPromptFile,
-		// Launch off bypassPermissions so the allow/deny lists are enforced.
-		// Set an explicit non-bypass mode instead of deferring to the user's
-		// Claude defaultMode, which may itself be bypassPermissions.
-		Permissions:     ports.PermissionModeAuto,
-		AllowedTools:    reviewerAllowedTools,
-		DisallowedTools: reviewerDisallowedTools,
+		// AO's default mode adds no flag; pinDefaultMode then pins Claude's.
+		Permissions:     ports.PermissionModeDefault,
+		AllowedTools:    workeragent.ReviewerAllowedTools,
+		DisallowedTools: workeragent.ReviewerDisallowedTools,
 	})
 	if err != nil {
 		return ports.ReviewCommandSpec{}, err
 	}
+	if argv, err = pinDefaultMode(argv); err != nil {
+		return ports.ReviewCommandSpec{}, err
+	}
 	return ports.ReviewCommandSpec{Argv: argv, AgentSessionID: agentSessionID}, nil
+}
+
+// pinDefaultMode starts the reviewer pane in Claude's default ("Manual") mode,
+// whatever the user's own defaultMode is. Not bypassPermissions, which ignores
+// the allow list; not auto, whose classifier approves shell commands no rule
+// names (touch, printf > file) without raising the PermissionRequest prompt the
+// reviewer hook answers. In default mode every such call reaches that hook,
+// which denies all but the exact submit commands. The flag-settings defaultMode
+// keeps Claude's one-time auto-mode dialog out of the pane, as AO does for its
+// explicit modes (see the worker adapter's autoDefaultNudgeGuardArgs).
+func pinDefaultMode(argv []string) ([]string, error) {
+	argv = slices.Clone(argv)
+	end := slices.Index(argv, "--")
+	if end < 0 {
+		end = len(argv)
+	}
+	extra := []string{"--permission-mode", "default"}
+	if i := slices.Index(argv[:end], "--settings"); i >= 0 && i+1 < end {
+		settings := map[string]any{}
+		if err := json.Unmarshal([]byte(argv[i+1]), &settings); err != nil {
+			return nil, fmt.Errorf("claude-code reviewer: read launch settings: %w", err)
+		}
+		permissions, _ := settings["permissions"].(map[string]any)
+		if permissions == nil {
+			permissions = map[string]any{}
+		}
+		permissions["defaultMode"] = "default"
+		settings["permissions"] = permissions
+		encoded, err := json.Marshal(settings)
+		if err != nil {
+			return nil, fmt.Errorf("claude-code reviewer: write launch settings: %w", err)
+		}
+		argv[i+1] = string(encoded)
+	} else {
+		extra = append(extra, "--settings", `{"permissions":{"defaultMode":"default"}}`)
+	}
+	return slices.Insert(argv, end, extra...), nil
+}
+
+// freshSessionID is the id a new reviewer conversation launches with. The id
+// derived from the reviewer is the same on every fresh launch for a worker, and
+// Claude Code exits with "Session ID ... is already in use" when --session-id
+// names a conversation that exists, so a taken id is replaced with a new one.
+func (r *Reviewer) freshSessionID(ctx context.Context, inv ports.ReviewInvocation) (string, error) {
+	derived := workeragent.SessionUUID(inv.ReviewerID)
+	probe, canProbe := r.agent.(ports.AgentInterfaceHandoffHistoryProbe)
+	minter, canMint := r.agent.(ports.AgentFreshNativeSessionIDProvider)
+	// Preflight builds a command with no reviewer, so there is nothing to probe.
+	if !canProbe || !canMint || inv.ReviewerID == "" {
+		return derived, nil
+	}
+	session := ports.SessionRef{ID: inv.ReviewerID, WorkspacePath: inv.WorkspacePath}
+	taken, err := probe.NativeConversationExists(ctx, session, derived, nil)
+	if err != nil {
+		return "", err
+	}
+	if taken {
+		return minter.NewNativeSessionID(), nil
+	}
+	return derived, nil
 }
 
 // PreLaunch runs reviewer-specific preflight. For Claude Code this installs the
@@ -133,6 +168,9 @@ func (r *Reviewer) PreLaunch(ctx context.Context, inv ports.ReviewInvocation) er
 		Config:        inv.Config,
 		SessionID:     workeragent.SessionUUID(inv.ReviewerID),
 		WorkspacePath: inv.WorkspacePath,
+		// Any explicit mode: the pane pins its mode in flag settings
+		// (pinDefaultMode), so the user's global config must not be marked.
+		Permissions: ports.PermissionModeAuto,
 	})
 }
 
@@ -153,12 +191,15 @@ func (r *Reviewer) ReviewRestoreCommand(ctx context.Context, inv ports.ReviewInv
 		inv.AgentSessionID = migratedID
 	}
 	cmd, ok, err := agentrestore.Command(ctx, r.agent, inv, agentrestore.Options{
-		Permissions:     ports.PermissionModeAuto,
-		AllowedTools:    reviewerAllowedTools,
-		DisallowedTools: reviewerDisallowedTools,
+		Permissions:     ports.PermissionModeDefault,
+		AllowedTools:    workeragent.ReviewerAllowedTools,
+		DisallowedTools: workeragent.ReviewerDisallowedTools,
 	})
 	if err != nil || !ok {
 		return cmd, ok, err
+	}
+	if cmd.Argv, err = pinDefaultMode(cmd.Argv); err != nil {
+		return ports.ReviewCommandSpec{}, false, err
 	}
 	if cmd.AgentSessionID == "" {
 		cmd.AgentSessionID = workeragent.SessionUUID(inv.ReviewerID)

@@ -2,6 +2,7 @@ import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { useUiStore } from "../../stores/ui-store";
 import { AgentModelCombobox, buildModelSearchIndex, searchModelIndex } from "./AgentModelCombobox";
 
 function renderCombobox(
@@ -64,6 +65,40 @@ describe("AgentModelCombobox", () => {
 		await userEvent.click(screen.getByRole("menuitemradio", { name: "Low" }));
 		expect(picker).toHaveTextContent("Plain");
 		expect(picker).toHaveTextContent("Low");
+	});
+
+	it("disables a model the installed CLI is too old for and explains the fix", async () => {
+		const { onChange } = renderCombobox([
+			{ id: "claude-sonnet-5-5", label: "Sonnet 5.5" },
+			{
+				id: "claude-opus-5-5",
+				label: "Opus 5.5",
+				requiresVersion: "2.1.280",
+				unavailableReason: "Requires Claude Code 2.1.280 or newer (installed: 2.1.239). Run `claude update`, then try again.",
+			},
+		], { compact: true });
+		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
+		const gated = screen.getByRole("menuitem", { name: /Opus 5\.5/ });
+		expect(gated).toHaveAttribute("aria-disabled", "true");
+		expect(gated).toHaveTextContent("Requires Claude Code 2.1.280 or newer");
+		await userEvent.click(gated);
+		expect(onChange).not.toHaveBeenCalled();
+		await userEvent.click(screen.getByRole("menuitem", { name: "Sonnet 5.5" }));
+		expect(onChange).toHaveBeenCalledWith("claude-sonnet-5-5");
+	});
+
+	it("offers Update Claude Code under a model that needs a newer CLI", async () => {
+		const openGlobalSettings = vi.spyOn(useUiStore.getState(), "openGlobalSettings").mockImplementation(() => undefined);
+		useUiStore.setState({ openGlobalSettings });
+		renderCombobox([
+			{ id: "claude-sonnet-5-5", label: "Sonnet 5.5" },
+			{ id: "claude-opus-5-5", label: "Opus 5.5", requiresVersion: "2.1.280", unavailableReason: "Requires Claude Code 2.1.280 or newer." },
+		], { compact: true, agentId: "claude-code", hostId: "remote-host" });
+		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
+		expect(screen.getByRole("menuitem", { name: /Opus 5\.5/ })).toHaveAttribute("aria-disabled", "true");
+		expect(screen.getAllByRole("menuitem", { name: "Update Claude Code" })).toHaveLength(1);
+		await userEvent.click(screen.getByRole("menuitem", { name: "Update Claude Code" }));
+		expect(openGlobalSettings).toHaveBeenCalledWith("harness", expect.objectContaining({ hostId: "remote-host", focusAgentId: "claude-code", harnessView: "local", preserveProject: true }));
 	});
 
 	it("closes only the effort submenu on Escape", async () => {
@@ -329,7 +364,7 @@ describe("AgentModelCombobox", () => {
 
 		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
 		const search = screen.getByRole("searchbox", { name: "Search worker model" });
-		expect(search).toHaveAttribute("placeholder", "Search models…");
+		expect(search).toHaveAttribute("placeholder", "Search models");
 		await userEvent.type(search, "fab");
 		expect(screen.getByRole("menuitem", { name: "Fable" })).toBeInTheDocument();
 		expect(screen.queryByRole("menuitem", { name: "Luna" })).not.toBeInTheDocument();
@@ -496,7 +531,7 @@ describe("AgentModelCombobox", () => {
 		const { onChange } = renderCombobox(models);
 		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
 		const search = screen.getByRole("searchbox", { name: "Search worker model" });
-		expect(search).toHaveAttribute("placeholder", "Search models or providers…");
+		expect(search).toHaveAttribute("placeholder", "Search models or providers");
 		await userEvent.type(search, "provider-1/model-99");
 
 		expect(screen.getByText("provider-1", { selector: "div" })).toBeInTheDocument();
@@ -521,5 +556,19 @@ describe("AgentModelCombobox", () => {
 
 		await userEvent.click(screen.getByRole("menuitem", { name: "Use “private/custom-model” as a custom model" }));
 		expect(onCustom).toHaveBeenCalledWith("private/custom-model");
+	});
+
+	it("lists a Cursor model once and keeps its thinking with its effort", async () => {
+		const { onChange } = renderCombobox([
+			{ id: "claude-opus-4-8-high", label: "Claude Opus 4.8 High", isDefault: true },
+			{ id: "claude-opus-4-8-thinking-high", label: "Claude Opus 4.8 High Thinking" },
+			{ id: "gpt-5.5-high", label: "GPT-5.5 High" },
+		], { agentId: "cursor", value: "claude-opus-4-8-high", compact: true, tuning: { effort: "", onEffortChange: vi.fn() } });
+		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
+		expect(screen.getAllByRole("menuitem", { name: /Claude Opus 4.8/ })).toHaveLength(1);
+		expect(screen.queryByText("Fast mode")).not.toBeInTheDocument();
+		await userEvent.click(screen.getByRole("menuitem", { name: /Reasoning effort/ }));
+		await userEvent.click(await screen.findByText("Thinking"));
+		expect(onChange).toHaveBeenCalledWith("claude-opus-4-8-thinking-high");
 	});
 });

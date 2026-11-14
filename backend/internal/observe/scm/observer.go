@@ -21,6 +21,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/observe"
+	"github.com/aoagents/agent-orchestrator/backend/internal/observe/sentryobs"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
@@ -42,6 +43,14 @@ const (
 	DefaultPRMaxAge = 5 * time.Minute
 	// BatchSize is the maximum number of PRs in one provider batch fetch.
 	BatchSize = 25
+	// DefaultLifecycleTimeout bounds one open PR's lifecycle reaction.
+	// Reactions write into agent panes and chat hosts, and Poll runs them one
+	// after another, so a single wedged session would otherwise stall every
+	// later session's PR status, indefinitely. A timed-out reaction takes the
+	// ordinary lifecycle-failure path: its hashes stay unacknowledged and the
+	// next poll retries it. It only cuts work that honors cancellation; a wake
+	// or a teardown runs on its own budget. Merged and closed PRs are exempt.
+	DefaultLifecycleTimeout = 30 * time.Second
 )
 
 // identityKey builds the cache key for a per-provider, per-host identity.
@@ -81,7 +90,11 @@ type Store interface {
 	ListWorkspaceRepos(ctx context.Context, projectID string) ([]domain.WorkspaceRepoRecord, error)
 	ListPRsBySession(ctx context.Context, sessionID domain.SessionID) ([]domain.PullRequest, error)
 	ListChecks(ctx context.Context, prURL string) ([]domain.PullRequestCheck, error)
+	// PRDetailsUpdatedAt returns the provider updatedAt the PR's stored
+	// details were read at; ok is false when they are due a read.
+	PRDetailsUpdatedAt(ctx context.Context, prURL string) (time.Time, bool, error)
 	WriteSCMObservation(ctx context.Context, pr domain.PullRequest, checks []domain.PullRequestCheck, reviews []domain.PullRequestReview, threads []domain.PullRequestReviewThread, comments []domain.PullRequestComment, reviewMode ports.ReviewWriteMode) error
+	RecordRepositoryRename(ctx context.Context, r domain.RepositoryRename) error
 }
 
 // Lifecycle is the provider-neutral lifecycle notification sink.
@@ -254,14 +267,35 @@ type Observer struct {
 	rateLimitUntil map[string]time.Time
 	// Cache holds bounded in-memory provider ETags and review poll timestamps.
 	Cache ObserverCache
+	// renames holds the repository renames already recorded, keyed
+	// host/old name. One entry per renamed scan repository.
+	renames map[string]string
 	// branchStates refreshes local branch facts on each tick.
 	branchStates BranchStateReconciler
+	// forceMu guards forcedReviews.
+	forceMu sync.Mutex
+	// forcedReviews holds PR URLs whose metadata and review threads the next
+	// poll fetches regardless of guards and review cadence. Each request is
+	// consumed by exactly one poll, whatever its outcome.
+	forcedReviews map[string]bool
+	// forcedSessions holds sessions whose open PRs the next poll fetches
+	// regardless of guards. Guarded by forceMu.
+	forcedSessions map[domain.SessionID]bool
+	// sessionRefreshArmed is true while a debounce timer is pending. Guarded by
+	// forceMu.
+	sessionRefreshArmed bool
+	// sessionRefreshDebounce coalesces a burst of session refresh requests.
+	sessionRefreshDebounce time.Duration
+	// trigger wakes the poll loop for a forced refresh.
+	trigger chan struct{}
+	// lifecycleTimeout bounds each lifecycle notification.
+	lifecycleTimeout time.Duration
 }
 
 // New constructs an Observer with default cadence/cache settings for zero
 // values in cfg.
 func New(provider Provider, store Store, lifecycle Lifecycle, cfg Config) *Observer {
-	o := &Observer{provider: provider, store: store, lifecycle: lifecycle, tick: cfg.Tick, reviewInterval: cfg.ReviewInterval, clock: cfg.Clock, logger: cfg.Logger, scopedIdentityResolver: cfg.ScopedIdentityResolver, Cache: newCache(cfg.CacheMax), rateLimitUntil: map[string]time.Time{}, branchStates: cfg.BranchStates}
+	o := &Observer{provider: provider, store: store, lifecycle: lifecycle, tick: cfg.Tick, reviewInterval: cfg.ReviewInterval, clock: cfg.Clock, logger: cfg.Logger, scopedIdentityResolver: cfg.ScopedIdentityResolver, Cache: newCache(cfg.CacheMax), rateLimitUntil: map[string]time.Time{}, branchStates: cfg.BranchStates, lifecycleTimeout: DefaultLifecycleTimeout, forcedReviews: map[string]bool{}, forcedSessions: map[domain.SessionID]bool{}, sessionRefreshDebounce: 500 * time.Millisecond, trigger: make(chan struct{}, 1)}
 	if o.tick <= 0 {
 		o.tick = DefaultTickInterval
 	}
@@ -297,7 +331,7 @@ func (o *Observer) Start(ctx context.Context) <-chan struct{} {
 		})
 		return o.Poll(ctx)
 	}
-	return observe.StartPollLoop(ctx, o.tick, poll, o.logger, "scm observer")
+	return observe.StartTriggeredPollLoop(ctx, o.tick, o.trigger, poll, o.logger, "scm observer")
 }
 
 type subject struct {
@@ -347,9 +381,98 @@ type persistenceOptions struct {
 	preserveLocalReviewDecision bool
 }
 
+// RequestReviewRefresh asks the poll loop to fetch prURL's metadata and review
+// threads now, for a caller that just changed the PR on the provider (an AO
+// review submission). It does not wait: the refresh is one attempt through the
+// normal poll, its failures are logged there, and the regular cadence remains
+// the fallback.
+func (o *Observer) RequestReviewRefresh(prURL string) {
+	prURL = strings.TrimSpace(prURL)
+	if prURL == "" {
+		return
+	}
+	o.forceMu.Lock()
+	o.forcedReviews[prURL] = true
+	o.forceMu.Unlock()
+	select {
+	case o.trigger <- struct{}{}:
+	default:
+	}
+}
+
+// RequestSessionRefresh asks the poll loop to re-fetch sessionID's open PRs
+// after a short debounce, for a local signal that they probably just changed
+// on the provider (the agent ran `gh pr merge`). It does not wait; the regular
+// cadence remains the fallback.
+func (o *Observer) RequestSessionRefresh(sessionID domain.SessionID) {
+	if sessionID == "" {
+		return
+	}
+	o.forceMu.Lock()
+	defer o.forceMu.Unlock()
+	o.forcedSessions[sessionID] = true
+	if o.sessionRefreshArmed {
+		return
+	}
+	o.sessionRefreshArmed = true
+	time.AfterFunc(o.sessionRefreshDebounce, func() {
+		o.forceMu.Lock()
+		o.sessionRefreshArmed = false
+		o.forceMu.Unlock()
+		select {
+		case o.trigger <- struct{}{}:
+		default:
+		}
+	})
+}
+
+// takeForcedSessions returns and clears the pending forced sessions.
+func (o *Observer) takeForcedSessions() map[domain.SessionID]bool {
+	o.forceMu.Lock()
+	defer o.forceMu.Unlock()
+	forced := o.forcedSessions
+	o.forcedSessions = map[domain.SessionID]bool{}
+	return forced
+}
+
+// takeForcedReviews returns and clears the pending forced refreshes.
+func (o *Observer) takeForcedReviews() map[string]bool {
+	o.forceMu.Lock()
+	defer o.forceMu.Unlock()
+	forced := o.forcedReviews
+	o.forcedReviews = map[string]bool{}
+	return forced
+}
+
+// forcedFor reports whether a forced refresh names this tracked PR.
+func forcedFor(forced map[string]bool, pr domain.PullRequest) bool {
+	return forced[pr.URL] || (pr.HTMLURL != "" && forced[pr.HTMLURL])
+}
+
 // Poll runs one synchronous SCM observation cycle.
-func (o *Observer) Poll(ctx context.Context) error {
+func (o *Observer) Poll(ctx context.Context) (pollErr error) {
+	pollStarted := time.Now()
+	o.logger.Debug("scm observer: poll started", "started_at", pollStarted.UTC())
+	defer func() {
+		completedAt := time.Now()
+		duration := completedAt.Sub(pollStarted)
+		attrs := []any{
+			"stage", "poll",
+			"started_at", pollStarted.UTC(),
+			"completed_at", completedAt.UTC(),
+			"duration_ms", duration.Milliseconds(),
+		}
+		if pollErr != nil {
+			attrs = append(attrs, "err", pollErr)
+		}
+		if duration >= o.tick {
+			o.logger.Warn("scm observer: slow poll completed", attrs...)
+			return
+		}
+		o.logger.Debug("scm observer: poll completed", attrs...)
+	}()
 	now := o.clock().UTC()
+	forcedSessions := o.takeForcedSessions()
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -424,8 +547,8 @@ func (o *Observer) Poll(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-
-	selection := o.selectRefreshCandidates(ctx, subjects, repoGuards, listedPRs, markRepoRefreshFailed, now)
+	forced := o.takeForcedReviews()
+	selection := o.selectRefreshCandidates(ctx, subjects, repoGuards, listedPRs, forced, forcedSessions, markRepoRefreshFailed, now)
 	// Item 2 — terminal-state reconciliation for GitHub: tracked open PRs
 	// not in the current state=open listing may have transitioned to
 	// merged/closed. Run a reconciliation pass that issues a full detail
@@ -476,7 +599,9 @@ func (o *Observer) Poll(ctx context.Context) error {
 		if len(active) == 0 {
 			continue
 		}
+		started := time.Now()
 		batch, err := o.provider.FetchPullRequests(ctx, active)
+		o.logProviderRequest("fetch_pull_requests", repoNames(active), started, err)
 		if err != nil {
 			// If the failure is a rate-limit error, apply a per-provider
 			// cooldown so subsequent polls back off instead of hammering
@@ -546,7 +671,7 @@ func (o *Observer) Poll(ctx context.Context) error {
 	reviewModes := map[string]ports.ReviewWriteMode{}
 	localOnlyObservations := map[string]bool{}
 	reviewStale := map[string]bool{}
-	o.refreshReviews(ctx, subjects, observations, selection.subjectsByPR, reviewModes, localOnlyObservations, reviewStale, now)
+	o.refreshReviews(ctx, subjects, observations, selection.subjectsByPR, forced, reviewModes, localOnlyObservations, reviewStale, now)
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -578,7 +703,22 @@ func (o *Observer) Poll(ctx context.Context) error {
 		}
 		prepared := o.prepareForPersistence(obs, local, opts, now)
 		if !prepared.Changed.Metadata && !prepared.Changed.CI && !prepared.Changed.Review {
-			prRefreshOK[key] = true
+			// Details are left out of the hashes, and a provider reads them only
+			// when none are stored or the PR's updatedAt moved, so details here
+			// with no other change are ones the store lacks (a PR stored before
+			// details existed, or by a path that writes none). Store them; there
+			// is nothing new for lifecycle.
+			// Details still owed (a failed read or write) keep the refresh
+			// incomplete, so the repository cursor waits and they are retried.
+			refreshed := !prepared.PR.DetailsPending
+			if prepared.PR.Details != nil {
+				pr, _, _, _, _ := domainFromObservation(subj.session.ID, subj.session, prepared, local, opts, now)
+				if err := o.store.WriteSCMObservation(ctx, pr, nil, nil, nil, nil, ports.ReviewWritePreserve); err != nil {
+					o.logger.Warn("scm observer: PR details write failed", "session", subj.session.ID, "pr", pr.URL, "err", err)
+					refreshed = false
+				}
+			}
+			prRefreshOK[key] = refreshed
 			continue
 		}
 		finalPR, finalChecks, finalReviews, finalThreads, finalComments := domainFromObservation(subj.session.ID, subj.session, prepared, local, opts, now)
@@ -603,17 +743,29 @@ func (o *Observer) Poll(ctx context.Context) error {
 		}
 		if err := o.store.WriteSCMObservation(ctx, pr, checks, reviews, threads, comments, reviewMode); err != nil {
 			o.logger.Error("scm observer: DB write failed", "session", subj.session.ID, "pr", pr.URL, "err", err)
+			sentryobs.CaptureBackground(ctx, err, "scm", "scm_persist", map[string]string{"reason": "db_write"})
 			markRepoRefreshFailed(subj.repo)
 			continue
 		}
 		if o.lifecycle != nil {
-			if err := o.lifecycle.ApplySCMObservation(ctx, subj.session.ID, prepared); err != nil {
+			// A merged or closed PR is not selected again after a failed
+			// reaction, so its one reaction (teardown, final notifications)
+			// runs unbounded. An open PR is retried on the next poll.
+			lifecycleCtx, cancel := ctx, context.CancelFunc(func() {})
+			if !prepared.PR.Merged && !prepared.PR.Closed {
+				lifecycleCtx, cancel = context.WithTimeout(ctx, o.lifecycleTimeout)
+			}
+			err := o.lifecycle.ApplySCMObservation(lifecycleCtx, subj.session.ID, prepared)
+			cancel()
+			if err != nil {
 				o.logger.Error("scm observer: lifecycle notification failed", "session", subj.session.ID, "pr", firstNonEmpty(prepared.PR.URL, prepared.PR.HTMLURL, local.URL), "err", err)
+				sentryobs.CaptureBackground(ctx, err, "scm", "scm_persist", map[string]string{"reason": "notify"})
 				markRepoRefreshFailed(subj.repo)
 				continue
 			}
 			if err := o.store.WriteSCMObservation(ctx, finalPR, finalChecks, nil, nil, nil, ports.ReviewWritePreserve); err != nil {
 				o.logger.Error("scm observer: DB lifecycle acknowledgement failed", "session", subj.session.ID, "pr", finalPR.URL, "err", err)
+				sentryobs.CaptureBackground(ctx, err, "scm", "scm_persist", map[string]string{"reason": "db_write"})
 				markRepoRefreshFailed(subj.repo)
 				continue
 			}
@@ -625,7 +777,7 @@ func (o *Observer) Poll(ctx context.Context) error {
 		// this branch (it returns at the unchanged-hashes check above), so
 		// its repo stays refresh-incomplete and the ETag/cursor stay pinned.
 		markRepoRefreshOK(subj.repo)
-		prRefreshOK[key] = true
+		prRefreshOK[key] = !prepared.PR.DetailsPending
 	}
 	for key, ok := range prRefreshOK {
 		if !ok {
@@ -940,6 +1092,39 @@ func trackedPRsForSession(sess domain.SessionRecord, prs []domain.PullRequest) [
 	return out
 }
 
+func (o *Observer) logProviderRequest(stage, repository string, startedAt time.Time, err error) {
+	completedAt := time.Now()
+	duration := completedAt.Sub(startedAt)
+	attrs := []any{
+		"stage", stage,
+		"repository", repository,
+		"started_at", startedAt.UTC(),
+		"completed_at", completedAt.UTC(),
+		"duration_ms", duration.Milliseconds(),
+	}
+	if err != nil {
+		attrs = append(attrs, "err", err)
+	}
+	if duration >= o.tick {
+		o.logger.Warn("scm observer: slow provider request completed", attrs...)
+		return
+	}
+	o.logger.Debug("scm observer: provider request completed", attrs...)
+}
+
+func repoNames(refs []ports.SCMPRRef) string {
+	seen := make(map[string]struct{}, len(refs))
+	for _, ref := range refs {
+		seen[repoFullName(ref.Repo)] = struct{}{}
+	}
+	names := make([]string, 0, len(seen))
+	for name := range seen {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return strings.Join(names, ",")
+}
+
 func (o *Observer) guardRepos(ctx context.Context, sessionRepos []sessionRepo) map[string]repoGuardState {
 	repos := map[string]ports.SCMRepo{}
 	for _, sr := range sessionRepos {
@@ -948,7 +1133,9 @@ func (o *Observer) guardRepos(ctx context.Context, sessionRepos []sessionRepo) m
 	out := map[string]repoGuardState{}
 	for key, repo := range repos {
 		prev, had := o.Cache.RepoPRListETag[key]
+		started := time.Now()
 		res, err := o.provider.RepoPRListGuard(ctx, repo, prev)
+		o.logProviderRequest("repo_pr_list_guard", repoFullName(repo), started, err)
 		if err != nil {
 			o.logger.Error("scm observer: repo PR-list guard failed", "repo", repoFullName(repo), "err", err)
 			out[key] = repoGuardState{hadETag: had, err: err}
@@ -1020,7 +1207,9 @@ func (o *Observer) discoverNewPRs(ctx context.Context, sessionRepos []sessionRep
 		if !cursor.IsZero() {
 			updatedAfter = cursor.Add(-incrementalDiscoveryOverlap)
 		}
+		started := time.Now()
 		pulls, err := o.provider.ListPRsByRepo(ctx, repo, updatedAfter)
+		o.logProviderRequest("list_open_prs", repoFullName(repo), started, err)
 		if err != nil {
 			o.logger.Debug("scm observer: open PR list failed", "repo", repoFullName(repo), "err", err)
 			if markRepoFailed != nil && !errors.Is(err, ports.ErrSCMNotFound) {
@@ -1029,6 +1218,7 @@ func (o *Observer) discoverNewPRs(ctx context.Context, sessionRepos []sessionRep
 			continue
 		}
 		pullsByRepo[repoKey] = pulls
+		o.recordRename(ctx, repo, pulls)
 		// Record the listed PR numbers so selectRefreshCandidates can
 		// restrict refresh to only updated MRs rather than every tracked MR.
 		// Subjects are identity-keyed, so when a listed PR's provider id
@@ -1073,7 +1263,7 @@ func (o *Observer) discoverNewPRs(ctx context.Context, sessionRepos []sessionRep
 				continue
 			}
 			id := identities[identityKey(repo.Provider, repo.Host)]
-			if !strings.EqualFold(strings.TrimSpace(pr.Author), id.Login) {
+			if !id.Authored(pr.Author) {
 				continue
 			}
 			if _, ok := subjects[prKey(repo, pr.Number)]; ok {
@@ -1128,6 +1318,7 @@ func (o *Observer) discoverNewPRs(ctx context.Context, sessionRepos []sessionRep
 			// durable, and the session could terminate while that PR is still open.
 			if err := o.store.WriteSCMObservation(ctx, known, nil, nil, nil, nil, ports.ReviewWritePreserve); err != nil {
 				o.logger.Error("scm observer: persist discovered PR failed", "session", sr.session.ID, "pr", known.URL, "err", err)
+				sentryobs.CaptureBackground(ctx, err, "scm", "scm_persist", map[string]string{"reason": "persist"})
 				if markRepoFailed != nil {
 					markRepoFailed(repo)
 				}
@@ -1207,30 +1398,39 @@ func matchSession(candidates []sessionRepo, sourceBranch string) (sessionRepo, b
 		if sr.branch == "" {
 			continue
 		}
-		if sr.branch == sourceBranch {
-			consider(sr, len(sourceBranch)+1)
-		}
-		for _, prefix := range sessionBranchPrefixes(sr.branch) {
-			if prefix == sourceBranch || strings.HasPrefix(sourceBranch, prefix+"/") {
-				consider(sr, len(prefix))
+		// A renamed task keeps owning its temporary branch, which the agent may
+		// have built on. It ranks below any session's current branch, so a later
+		// task given that name still wins its own PRs.
+		for temporary, owned := range []string{sr.branch, sr.session.TemporaryBranch} {
+			if owned == "" {
+				continue
 			}
-		}
-		if workspaceHyphenBranch(sr) && strings.HasPrefix(sourceBranch, sr.branch+"-") && len(sourceBranch) > len(sr.branch)+1 {
-			consider(sr, len(sr.branch))
+			rank := func(length int) int { return 2*length + 1 - temporary }
+			if owned == sourceBranch {
+				consider(sr, rank(len(sourceBranch)+1))
+			}
+			for _, prefix := range sessionBranchPrefixes(owned) {
+				if prefix == sourceBranch || strings.HasPrefix(sourceBranch, prefix+"/") {
+					consider(sr, rank(len(prefix)))
+				}
+			}
+			if workspaceHyphenBranch(sr, owned) && strings.HasPrefix(sourceBranch, owned+"-") && len(sourceBranch) > len(owned)+1 {
+				consider(sr, rank(len(owned)))
+			}
 		}
 	}
 	return best, bestLen >= 0 && !ambiguous
 }
 
-func workspaceHyphenBranch(sr sessionRepo) bool {
+func workspaceHyphenBranch(sr sessionRepo, branch string) bool {
 	if !sr.workspace || sr.session.ID == "" {
 		return false
 	}
 	base := "ao/" + string(sr.session.ID)
-	if sr.branch == base {
+	if branch == base {
 		return true
 	}
-	suffix, ok := strings.CutPrefix(sr.branch, base+"-")
+	suffix, ok := strings.CutPrefix(branch, base+"-")
 	if !ok {
 		return false
 	}
@@ -1249,7 +1449,27 @@ func sessionBranchPrefixes(branch string) []string {
 	return prefixes
 }
 
-func (o *Observer) selectRefreshCandidates(ctx context.Context, subjects map[string]*subject, guards map[string]repoGuardState, listedPRs map[string]bool, markRepoFailed func(ports.SCMRepo), now time.Time) refreshSelection {
+// trackedPRRef is the provider ref for a tracked PR. It carries the provider
+// updatedAt the PR's stored details were read at, so the provider reads them
+// again only once the PR has changed. A failed lookup leaves it zero, which
+// costs a details read and never skips one.
+func (o *Observer) trackedPRRef(ctx context.Context, s *subject) ports.SCMPRRef {
+	ref := ports.SCMPRRef{Repo: s.repo, Number: s.known.Number, URL: s.known.URL}
+	if s.known.URL == "" {
+		return ref
+	}
+	updatedAt, ok, err := o.store.PRDetailsUpdatedAt(ctx, s.known.URL)
+	if err != nil {
+		o.logger.Warn("scm observer: read stored PR details updatedAt failed; reading details again", "pr", s.known.URL, "err", err)
+		return ref
+	}
+	if ok {
+		ref.DetailsUpdatedAt = updatedAt
+	}
+	return ref
+}
+
+func (o *Observer) selectRefreshCandidates(ctx context.Context, subjects map[string]*subject, guards map[string]repoGuardState, listedPRs, forced map[string]bool, forcedSessions map[domain.SessionID]bool, markRepoFailed func(ports.SCMRepo), now time.Time) refreshSelection {
 	selection := refreshSelection{
 		subjectsByPR:  map[string]*subject{},
 		commitETags:   map[string]pendingCacheString{},
@@ -1261,7 +1481,9 @@ func (o *Observer) selectRefreshCandidates(ctx context.Context, subjects map[str
 		}
 		key := keyForTrackedPR(s.known, s.repo)
 		selection.subjectsByPR[key] = s
-		candidate := missingLocalState(s.known)
+		// A forced session's terminal PRs stay terminal; only open ones can move.
+		candidate := missingLocalState(s.known) || forcedFor(forced, s.known) ||
+			(forcedSessions[s.session.ID] && !s.known.Merged && !s.known.Closed)
 		repoCursor := o.Cache.LastSyncCursor[prKey(s.repo, 0)]
 		hasCursor := !repoCursor.IsZero()
 		g := guards[prKey(s.repo, 0)]
@@ -1277,10 +1499,15 @@ func (o *Observer) selectRefreshCandidates(ctx context.Context, subjects map[str
 				candidate = true
 			}
 		}
-		if s.known.HeadSHA != "" {
+		// A poll forced by a session's local signal must not wait on one serial
+		// guard request per other tracked PR; the next regular tick checks them.
+		deferChecksGuard := len(forcedSessions) > 0 && !forcedSessions[s.session.ID]
+		if s.known.HeadSHA != "" && !deferChecksGuard {
 			commitKey := commitKey(s.repo, s.known.HeadSHA)
 			prev := o.Cache.CommitChecksETag[commitKey]
+			started := time.Now()
 			res, err := o.provider.CommitChecksGuard(ctx, s.repo, s.known.HeadSHA, prev)
+			o.logProviderRequest("commit_checks_guard", repoFullName(s.repo), started, err)
 			if err != nil {
 				o.logger.Error("scm observer: commit check-runs guard failed", "pr", s.known.URL, "sha", s.known.HeadSHA, "err", err)
 				if markRepoFailed != nil {
@@ -1324,7 +1551,7 @@ func (o *Observer) selectRefreshCandidates(ctx context.Context, subjects map[str
 			}
 		}
 		if candidate {
-			selection.refs = append(selection.refs, ports.SCMPRRef{Repo: s.repo, Number: s.known.Number, URL: s.known.URL})
+			selection.refs = append(selection.refs, o.trackedPRRef(ctx, s))
 			selection.refKeys = append(selection.refKeys, key)
 			selection.candidateKeys[key] = true
 		}
@@ -1414,7 +1641,7 @@ func (o *Observer) reconcileTerminalGitHubPRs(ctx context.Context, subjects map[
 			continue
 		}
 		refs = append(refs, pendingReconcile{
-			ref: ports.SCMPRRef{Repo: s.repo, Number: s.known.Number, URL: s.known.URL},
+			ref: o.trackedPRRef(ctx, s),
 			s:   s,
 		})
 	}
@@ -1447,7 +1674,9 @@ func (o *Observer) reconcileTerminalGitHubPRs(ctx context.Context, subjects map[
 		for i, r := range activePending {
 			active[i] = r.ref
 		}
+		started := time.Now()
 		batch, err := o.provider.FetchPullRequests(ctx, active)
+		o.logProviderRequest("reconcile_terminal_pull_requests", repoNames(active), started, err)
 		if err != nil {
 			if cooldown, ok := rateLimitCooldown(now, err); ok {
 				for _, ref := range active {
@@ -1520,7 +1749,7 @@ func (o *Observer) enrichFailureLogs(ctx context.Context, obs *ports.SCMObservat
 	}
 	if strings.HasPrefix(local.CIHash, obs.CI.FailedFingerprint+":") {
 		checks, err := o.store.ListChecks(ctx, local.URL)
-		if err == nil && applyStoredFailedLogTails(obs, checks) {
+		if err == nil && obs.CI.ApplyStoredLogTails(checks) {
 			return
 		}
 	}
@@ -1534,7 +1763,10 @@ func (o *Observer) enrichFailureLogs(ctx context.Context, obs *ports.SCMObservat
 		tail := obs.CI.FailedChecks[i].LogTail
 		if tail == "" && obs.CI.FailedChecks[i].ProviderID != "" {
 			var err error
-			tail, err = o.provider.FetchFailedCheckLogTail(ctx, ports.SCMRepo{Provider: obs.Provider, Host: obs.Host, Repo: obs.Repo, Owner: ownerOf(obs.Repo), Name: nameOf(obs.Repo)}, obs.CI.FailedChecks[i])
+			repo := ports.SCMRepo{Provider: obs.Provider, Host: obs.Host, Repo: obs.Repo, Owner: ownerOf(obs.Repo), Name: nameOf(obs.Repo)}
+			started := time.Now()
+			tail, err = o.provider.FetchFailedCheckLogTail(ctx, repo, obs.CI.FailedChecks[i])
+			o.logProviderRequest("fetch_failed_check_log", repoFullName(repo), started, err)
 			if err != nil {
 				tail = "<log fetch failed: " + scrubLine(err.Error()) + ">"
 			}
@@ -1554,38 +1786,7 @@ func checkProviderKey(ch ports.SCMCheckObservation) string {
 	return ch.Name + "\x00" + ch.ProviderID
 }
 
-func applyStoredFailedLogTails(obs *ports.SCMObservation, checks []domain.PullRequestCheck) bool {
-	tailsByName := map[string]string{}
-	for _, ch := range checks {
-		if obs.CI.HeadSHA != "" && ch.CommitHash != "" && ch.CommitHash != obs.CI.HeadSHA {
-			continue
-		}
-		if ch.LogTail != "" && (ch.Status == domain.PRCheckFailed || ch.Status == domain.PRCheckCancelled) {
-			tailsByName[ch.Name] = ch.LogTail
-		}
-	}
-	if len(tailsByName) == 0 {
-		return false
-	}
-	tails := make([]string, 0, len(obs.CI.FailedChecks))
-	for i := range obs.CI.FailedChecks {
-		tail := tailsByName[obs.CI.FailedChecks[i].Name]
-		if tail == "" {
-			return false
-		}
-		obs.CI.FailedChecks[i].LogTail = tail
-		tails = append(tails, tail)
-	}
-	for i := range obs.CI.Checks {
-		if tail := tailsByName[obs.CI.Checks[i].Name]; tail != "" {
-			obs.CI.Checks[i].LogTail = tail
-		}
-	}
-	obs.CI.FailureLogTail = strings.Join(tails, "\n---\n")
-	return true
-}
-
-func (o *Observer) refreshReviews(ctx context.Context, subjects map[string]*subject, observations map[string]ports.SCMObservation, subjectsByPR map[string]*subject, reviewModes map[string]ports.ReviewWriteMode, localOnlyObservations, reviewStale map[string]bool, now time.Time) {
+func (o *Observer) refreshReviews(ctx context.Context, subjects map[string]*subject, observations map[string]ports.SCMObservation, subjectsByPR map[string]*subject, forced map[string]bool, reviewModes map[string]ports.ReviewWriteMode, localOnlyObservations, reviewStale map[string]bool, now time.Time) {
 	for _, s := range subjects {
 		if !s.hasPR || s.known.Number <= 0 {
 			continue
@@ -1600,10 +1801,17 @@ func (o *Observer) refreshReviews(ctx context.Context, subjects map[string]*subj
 			decision = obs.Review.Decision
 		}
 		updatedAtProvider := obs.PR.UpdatedAtProvider
-		if !o.needsReviewRefresh(pkey, s.known, decision, hasObs, updatedAtProvider, now) {
+		if !forcedFor(forced, s.known) && !o.needsReviewRefresh(pkey, s.known, decision, hasObs, updatedAtProvider, now) {
 			continue
 		}
+		// A rate-limited provider gets no calls until its cooldown ends, a forced
+		// refresh included; the regular poll fetches the threads afterwards.
+		if o.inRateLimitCooldown(now, s.repo.Provider) {
+			continue
+		}
+		started := time.Now()
 		review, err := o.provider.FetchReviewThreads(ctx, ports.SCMPRRef{Repo: s.repo, Number: s.known.Number, URL: s.known.URL})
+		o.logProviderRequest("fetch_review_threads", repoFullName(s.repo), started, err)
 		if err != nil {
 			o.logger.Error("scm observer: review refresh failed", "pr", s.known.URL, "err", err)
 			o.cacheSetBool(o.Cache.ReviewRefreshFailed, &o.Cache.reviewFailedOrder, pkey, true)
@@ -1808,6 +2016,11 @@ func domainFromObservation(sessionID domain.SessionID, sessionRecord domain.Sess
 		ReviewObservedAt:         reviewObservedAt,
 		ReviewPartial:            reviewPartial,
 	}
+	if obs.PR.Details != nil {
+		details := *obs.PR.Details
+		details.ObservedAt = obs.ObservedAt
+		pr.Details = &details
+	}
 	checks := make([]domain.PullRequestCheck, 0, len(obs.CI.Checks))
 	for _, ch := range obs.CI.Checks {
 		checks = append(checks, domain.PullRequestCheck{Name: ch.Name, CommitHash: obs.CI.HeadSHA, Status: domain.PRCheckStatus(ch.Status), Conclusion: ch.Conclusion, URL: ch.URL, Details: ch.ProviderID, LogTail: ch.LogTail, CreatedAt: now})
@@ -1835,7 +2048,7 @@ func domainFromObservation(sessionID domain.SessionID, sessionRecord domain.Sess
 	for _, th := range obs.Review.Threads {
 		threads = append(threads, domain.PullRequestReviewThread{ThreadID: th.ID, Path: th.Path, Line: th.Line, Resolved: th.Resolved, IsBot: th.IsBot, SemanticHash: threadSemanticHash(th), UpdatedAt: now})
 		for _, c := range th.Comments {
-			comments = append(comments, domain.PullRequestComment{ThreadID: th.ID, ReviewID: c.ReviewID, ID: c.ID, Author: c.Author, File: th.Path, Line: th.Line, Body: c.Body, URL: c.URL, Resolved: th.Resolved, IsBot: c.IsBot, CreatedAt: now, AutoInjectReview: sessionRecord.AutoInjectReview})
+			comments = append(comments, domain.PullRequestComment{ThreadID: th.ID, ReviewID: c.ReviewID, ID: c.ID, Author: c.Author, File: th.Path, Line: th.Line, Body: c.Body, URL: c.URL, Resolved: th.Resolved, IsBot: c.IsBot, CreatedAt: firstTime(c.CreatedAt, now), AutoInjectReview: sessionRecord.AutoInjectReview})
 		}
 	}
 	return pr, checks, reviews, threads, comments
@@ -1877,7 +2090,7 @@ func ciObservationFromLocal(pr domain.PullRequest, checks []domain.PullRequestCh
 			ProviderID: ch.Details,
 		}
 		ci.Checks = append(ci.Checks, check)
-		if ch.Status == domain.PRCheckFailed || ch.Status == domain.PRCheckCancelled {
+		if ch.Status == domain.PRCheckFailed {
 			ci.FailedChecks = append(ci.FailedChecks, check)
 			if ch.LogTail != "" {
 				tails = append(tails, ch.LogTail)
@@ -2087,6 +2300,32 @@ func repoFullName(repo ports.SCMRepo) string {
 		return repo.Repo
 	}
 	return repo.Owner + "/" + repo.Name
+}
+
+// recordRename stores the provider's current name for repo when its PR
+// listing answers under another name, as a renamed or transferred
+// repository's old name does. Each rename is written once per process.
+func (o *Observer) recordRename(ctx context.Context, repo ports.SCMRepo, pulls []ports.SCMPRObservation) {
+	if len(pulls) == 0 || pulls[0].BaseRepo == "" {
+		return
+	}
+	r := domain.RepositoryRename{
+		Host:    strings.ToLower(repo.Host),
+		OldName: strings.ToLower(repoFullName(repo)),
+		Name:    strings.ToLower(pulls[0].BaseRepo),
+	}
+	key := r.Host + "/" + r.OldName
+	if r.Name == r.OldName || o.renames[key] == r.Name {
+		return
+	}
+	if err := o.store.RecordRepositoryRename(ctx, r); err != nil {
+		o.logger.Warn("scm observer: record repository rename failed", "repo", key, "err", err)
+		return
+	}
+	if o.renames == nil {
+		o.renames = map[string]string{}
+	}
+	o.renames[key] = r.Name
 }
 
 func ownerOf(full string) string {

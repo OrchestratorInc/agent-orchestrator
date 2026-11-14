@@ -27,7 +27,8 @@ func TestGetAgentHooksInstallsOwnedHookAgentAndSkill(t *testing.T) {
 	for path, markers := range map[string][]string{
 		mimoHookPath(workspace):            {mimoHookSentinel, `"mimo-code"`, `"permission.ask"`, `case "question.asked":`, `case "session.created":`},
 		mimoAgentPath(workspace, "sess/1"): {mimoAgentSentinel, "mode: primary", "edit: allow", "Follow AO instructions."},
-		filepath.Join(workspace, ".mimocode", "skills", "using-ao", "SKILL.md"): {"using-ao"},
+		filepath.Join(workspace, ".mimocode", "skills", "using-ao", "SKILL.md"):   {"using-ao"},
+		filepath.Join(workspace, ".mimocode", "skills", "bug-triage", "SKILL.md"): {"bug-triage"},
 	} {
 		data, err := os.ReadFile(path)
 		if err != nil {
@@ -85,5 +86,24 @@ func TestUninstallHooksRemovesOnlyOwnedArtifacts(t *testing.T) {
 	}
 	if _, err := os.Stat(mimoAgentPath(workspace, "sess-1")); !os.IsNotExist(err) {
 		t.Fatalf("AO agent remains: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(workspace, ".mimocode", "skills", "bug-triage")); !os.IsNotExist(err) {
+		t.Fatalf("AO bug-triage skill remains: %v", err)
+	}
+}
+
+func TestMimoAgentAllowsEveryPermissionForBypass(t *testing.T) {
+	// Bypass goes through the agent file: the CLI flag stops at a consent screen
+	// on every terminal launch.
+	for _, mode := range []ports.PermissionMode{ports.PermissionModeAuto, ports.PermissionModeBypassPermissions} {
+		if got := mimoAgentPermission(mode); got != "permission:\n  \"*\": allow\n" {
+			t.Fatalf("%s permission = %q, want every permission allowed", mode, got)
+		}
+		if !usesAOAgent(mode, "", "") {
+			t.Fatalf("%s does not select AO's agent file", mode)
+		}
+	}
+	if got := mimoAgentPermission(ports.PermissionModeDefault); got != "" || usesAOAgent(ports.PermissionModeDefault, "", "") {
+		t.Fatalf("default mode permission = %q, want none", got)
 	}
 }

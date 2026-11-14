@@ -43,6 +43,10 @@ type Manager interface {
 	// local repository as a project.
 	Clone(ctx context.Context, in CloneInput) (Project, error)
 	PrepareClone(ctx context.Context, in CloneInput) (ClonePreparationResult, error)
+	// PrepareCloneWithProgress is PrepareClone that reports each git step
+	// through onProgress as the clone reaches it.
+	PrepareCloneWithProgress(ctx context.Context, in CloneInput, onProgress func(CloneProgress)) (ClonePreparationResult, error)
+	CheckCloneDestination(ctx context.Context, in CloneInput) (CloneDestination, error)
 	CleanupPreparedClone(ctx context.Context, in ClonePreparationCleanupInput) error
 
 	// InitializeRepository prepares a selected folder for project registration.
@@ -52,6 +56,8 @@ type Manager interface {
 	// and per-project config, returning the updated read-model.
 	UpdateSettings(ctx context.Context, id domain.ProjectID, in UpdateSettingsInput) (Project, error)
 	SetPermissions(ctx context.Context, id domain.ProjectID, in SetPermissionsInput) (Project, error)
+	// ForgetPermissions clears the remembered policy, so new sessions use the agent's own default.
+	ForgetPermissions(ctx context.Context, id domain.ProjectID) (Project, error)
 
 	// SetConfig replaces a project's per-project config, returning the updated
 	// read-model.
@@ -68,15 +74,22 @@ type SessionTeardowner interface {
 	TeardownProject(ctx context.Context, project domain.ProjectID) error
 }
 
+// autoSpawnPauser is the session service's view of paused automatic starts.
+// Optional, so focused fakes need not implement it.
+type autoSpawnPauser interface {
+	AutoSpawnPauses(ctx context.Context, project domain.ProjectRecord) []domain.AutoSpawnPause
+}
+
 // Service implements project registration and lookup use-cases for controllers.
 type Service struct {
-	store               Store
-	sessions            SessionTeardowner
-	clock               func() time.Time
-	telemetry           ports.EventSink
-	defaultHarness      domain.AgentHarness
-	logger              *slog.Logger
-	onModelScopeChanged func(projectID string)
+	store          Store
+	sessions       SessionTeardowner
+	clock          func() time.Time
+	telemetry      ports.EventSink
+	milestones     ports.InstallMilestones
+	defaultHarness domain.AgentHarness
+	logger         *slog.Logger
+	githubRepos    ports.GitHubRepositoryResolver
 	// addMu serialises the whole body of Add. Workspace registration performs
 	// filesystem mutations (git init, .gitignore writes, commits) that are not
 	// covered by the store's own writeMu, so path/id conflict checks plus the
@@ -97,12 +110,15 @@ type Deps struct {
 	Sessions       SessionTeardowner
 	Clock          func() time.Time
 	Telemetry      ports.EventSink
+	// Milestones durably records the install's first added project, so
+	// ao.projects.created carries first_for_install. Left nil, it is omitted.
+	Milestones ports.InstallMilestones
 	// Logger receives structured logs. Left nil, the service falls back to
 	// slog.Default, keeping service-focused tests logger-free.
 	Logger *slog.Logger
-	// OnModelScopeChanged schedules non-blocking model-catalog invalidation
-	// after a project is created or its agent-relevant config changes.
-	OnModelScopeChanged func(projectID string)
+	// GitHubRepos resolves a github.com origin to its current owner/name so
+	// Get can report CanonicalRepo after a rename. Left nil, it is omitted.
+	GitHubRepos ports.GitHubRepositoryResolver
 }
 
 // New returns a project service backed by the given durable store.
@@ -117,13 +133,14 @@ func NewWithDeps(d Deps) *Service {
 		defaultHarness = domain.AgentHarness(config.DefaultAgent)
 	}
 	s := &Service{
-		store:               d.Store,
-		sessions:            d.Sessions,
-		clock:               d.Clock,
-		telemetry:           d.Telemetry,
-		defaultHarness:      defaultHarness,
-		logger:              d.Logger,
-		onModelScopeChanged: d.OnModelScopeChanged,
+		store:          d.Store,
+		sessions:       d.Sessions,
+		clock:          d.Clock,
+		telemetry:      d.Telemetry,
+		milestones:     d.Milestones,
+		defaultHarness: defaultHarness,
+		logger:         d.Logger,
+		githubRepos:    d.GitHubRepos,
 	}
 	if s.clock == nil {
 		s.clock = time.Now
@@ -158,6 +175,9 @@ func (m *Service) List(ctx context.Context) ([]Summary, error) {
 			OrchestratorAgent: row.Config.Orchestrator.Harness,
 			FolderMissing:     folderMissing,
 		})
+		if pauser, ok := m.sessions.(autoSpawnPauser); ok {
+			out[len(out)-1].AutoSpawnPauses = pauser.AutoSpawnPauses(ctx, row)
+		}
 	}
 	return out, nil
 }
@@ -182,7 +202,56 @@ func (m *Service) Get(ctx context.Context, id domain.ProjectID) (GetResult, erro
 		}
 		p.WorkspaceRepos = workspaceReposFromRecords(row.Path, repos)
 	}
+	canonical := m.canonicalGitHubRepo(ctx, p.Repo)
+	p.CanonicalRepo, p.CanonicalOwnerAvatarURL = canonical.FullName, canonical.OwnerAvatarURL
 	return GetResult{Status: "ok", Project: &p}, nil
+}
+
+// WarmCanonicalRepos resolves every github.com project origin so the first
+// project read after startup already has CanonicalRepo. Run it in the
+// background: it makes one GitHub request per uncached origin.
+func (m *Service) WarmCanonicalRepos(ctx context.Context) {
+	if m.githubRepos == nil {
+		return
+	}
+	rows, err := m.store.ListProjects(ctx)
+	if err != nil {
+		return
+	}
+	for _, row := range rows {
+		if ctx.Err() != nil {
+			return
+		}
+		if id, err := domain.ParseRepositoryIdentity(row.RepoOriginURL); err == nil && id.Host == "github.com" {
+			_, _ = m.githubRepos.ResolveGitHubRepository(ctx, id.Namespace, id.Name)
+		}
+	}
+}
+
+// canonicalRepoWait bounds how long Get waits for GitHub on a cold cache. A
+// slower lookup keeps running and fills the cache for the next read.
+const canonicalRepoWait = 2 * time.Second
+
+// canonicalGitHubRepo returns GitHub's current identity for a github.com
+// origin, or the zero value when the origin is on any other host or the
+// lookup fails.
+// Only github.com origins are looked up: sending a self-hosted remote's host
+// or owner to a third party would leak internal names.
+func (m *Service) canonicalGitHubRepo(ctx context.Context, origin string) ports.GitHubRepository {
+	if m.githubRepos == nil || origin == "" {
+		return ports.GitHubRepository{}
+	}
+	id, err := domain.ParseRepositoryIdentity(origin)
+	if err != nil || id.Host != "github.com" {
+		return ports.GitHubRepository{}
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, canonicalRepoWait)
+	defer cancel()
+	repo, err := m.githubRepos.ResolveGitHubRepository(waitCtx, id.Namespace, id.Name)
+	if err != nil {
+		return ports.GitHubRepository{}
+	}
+	return repo
 }
 
 // Add registers a local git repository as a project.
@@ -206,15 +275,6 @@ func (m *Service) Add(ctx context.Context, in AddInput) (Project, error) {
 
 	m.addMu.Lock()
 	defer m.addMu.Unlock()
-	if in.ClonePreparationID != "" {
-		markerID, exists, markerErr := readClonePreparationID(path)
-		if markerErr != nil {
-			return Project{}, apierr.Invalid("CLONE_PREPARATION_FAILED", "The prepared clone could not be inspected.", map[string]any{"path": path})
-		}
-		if !exists || !sameClonePreparationID(markerID, in.ClonePreparationID) {
-			return Project{}, apierr.Conflict("CLONE_PREPARATION_MISMATCH", "This checkout belongs to a different clone preparation.", map[string]any{"path": path})
-		}
-	}
 
 	activeProjects, err := m.store.ListProjects(ctx)
 	if err != nil {
@@ -222,6 +282,11 @@ func (m *Service) Add(ctx context.Context, in AddInput) (Project, error) {
 	}
 
 	projectCountBefore := len(activeProjects)
+	// first_for_install must also see archived rows: Remove archives, so an
+	// install upgraded after removing its projects is not on its first project.
+	// A failed count only omits the durable flag; it never fails the add.
+	allProjectsBefore, countErr := m.store.CountProjectsIncludingArchived(ctx)
+	prior := priorProjects{none: countErr == nil && allProjectsBefore == 0, known: countErr == nil}
 
 	name := string(id)
 	if in.Name != nil {
@@ -261,6 +326,16 @@ func (m *Service) Add(ctx context.Context, in AddInput) (Project, error) {
 			"existingProjectId":  existing.ID,
 			"suggestedProjectId": string(m.suggestID(ctx, id)),
 		})
+	}
+
+	if in.ClonePreparationID != "" {
+		markerID, exists, markerErr := readClonePreparationID(path)
+		if markerErr != nil {
+			return Project{}, apierr.Invalid("CLONE_PREPARATION_FAILED", "The prepared clone could not be inspected.", map[string]any{"path": path})
+		}
+		if !exists || !sameClonePreparationID(markerID, in.ClonePreparationID) {
+			return Project{}, apierr.Conflict("CLONE_PREPARATION_MISMATCH", "This checkout belongs to a different clone preparation.", map[string]any{"path": path})
+		}
 	}
 
 	if existing, ok, err := m.store.GetProject(ctx, string(id)); err != nil {
@@ -308,11 +383,10 @@ func (m *Service) Add(ctx context.Context, in AddInput) (Project, error) {
 		if err := m.store.UpsertWorkspaceProject(ctx, row, repos); err != nil {
 			return Project{}, apierr.Internal("PROJECT_ADD_FAILED", "Failed to register workspace project")
 		}
-		m.modelScopeChanged(row.ID)
 		if in.ClonePreparationID != "" {
 			removeClonePreparationMarker(path)
 		}
-		m.emitProjectAdded(ctx, row, projectCountBefore == 0)
+		m.emitProjectAdded(ctx, row, projectCountBefore == 0, prior)
 		p := m.projectFromRow(ctx, row)
 		p.WorkspaceRepos = workspaceReposFromRecords(row.Path, repos)
 		return p, nil
@@ -342,10 +416,10 @@ func (m *Service) Add(ctx context.Context, in AddInput) (Project, error) {
 	}()
 	probes.Wait()
 	if !isRepo {
-		return Project{}, apierr.Invalid("NOT_A_GIT_REPO", "AO needs a Git repository with an initial commit before it can create agent workspaces.", nil)
+		return Project{}, apierr.Invalid("NOT_A_GIT_REPO", "Orchestrator needs a Git repository with an initial commit before it can create agent workspaces.", nil)
 	}
 	if !hasCommit {
-		return Project{}, apierr.Invalid("PROJECT_UNBORN", "AO needs a Git repository with an initial commit before it can create agent workspaces.", map[string]any{
+		return Project{}, apierr.Invalid("PROJECT_UNBORN", "Orchestrator needs a Git repository with an initial commit before it can create agent workspaces.", map[string]any{
 			"path":         path,
 			"suggestedFix": "Run `git commit --allow-empty -m \"initial commit\"` in this folder, then try again.",
 		})
@@ -360,8 +434,7 @@ func (m *Service) Add(ctx context.Context, in AddInput) (Project, error) {
 	if in.ClonePreparationID != "" {
 		removeClonePreparationMarker(path)
 	}
-	m.modelScopeChanged(row.ID)
-	m.emitProjectAdded(ctx, row, projectCountBefore == 0)
+	m.emitProjectAdded(ctx, row, projectCountBefore == 0, prior)
 	return m.projectFromRow(ctx, row), nil
 }
 
@@ -378,15 +451,42 @@ func (m *Service) InitializeRepository(ctx context.Context, in InitializeReposit
 	if err != nil {
 		return InitializeRepositoryResult{}, err
 	}
-	if err := ensureDirectoryPath(path); err != nil {
-		return InitializeRepositoryResult{}, err
-	}
+
+	// Before anything is made: a create the check refuses must leave no folders,
+	// and MkdirAll would otherwise make the path's missing parents first.
 	if err := validateRepositorySetupPathSafety(path); err != nil {
 		return InitializeRepositoryResult{}, err
 	}
 
 	m.addMu.Lock()
 	defer m.addMu.Unlock()
+
+	recordCreateID := false
+	if in.Create {
+		if in.CreateID != "" && !projectCreateIDPattern.MatchString(in.CreateID) {
+			return InitializeRepositoryResult{}, apierr.Invalid("INVALID_CREATE_ID", "createId must be 1-64 letters, digits, or hyphens, starting with a letter or digit.", nil)
+		}
+		if in.CreateID != "" && createdByRequest(ctx, path, in.CreateID) {
+			// A retry of a create whose response was lost: the folder is this
+			// request's own. Done if it got its first commit; otherwise go on.
+			if repoHasCommit(ctx, path) {
+				return InitializeRepositoryResult{Path: path}, nil
+			}
+		} else {
+			if err := createProjectFolder(path); err != nil {
+				return InitializeRepositoryResult{}, err
+			}
+			defer func() {
+				if retErr != nil {
+					_ = os.RemoveAll(path)
+				}
+			}()
+			recordCreateID = in.CreateID != ""
+		}
+	}
+	if err := ensureDirectoryPath(path); err != nil {
+		return InitializeRepositoryResult{}, err
+	}
 
 	target, err := classifyRepositorySetupTarget(ctx, path)
 	if err != nil {
@@ -408,6 +508,11 @@ func (m *Service) InitializeRepository(ctx context.Context, in InitializeReposit
 			return InitializeRepositoryResult{}, apierr.Invalid("GIT_INIT_FAILED", "Could not initialize a Git repository in this folder.", map[string]any{"error": err.Error()})
 		}
 	}
+	if recordCreateID {
+		if _, err := gitOutput(ctx, path, "config", "--local", projectCreateIDConfigKey, in.CreateID); err != nil {
+			return InitializeRepositoryResult{}, apierr.Invalid("GIT_INIT_FAILED", "Could not record the new project in its repository.", map[string]any{"error": err.Error()})
+		}
+	}
 	if err := gitdefault.New("git", nil).RecordInitialBranch(ctx, path); err != nil {
 		return InitializeRepositoryResult{}, apierr.Invalid("GIT_INIT_FAILED", "Could not record the default branch for this repository.", map[string]any{"error": err.Error()})
 	}
@@ -425,7 +530,7 @@ func classifyRepositorySetupTarget(ctx context.Context, path string) (repository
 	if isBareGitRepository(ctx, path) {
 		return repositorySetupPlainFolder, apierr.Invalid("PROJECT_BARE_REPOSITORY", "Selected folder must be a non-bare Git repository or a plain folder.", map[string]any{
 			"path":         path,
-			"suggestedFix": "Use a normal checkout, or select a plain folder for AO to initialize.",
+			"suggestedFix": "Use a normal checkout, or select a plain folder for Orchestrator to initialize.",
 		})
 	}
 
@@ -437,7 +542,7 @@ func classifyRepositorySetupTarget(ctx context.Context, path string) (repository
 	}
 
 	if hasGitMetadata(path) {
-		return repositorySetupPlainFolder, apierr.Invalid("UNSUPPORTED_GIT_REPO", "Selected folder contains Git metadata that AO could not inspect.", map[string]any{
+		return repositorySetupPlainFolder, apierr.Invalid("UNSUPPORTED_GIT_REPO", "Selected folder contains Git metadata that Orchestrator could not inspect.", map[string]any{
 			"path":         path,
 			"suggestedFix": "Repair the Git repository or select a plain folder.",
 		})
@@ -469,7 +574,7 @@ func validateRepositorySetupPathSafety(path string) error {
 
 	aoState := comparablePath(filepath.Join(home, ".ao"))
 	if samePath(clean, aoState) || isDescendantPath(clean, aoState) {
-		return unsafeRepositorySetupPathError(path, "AO state directory")
+		return unsafeRepositorySetupPathError(path, "Orchestrator state directory")
 	}
 	return nil
 }
@@ -572,7 +677,20 @@ func nestedGitRepositoryPaths(root string) ([]string, error) {
 	return nested, nil
 }
 
-func (m *Service) emitProjectAdded(ctx context.Context, row domain.ProjectRecord, firstProject bool) {
+// priorProjects is whether any project row, archived included, existed before
+// an add; known is false when that could not be read.
+type priorProjects struct{ none, known bool }
+
+// emitProjectAdded reports an add. firstProject (no active projects before)
+// drives the deprecated first_project_added event; prior drives the durable
+// first_for_install flag.
+func (m *Service) emitProjectAdded(ctx context.Context, row domain.ProjectRecord, firstProject bool, prior priorProjects) {
+	// Claimed even when telemetry is off: the marker describes the install. An
+	// unreadable prior count leaves the marker unclaimed and the flag omitted.
+	var firstForInstall, firstKnown bool
+	if prior.known {
+		firstForInstall, firstKnown = ports.FirstForInstall(m.milestones, "project_added", prior.none)
+	}
 	if m.telemetry == nil {
 		return
 	}
@@ -594,6 +712,11 @@ func (m *Service) emitProjectAdded(ctx context.Context, row domain.ProjectRecord
 	if owner := githubOwner(row.RepoOriginURL); owner != "" {
 		payload["github_org"] = owner
 	}
+	// Only ao.projects.created allowlists first_for_install; the deprecated
+	// first_project_added event below drops it at export.
+	if firstKnown {
+		payload["first_for_install"] = firstForInstall
+	}
 	m.telemetry.Emit(context.Background(), ports.TelemetryEvent{
 		Name:       "ao.projects.created",
 		Source:     "project_service",
@@ -603,11 +726,14 @@ func (m *Service) emitProjectAdded(ctx context.Context, row domain.ProjectRecord
 		RequestID:  reqid.FromContext(ctx),
 		Payload:    payload,
 	})
+	// Deprecated: first_project_added fires whenever the projects table is
+	// empty. Use ao.projects.created with first_for_install=true. Kept for
+	// dashboard continuity.
 	if !firstProject {
 		return
 	}
 	m.telemetry.Emit(context.Background(), ports.TelemetryEvent{
-		Name:       "ao.onboarding.first_project_added",
+		Name:       "ao.projects.first_added",
 		Source:     "project_service",
 		OccurredAt: at,
 		Level:      ports.TelemetryLevelInfo,
@@ -739,14 +865,7 @@ func (m *Service) UpdateSettings(ctx context.Context, id domain.ProjectID, in Up
 	}
 	row.DisplayName = inDisplayName
 	row.Config = in.Config
-	m.modelScopeChanged(row.ID)
 	return m.projectFromRow(ctx, row), nil
-}
-
-func (m *Service) modelScopeChanged(projectID string) {
-	if m.onModelScopeChanged != nil {
-		m.onModelScopeChanged(projectID)
-	}
 }
 
 // SetConfig replaces the project's stored config. The typed config is validated
@@ -777,7 +896,6 @@ func (m *Service) SetConfig(ctx context.Context, id domain.ProjectID, in SetConf
 	if err := m.store.UpsertProject(ctx, row); err != nil {
 		return Project{}, apierr.Internal("PROJECT_CONFIG_UPDATE_FAILED", "Failed to update project config")
 	}
-	m.modelScopeChanged(row.ID)
 	return m.projectFromRow(ctx, row), nil
 }
 
@@ -949,6 +1067,43 @@ func folderExists(path string) (bool, error) {
 	return true, nil
 }
 
+// projectCreateIDConfigKey records, in a new project's repository, the create
+// request that made it, so a retry of that request can resume it.
+const projectCreateIDConfigKey = "ao.createId"
+
+var projectCreateIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]{0,63}$`)
+
+// createdByRequest reports whether path is a repository a create request with
+// id made: it exists and its local Git config carries the same id.
+func createdByRequest(ctx context.Context, path, id string) bool {
+	if info, err := os.Stat(path); err != nil || !info.IsDir() || !hasGitMetadata(path) {
+		return false
+	}
+	out, err := gitOutput(ctx, path, "config", "--local", "--get", projectCreateIDConfigKey)
+	return err == nil && strings.TrimSpace(out) == id
+}
+
+// createProjectFolder makes the folder for a new, empty project. It refuses a
+// path that already exists, so a new project never takes over an existing
+// folder; adding an existing folder is POST /projects.
+func createProjectFolder(path string) error {
+	failed := func(err error) error {
+		return apierr.Invalid("PROJECT_FOLDER_CREATE_FAILED", "Orchestrator could not create the project folder.", map[string]any{"path": path, "error": err.Error()})
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+		return failed(err)
+	}
+	// Mkdir, not MkdirAll: it fails when the folder exists, even if it appeared
+	// a moment ago, so the cleanup after a failed setup only removes ours.
+	if err := os.Mkdir(path, 0o750); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return apierr.Conflict("PATH_EXISTS", "A folder with this name already exists.", map[string]any{"path": path})
+		}
+		return failed(err)
+	}
+	return nil
+}
+
 func ensureDirectoryPath(path string) error {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -988,9 +1143,22 @@ func normalizeGitReportedPath(base, reported string) string {
 func comparablePath(path string) string {
 	clean := filepath.Clean(path)
 	if resolved, err := filepath.EvalSymlinks(clean); err == nil {
-		clean = resolved
+		return filepath.Clean(resolved)
 	}
-	return filepath.Clean(clean)
+	// Not there yet (a folder a create is about to make): resolve the nearest
+	// folder that is, so a path under a symlinked home still compares as under it.
+	rest := []string{}
+	for dir := clean; ; {
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return clean
+		}
+		rest = append([]string{filepath.Base(dir)}, rest...)
+		dir = parent
+		if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+			return filepath.Join(append([]string{resolved}, rest...)...)
+		}
+	}
 }
 
 func samePath(a, b string) bool {
@@ -1090,6 +1258,18 @@ func (m *Service) SetPermissions(ctx context.Context, id domain.ProjectID, in Se
 	if in.SourceHarness == domain.HarnessCodex && permissions == domain.PermissionModeDefault {
 		permissions = domain.PermissionModeBypassPermissions
 	}
+	return m.storePermissions(ctx, id, permissions)
+}
+
+// ForgetPermissions clears the remembered approval policy. Existing sessions keep theirs.
+func (m *Service) ForgetPermissions(ctx context.Context, id domain.ProjectID) (Project, error) {
+	if err := validateProjectID(id); err != nil {
+		return Project{}, err
+	}
+	return m.storePermissions(ctx, id, "")
+}
+
+func (m *Service) storePermissions(ctx context.Context, id domain.ProjectID, permissions domain.PermissionMode) (Project, error) {
 	row, ok, err := m.store.SetProjectPermissions(ctx, string(id), permissions)
 	if err != nil {
 		return Project{}, apierr.Internal("PROJECT_PERMISSIONS_UPDATE_FAILED", "Failed to update project permissions")

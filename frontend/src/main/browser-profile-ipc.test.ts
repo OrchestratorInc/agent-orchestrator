@@ -46,6 +46,8 @@ async function setup(confirmSwitch = vi.fn(async () => true)) {
 			state = { viewId: state.viewId, profileId, temporary: profileId === null };
 			return state;
 		}),
+		getProfileUsage: vi.fn((profileId: string) => state.profileId === profileId ? [{ viewId: state.viewId, sessionId: "worker-1", blocker: null }] : []),
+		detachProfile: vi.fn(async (_profileId: string) => { state = { ...state, profileId: null, temporary: true }; }),
 		isProfileLive: vi.fn((profileId: string) => state.profileId === profileId),
 		clearProfileData: vi.fn(async () => undefined),
 	};
@@ -182,25 +184,53 @@ describe("browser profile IPC", () => {
 		expect(host.switchProfile).not.toHaveBeenCalled();
 	});
 
-	it("refuses clear/delete while live and cleans storage before deleting an idle profile", async () => {
+	it("keeps clear guarded but switches live browsers before deleting on confirmation", async () => {
 		const { invoke, shell, store, host, state } = await setup();
 		const profile = await store.createProfile("Work");
 		state().profileId = profile.id;
-		state().temporary = false;
-
-		await expect(invoke("browserProfiles:clear", shell, { id: profile.id })).rejects.toMatchObject({
-			code: "BROWSER_PROFILE_ACTIVE",
-		});
-		await expect(invoke("browserProfiles:delete", shell, { id: profile.id })).rejects.toMatchObject({
-			code: "BROWSER_PROFILE_ACTIVE",
-		});
-		expect(host.clearProfileData).not.toHaveBeenCalled();
-
-		state().profileId = null;
-		state().temporary = true;
-		await invoke("browserProfiles:delete", shell, { id: profile.id });
+		await expect(invoke("browserProfiles:clear", shell, { id: profile.id })).rejects.toMatchObject({ code: "BROWSER_PROFILE_ACTIVE" });
+		expect(await invoke("browserProfiles:usage", shell, { id: profile.id })).toEqual({ sessions: [{ viewId: state().viewId, sessionId: "worker-1", blocker: null }] });
+		expect(await invoke("browserProfiles:delete", shell, { id: profile.id, confirmedViewIds: [state().viewId] })).toEqual({});
+		expect(host.detachProfile).toHaveBeenCalledWith(profile.id);
 		expect(host.clearProfileData).toHaveBeenCalledWith(profile.id);
+		expect(host.detachProfile.mock.invocationCallOrder[0]).toBeLessThan(host.clearProfileData.mock.invocationCallOrder[0]!);
 		expect(store.getProfile(profile.id)).toBeUndefined();
+	});
+
+	it("requires fresh confirmation when another browser joins and rejects untrusted deletion", async () => {
+		const { invoke, shell, renderer, store, host, state } = await setup();
+		const profile = await store.createProfile("Work");
+		state().profileId = profile.id;
+		expect(await invoke("browserProfiles:delete", renderer, { id: profile.id, confirmedViewIds: [] })).toMatchObject({ error: expect.stringContaining("denied") });
+		expect(await invoke("browserProfiles:usage", renderer, { id: profile.id })).toMatchObject({ sessions: [], error: expect.any(String) });
+		expect(await invoke("browserProfiles:delete", shell, { id: profile.id, confirmedViewIds: [] })).toMatchObject({ error: expect.stringContaining("sessions changed") });
+		expect(host.detachProfile).not.toHaveBeenCalled();
+		expect(host.clearProfileData).not.toHaveBeenCalled();
+		expect(store.getProfile(profile.id)).toBeDefined();
+	});
+
+	it("reserves the profile during switching and retains it when switching fails", async () => {
+		const { invoke, shell, store, host, state } = await setup();
+		const profile = await store.createProfile("Work");
+		state().profileId = profile.id;
+		host.detachProfile.mockImplementationOnce(async () => {
+			expect(store.isProfileOperationInProgress(profile.id)).toBe(true);
+			throw Object.assign(new Error("Wait for browser activity in worker-1."), { code: "BROWSER_PROFILE_ACTIVE" });
+		});
+		expect(await invoke("browserProfiles:delete", shell, { id: profile.id, confirmedViewIds: [state().viewId] })).toEqual({ error: "Wait for browser activity in worker-1." });
+		expect(host.clearProfileData).not.toHaveBeenCalled();
+		expect(store.getProfile(profile.id)).toBeDefined();
+		expect(store.isProfileOperationInProgress(profile.id)).toBe(false);
+	});
+
+	it("does not expose raw storage errors or delete the registry after cleanup fails", async () => {
+		const { invoke, shell, store, host } = await setup();
+		const profile = await store.createProfile("Work");
+		host.clearProfileData.mockRejectedValueOnce(new Error("secret/path: disk error"));
+		const result = await invoke("browserProfiles:delete", shell, { id: profile.id, confirmedViewIds: [] });
+		expect(result).toMatchObject({ error: expect.stringContaining("Could not finish deleting") });
+		expect(JSON.stringify(result)).not.toContain("secret/path");
+		expect(store.getProfile(profile.id)).toBeDefined();
 	});
 
 	it("allows import only from the trusted shell and forwards scoped progress", async () => {

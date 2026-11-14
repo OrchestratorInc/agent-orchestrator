@@ -302,3 +302,20 @@ func TestSessionIDFromHostRejectsOrdinaryHosts(t *testing.T) {
 		}
 	}
 }
+
+func TestStoredArtifactPreviewKeepsItsScope(t *testing.T) {
+	raw, err := ArtifactFileURL("http://127.0.0.1:3002", "ao-1", "pages/test page.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry, ok := StoredEntryFromPreview(raw, "ao-1")
+	if !ok || entry.Scope != StoredEntryScopeArtifact || entry.Path != "pages/test page.html" {
+		t.Fatalf("entry=%+v ok=%v", entry, ok)
+	}
+	if _, ok := StoredWorkspaceEntry(raw, "ao-1"); ok {
+		t.Fatal("artifact was treated as workspace")
+	}
+	if _, ok := StoredEntryFromPreview(raw, "ao-2"); ok {
+		t.Fatal("accepted another session's artifact")
+	}
+}

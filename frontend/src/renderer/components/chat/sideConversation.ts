@@ -55,10 +55,12 @@ export function sideConversationMessage(message: SideMessage, turns: readonly Si
 		content: user
 			? (turns.find((turn) => turn.id === message.turnId)?.references ?? []).map((ref) => ({
 					type: "excerpt",
+					annotationId: ref.id, annotationOrder: ref.order,
 					text: ref.selection,
+					comment: ref.comment || undefined,
 					sourceConversationId: ref.conversationId,
 					sourceMessageId: ref.messageId,
-					sourceRevision: ref.revision,
+					sourceRevision: ref.revision, snapshot: ref.snapshot,
 				}))
 			: undefined,
 	};
@@ -74,6 +76,8 @@ export function sideConversationActivity(activity: SideActivity): ConversationAc
 						? activity.detail
 						: {}),
 					output: activity.text,
+					// The detail's own copy of the output may have been cut; this one was not.
+					outputTruncated: undefined,
 				}
 			: activity.detail;
 	return {

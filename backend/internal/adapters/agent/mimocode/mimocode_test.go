@@ -51,8 +51,8 @@ func TestGetLaunchCommandMapsPromptModelAndPermissions(t *testing.T) {
 	}{
 		{name: "default", mode: ports.PermissionModeDefault, want: []string{"mimo", "--trust", "--model", "mimo/mimo-v2-pro", "--agent", "ao-sess-1", "--prompt", "-fix this"}},
 		{name: "accept edits", mode: ports.PermissionModeAcceptEdits, want: []string{"mimo", "--trust", "--model", "mimo/mimo-v2-pro", "--agent", "ao-sess-1", "--prompt", "-fix this"}},
-		{name: "auto", mode: ports.PermissionModeAuto, want: []string{"mimo", "--trust", "--dangerously-skip-permissions", "--model", "mimo/mimo-v2-pro", "--agent", "ao-sess-1", "--prompt", "-fix this"}},
-		{name: "bypass", mode: ports.PermissionModeBypassPermissions, want: []string{"mimo", "--trust", "--dangerously-skip-permissions", "--model", "mimo/mimo-v2-pro", "--agent", "ao-sess-1", "--prompt", "-fix this"}},
+		{name: "auto", mode: ports.PermissionModeAuto, want: []string{"mimo", "--trust", "--model", "mimo/mimo-v2-pro", "--agent", "ao-sess-1", "--prompt", "-fix this"}},
+		{name: "bypass", mode: ports.PermissionModeBypassPermissions, want: []string{"mimo", "--trust", "--model", "mimo/mimo-v2-pro", "--agent", "ao-sess-1", "--prompt", "-fix this"}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -86,7 +86,7 @@ func TestGetRestoreCommandUsesExactNativeSessionAndReappliesSettings(t *testing.
 	if !ok {
 		t.Fatal("ok = false, want true")
 	}
-	want := []string{"mimo", "--trust", "--dangerously-skip-permissions", "--model", "anthropic/claude-sonnet-4-6", "--agent", "ao-sess-1", "--session", "ses_abc123", "--prompt", "continue now"}
+	want := []string{"mimo", "--trust", "--model", "anthropic/claude-sonnet-4-6", "--agent", "ao-sess-1", "--session", "ses_abc123", "--prompt", "continue now"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("command\nwant: %#v\n got: %#v", want, cmd)
 	}

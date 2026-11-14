@@ -18,6 +18,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/inputdelay"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/ptyexec"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -60,6 +61,7 @@ type Options struct {
 	ChunkSize    int           // default 16*1024
 	EnterDelay   time.Duration // pause after pasting a non-empty message before pressing Enter; default defaultEnterDelay. Conpty already does this (ptyInputEnterDelay); tmux lacked it, so a large multiline paste could absorb the trailing Enter and leave the prompt unsubmitted (issue #2342).
 	ReapGrace    time.Duration // grace between SIGTERM and SIGKILL when reaping a pane's leftover background processes on Destroy; default defaultReapGrace.
+	EnvDir       string        // where launch environment files are written; default <AO data dir>/runtime-env (see launchEnvDir)
 }
 
 // Runtime runs agent sessions inside tmux sessions, driving them via the tmux
@@ -73,6 +75,7 @@ type Runtime struct {
 	chunkSize      int
 	enterDelay     time.Duration
 	reapGrace      time.Duration
+	envDir         string
 	runner         runner
 	reapSessions   func(ctx context.Context, pids []int, grace time.Duration)
 	socketMu       sync.RWMutex
@@ -332,6 +335,7 @@ func New(opts Options) *Runtime {
 		chunkSize:      chunkSize,
 		enterDelay:     enterDelay,
 		reapGrace:      reapGrace,
+		envDir:         opts.EnvDir,
 		runner:         execRunner{},
 		reapSessions:   killSessionsByPID,
 		sessionSockets: make(map[string]string),
@@ -355,7 +359,19 @@ func (r *Runtime) Create(ctx context.Context, cfg ports.RuntimeConfig) (ports.Ru
 		return ports.RuntimeHandle{}, tmuxCreateFailure(err)
 	}
 
-	launchCmd := buildLaunchCommand(cfg)
+	envFile, err := r.writeLaunchEnv(ctx, cfg)
+	if err != nil {
+		return ports.RuntimeHandle{}, tmuxCreateFailure(err)
+	}
+	// The pane's shell deletes the file once it has read it. Delete it here
+	// too when the session never comes up, so no secret is left behind.
+	created := false
+	defer func() {
+		if !created {
+			_ = os.Remove(envFile)
+		}
+	}()
+	launchCmd := buildLaunchCommand(cfg, envFile)
 	args := newSessionArgs(id, cfg.WorkspacePath, r.shell, launchCmd)
 	if _, err := r.run(ctx, args...); err != nil {
 		return ports.RuntimeHandle{}, tmuxPossibleCreateFailure(
@@ -403,6 +419,7 @@ func (r *Runtime) Create(ctx context.Context, cfg ports.RuntimeConfig) (ports.Ru
 	if !alive {
 		return ports.RuntimeHandle{}, r.failedCreatedRuntime(handle, fmt.Errorf("tmux runtime: session %s exited before ready", id))
 	}
+	created = true
 	return handle, nil
 }
 
@@ -438,15 +455,25 @@ func (r *Runtime) Restart(ctx context.Context, handle ports.RuntimeHandle, cfg p
 		return ports.RuntimeHandle{}, err
 	}
 
-	launchCmd := buildLaunchCommand(cfg)
+	envFile, err := r.writeLaunchEnv(ctx, cfg)
+	if err != nil {
+		return ports.RuntimeHandle{}, err
+	}
+	launchCmd := buildLaunchCommand(cfg, envFile)
 	if _, err := r.runForSession(ctx, id, respawnPaneArgs(id, cfg.WorkspacePath, r.shell, launchCmd)...); err != nil {
+		_ = os.Remove(envFile)
 		return ports.RuntimeHandle{}, fmt.Errorf("tmux runtime: restart session %s: %w", id, err)
 	}
 	alive, err := r.IsAlive(ctx, handle)
 	if err != nil {
+		// A failed probe does not show the pane is gone: it may still be
+		// starting and will read, then delete, the file itself.
 		return ports.RuntimeHandle{}, fmt.Errorf("tmux runtime: verify restarted session %s: %w", id, err)
 	}
 	if !alive {
+		// The pane exited, possibly before its shell read the file: no later
+		// reader exists, so the secrets it holds go now.
+		_ = os.Remove(envFile)
 		return ports.RuntimeHandle{}, fmt.Errorf("tmux runtime: session %s exited during restart", id)
 	}
 	return handle, nil
@@ -808,6 +835,82 @@ func (r *Runtime) HasSupervisedProcessRecord(ctx context.Context, handle ports.R
 	return false, nil
 }
 
+// RunningWorkloadCommands counts shell commands below the exact supervised
+// agent for ref (see ports.WorkloadCommandInspector).
+func (r *Runtime) RunningWorkloadCommands(ctx context.Context, handle ports.RuntimeHandle, ref ports.SupervisedProcessRef) (int, error) {
+	if ref.SessionID == "" || strings.TrimSpace(ref.LaunchID) == "" {
+		return 0, errors.New("tmux runtime: exact supervisor session and launch are required")
+	}
+	entries, panePID, err := r.supervisedProcessTree(ctx, handle)
+	if err != nil {
+		return 0, err
+	}
+	return countWorkloadCommands(entries, panePID, string(ref.SessionID), ref.LaunchID)
+}
+
+// countWorkloadCommands finds the agent the exact supervisor launched and
+// counts the shells it spawned, with everything below them.
+func countWorkloadCommands(entries []processEntry, panePID int, sessionID, launchID string) (int, error) {
+	descendants := descendantPIDs(entries, panePID)
+	supervisor := 0
+	for _, entry := range entries {
+		if entry.pid != panePID && descendants[entry.pid] && isSupervisorCommand(entry.command, sessionID, launchID) {
+			supervisor = entry.pid
+			break
+		}
+	}
+	if supervisor == 0 {
+		return 0, errors.New("tmux runtime: exact supervisor is not running")
+	}
+	agents := 0
+	commands := 0
+	for _, agent := range entries {
+		if agent.ppid != supervisor {
+			continue
+		}
+		agents++
+		below := descendantPIDs(entries, agent.pid)
+		for _, entry := range entries {
+			if entry.pid == agent.pid || !below[entry.pid] || !isShellCommand(entry.command) {
+				continue
+			}
+			// Count each shell once, with its subtree, from its outermost shell.
+			if parent, ok := processByPID(entries, entry.ppid); ok && parent.pid != agent.pid && below[parent.pid] && isShellCommand(parent.command) {
+				continue
+			}
+			commands += len(descendantPIDs(entries, entry.pid))
+		}
+	}
+	if agents == 0 {
+		return 0, errors.New("tmux runtime: supervised agent is not running")
+	}
+	return commands, nil
+}
+
+func processByPID(entries []processEntry, pid int) (processEntry, bool) {
+	for _, entry := range entries {
+		if entry.pid == pid {
+			return entry, true
+		}
+	}
+	return processEntry{}, false
+}
+
+// isShellCommand reports a POSIX or common interactive shell, the way agents
+// run tool commands.
+func isShellCommand(command string) bool {
+	fields := strings.Fields(command)
+	if len(fields) == 0 {
+		return false
+	}
+	name := strings.TrimPrefix(filepath.Base(fields[0]), "-")
+	switch name {
+	case "sh", "bash", "zsh", "dash", "fish", "ksh":
+		return true
+	}
+	return false
+}
+
 func (r *Runtime) supervisedProcessTree(ctx context.Context, handle ports.RuntimeHandle) ([]processEntry, int, error) {
 	id, err := handleID(handle)
 	if err != nil {
@@ -846,6 +949,7 @@ func (r *Runtime) SendMessage(ctx context.Context, handle ports.RuntimeHandle, m
 	}
 	enterCtx := ctx
 	if message != "" {
+		delay := inputdelay.ForMessage(message, r.enterDelay)
 		messageChunks := chunks(message, r.chunkSize)
 		sendCtx := ctx
 		var finishCancel context.CancelFunc
@@ -857,7 +961,7 @@ func (r *Runtime) SendMessage(ctx context.Context, handle ports.RuntimeHandle, m
 				return fmt.Errorf("tmux runtime: send message %s: %w", id, err)
 			}
 			if i == 0 {
-				completionBudget := sendCompletionBudget(len(messageChunks), r.timeout, r.enterDelay)
+				completionBudget := sendCompletionBudget(len(messageChunks), r.timeout, delay)
 				enterCtx, finishCancel = context.WithTimeout(context.WithoutCancel(ctx), completionBudget)
 				sendCtx = enterCtx
 			}
@@ -878,11 +982,11 @@ func (r *Runtime) SendMessage(ctx context.Context, handle ports.RuntimeHandle, m
 		// Errors reported by tmux after it accepts a chunk still return to the
 		// caller; they are not retried because AO cannot safely distinguish
 		// whether tmux applied the failed command.
-		if r.enterDelay > 0 {
+		if delay > 0 {
 			select {
 			case <-enterCtx.Done():
 				return enterCtx.Err()
-			case <-time.After(r.enterDelay):
+			case <-time.After(delay):
 			}
 		}
 	}
@@ -1391,11 +1495,13 @@ func handleID(handle ports.RuntimeHandle) (string, error) {
 // running" describes the whole server and "error connecting" is a transient
 // socket failure; neither says anything about one session, so treating them as
 // per-session death let a single server outage archive every session on the
-// board (issue #3475).
+// board (issue #3475). tmux >= 3.5 words a missing target as "no such
+// session: <target>" for some commands, e.g. set-option (issue #6099).
 func sessionMissingOutput(out string) bool {
 	s := strings.ToLower(out)
 	return strings.Contains(s, "can't find session") ||
-		strings.Contains(s, "session not found")
+		strings.Contains(s, "session not found") ||
+		strings.Contains(s, "no such session")
 }
 
 func serverNotRunningOutput(out string) bool {
@@ -1568,20 +1674,19 @@ func shellQuote(s string) string {
 }
 
 // buildLaunchCommand builds the shell command string passed to `sh -c`. It
-// exports env vars and runs argv. Short-lived command terminals exit with the
-// command; ordinary interactive runtimes keep the tmux session alive. Supervised
-// launches park on a non-interpreting stdin sink after exit so bytes racing a
-// process exit can never become shell commands; legacy/unsupervised launches
-// retain the interactive-shell fallback used by manual recovery.
+// loads the session environment from envFile (see launchEnvScript) and runs
+// argv. Short-lived command terminals exit with the command; ordinary
+// interactive runtimes keep the tmux session alive. Supervised launches park
+// on a non-interpreting stdin sink after exit so bytes racing a process exit
+// can never become shell commands; legacy/unsupervised launches retain the
+// interactive-shell fallback used by manual recovery.
 //
-// PATH from cfg.Env is exported last, after all other keys, so an explicit
-// override takes effect.
-func buildLaunchCommand(cfg ports.RuntimeConfig) string {
-	path := cfg.Env["PATH"]
-	if path == "" {
-		path = getenv("PATH")
-	}
-
+// No environment value appears in this string. It becomes the argv of the
+// pane's `sh -c`, which stays alive as the agent's parent and is readable by
+// any local user through `ps`, /proc/<pid>/cmdline, and tmux's
+// #{pane_start_command}; the environment carries saved provider keys and
+// tokens. The shell reads envFile and deletes it before running argv.
+func buildLaunchCommand(cfg ports.RuntimeConfig, envFile string) string {
 	var b strings.Builder
 	b.WriteString("cd ")
 	b.WriteString(shellQuote(cfg.WorkspacePath))
@@ -1593,25 +1698,10 @@ func buildLaunchCommand(cfg ports.RuntimeConfig) string {
 		// opt out of color explicitly through its configured environment.
 		b.WriteString("unset NO_COLOR; ")
 	}
-	for _, key := range sortedKeys(cfg.Env) {
-		if key == "PATH" || key == "COLORTERM" {
-			continue
-		}
-		b.WriteString("export ")
-		b.WriteString(key)
-		b.WriteString("=")
-		b.WriteString(shellQuote(cfg.Env[key]))
-		b.WriteString("; ")
-	}
-	// The AO web terminal and tmux attach client both support 24-bit SGR color.
-	// Export this after caller env so agent color detection cannot accidentally
-	// downgrade rich syntax/diff colors to ANSI-256.
-	b.WriteString("export COLORTERM='truecolor'; ")
-	if path != "" {
-		b.WriteString("export PATH=")
-		b.WriteString(shellQuote(path))
-		b.WriteString("; ")
-	}
+	file := shellQuote(envFile)
+	// A file that cannot be read must not start the agent without its
+	// environment (AO_SESSION_ID, PATH, keys).
+	b.WriteString(". " + file + " || { rm -f " + file + "; exit 1; }; rm -f " + file + "; ")
 	// Quote each argv word so spaces inside a word are preserved.
 	parts := make([]string, len(cfg.Argv))
 	for i, a := range cfg.Argv {
@@ -1633,6 +1723,138 @@ func buildLaunchCommand(cfg ports.RuntimeConfig) string {
 		b.WriteString(`; exec "${SHELL:-/bin/sh}" -i`)
 	}
 	return b.String()
+}
+
+// launchEnvScript is the shell script the launch command sources: one export
+// per env var. PATH from cfg.Env is exported last, after all other keys, so
+// an explicit override takes effect.
+func launchEnvScript(cfg ports.RuntimeConfig) string {
+	path := cfg.Env["PATH"]
+	if path == "" {
+		path = getenv("PATH")
+	}
+	var b strings.Builder
+	for _, key := range sortedKeys(cfg.Env) {
+		if key == "PATH" || key == "COLORTERM" {
+			continue
+		}
+		b.WriteString("export ")
+		b.WriteString(key)
+		b.WriteString("=")
+		b.WriteString(shellQuote(cfg.Env[key]))
+		b.WriteString("\n")
+	}
+	// The AO web terminal and tmux attach client both support 24-bit SGR color.
+	// Export this after caller env so agent color detection cannot accidentally
+	// downgrade rich syntax/diff colors to ANSI-256.
+	b.WriteString("export COLORTERM='truecolor'\n")
+	if path != "" {
+		b.WriteString("export PATH=")
+		b.WriteString(shellQuote(path))
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+// launchEnvMaxAge bounds how long a launch environment file may wait for its
+// shell. The shell reads it as soon as tmux starts the pane, so an older file
+// belongs to a launch that never ran (a crash between write and start).
+const launchEnvMaxAge = 10 * time.Minute
+
+// launchEnvDir is where launch environment files go: under the session's AO
+// data directory, so the secrets they hold stay under ~/.ao.
+func (r *Runtime) launchEnvDir(cfg ports.RuntimeConfig) (string, error) {
+	if r.envDir != "" {
+		// The pane changes to the workspace before it sources the file, so a
+		// relative directory would name a different place there.
+		abs, err := filepath.Abs(r.envDir)
+		if err != nil {
+			return "", fmt.Errorf("tmux runtime: resolve launch environment directory: %w", err)
+		}
+		return abs, nil
+	}
+	dataDir := cfg.Env["AO_DATA_DIR"]
+	if dataDir == "" {
+		dataDir = getenv("AO_DATA_DIR")
+	}
+	if dataDir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("tmux runtime: resolve AO data directory: %w", err)
+		}
+		dataDir = filepath.Join(home, ".ao", "data")
+	}
+	abs, err := filepath.Abs(dataDir)
+	if err != nil {
+		return "", fmt.Errorf("tmux runtime: resolve AO data directory: %w", err)
+	}
+	return filepath.Join(abs, "runtime-env"), nil
+}
+
+// writeLaunchEnv writes launchEnvScript(cfg) to a new file only this user can
+// read, in a directory only this user can enter, and returns its path.
+func (r *Runtime) writeLaunchEnv(ctx context.Context, cfg ports.RuntimeConfig) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	dir, err := r.launchEnvDir(cfg)
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", fmt.Errorf("tmux runtime: create launch environment directory: %w", err)
+	}
+	info, err := os.Lstat(dir)
+	if err != nil {
+		return "", fmt.Errorf("tmux runtime: inspect launch environment directory: %w", err)
+	}
+	if !info.IsDir() {
+		return "", errors.New("tmux runtime: launch environment directory is not a directory")
+	}
+	if info.Mode().Perm() != 0o700 {
+		if err := os.Chmod(dir, 0o700); err != nil { //nolint:gosec // a directory needs its search bit; 0700 is owner-only
+			return "", fmt.Errorf("tmux runtime: restrict launch environment directory: %w", err)
+		}
+	}
+	sweepLaunchEnv(ctx, dir)
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	f, err := os.CreateTemp(dir, "launch-*.env")
+	if err != nil {
+		return "", fmt.Errorf("tmux runtime: create launch environment: %w", err)
+	}
+	name := f.Name()
+	if _, err := f.WriteString(launchEnvScript(cfg)); err != nil {
+		_ = f.Close()
+		_ = os.Remove(name)
+		return "", fmt.Errorf("tmux runtime: write launch environment: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(name)
+		return "", fmt.Errorf("tmux runtime: write launch environment: %w", err)
+	}
+	return name, nil
+}
+
+// sweepLaunchEnv removes launch environment files no shell read in time. It
+// stops when ctx ends; the next launch sweeps what is left.
+func sweepLaunchEnv(ctx context.Context, dir string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if ctx.Err() != nil {
+			return
+		}
+		if !entry.Type().IsRegular() || !strings.HasPrefix(entry.Name(), "launch-") || !strings.HasSuffix(entry.Name(), ".env") {
+			continue
+		}
+		if info, err := entry.Info(); err == nil && time.Since(info.ModTime()) > launchEnvMaxAge {
+			_ = os.Remove(filepath.Join(dir, entry.Name()))
+		}
+	}
 }
 
 func sameDirectory(a, b string) bool {

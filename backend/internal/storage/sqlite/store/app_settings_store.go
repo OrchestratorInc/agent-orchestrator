@@ -24,10 +24,17 @@ type AppSettings struct {
 	// interface transition changes a live session's committed mode, so
 	// changing this only affects sessions created afterwards.
 	DefaultSessionMode domain.SessionMode
-	// CloudOffering is the user's cloud toggle (Settings, Developer Mode). The
-	// daemon gate combines it with the deployment's control-plane URL.
-	CloudOffering bool
-	UpdatedAt     time.Time
+	// VersionRefresh moves idle open sessions to a harness release installed
+	// while they ran.
+	VersionRefresh bool
+	// ComputerUse gives new chat sessions tools to drive desktop apps through
+	// Cua Driver.
+	ComputerUse bool
+	// SessionRetentionDays is how long an archived session is kept before the
+	// daemon deletes it; 0 keeps it.
+	SessionRetentionDays int
+	AccountHandoff       bool
+	UpdatedAt            time.Time
 }
 
 // GetAppSettings reads the preference row.
@@ -44,9 +51,12 @@ func (s *Store) GetAppSettings(ctx context.Context) (AppSettings, error) {
 		HarnessDefaults: defaults,
 		// Normalized on read: a value written by a build that knows a mode this
 		// one does not must still resolve to something dispatchable.
-		DefaultSessionMode: domain.NormalizeSessionMode(row.DefaultSessionMode),
-		CloudOffering:      row.CloudOffering,
-		UpdatedAt:          row.UpdatedAt,
+		DefaultSessionMode:   domain.NormalizeSessionMode(row.DefaultSessionMode),
+		VersionRefresh:       row.VersionRefresh,
+		ComputerUse:          row.ComputerUse,
+		SessionRetentionDays: int(row.SessionRetentionDays),
+		AccountHandoff:       row.AccountHandoff,
+		UpdatedAt:            row.UpdatedAt,
 	}, nil
 }
 
@@ -66,15 +76,54 @@ func (s *Store) SetDefaultSessionMode(ctx context.Context, mode domain.SessionMo
 	return nil
 }
 
-// SetCloudOffering persists the user's cloud toggle.
-func (s *Store) SetCloudOffering(ctx context.Context, enabled bool, now time.Time) error {
+// SetVersionRefresh persists whether open sessions move to new harness releases.
+func (s *Store) SetVersionRefresh(ctx context.Context, enabled bool, now time.Time) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	if err := s.qw.SetCloudOffering(ctx, gen.SetCloudOfferingParams{
-		CloudOffering: enabled,
-		UpdatedAt:     now,
+	if err := s.qw.SetVersionRefresh(ctx, gen.SetVersionRefreshParams{
+		VersionRefresh: enabled,
+		UpdatedAt:      now,
 	}); err != nil {
-		return fmt.Errorf("set cloud offering: %w", err)
+		return fmt.Errorf("set version refresh: %w", err)
+	}
+	return nil
+}
+
+// SetComputerUse persists whether new chat sessions get the computer-use tools.
+func (s *Store) SetComputerUse(ctx context.Context, enabled bool, now time.Time) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if err := s.qw.SetComputerUse(ctx, gen.SetComputerUseParams{
+		ComputerUse: enabled,
+		UpdatedAt:   now,
+	}); err != nil {
+		return fmt.Errorf("set computer use: %w", err)
+	}
+	return nil
+}
+
+// SetSessionRetentionDays persists how long archived sessions are kept.
+func (s *Store) SetSessionRetentionDays(ctx context.Context, days int, now time.Time) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if err := s.qw.SetSessionRetentionDays(ctx, gen.SetSessionRetentionDaysParams{
+		SessionRetentionDays: int64(days),
+		UpdatedAt:            now,
+	}); err != nil {
+		return fmt.Errorf("set session retention: %w", err)
+	}
+	return nil
+}
+
+// SetAccountHandoff stores the usage-limit account handoff setting.
+func (s *Store) SetAccountHandoff(ctx context.Context, enabled bool, now time.Time) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if err := s.qw.SetAccountHandoff(ctx, gen.SetAccountHandoffParams{
+		AccountHandoff: enabled,
+		UpdatedAt:      now,
+	}); err != nil {
+		return fmt.Errorf("set account handoff: %w", err)
 	}
 	return nil
 }

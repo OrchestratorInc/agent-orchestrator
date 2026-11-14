@@ -106,6 +106,16 @@ func stoppedContinuationContext(rows ConversationRows) string {
 		}
 	}
 	if cutoff == 0 {
+		// The provider started this turn itself (for example a Codex thread-goal
+		// continuation), so it has no user message. Its task is the latest real
+		// request in the visible history.
+		for _, message := range rows.Messages {
+			if _, visible := turns[message.TurnID]; visible && message.Sequence > cutoff {
+				cutoff = message.Sequence
+			}
+		}
+	}
+	if cutoff == 0 {
 		return ""
 	}
 	for _, message := range rows.Messages {

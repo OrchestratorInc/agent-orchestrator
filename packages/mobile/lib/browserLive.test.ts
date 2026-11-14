@@ -1,0 +1,257 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { ApiError, apiRequest } from "./api";
+import { BrowserLiveClient } from "./browserLive";
+import { browserJPEGDataURI, browserLiveURL, browserWheelDeltaFromDrag, containBrowserFrame, decodeBrowserFrame, normalizedFramePoint } from "./browserLiveProtocol";
+
+vi.mock("./config", () => ({
+	authHeaders: (config: { password: string }) => ({ Authorization: `Bearer ${config.password}` }),
+}));
+
+vi.mock("./api", () => ({
+	ApiError: class extends Error {
+		constructor(readonly status: number, message: string, readonly code?: string) { super(message); }
+	},
+	apiRequest: vi.fn(),
+}));
+
+afterEach(() => { vi.unstubAllGlobals(); vi.mocked(apiRequest).mockReset(); });
+
+function encodedFrame(): ArrayBuffer {
+	const bytes = new Uint8Array(25);
+	const view = new DataView(bytes.buffer);
+	bytes[0] = 1;
+	bytes[1] = 1;
+	view.setBigUint64(2, 7n);
+	view.setBigUint64(10, 123n);
+	view.setUint16(18, 640);
+	view.setUint16(20, 360);
+	bytes.set([0xff, 0xd8, 0xff], 22);
+	return bytes.buffer;
+}
+
+describe("browser live transport", () => {
+	it("builds the authenticated listener URL without putting the password in it", () => {
+		const config = { host: "192.168.1.5", httpPort: "3011", password: "secret" };
+		const url = browserLiveURL(config, "worker/a");
+		expect(url).toBe("ws://192.168.1.5:3011/api/v1/sessions/worker%2Fa/browser/live");
+		expect(url).not.toContain("secret");
+	});
+
+	it("decodes the versioned binary JPEG envelope", () => {
+		const frame = decodeBrowserFrame(encodedFrame());
+		expect(frame).toMatchObject({ sequence: 7n, capturedAtMs: 123n, width: 640, height: 360 });
+		expect([...new Uint8Array(frame.jpeg)]).toEqual([0xff, 0xd8, 0xff]);
+	});
+
+	it("leaves handshake errors without generic copy so the sharing hint is shown", () => {
+		class FakeWebSocket {
+			static instance: FakeWebSocket;
+			binaryType = "";
+			onopen: (() => void) | null = null;
+			onerror: (() => void) | null = null;
+			onclose: (() => void) | null = null;
+			onmessage: ((event: { data: unknown }) => void) | null = null;
+
+			constructor() {
+				FakeWebSocket.instance = this;
+			}
+
+			close() {}
+		}
+		vi.stubGlobal("WebSocket", FakeWebSocket);
+		const statuses: Array<{ status: string; message?: string }> = [];
+		const client = new BrowserLiveClient(
+			{ host: "192.168.1.5", httpPort: "3011", muxPort: "3012", password: "secret" },
+			"worker/a",
+			{
+				onStatus: (status, message) => statuses.push({ status, message }),
+				onState: () => {},
+				onFrame: () => {},
+			},
+		);
+
+		client.connect();
+		FakeWebSocket.instance.onerror?.();
+		expect(statuses.at(-1)).toEqual({ status: "error", message: undefined });
+	});
+
+	it.each([
+		[403, "BROWSER_REMOTE_DISABLED", true],
+		[401, "UNAUTHORIZED", false],
+		[403, "FORBIDDEN", false],
+		[409, "BROWSER_CONTROL_IN_USE", false],
+		[426, "WEBSOCKET_REQUIRED", false],
+		[404, undefined, true],
+		[404, "NOT_FOUND", true],
+		[503, "BROWSER_HOST_UNAVAILABLE", false],
+	])("identifies handshake rejection %s/%s", async (status, code, disabled) => {
+		class FakeWebSocket {
+			static instance: FakeWebSocket;
+			binaryType = "";
+			onerror?: () => void;
+			onclose?: () => void;
+			constructor() { FakeWebSocket.instance = this; }
+			close() {}
+		}
+		vi.stubGlobal("WebSocket", FakeWebSocket);
+		vi.mocked(apiRequest).mockRejectedValue(new ApiError(status, "Rejected", code));
+		const onDisabled = vi.fn();
+		const onStatus = vi.fn();
+		const config = { host: "desktop.local", httpPort: "3011", muxPort: "3011", password: "secret" };
+		const client = new BrowserLiveClient(config, "worker/a", { onStatus, onState: vi.fn(), onFrame: vi.fn(), onDisabled });
+		client.connect();
+		FakeWebSocket.instance.onerror?.();
+		FakeWebSocket.instance.onclose?.();
+		await Promise.resolve();
+		expect(apiRequest).toHaveBeenCalledWith(config, "/api/v1/sessions/worker%2Fa/browser/live", undefined, 5_000);
+		expect(onDisabled).toHaveBeenCalledTimes(disabled ? 1 : 0);
+		if (status === 404) {
+			expect(onStatus).toHaveBeenLastCalledWith("error", "Update the desktop app to view its browser from your phone.");
+		}
+	});
+
+	it.each([403, 404])("ignores a %s sharing probe that finishes after closing the stream", async (status) => {
+		class FakeWebSocket {
+			static instance: FakeWebSocket;
+			binaryType = "";
+			onerror?: () => void;
+			constructor() { FakeWebSocket.instance = this; }
+			close() {}
+		}
+		vi.stubGlobal("WebSocket", FakeWebSocket);
+		let reject!: (error: Error) => void;
+		vi.mocked(apiRequest).mockReturnValue(new Promise((_, fail) => { reject = fail; }));
+		const onDisabled = vi.fn();
+		const client = new BrowserLiveClient({ host: "desktop.local", httpPort: "3011", muxPort: "3011", password: "secret" }, "s1", { onStatus: vi.fn(), onState: vi.fn(), onFrame: vi.fn(), onDisabled });
+		client.connect();
+		FakeWebSocket.instance.onerror?.();
+		client.close();
+		reject(new ApiError(status, "Unavailable", status === 403 ? "BROWSER_REMOTE_DISABLED" : undefined));
+		await Promise.resolve();
+		expect(onDisabled).not.toHaveBeenCalled();
+	});
+
+	it("restores an open stream when a valid frame follows a recoverable host error", async () => {
+		class FakeWebSocket {
+			static readonly OPEN = 1;
+			static instance: FakeWebSocket;
+			readonly readyState = FakeWebSocket.OPEN;
+			binaryType = "";
+			onopen: (() => void) | null = null;
+			onerror: (() => void) | null = null;
+			onclose: (() => void) | null = null;
+			onmessage: ((event: { data: unknown }) => void) | null = null;
+
+			constructor() {
+				FakeWebSocket.instance = this;
+			}
+
+			send() {}
+			close() {}
+		}
+		vi.stubGlobal("WebSocket", FakeWebSocket);
+		const statuses: Array<{ status: string; message?: string }> = [];
+		const frames: bigint[] = [];
+		const client = new BrowserLiveClient(
+			{ host: "192.168.1.5", httpPort: "3011", muxPort: "3012", password: "secret" },
+			"worker/a",
+			{
+				onStatus: (status, message) => statuses.push({ status, message }),
+				onState: () => {},
+				onFrame: (frame) => frames.push(frame.sequence),
+			},
+		);
+
+		client.connect();
+		FakeWebSocket.instance.onopen?.();
+		FakeWebSocket.instance.onmessage?.({ data: JSON.stringify({ type: "error", message: "Desktop input is busy" }) });
+		await Promise.resolve();
+		expect(statuses.at(-1)).toEqual({ status: "error", message: "Desktop input is busy" });
+
+		FakeWebSocket.instance.onmessage?.({ data: encodedFrame() });
+		await Promise.resolve();
+		expect(statuses.at(-1)).toEqual({ status: "open", message: undefined });
+		expect(frames).toEqual([7n]);
+	});
+
+	it.each([
+		["BROWSER_REMOTE_READ_ONLY", "Desktop browser control is active", "Desktop browser control is active"],
+		["INVALID_URL", "ao browser open requires an explicit http(s) URL or hostname", "Enter a web address, like localhost:3000 or example.com."],
+		["URL_REQUIRED", "url is required", "Enter an address to open."],
+		["BROWSER_URL_FORBIDDEN", "Agent browser commands support only http(s) URLs", "The desktop browser opens only http and https addresses."],
+		["TAB_NOT_FOUND", "Browser tab t2 does not exist", "That tab has already closed."],
+	])("keeps the stream open when the desktop refuses a command with %s", async (code, message, notice) => {
+		class FakeWebSocket {
+			static readonly OPEN = 1;
+			static instance: FakeWebSocket;
+			readonly readyState = FakeWebSocket.OPEN;
+			binaryType = "";
+			onopen: (() => void) | null = null;
+			onmessage: ((event: { data: unknown }) => void) | null = null;
+			sent: string[] = [];
+			constructor() { FakeWebSocket.instance = this; }
+			send(data: string) { this.sent.push(data); }
+			close() {}
+		}
+		vi.stubGlobal("WebSocket", FakeWebSocket);
+		const onStatus = vi.fn();
+		const client = new BrowserLiveClient({ host: "desktop.local", httpPort: "3011", muxPort: "3011", password: "secret" }, "s1", { onStatus, onState: vi.fn(), onFrame: vi.fn() });
+		client.connect();
+		FakeWebSocket.instance.onopen?.();
+		client.send({ type: "navigate", payload: { action: "open", url: "not a url" } });
+		expect(JSON.parse(FakeWebSocket.instance.sent[0])).toEqual({ type: "navigate", payload: { action: "open", url: "not a url" } });
+		FakeWebSocket.instance.onmessage?.({ data: JSON.stringify({ type: "error", code, message }) });
+		await Promise.resolve();
+		expect(onStatus).toHaveBeenLastCalledWith("open", notice);
+	});
+
+	it("passes the desktop's state through, tabs and history included", async () => {
+		class FakeWebSocket {
+			static instance: FakeWebSocket;
+			binaryType = "";
+			onmessage: ((event: { data: unknown }) => void) | null = null;
+			constructor() { FakeWebSocket.instance = this; }
+			close() {}
+		}
+		vi.stubGlobal("WebSocket", FakeWebSocket);
+		const onState = vi.fn();
+		const client = new BrowserLiveClient({ host: "desktop.local", httpPort: "3011", muxPort: "3011", password: "secret" }, "s1", { onStatus: vi.fn(), onState, onFrame: vi.fn() });
+		client.connect();
+		const state = { url: "http://localhost:3000/", title: "App", loading: true, canGoBack: true, canGoForward: false, activeTabId: "t1", tabs: [{ id: "t1", title: "App", url: "http://localhost:3000/", active: true }], width: 1280, height: 800 };
+		FakeWebSocket.instance.onmessage?.({ data: JSON.stringify({ type: "state", payload: state }) });
+		await Promise.resolve();
+		expect(onState).toHaveBeenCalledWith(state);
+	});
+
+	it("fits the desktop frame without stretching it", () => {
+		expect(containBrowserFrame({ width: 390, height: 600 }, { width: 1280, height: 720 })).toEqual({
+			left: 0,
+			top: 190.3125,
+			width: 390,
+			height: 219.375,
+		});
+	});
+
+	it("places a tap on the page as fractions of the fitted frame, ignoring the letterbox", () => {
+		const rect = { left: 0, top: 190, width: 390, height: 220 };
+		expect(normalizedFramePoint(rect, { x: 195, y: 245 })).toEqual({ x: 0.5, y: 0.25 });
+		expect(normalizedFramePoint(rect, { x: 195, y: 100 })).toBeNull();
+		expect(normalizedFramePoint({ left: 0, top: 0, width: 0, height: 0 }, { x: 0, y: 0 })).toBeNull();
+	});
+
+	it("preserves drag signs for Electron wheel input so content follows the finger", () => {
+		expect(browserWheelDeltaFromDrag(12, -30)).toEqual({ deltaX: 12, deltaY: -30 });
+		expect(browserWheelDeltaFromDrag(-8, 24)).toEqual({ deltaX: -8, deltaY: 24 });
+	});
+
+	it("scrolls the desktop page by what the finger covered on the fitted frame", () => {
+		// A 1280px page fitted into 320pt: each phone point is four desktop pixels.
+		expect(browserWheelDeltaFromDrag(10, -30, 320 / 1280)).toEqual({ deltaX: 40, deltaY: -120 });
+		expect(browserWheelDeltaFromDrag(10, -30, 0)).toEqual({ deltaX: 10, deltaY: -30 });
+		expect(browserWheelDeltaFromDrag(10, -30, Number.NaN)).toEqual({ deltaX: 10, deltaY: -30 });
+	});
+
+	it("encodes JPEG bytes as a React Native image data URI", () => {
+		expect(browserJPEGDataURI(Uint8Array.from([0xff, 0xd8, 0xff]).buffer)).toBe("data:image/jpeg;base64,/9j/");
+	});
+});

@@ -15,86 +15,109 @@
 
 import { memo, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { KeyRound, Plug, TriangleAlert, X } from "lucide-react";
-import { cn } from "../../lib/utils";
+import { CircleArrowUp, Download, KeyRound, Plug, TriangleAlert } from "@/components/app-icons";
+import { agentAccountProviderFor, useSessionAgentAccounts } from "../../hooks/useAgentAccounts";
+import { useSettings } from "../../hooks/useSettings";
+import { versionLabel } from "../../hooks/useHarnessUpdates";
+import { agentLabel } from "../../lib/agent-options";
+import type { AgentBlock } from "../../lib/session-import";
+import { labelForHost } from "../../lib/host-clients";
+import { cn, truncateMiddle } from "../../lib/utils";
+import { useUiStore } from "../../stores/ui-store";
+import type { SessionStaleBinary } from "../../types/workspace";
 import { Button } from "../ui/button";
 import type { ConversationAccount, ConversationThreadState, McpServer } from "../../types/conversation";
 
-/** A current provider credential demand; dismissal affects presentation only. */
+export function ImportedAgentBlocked({ agent, block }: { agent: string; block: AgentBlock }) {
+	const { t } = useTranslation();
+	const openGlobalSettings = useUiStore((state) => state.openGlobalSettings);
+	const signedOut = block === "signed_out";
+	const Icon = signedOut ? KeyRound : Download;
+	return (
+		<div role="status" className="flex items-center gap-2.5 rounded-[var(--radius-chat-composer)] border border-border bg-surface px-4 py-2.5">
+			<Icon aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
+			<p className="min-w-0 flex-1 text-sm text-foreground">
+				{t(signedOut ? "sessionImport.blockedSignedOut" : "sessionImport.blockedMissing", { agent: agentLabel(agent) })}
+			</p>
+			<Button
+				type="button"
+				size="sm"
+				variant="primary"
+				className="shrink-0"
+				onClick={() => openGlobalSettings("harness", { focusAgentId: agent, startLogin: signedOut, preserveProject: true })}
+			>
+				{t(signedOut ? "sessionImport.signIn" : "sessionImport.install")}
+			</Button>
+		</div>
+	);
+}
+
+/**
+ * The provider refused this session's login.
+ *
+ * An expired login is routine, so the notice says so plainly and offers one way
+ * out: the Harness page, which signs in on the computer that runs the session,
+ * a remote host or the cloud connection included. The failed turn stays for the
+ * user to retry.
+ */
 export const ReauthBanner = memo(function ReauthBanner({
 	account,
 	harness,
-	reasonInTimeline = false,
+	sessionId,
+	hostId,
+	cloud = false,
+	onLogIn,
 }: {
 	account: ConversationAccount;
 	harness: string;
-	reasonInTimeline?: boolean;
+	sessionId?: string;
+	/** The remote host that runs the session; omitted for this computer's. */
+	hostId?: string;
+	/** The session runs in the cloud, so its login is the cloud connection's. */
+	cloud?: boolean;
+	/** Starts the login so that it brings the user back to this chat once it takes. */
+	onLogIn?: () => void;
 }) {
-	const [dismissedFailure, setDismissedFailure] = useState<string>();
-	const failure = account.authFailureId ?? `${harness}:${account.reauthRequiredAt}:${account.reauthReason}`;
+	const { t } = useTranslation();
 	const required = account.authenticationState === "required" ||
 		(account.authenticationState === undefined && Boolean(account.reauthRequiredAt));
-	if (!required || dismissedFailure === failure) return null;
-	const command = signInCommand(harness);
-
+	if (!required) return null;
+	const agent = agentLabel(harness);
+	const host = hostId ? labelForHost(hostId) ?? hostId : undefined;
 	return (
-		<div
-			role="alert"
-			className="flex shrink-0 items-start gap-2.5 border-b border-destructive/40 bg-destructive/10 px-4 py-3"
-		>
-			<KeyRound aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-destructive" />
-			<div className="flex min-w-0 flex-col gap-1">
-				<strong className="text-xs font-semibold text-destructive">
-					Provider authentication needs attention
-				</strong>
-				{!reasonInTimeline ? (
-					<p className="text-xs leading-relaxed text-foreground">
-						{account.reauthReason ??
-							"The provider rejected this session's credentials."}
-					</p>
-				) : null}
-				<p className="text-xs leading-relaxed text-muted-foreground">
-					{command ? (
-						<>
-							Run{" "}
-							<code className="rounded bg-background px-1 py-0.5 font-mono text-xs text-foreground">
-								{command}
-							</code>{" "}
-							in a terminal if needed. This chat may need to reconnect before it can use updated credentials.
-						</>
-					) : (
-						<>
-							Sign in with the agent&rsquo;s own CLI if needed, then reconnect this chat.
-						</>
-					)}
-				</p>
-			</div>
-			<Button variant="ghost" size="icon" className="ml-auto size-6 shrink-0"
-				aria-label="Dismiss authentication notice" title="Hide this notice; authentication state is unchanged"
-				onClick={() => setDismissedFailure(failure)}>
-				<X aria-hidden="true" className="size-3.5" />
-			</Button>
+		<div role="status" className="flex shrink-0 items-center gap-2.5 border-b border-border bg-surface px-4 py-2">
+			<KeyRound aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
+			<p className="min-w-0 flex-1 text-xs leading-snug text-foreground">
+				{host ? t("chat.reauth.expiredOnHost", { agent, host }) : t("chat.reauth.expired", { agent })}
+			</p>
+			{/* A chat signs in the session's own account itself, so it needs no lookup here. */}
+			{onLogIn ? (
+				<Button type="button" size="sm" variant="secondary" className="shrink-0" onClick={onLogIn}>
+					{t("chat.reauth.logInAgain")}
+				</Button>
+			) : <ReauthLogInButton harness={harness} sessionId={sessionId} hostId={hostId} cloud={cloud} />}
 		</div>
 	);
 });
 
-/**
- * The sign-in command for a harness, or nothing.
- *
- * Named per harness rather than described generically, because a user staring at a
- * blocked session wants the line to type. Unknown harnesses get the generic wording
- * instead of a guessed command that would fail.
- */
-function signInCommand(harness: string): string | undefined {
-	switch (harness) {
-		case "codex":
-			return "codex login";
-		case "claude-code":
-		case "claude":
-			return "claude auth login";
-		default:
-			return undefined;
-	}
+function ReauthLogInButton({ harness, sessionId, hostId, cloud }: { harness: string; sessionId?: string; hostId?: string; cloud: boolean }) {
+	const { t } = useTranslation();
+	const openGlobalSettings = useUiStore((state) => state.openGlobalSettings);
+	const provider = !hostId && !cloud && sessionId ? agentAccountProviderFor(harness) : null;
+	const sessionAccounts = useSessionAgentAccounts(provider ? sessionId : undefined);
+	const sessionAccountId = provider ? sessionAccounts.data?.[provider] : undefined;
+	return (
+		<Button type="button" size="sm" variant="secondary" className="shrink-0" disabled={provider !== null && sessionAccounts.isPending}
+			onClick={() => openGlobalSettings("harness", {
+				focusAgentId: harness,
+				...(hostId ? { hostId } : {}),
+				harnessView: cloud ? "cloud" : "local",
+				...(sessionAccountId ? { loginAccountId: sessionAccountId } : { startLogin: true }),
+				preserveProject: true,
+			})}>
+			{t("chat.reauth.logInAgain")}
+		</Button>
+	);
 }
 
 /**
@@ -122,11 +145,11 @@ export const ThreadStateBanner = memo(function ThreadStateBanner({
 		status === "system_error"
 			? {
 					title: "The agent's thread hit an internal error",
-					body: "The provider reported a fault in this thread, not in AO's connection to it. New turns will usually fail; the conversation and the worktree are kept.",
+					body: "The provider reported a fault in this thread, not in Orchestrator's connection to it. New turns will usually fail; the conversation and the worktree are kept.",
 				}
 			: {
 					title: "The agent closed this thread",
-					body: "The provider dropped the conversation on its side. AO kept the history, but the agent no longer holds it.",
+					body: "The provider dropped the conversation on its side. Orchestrator kept the history, but the agent no longer holds it.",
 				};
 
 	return (
@@ -238,3 +261,53 @@ export const McpServerBanner = memo(function McpServerBanner({
 		</div>
 	);
 });
+
+/**
+ * A harness update replaced the release this session's agent runs. With
+ * "move open sessions to new versions" on, the daemon restarts the agent on
+ * the new release once it is idle, or before the next message; a failed
+ * restart keeps the queued messages for a manual resume. A stopped agent is
+ * never moved on its own: resuming it starts the new release.
+ */
+export const VersionSwitchBanner = memo(function VersionSwitchBanner({
+	staleBinary,
+	hostId,
+	agentStopped,
+}: {
+	staleBinary?: SessionStaleBinary;
+	hostId?: string;
+	/** The agent controller stopped and waits for the user to resume it. */
+	agentStopped?: boolean;
+}) {
+	// Most sessions are current; only a marked one reads the setting.
+	return staleBinary?.version ? <VersionSwitchNotice staleBinary={staleBinary} hostId={hostId} agentStopped={agentStopped} /> : null;
+});
+
+function VersionSwitchNotice({ staleBinary, hostId, agentStopped }: { staleBinary: SessionStaleBinary; hostId?: string; agentStopped?: boolean }) {
+	const { t } = useTranslation();
+	const { settings } = useSettings(hostId);
+	const version = truncateMiddle(versionLabel(staleBinary.version));
+	if (staleBinary.switchFailedAt) {
+		return (
+			<div role="alert" className="flex shrink-0 items-start gap-2.5 border-b border-border bg-surface px-4 py-2.5">
+				<TriangleAlert aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 text-warning" />
+				<div className="flex min-w-0 flex-col gap-0.5">
+					<strong className="text-xs font-medium text-warning">{t("chat.versionSwitch.failedTitle", { version })}</strong>
+					<span className="text-xs leading-snug text-muted-foreground">{t("chat.versionSwitch.failedBody")}</span>
+				</div>
+			</div>
+		);
+	}
+	if (!settings?.versionRefresh) return null;
+	return (
+		<div role="status" className="flex shrink-0 items-center gap-2 border-b border-border bg-surface px-4 py-1.5">
+			<span className="inline-flex items-center gap-1.5 rounded-full border border-border px-2 py-0.5 text-caption text-muted-foreground">
+				<CircleArrowUp aria-hidden="true" className="size-3 shrink-0 text-settings-accent" />
+				{t(agentStopped ? "chat.versionSwitch.installed" : "chat.versionSwitch.pending", { version })}
+			</span>
+			<span className="min-w-0 truncate text-caption text-muted-foreground">
+				{t(agentStopped ? "chat.versionSwitch.stoppedHint" : "chat.versionSwitch.pendingHint")}
+			</span>
+		</div>
+	);
+}

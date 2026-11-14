@@ -156,6 +156,15 @@ func (r *hybridRuntime) IsExactSupervisedProcessAlive(ctx context.Context, handl
 	return backend.IsExactSupervisedProcessAlive(ctx, raw, ref)
 }
 
+func (r *hybridRuntime) RunningWorkloadCommands(ctx context.Context, handle ports.RuntimeHandle, ref ports.SupervisedProcessRef) (int, error) {
+	backend, raw := r.route(handle)
+	inspector, ok := backend.(ports.WorkloadCommandInspector)
+	if !ok {
+		return 0, errors.New("runtime cannot inspect the commands an agent is running")
+	}
+	return inspector.RunningWorkloadCommands(ctx, raw, normalizeProcessRef(handle, raw, ref))
+}
+
 func normalizeProcessRef(handle, raw ports.RuntimeHandle, ref ports.SupervisedProcessRef) ports.SupervisedProcessRef {
 	if string(ref.SessionID) == handle.ID && raw.ID != handle.ID {
 		ref.SessionID = domain.SessionID(raw.ID)
@@ -199,4 +208,30 @@ func (r *hybridRuntime) route(handle ports.RuntimeHandle) (routedBackend, ports.
 		return r.direct, handle
 	}
 	return r.legacy, handle
+}
+
+var _ ports.TerminalForegroundWatcher = (*hybridRuntime)(nil)
+
+// WatchTerminalForeground routes to the backend that owns the handle; tmux
+// handles cannot name their foreground program.
+func (r *hybridRuntime) WatchTerminalForeground(ctx context.Context, handle ports.RuntimeHandle, fn func(ports.TerminalForeground)) error {
+	backend, raw := r.route(handle)
+	watcher, ok := backend.(ports.TerminalForegroundWatcher)
+	if !ok {
+		return ports.ErrTerminalForegroundUnavailable
+	}
+	return watcher.WatchTerminalForeground(ctx, raw, fn)
+}
+
+var _ ports.TerminalTitleWatcher = (*hybridRuntime)(nil)
+
+// WatchTerminalTitle routes to the backend that owns the handle; legacy tmux
+// handles have no host to report titles.
+func (r *hybridRuntime) WatchTerminalTitle(ctx context.Context, handle ports.RuntimeHandle, fn func(string)) error {
+	backend, raw := r.route(handle)
+	watcher, ok := backend.(ports.TerminalTitleWatcher)
+	if !ok {
+		return ports.ErrTerminalTitleUnavailable
+	}
+	return watcher.WatchTerminalTitle(ctx, raw, fn)
 }

@@ -16,20 +16,23 @@ ao report --done --note <text> [output flags]
 Output flags are repeatable:
 
 ```text
---artifact <opaque-reference>
+--artifact <absolute-path>
 --pr-created <pr-or-mr-url>
 --pr-reviewed <pr-or-mr-url>
 ```
 
 Use reports for meaningful transitions, decisions, blockers, required input,
-outputs, and terminal judgment. Do not narrate routine commands. Outputs do not
+outputs, and terminal judgment. Do not file a report for routine commands. Outputs do not
 imply completion, and `--done` does not terminate the session.
 
 Attach a reviewable deliverable as soon as it is ready, not only at `--done`:
-use `--artifact <reference>` on the report for the milestone that produced it.
-Examples include a requested document, a rendered dashboard, or another output
-the orchestrator or human needs to open directly. `--artifact` takes any opaque
-reference string; it is not validated as a URL.
+use `--artifact <absolute-path>` on the report for the milestone that produced it,
+one flag per deliverable, not its supporting files. Examples include a requested
+document, a rendered dashboard, or another output the orchestrator or human
+needs to open directly. `--artifact` takes only a path to a file in the session
+artifact directory; mention issues, links, and other URLs in the note.
+`--artifact` does not make a file appear as a session artifact: run
+[`ao artifact add`](artifact.md) for that, before you report it.
 In a chat session, an HTML file from the artifact directory that you attach
 with `--artifact` also shows in the thread.
 
@@ -40,7 +43,7 @@ when a separate deliverable is useful, prefer one consolidated report over
 individual logs. Ordinary progress updates and concise final answers do not
 need separate artifact files.
 
-Saving a local artifact or attaching its reference to an AO report is not
+Saving a local artifact or attaching its reference to an Orchestrator report is not
 external publishing authorization. Publish externally only within the
 user-authorized scope.
 

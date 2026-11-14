@@ -236,3 +236,41 @@ func TestReportStoreInterruptLimitSurvivesRestart(t *testing.T) {
 		t.Fatalf("boundary acquired = %v, err = %v", acquired, err)
 	}
 }
+
+func TestReportStoreDeferredBatchYieldsScheduleToOtherProjects(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "ao")
+	seedProject(t, s, "other")
+	refusing, err := s.CreateSession(ctx, sampleRecord("ao"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	healthy, err := s.CreateSession(ctx, sampleRecord("other"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	for _, rec := range []domain.ReportRecord{
+		{ID: "rpt_refused", SessionID: refusing.ID, ProjectID: "ao", Message: "stuck", CreatedAt: now.Add(-time.Minute), DeliveryState: domain.ReportPending, AvailableAt: now.Add(-time.Minute), RepeatCount: 1},
+		{ID: "rpt_waiting", SessionID: healthy.ID, ProjectID: "other", Message: "done", CreatedAt: now, DeliveryState: domain.ReportPending, AvailableAt: now, RepeatCount: 1},
+	} {
+		if _, err := s.CreateReport(ctx, rec); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if claimed, err := s.ClaimPendingReportBatch(ctx, "ao", "token-1", now); err != nil || len(claimed) != 1 {
+		t.Fatalf("claimed = %+v, err = %v", claimed, err)
+	}
+	if _, err := s.DeferReportBatch(ctx, "ao", "token-1", now.Add(5*time.Second), "composer is not empty"); err != nil {
+		t.Fatal(err)
+	}
+	next, err := s.ListPendingReportSchedule(ctx, 1)
+	if err != nil || len(next) != 1 || next[0].ID != "rpt_waiting" {
+		t.Fatalf("next = %+v, err = %v; the refused batch kept the front of the schedule", next, err)
+	}
+	refused, ok, err := s.GetReport(ctx, "rpt_refused")
+	if err != nil || !ok || refused.DeliveryState != domain.ReportPending || refused.LastError != "composer is not empty" || !refused.AvailableAt.Equal(now.Add(5*time.Second)) || refused.DeliveryBatchID == "" {
+		t.Fatalf("refused = %+v ok=%v err=%v", refused, ok, err)
+	}
+}
