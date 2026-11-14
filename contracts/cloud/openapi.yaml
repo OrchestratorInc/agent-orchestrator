@@ -1437,6 +1437,10 @@ paths:
     delete:
       operationId: cancelSessionInterfaceTransition
       tags: [Sessions]
+      description: >-
+        An agent switch can be cancelled only by the session's creator (403
+        forbidden otherwise); an interface-only switch by any member who may
+        switch it.
       responses:
         "200":
           description: Interface switch cancelled.
@@ -5445,6 +5449,14 @@ components:
           description: Harnesses a session can start in, or switch to, Chat with.
           items:
             type: string
+        agentSwitchHarnesses:
+          type: array
+          description: >-
+            Harnesses a running session can switch its coding agent to
+            (startSessionInterfaceTransition with targetHarness). Absent from
+            a control plane that cannot switch a session's agent.
+          items:
+            $ref: "#/components/schemas/CloudAgentHarness"
     AgentCapability:
       type: string
       enum:
@@ -8227,6 +8239,24 @@ components:
         noticeAcknowledgedAt:
           type: string
           format: date-time
+        sourceHarness:
+          $ref: "#/components/schemas/CloudAgentHarness"
+          description: The agent the session ran before an agent switch. Set only on an agent switch.
+        targetHarness:
+          $ref: "#/components/schemas/CloudAgentHarness"
+          description: >-
+            The agent an agent switch moves the session to. Set only on an
+            agent switch; the session's harness becomes it once the switch
+            commits, and goes back to sourceHarness if it fails.
+        sourceModel:
+          type: string
+          description: The model the session ran before an agent switch.
+        targetModel:
+          type: string
+          description: The model the switched-to agent starts with.
+        targetReasoningEffort:
+          type: string
+          description: The effort the switched-to agent starts at.
         createdAt:
           type: string
           format: date-time
@@ -8260,17 +8290,33 @@ components:
           $ref: "#/components/schemas/SessionInterfaceMode"
         policy:
           $ref: "#/components/schemas/SessionInterfaceTransitionPolicy"
+        targetHarness:
+          $ref: "#/components/schemas/CloudAgentHarness"
+          description: >-
+            Switches the session's coding agent to this harness (one of the
+            current account's agentSwitchHarnesses), in the same sandbox and
+            checkout. targetMode may then be the session's current mode. The
+            new agent receives a handoff note of the conversation so far, or
+            resumes its own conversation when the session ran it before.
+            Messages sent while the switch runs reach the new agent. A
+            control plane without agent switching refuses the field. Only the
+            session's creator may switch its agent, since the new agent runs
+            on their login for it. Anyone else, an org admin included, gets
+            403 forbidden, whatever logins the creator has.
         model:
           type: string
           description: >-
             The model the terminal agent starts with, as the Chat ran it.
             Chat to terminal handoff only; validated as a Chat turn's model.
+            With targetHarness, the model the new agent starts with (any
+            target mode); its default model when omitted.
         reasoningEffort:
           type: string
           enum: [none, minimal, low, medium, high, xhigh, max, ultra]
           description: >-
             The effort the terminal agent starts at, as the Chat ran it. Chat
-            to terminal handoff only; validated as a Chat turn's effort.
+            to terminal handoff only; validated as a Chat turn's effort. With
+            targetHarness, the effort the new agent starts at.
     Session:
       type: object
       additionalProperties: false
@@ -10508,6 +10554,48 @@ components:
         createdAt:
           type: string
           format: date-time
+    AgentSwitchedEvent:
+      type: object
+      additionalProperties: false
+      required: [sessionId, sequence, type, payload, createdAt]
+      description: >-
+        The session's coding agent changed (an agent switch committed). Turns
+        after it are answered by targetHarness.
+      properties:
+        sessionId:
+          type: string
+        sequence:
+          type: integer
+          format: int64
+          maximum: 9007199254740991
+        type:
+          const: chat.agent_switched
+        payload:
+          type: object
+          additionalProperties: false
+          required: [transitionId, sourceHarness, targetHarness]
+          properties:
+            transitionId:
+              type: string
+              format: uuid
+            sourceHarness:
+              $ref: "#/components/schemas/CloudAgentHarness"
+            targetHarness:
+              $ref: "#/components/schemas/CloudAgentHarness"
+            sourceModel:
+              type: string
+            targetModel:
+              type: string
+            targetReasoningEffort:
+              type: string
+            resumed:
+              type: boolean
+              description: >-
+                The new agent resumed its own earlier conversation in this
+                session instead of starting a new one.
+        createdAt:
+          type: string
+          format: date-time
     ClientEvent:
       oneOf:
         - $ref: "#/components/schemas/UserMessageEvent"
@@ -10520,6 +10608,7 @@ components:
         - $ref: "#/components/schemas/InterruptRequestedEvent"
         - $ref: "#/components/schemas/TurnSteeredEvent"
         - $ref: "#/components/schemas/ScriptStepEvent"
+        - $ref: "#/components/schemas/AgentSwitchedEvent"
     ClientEventPage:
       type: object
       additionalProperties: false
