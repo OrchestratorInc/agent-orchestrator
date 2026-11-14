@@ -733,11 +733,11 @@ describe("session rows jump to the session", () => {
 	it("navigates on Enter and keeps the actions panel as the Cmd+Enter alternative", () => {
 		const items = buildCommands({ workspaces: workspaces() });
 		const map = byId(items);
-		expect(map.get("attention:w-merge")?.action).toEqual({
+		expect(map.get("attention:w-action")?.action).toEqual({
 			kind: "navigate",
-			target: { to: "/projects/$projectId/sessions/$sessionId", params: { projectId: "proj-1", sessionId: "w-merge" } },
+			target: { to: "/projects/$projectId/sessions/$sessionId", params: { projectId: "proj-1", sessionId: "w-action" } },
 		});
-		expect(map.get("attention:w-merge")?.secondaryAction).toEqual({ kind: "open-session-actions", sessionId: "w-merge" });
+		expect(map.get("attention:w-action")?.secondaryAction).toEqual({ kind: "open-session-actions", sessionId: "w-action" });
 		expect(map.get("pr:w-pr:42")?.action?.kind).toBe("navigate");
 		expect(map.get("project:proj-1")?.action?.kind).toBe("navigate");
 	});
@@ -878,16 +878,25 @@ describe("whole keyword matches", () => {
 		expect(displayGroups(rows, "keys")[0]?.items[0]?.id).toBe("shortcut:keyboard-shortcuts");
 	});
 
-	it.each(["bug", "review", "keys", "code"])("keep %s from pulling up a page of unrelated settings", (query) => {
+	it.each(["bug", "review", "keys"])("keep %s from pulling up a page of unrelated settings", (query) => {
 		const rows = buildSettingsCommands(appI18n.t, { developerMode: true, diagnostics: true, mac: true });
 		expect(filterCommands(rows, query).length).toBeLessThanOrEqual(2);
+	});
+
+	it("keep code to the rows that name it", () => {
+		const rows = buildSettingsCommands(appI18n.t, { developerMode: true, diagnostics: true, mac: true });
+		// Its title, Mobile's "qr code", the Harness page's "codex", and Color
+		// theme's "VS Code" option; no row of an unrelated page.
+		expect(filterCommands(rows, "code").map((item) => item.id).sort()).toEqual(
+			["setting:color-theme", "setting:connection-password", "setting:harness", "setting:mobile"],
+		);
 	});
 
 	it("rank the code keyword above qr code, below a title that says code", () => {
 		const rows = [...buildShortcutCommands(appI18n.t, { session: "local" }), ...buildSettingsCommands(appI18n.t, { developerMode: false, diagnostics: false })];
 		const byId = (id: string) => rows.find((item) => item.id === id)!;
 		// "Pairing code or password" names it in its title, and a title beats a keyword.
-		expect(displayGroups(rows, "code")[0]?.items[0]?.id).toBe("setting:connection-password");
+		expect(bestMatch(rows, "code")?.id).toBe("setting:connection-password");
 		expect(matchScore("code", byId("shortcut:open-in-editor"))).toBeGreaterThan(matchScore("code", byId("setting:mobile")));
 		// Mobile's page words stay on the page row, not on each of its rows.
 		expect(matchScore("code", byId("setting:mobile-devices"))).toBe(0);
@@ -943,7 +952,8 @@ describe("exact names", () => {
 			...buildCommands({ workspaces: [{ ...workspaces()[0]!, sessions: [session({ id: "s-theme", title: "theme" })] }] }),
 			...buildSettingsCommands(appI18n.t, { developerMode: false, diagnostics: false }),
 		];
-		expect(displayGroups(items, "theme")[0]?.items[0]?.id).toBe("session:s-theme");
+		// Enter runs the best match wherever its group sits.
+		expect(bestMatch(items, "theme")?.id).toBe("session:s-theme");
 	});
 });
 
