@@ -258,6 +258,8 @@ export const aoBridge: AoBridge =
 			}),
 			historySuggestions: async () => [],
 			historyFavicon: async () => undefined,
+			userBrowser: async () => null,
+			openInUserBrowser: async () => ({ name: "", chrome: false }),
 			clear: async (viewId: string) => ({
 				viewId,
 				url: "",
