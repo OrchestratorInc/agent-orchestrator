@@ -642,6 +642,17 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 		!usesPreviewWorkspaceData &&
 		!daemonStatus.code &&
 		(daemonStatus.state !== "ready" || workspaceStartupState === "loading" || (!workspaceQuery.isSuccess && !workspaceQuery.isError));
+	// Launch timing: the second frame runs once the first frame that shows the
+	// workspace is on screen. A daemon failure is not a launch, and main logs the
+	// first report only, so nothing is reported while one is showing.
+	const workspaceShown = !isStartupLoading && !daemonStatus.code && workspaceQuery.data !== undefined;
+	useEffect(() => {
+		if (!workspaceShown) return;
+		let frame = requestAnimationFrame(() => {
+			frame = requestAnimationFrame(() => aoBridge.app.reportSessionsShown());
+		});
+		return () => cancelAnimationFrame(frame);
+	}, [workspaceShown]);
 	// The startup loader renders no sidebar, so measure again once the shell
 	// mounts it. Otherwise the strip keeps the 240px default and its fill
 	// paints over the center panel's top-left corner beside a narrower sidebar.

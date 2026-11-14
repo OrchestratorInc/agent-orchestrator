@@ -51,6 +51,7 @@ export const aoBridge: AoBridge =
 			onPreviousTabShortcut: () => () => undefined,
 			onNextTabShortcut: () => () => undefined,
 			onShortcut: () => () => undefined,
+			reportSessionsShown: () => undefined,
 			setMenuAvailability: () => undefined,
 			onMenuAction: () => () => undefined,
 			onScrollPhase: () => () => undefined,
