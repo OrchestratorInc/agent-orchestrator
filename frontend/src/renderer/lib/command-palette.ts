@@ -335,7 +335,9 @@ export function buildChatSearchCommands(
 }
 
 /** Where a row lives: its project, marked Cloud when it does not run on this machine. */
-function workspacePlace(workspace: WorkspaceSummary, t: TFunction): string {
+function workspacePlace(workspace: WorkspaceSummary, t: TFunction): string | undefined {
+	// A standalone session has no project to name; "Sessions" would only repeat the list.
+	if (workspace.id === STANDALONE_WORKSPACE_ID) return undefined;
 	return workspace.kind === CLOUD_PROJECT_KIND ? `${workspace.name} · ${t("shell.cloudProjectBadge")}` : workspace.name;
 }
 
