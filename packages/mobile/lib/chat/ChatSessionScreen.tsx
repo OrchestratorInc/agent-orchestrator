@@ -64,6 +64,7 @@ import { Button, EmptyState } from "../ui";
 import { backOr } from "../backNavigation";
 import { userFacingError, NOT_PAIRED_ACTION_COPY, RECONNECTING_ACTION_COPY } from "../connectionError";
 import { agentAccountLabel, agentAccountOptions, moveSessionAgentAccount, useAgentAccounts } from "../agentAccounts";
+import { useStillHere } from "../useStillHere";
 import { ARCHIVE_SESSION_CONFIRM } from "../worker-action-model";
 import { changedPathCount, fileRoute, filesRoute, FilesNavigationContext, type FilesNavigation } from "../files/navigation";
 import { TurnArtifactsContext, useTurnArtifactSourceFor } from "./TurnArtifacts";
@@ -585,6 +586,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	const accountMoving = mobileInterfaceTransitionIsActive(accountMove);
 	// Reread the binding once a move settles: it commits at the end of the move.
 	const agentAccounts = useAgentAccounts(config, terminated ? undefined : headerHarness, session.id, accountMoving ? undefined : accountMove?.id);
+	const stillHere = useStillHere(`${currentHostId ?? ""}|${session.id}|${config ? JSON.stringify(config) : ""}`, () => navigation.isFocused?.() !== false);
 	const currentAccount = agentAccounts.accounts.find((account) => account.id === agentAccounts.current);
 	const menuAccountName = currentAccount ? agentAccountLabel(currentAccount, agentAccounts.accounts) : undefined;
 	const menuAccountCanMove = agentAccounts.accounts.some((account) => account.signedIn && account.id !== agentAccounts.current);
@@ -644,7 +646,9 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 			const move = (accountId: string, stop: boolean) => void moveSessionAgentAccount(config, session.id, accountId, stop)
 				.then(() => interfaceSwitch.refresh())
 				.catch((cause) => Alert.alert("Couldn't switch account", userFacingError(cause)));
+			const here = stillHere();
 			const { accounts, current } = await agentAccounts.reload().catch(() => undefined) ?? agentAccounts;
+			if (!here()) return;
 			void presentSheet({
 				kind: "account-picker",
 				subtitle: "The agent resumes this conversation on the account you choose.",
