@@ -41,7 +41,11 @@ export interface CloudShareFile {
 	artifactId?: string;
 	/** Update this active link instead of publishing a new document. */
 	shareId?: string;
-	/** The fingerprint of the inspection the person saw; publishing refuses a file that changed since. */
+	/**
+	 * The file's version as the panel showed it: a local file's size and
+	 * modification time, a cloud file's SHA-256 from its session's artifact
+	 * list. Publishing refuses a file that changed since.
+	 */
 	fingerprint?: string;
 	/**
 	 * Who a new link opens for. Sent only where the control plane offers
@@ -120,17 +124,20 @@ export interface CloudShareLinks {
 	privateLinks: boolean;
 }
 
-/** What the share popover shows before the person publishes. */
+/**
+ * What the share popover and the Publish button know about a file, read
+ * without opening it: from this computer's publish record and the file's
+ * metadata (a cloud file's listed SHA-256).
+ */
 export interface CloudShareInspection {
 	name: string;
-	size: number;
-	/** Kinds of credential the file looks like it holds, such as "AWS access key". */
-	secretFindings: string[];
+	/** Known for a local file, and for a cloud file whose list was read. */
+	size?: number;
 	/** Video is not shared yet. */
 	unsupported: boolean;
 	/** The link this file was last published to from this computer, if any. */
 	shareId?: string;
-	/** Names exactly what was scanned: the hash of the file's start, its size and modification time. */
+	/** The file's version now: a local file's size and modification time, a cloud file's SHA-256. */
 	fingerprint: string;
 	/**
 	 * The fingerprint the file had when it was published to shareId, when this
@@ -138,13 +145,15 @@ export interface CloudShareInspection {
 	 * not checked: a different value means the file changed since publishing.
 	 */
 	publishedFingerprint?: string;
-	/**
-	 * Kinds of credential the copy last published to shareId looked like it
-	 * held, when this computer recorded it. The link serves that copy until it
-	 * is republished, so making the link public is warned about for these too,
-	 * even once the file no longer holds them.
-	 */
-	publishedSecretFindings?: string[];
+}
+
+/**
+ * Whether two fingerprints name the same version. A local file's fingerprint
+ * recorded by an older version began with a hash of its content
+ * ("<hash>:<size>:<mtime>"); its size and modification time still compare.
+ */
+export function sameShareFingerprint(recorded: string, current: string): boolean {
+	return recorded === current || (current !== "" && recorded.endsWith(`:${current}`));
 }
 
 export type CloudSharePublishResult =

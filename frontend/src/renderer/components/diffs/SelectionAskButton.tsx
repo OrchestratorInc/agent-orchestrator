@@ -3,6 +3,8 @@ import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { selectionRangesEqual, selectionToolbarClass, selectionToolbarPosition, selectionViewport } from "../../lib/selection-toolbar";
 import { isMacPlatform } from "../../lib/platform";
+import { effectiveShortcutBindings, matchesAppShortcut, shortcutBindingLabel } from "../../../shared/shortcuts";
+import { useKeybindingsStore } from "../../stores/keybindings-store";
 import { Button } from "../ui/button";
 import { isDialogOrMenuOpen } from "../../lib/dom-selectors";
 import { codeSelectionRange, type CodeSelection, type CodeSelectionSource } from "./useCodeSelection";
@@ -30,6 +32,9 @@ export function SelectionAskButton({ onAsk, onDismiss, source }: {
 	onAsk: () => boolean | void; onDismiss?: () => void; source: CodeSelectionSource;
 }) {
 	const { t } = useTranslation();
+	const overrides = useKeybindingsStore((state) => state.overrides);
+	const shortcutHint = effectiveShortcutBindings("add-selection-to-chat", isMacPlatform(), overrides)
+		.map((binding) => shortcutBindingLabel(binding, isMacPlatform())).join(" / ");
 	const selection = useSyncExternalStore(source.subscribe, source.get, () => null);
 	const buttonRef = useRef<HTMLDivElement>(null);
 	const [rejected, setRejected] = useState(false);
@@ -56,8 +61,10 @@ export function SelectionAskButton({ onAsk, onDismiss, source }: {
 				event.preventDefault(); event.stopPropagation(); return;
 			}
 			const escape = event.key === "Escape" && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey && Boolean(onDismiss);
-			const add = event.key.toLowerCase() === "l" && !event.shiftKey && !event.altKey &&
-				(isMacPlatform() ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey);
+			const add = !event.isComposing && matchesAppShortcut("add-selection-to-chat", {
+				key: event.key, code: event.code, ctrl: event.ctrlKey,
+				meta: event.metaKey, shift: event.shiftKey, alt: event.altKey,
+			}, isMacPlatform(), useKeybindingsStore.getState().overrides);
 			const button = buttonRef.current;
 			if ((!escape && !add) || !selection || selection.dragging || !button || submitted.current === selection) return;
 			const geometry = placement(selection, button);
@@ -68,7 +75,11 @@ export function SelectionAskButton({ onAsk, onDismiss, source }: {
 			if (target?.closest('input, textarea, select, [contenteditable], [role="textbox"], .xterm, webview, [data-browser-view]')) return;
 			const toolbarFocused = Boolean(target && button.contains(target));
 			const surface = selection.host?.closest("[data-selection-toolbar-scope], .ao-pierre-surface") ?? selection.host;
-			const onSurface = Boolean(surface && target && (surface.contains(target) || event.composedPath().includes(surface)));
+			// File tabs can retain focus outside both the code and an inner clipping viewport.
+			// Accept the owning region itself, without claiming sibling controls.
+			const keyboardScope = selection.host?.closest("[data-code-selection-keyboard-scope]");
+			const onSurface = Boolean(target && (target === keyboardScope || target === selection.viewport ||
+				(surface && (surface.contains(target) || event.composedPath().includes(surface)))));
 			const liveRange = selection.host && codeSelectionRange(selection.host);
 			const matches = selectionRangesEqual(liveRange ?? undefined, selection.textRange);
 			const documentTarget = !target || target === document.body || target === document.documentElement;
@@ -154,7 +165,7 @@ export function SelectionAskButton({ onAsk, onDismiss, source }: {
 				onClick={activate}
 				disabled={selection.dragging || accepted === selection}
 				size="sm"
-				title={`${label} (${isMacPlatform() ? "⌘L" : "Ctrl+L"})`}
+				title={`${label}${shortcutHint ? ` (${shortcutHint})` : ""}`}
 				type="button"
 				variant="quiet"
 			>

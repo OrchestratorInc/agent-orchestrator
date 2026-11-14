@@ -34,6 +34,8 @@ const h = vi.hoisted(() => ({
 	cloudOrgId: "org-1",
 	cloudBaseUrl: "https://cloud-a.example.test",
 	cloudUserId: "user-1",
+	cloudMaxAttachmentBytes: undefined as number | undefined,
+	cloudUpload: vi.fn(),
 }));
 
 vi.mock("../hooks/useChatPermissionModes", async (importOriginal) => {
@@ -131,7 +133,13 @@ vi.mock("../hooks/useCloudCp", () => ({
 }));
 
 vi.mock("../hooks/useCloudOffering", () => ({
-	useCloudOffering: () => ({ chatHarnesses: h.cloudChatHarnesses, loaded: h.cloudOfferingLoaded, defaultProvider: h.cloudDefaultProvider }),
+	useCloudOffering: () => ({ chatHarnesses: h.cloudChatHarnesses, loaded: h.cloudOfferingLoaded, defaultProvider: h.cloudDefaultProvider, maxAttachmentBytes: h.cloudMaxAttachmentBytes }),
+}));
+
+// A Cloud task's files upload to its session through the main process's binary channel.
+vi.mock("../lib/cloud-attachments", async (importOriginal) => ({
+	...await importOriginal<typeof import("../lib/cloud-attachments")>(),
+	uploadCloudAttachment: h.cloudUpload,
 }));
 
 import { TaskComposer, useTaskLaunch } from "./TaskComposer";
@@ -278,6 +286,8 @@ afterEach(() => {
 	h.cloudOrgId = "org-1";
 	h.cloudBaseUrl = "https://cloud-a.example.test";
 	h.cloudUserId = "user-1";
+	h.cloudMaxAttachmentBytes = undefined;
+	h.cloudUpload.mockReset();
 	vi.unstubAllGlobals();
 	h.agentValues.length = 0;
 	window.localStorage.removeItem("ao.taskComposer.preferences.v1");
@@ -4222,6 +4232,137 @@ describe("useTaskLaunch Cloud start on send", () => {
 		const [first, second] = h.cloudCreateSession.mock.calls.map((call) => call[2]);
 		expect(first?.idempotencyKey).toEqual(expect.any(String));
 		expect(second).toEqual(first);
+	});
+
+	// A refusal the page treats as uncertain keeps the send pinned and retries
+	// it as it was, so a task with files that cannot start must be refused as final.
+	it("refuses files on a Cloud task that starts in the terminal as final, creating nothing", async () => {
+		const queryClient = freestyleFixture();
+		h.cloudMaxAttachmentBytes = 25 * 1024 * 1024;
+		render(<Wrap queryClient={queryClient}><Launcher /></Wrap>);
+		await screen.findByText("ready");
+		let outcome: unknown;
+		await act(async () => {
+			outcome = await task.launch("Look at this", { clientRequestId: "req-f1", interfaceMode: "tui", attachments: [{ mimeType: "image/png", data: "aGk=", name: "shot.png" }] })
+				.catch((error: unknown) => error);
+		});
+		// The page has no interface switch: the default session interface in Settings decides it.
+		expect(outcome).toMatchObject({ name: "TaskCreateError", code: "CLOUD_ATTACHMENTS_NEED_CHAT", message: "Files can start a Cloud task only in Chat. Set the default session interface to Chat in Settings > General, or remove the files." });
+		expect(h.cloudCreateSession).not.toHaveBeenCalled();
+	});
+
+	// An agent Cloud runs only in the terminal starts there whatever the default says.
+	it("says to choose another agent when the task's agent has no Chat on Cloud", async () => {
+		const queryClient = freestyleFixture();
+		h.cloudMaxAttachmentBytes = 25 * 1024 * 1024;
+		h.cloudChatHarnesses = [];
+		render(<Wrap queryClient={queryClient}><Launcher /></Wrap>);
+		await screen.findByText("ready");
+		let outcome: unknown;
+		await act(async () => {
+			outcome = await task.launch("Look at this", { clientRequestId: "req-f6", interfaceMode: "tui", attachments: [{ mimeType: "image/png", data: "aGk=", name: "shot.png" }] })
+				.catch((error: unknown) => error);
+		});
+		expect(outcome).toMatchObject({ name: "TaskCreateError", code: "CLOUD_ATTACHMENTS_NEED_CHAT", message: "Files can start a Cloud task only in Chat, which Codex doesn't run in on Cloud. Choose another agent, or remove the files." });
+		expect(h.cloudCreateSession).not.toHaveBeenCalled();
+	});
+
+	it("refuses files as final where the control plane takes none", async () => {
+		const queryClient = freestyleFixture();
+		render(<Wrap queryClient={queryClient}><Launcher /></Wrap>);
+		await screen.findByText("ready");
+		let outcome: unknown;
+		await act(async () => {
+			outcome = await task.launch("Look at this", { clientRequestId: "req-f2", interfaceMode: "chat", attachments: [{ mimeType: "image/png", data: "aGk=", name: "shot.png" }] })
+				.catch((error: unknown) => error);
+		});
+		expect(outcome).toMatchObject({ name: "TaskCreateError", code: "CLOUD_ATTACHMENTS_UNSUPPORTED" });
+		expect(h.cloudCreateSession).not.toHaveBeenCalled();
+	});
+
+	// Its session was deleted again, so nothing is left to retry: the page
+	// hands the brief and files back with the reason.
+	it("returns a Cloud task whose files did not upload as final, once its session is deleted", async () => {
+		const queryClient = freestyleFixture();
+		h.cloudMaxAttachmentBytes = 25 * 1024 * 1024;
+		h.cloudCreateSession.mockResolvedValue({ session: { id: "s-f3", harness: "codex", interfaceMode: "chat" } });
+		h.cloudUpload.mockRejectedValue(new Error("This file type is not allowed."));
+		render(<Wrap queryClient={queryClient}><Launcher /></Wrap>);
+		await screen.findByText("ready");
+		let outcome: unknown;
+		await act(async () => {
+			outcome = await task.launch("Look at this", { clientRequestId: "req-f3", interfaceMode: "chat", attachments: [{ mimeType: "image/png", data: "aGk=", name: "shot.png" }] })
+				.catch((error: unknown) => error);
+		});
+		expect(h.cloudDeleteSession).toHaveBeenCalledWith("org-1", "s-f3");
+		expect(outcome).toMatchObject({ name: "TaskCreateError", code: "CLOUD_TASK_FILES_UNDELIVERED", message: "This file type is not allowed." });
+		expect(queryClient.getQueryData(["cloud-opening", "org-1", "s-f3"])).toBeUndefined();
+	});
+
+	// A session the cleanup could not delete may still take the brief: the
+	// failure stays uncertain, so the page retries it with the same request id.
+	it("keeps a Cloud task with files uncertain while its session may still exist", async () => {
+		const queryClient = freestyleFixture();
+		h.cloudMaxAttachmentBytes = 25 * 1024 * 1024;
+		h.cloudCreateSession.mockResolvedValue({ session: { id: "s-f4", harness: "codex", interfaceMode: "chat" } });
+		h.cloudUpload.mockRejectedValue(new Error("Couldn’t reach Orchestrator Cloud. Check the connection and try again."));
+		h.cloudDeleteSession.mockRejectedValue(new TypeError("Failed to fetch"));
+		render(<Wrap queryClient={queryClient}><Launcher /></Wrap>);
+		await screen.findByText("ready");
+		let outcome: unknown;
+		await act(async () => {
+			outcome = await task.launch("Look at this", { clientRequestId: "req-f4", interfaceMode: "chat", attachments: [{ mimeType: "image/png", data: "aGk=", name: "shot.png" }] })
+				.catch((error: unknown) => error);
+		});
+		expect(outcome).toBeInstanceOf(Error);
+		expect(outcome).not.toMatchObject({ name: "TaskCreateError" });
+		expect((outcome as { code?: string }).code).toBeUndefined();
+	});
+
+	// A control plane's refusal of the brief is final only once the session
+	// is gone: while the cleanup could not delete it, the page keeps the send
+	// and retries it with the same request id, which continues that session.
+	it("keeps a refused brief uncertain while its session may still exist", async () => {
+		const queryClient = freestyleFixture();
+		h.cloudMaxAttachmentBytes = 25 * 1024 * 1024;
+		h.cloudCreateSession.mockResolvedValue({ session: { id: "s-f7", harness: "codex", interfaceMode: "chat" } });
+		h.cloudUpload.mockResolvedValue({ id: "file-1" });
+		h.cloudSendSessionMessage.mockRejectedValue(new CloudCpError("This session's sandbox runs an older AO worker that cannot receive attached files.", { status: 409, code: "ATTACHMENTS_UNSUPPORTED" }));
+		h.cloudDeleteSession.mockRejectedValue(new TypeError("Failed to fetch"));
+		render(<Wrap queryClient={queryClient}><Launcher /></Wrap>);
+		await screen.findByText("ready");
+		let outcome: unknown;
+		await act(async () => {
+			outcome = await task.launch("Look at this", { clientRequestId: "req-f7", interfaceMode: "chat", attachments: [{ mimeType: "image/png", data: "aGk=", name: "shot.png" }] })
+				.catch((error: unknown) => error);
+		});
+		expect(outcome).toBeInstanceOf(Error);
+		expect(outcome).not.toMatchObject({ name: "TaskCreateError" });
+		expect((outcome as { code?: string }).code).toBeUndefined();
+		expect((outcome as { status?: number }).status).toBeUndefined();
+	});
+
+	// Its own project comes with its session, so a start the files did not
+	// reach would leave that project behind: it starts without them.
+	it("refuses files on a Cloud standalone agent as final, starting nothing", async () => {
+		const queryClient = freestyleFixture();
+		h.cloudMaxAttachmentBytes = 25 * 1024 * 1024;
+		let standalone!: ReturnType<typeof useTaskLaunch>;
+		function StandaloneLauncher() {
+			standalone = useTaskLaunch({ projectId: CLOUD_STANDALONE_WORKSPACE_ID });
+			return <p>{standalone.canSubmit ? "ready" : "loading"}</p>;
+		}
+		render(<Wrap queryClient={queryClient}><StandaloneLauncher /></Wrap>);
+		await screen.findByText("ready");
+		let outcome: unknown;
+		await act(async () => {
+			outcome = await standalone.launch("Look at this", { clientRequestId: "req-f5", interfaceMode: "chat", attachments: [{ mimeType: "image/png", data: "aGk=", name: "shot.png" }] })
+				.catch((error: unknown) => error);
+		});
+		expect(outcome).toMatchObject({ name: "TaskCreateError", code: "CLOUD_ATTACHMENTS_UNSUPPORTED" });
+		expect(h.cloudCreateStandaloneAgent).not.toHaveBeenCalled();
+		expect(h.cloudCreateSession).not.toHaveBeenCalled();
+		expect(h.cloudUpload).not.toHaveBeenCalled();
 	});
 
 	it("keeps a full plan's refusal as the reason, and creates nothing else", async () => {
