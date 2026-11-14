@@ -8,10 +8,10 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-func TestOpenInterpreterCandidateRemainsUnavailableInProduction(t *testing.T) {
+func TestOpenInterpreterChatIsUnsupported(t *testing.T) {
 	registry := Build(nil, nil)
 	if registry.SupportsChat(domain.HarnessOpenInterpreter) {
-		t.Fatal("unqualified Open Interpreter candidate exposed in Chat")
+		t.Fatal("Open Interpreter exposed in Chat before its ACP mode is qualified")
 	}
 	_, err := registry.Driver(domain.HarnessOpenInterpreter)
 	if !errors.Is(err, ports.ErrChatUnsupported) {
