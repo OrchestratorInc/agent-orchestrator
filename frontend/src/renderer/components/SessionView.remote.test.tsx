@@ -433,9 +433,11 @@ it("opens the frontend file from an absolute remote turn diff without a cwd", as
 });
 
 it.each([
-	["a daemon that places the path outside the session", () => Response.json({ sessionId: "session-1", kind: "outside", path: "" })],
-	["an older daemon without the resolve route", () => Response.json({ error: "Not found" }, { status: 404 })],
-])("does not open a same-named workspace file for an absolute Markdown link on %s", async (_name, resolveResponse) => {
+	// A daemon that knows the file is outside says so without leaving a tab that
+	// can only repeat it; an older one cannot say, so the file pane does.
+	["a daemon that places the path outside the session", () => Response.json({ sessionId: "session-1", kind: "outside", path: "" }), "toast"],
+	["an older daemon without the resolve route", () => Response.json({ error: "Not found" }, { status: 404 }), "tab"],
+] as const)("does not open a same-named workspace file for an absolute Markdown link on %s", async (_name, resolveResponse, notice) => {
 	HTMLElement.prototype.scrollTo = vi.fn();
 	localGet.mockReset();
 	remoteConnect.mockResolvedValue({ hostId: "box-a", label: "Box A", url: "http://box-a:3001", base: "http://127.0.0.1:4000" });
@@ -466,7 +468,14 @@ it.each([
 	await connectHost("http://box-a:3001");
 	renderRemoteSession(new QueryClient({ defaultOptions: { queries: { retry: false } } }));
 	await userEvent.click(await screen.findByRole("link", { name: "the other readme" }));
-	expect(await screen.findByText("This file is outside the session's workspace, so it can't be opened here.")).toBeInTheDocument();
+	const outsideMessage = "This file is outside the session's workspace, so it can't be opened here.";
+	if (notice === "toast") {
+		await waitFor(() => expect(useUiStore.getState().globalToast?.title).toBe(outsideMessage));
+		expect(useUiStore.getState().globalToast?.body).toBe("/other-repo/README.md");
+		expect(screen.queryByText(outsideMessage)).not.toBeInTheDocument();
+	} else {
+		expect(await screen.findByText(outsideMessage)).toBeInTheDocument();
+	}
 	expect(resolveRequests).toEqual(["/other-repo/README.md"]);
 	expect(fileRequests).toEqual([]);
 	expect(localGet).not.toHaveBeenCalled();

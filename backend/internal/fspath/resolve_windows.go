@@ -1,6 +1,6 @@
 //go:build windows
 
-package session
+package fspath
 
 import (
 	"path/filepath"
@@ -9,7 +9,9 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-func resolvedFilesystemPath(path string) (string, error) {
+// Resolved is the path with every symlink followed, as the filesystem reads
+// it. The path must exist.
+func Resolved(path string) (string, error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		return "", err

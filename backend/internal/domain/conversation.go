@@ -667,6 +667,10 @@ type ConversationDiffFile struct {
 	Status string `json:"status"`
 	// OldPath is set only for a rename.
 	OldPath string `json:"oldPath,omitempty"`
+	// OutsideWorkspace marks an absolute path in neither the session worktree
+	// nor its artifact directory, such as an agent's own memory file. It is a
+	// real change the turn made, but not one the Files panel can open.
+	OutsideWorkspace bool `json:"outsideWorkspace,omitempty"`
 	// RolledBackAt is set when a rollback discarded this turn provider-side. The
 	// row survives because AO does not destroy durable facts, but the agent no
 	// longer remembers the exchange, so its messages and activities are left out
