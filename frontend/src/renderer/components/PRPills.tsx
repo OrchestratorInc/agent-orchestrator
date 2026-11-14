@@ -1,7 +1,7 @@
 import { ChevronDown, GitBranch, GitMerge, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, type LucideIcon } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { SessionPRSummary } from "../hooks/useSessionScmSummary";
-import { prCanMerge, prHasNoChecks } from "../lib/pr-display";
+import { prCanMerge, prHasNoChecks, prRepositoryFromUrl, prRepositoryLabels } from "../lib/pr-display";
 import { usePRNoChecksClock } from "../hooks/usePRNoChecksClock";
 import { cn } from "../lib/utils";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./ui/dropdown-menu";
@@ -65,6 +65,7 @@ export function PRPills({ branchPR, focused, onFocus, prs, showRepository }: {
 	const shown = earlier.some((pr) => prFocusKey(pr) === focusKey) ? [...active, focused] : active;
 	const folded = earlier.filter((pr) => prFocusKey(pr) !== focusKey);
 	const branchKey = branchPR ? prFocusKey(branchPR) : undefined;
+	const repositoryLabels = prRepositoryLabels(prs);
 	return (
 		<div aria-label={t("pr.others.label")} className="flex min-w-0 flex-wrap items-center gap-1.5 text-xs" data-testid="pr-pills" role="group">
 			{shown.map((pr) => {
@@ -72,6 +73,9 @@ export function PRPills({ branchPR, focused, onFocus, prs, showRepository }: {
 				const status = t(dot.labelKey);
 				const pressed = prFocusKey(pr) === focusKey;
 				const branch = prFocusKey(pr) === branchKey;
+				// The repository comes from the PR, or from its URL when the PR doesn't say.
+				const fullRepository = showRepository ? pr.repo || prRepositoryFromUrl(pr.htmlUrl || pr.url) : undefined;
+				const repository = fullRepository ? repositoryLabels.get(fullRepository) ?? fullRepository : undefined;
 				return (
 					<button
 						aria-pressed={pressed}
@@ -83,12 +87,14 @@ export function PRPills({ branchPR, focused, onFocus, prs, showRepository }: {
 						)}
 						key={prFocusKey(pr)}
 						onClick={() => onFocus(pr)}
-						title={`${pr.title} · ${status}${branch ? ` · ${t("pr.others.checkedOut")}` : ""}`}
+						title={`${fullRepository ? `${fullRepository} · ` : ""}${pr.title} · ${status}${branch ? ` · ${t("pr.others.checkedOut")}` : ""}`}
 						type="button"
 					>
 						<span aria-hidden="true" className={cn("size-dot-sm shrink-0 rounded-full", dot.className, dot.breathe && "animate-status-pulse")} />
-						<span className="shrink-0 font-medium">{showRepository && pr.repo ? `${pr.repo} ` : ""}{t("pr.others.short", { number: pr.number })}</span>
-						{pr.title ? <span className="min-w-0 truncate">{pr.title}</span> : null}
+						{/* A long repository name gives way; the number always shows. */}
+						{repository ? <span className="min-w-0 shrink truncate font-medium">{repository}</span> : null}
+						<span className="shrink-0 font-medium">{t("pr.others.short", { number: pr.number })}</span>
+						{pr.title && !repository ? <span className="min-w-0 truncate">{pr.title}</span> : null}
 						{branch ? <GitBranch aria-hidden="true" className="size-icon-2xs shrink-0 text-passive" /> : null}
 						<span className="sr-only">, {status}{branch ? `, ${t("pr.others.checkedOut")}` : ""}</span>
 					</button>

@@ -141,6 +141,7 @@ if (typeof window !== "undefined") {
 	document.elementFromPoint = (() => null) as typeof document.elementFromPoint;
 
 	window.ao = {
+		triage: { launch: async () => ({ ok: true }) },
 		dictation: {
 			start: async () => undefined,
 			stop: async () => undefined,
@@ -166,6 +167,7 @@ if (typeof window !== "undefined") {
 			checkGitHubRepositoryAvailability: async () => ({ available: true }),
 			getPathForFile: () => "",
 			onOpenFolderPath: () => () => undefined,
+			onOpenSessionDeepLink: () => () => undefined,
 			onNewSessionShortcut: () => () => undefined,
 			onKeyboardShortcutsHelp: () => () => undefined,
 			onQuitConfirmRequest: () => () => undefined,
@@ -227,7 +229,7 @@ if (typeof window !== "undefined") {
 		},
 		cloudShare: {
 			available: async () => true,
-			inspect: async () => ({ name: "", size: 0, secretFindings: [], unsupported: false, fingerprint: "" }),
+			inspect: async () => ({ name: "", size: 0, unsupported: false, fingerprint: "" }),
 			list: async () => ({ shares: [], limit: 3, used: 0, unlimited: false, privateLinks: false }),
 			publish: async () => ({ status: "cancelled" as const }),
 			cancel: async () => undefined,

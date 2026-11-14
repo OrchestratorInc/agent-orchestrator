@@ -152,7 +152,7 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 }));
 
 vi.mock("../lib/shell-context", () => ({
-	useShell: () => ({ cloneProject: vi.fn(), createProject: vi.fn(), initializeProjectRepository: vi.fn(), daemonStatus: {} }),
+	useShell: () => ({ cloneProject: vi.fn(), createProject: vi.fn(), initializeProjectRepository: vi.fn(), daemonStatus: { state: "ready" } }),
 }));
 
 vi.mock("../lib/spawn-orchestrator", () => ({ spawnOrchestrator: spawnMock }));
@@ -308,6 +308,29 @@ describe("CommandPalette gating", () => {
 
 		fireEvent.click(screen.getByText(rowTitle("New project")));
 		await waitFor(() => expect(createProjectFlowMock.props).not.toBeNull());
+	});
+
+	it("starts a problem report and closes", async () => {
+		renderPalette();
+		act(() => useUiStore.getState().setCommandPaletteOpen(true));
+		await screen.findByPlaceholderText(/search sessions/i);
+
+		fireEvent.click(screen.getByText(rowTitle("Report a problem")));
+		await waitFor(() => expect(useUiStore.getState().isCommandPaletteOpen).toBe(false));
+		expect(useUiStore.getState().newTaskRequest).toMatchObject({ projectId: STANDALONE_WORKSPACE_ID });
+	});
+
+	it.each(["bug", "report"])("starts a problem report when Enter follows %s", async (query) => {
+		renderPalette();
+		act(() => useUiStore.getState().setCommandPaletteOpen(true));
+		const input = await screen.findByPlaceholderText(/search sessions/i);
+
+		fireEvent.change(input, { target: { value: query } });
+		await screen.findByText(rowTitle("Report a problem"));
+		fireEvent.keyDown(input, { key: "Enter" });
+
+		await waitFor(() => expect(useUiStore.getState().isCommandPaletteOpen).toBe(false));
+		expect(useUiStore.getState().newTaskRequest).toMatchObject({ projectId: STANDALONE_WORKSPACE_ID });
 	});
 
 	it("subscribes to workspace updates only while open", () => {

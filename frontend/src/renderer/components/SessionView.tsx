@@ -26,7 +26,7 @@ import { SplitCloseFocusedContext, SplitHiddenTabKeysContext } from "./split-pan
 import { SessionTabAgentMenuContext, SessionTabMenuButton, TabSplitMenuContext, type SessionTabAgentMenu, type TabMenuSpec, type TabSplitActions } from "./TabContextMenu";
 import { useSplitPanesEnabled } from "../lib/split-panes";
 import { useSessionSplitGroups, useSplitPanesStore } from "../stores/split-panes-store";
-import { SplitDivider, SplitGroupTab, SplitPaneTerminal, type SplitGroupMember } from "./SplitView";
+import { PANE_HEADER_PX, SplitDivider, SplitGroupTab, SplitJunction, SplitPaneHeader, SplitPaneTerminal, findJunctions, type SplitGroupMember } from "./SplitView";
 import { WorkspaceEntryIcon } from "./WorkspaceEntryIcon";
 import { registerPaneDropTarget, type PaneDropResolution } from "../lib/pane-drag";
 import {
@@ -552,7 +552,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const filesKind = session ? filesProjectKind(session, sessionWorkspaceKind) : undefined;
 	const interfaceContext = hostId ?? (session ? session.cloud ?? null : cloudOrgId && projectId ? { orgId: cloudOrgId } : undefined);
 	const interfaceUi = useSessionInterfaceSwitch(sessionId, session, interfaceContext);
-	const accountLabel = useAgentAccountLabel(Boolean(interfaceUi.accountMoveTarget));
+	const accountLabel = useAgentAccountLabel(Boolean(interfaceUi.accountMoveTarget), hostId);
 	const accountSwitchingLabel = interfaceUi.accountMoveTarget
 		? t("settings.agentAccounts.switching", { email: accountLabel(interfaceUi.accountMoveTarget) })
 		: undefined;
@@ -1847,7 +1847,15 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	}, []);
 	const centerColumnRef = useRef<HTMLDivElement | null>(null);
 	const splitDropStateRef = useRef<SplitDropState | null>(null);
-	splitDropStateRef.current = { groups, shownGroup, selectedTabKey, splittableKeys, selectTab, updateGroups };
+	splitDropStateRef.current = {
+		groups,
+		shownGroup,
+		selectedTabKey,
+		splittableKeys,
+		selectTab,
+		updateGroups,
+		labels: { split: t("splitPane.dropSplit"), join: t("splitPane.dropJoin"), unsplit: t("splitPane.dropUnsplit") },
+	};
 	useEffect(
 		() =>
 			!splitPanes ? undefined : registerPaneDropTarget({
@@ -1886,7 +1894,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const shownLayout = useMemo(() => (shownGroup ? layoutCss(shownGroup.root) : null), [shownGroup]);
 	const paneStyle = (key: string): CSSProperties => {
 		const box = shownLayout?.leaves.get(key);
-		return box ? { position: "absolute", ...box } : FULL_PANE_STYLE;
+		// Each pane keeps a title bar on top; the content takes what is below it.
+		return box
+			? { position: "absolute", left: box.left, width: box.width, top: `calc(${box.top} + ${PANE_HEADER_PX}px)`, height: `calc(${box.height} - ${PANE_HEADER_PX}px)` }
+			: FULL_PANE_STYLE;
 	};
 	// The reviewer chat stays mounted while it is a member of a split, so it
 	// survives moving between panes and leaving its group's tab. Otherwise it
@@ -1961,8 +1972,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const sessionLabel = session ? (isOrchestrator ? t("shell.orchestrator") : session.title) : t("terminal.noSession");
 	const sessionProvider = session?.provider;
 	const reviewerHarness = reviewerTerminal?.harness ?? reviewerChat?.harness;
-	const groupWorkspaceTabs = useMemo(() => {
-		const groupMember = (key: string): SplitGroupMember => {
+	const groupMember = useCallback((key: string): SplitGroupMember => {
 			const onSelect = () => selectTab(key);
 			const onClose = () => closePane(key);
 			if (key === SESSION_TAB_KEY) {
@@ -2002,7 +2012,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 				icon: <SquareTerminal aria-hidden="true" className="size-icon-sm" />,
 				agentHandleId: tracksAgent ? key : undefined,
 			};
-		};
+	}, [centerFileRequestsBySession, closePane, reviewerHarness, selectTab, sessionLabel, sessionProvider, shellTerminals, t, uiSessionId]);
+	// Pressing a file pane's title bar moves keyboard focus into that file.
+	const [paneFocusRequests, setPaneFocusRequests] = useState<Record<string, number>>({});
+	const groupWorkspaceTabs = useMemo(() => {
 		const groupFocus = (group: TabGroup) => {
 			const members = leafKeys(group.root);
 			return group.focus && members.includes(group.focus) ? group.focus : members[0]!;
@@ -2042,6 +2055,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	}, [
 		centerFileRequestsBySession,
 		closePane,
+		groupMember,
 		groups,
 		hostId,
 		isOrchestrator,
@@ -2948,6 +2962,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 													>
 														<SessionFileWorkspace
 															active={visible && !filesPoppedOut}
+															focusRequest={paneFocusRequests[paneKey] ?? 0}
 															fileKey={fileKey}
 															hostId={hostId}
 															source={request?.source} annotationRange={request?.annotationRange}
@@ -2972,17 +2987,31 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 										</>									)}
 								</div>
 							) : null}
-							{/* Panes other than the focused one rest under a light veil, so
-							    the one taking keys stands out; the veil never takes the pointer.
-							    The session's own chat or agent is never dimmed. */}
+							{/* Every pane of a split has a title bar: it names the pane as the
+							    tab it is, is the handle to drag it. */}
 							{shownGroup && shownLayout
-								? [...shownLayout.leaves.keys()].filter((key) => key !== SESSION_TAB_KEY).map((key) => (
-									<div
-										aria-hidden="true"
-										className="pane-split-dim"
-										data-dimmed={key === selectedTabKey ? undefined : ""}
-										key={`dim:${key}`}
-										style={paneStyle(key)}
+								? [...shownLayout.leaves.entries()].map(([key, box]) => (
+									<SplitPaneHeader
+										closable={key !== SESSION_TAB_KEY && !key.startsWith("reviewer")}
+										focused={key === selectedTabKey}
+										key={`header:${key}`}
+										member={groupMember(key)}
+										menu={{ kind: "group", onUngroup: () => updateGroups((current) => ungroupById(current, shownGroup.id)) }}
+										onPress={() => {
+											setPaneFocusRequests((current) => ({ ...current, [key]: (current[key] ?? 0) + 1 }));
+											// A terminal or chat composer only autofocuses when it becomes
+											// selected, so a press on a selected pane puts the caret in it.
+											requestAnimationFrame(() => {
+												for (const pane of document.querySelectorAll<HTMLElement>("[data-split-pane]")) {
+													if (pane.dataset.splitPane === key) pane.querySelector<HTMLElement>(".xterm-helper-textarea, [contenteditable='true'][role='combobox']")?.focus({ preventScroll: true });
+												}
+											});
+										}}
+										// The top row reaches 2px above the screen so no sliver of the
+										// panel shows over its title bar.
+										style={box.top === "0%"
+											? { left: box.left, top: -2, width: box.width, height: PANE_HEADER_PX + 2, paddingTop: 2 }
+											: { left: box.left, top: box.top, width: box.width, height: PANE_HEADER_PX }}
 									/>
 								))
 								: null}
@@ -3008,6 +3037,17 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									/>
 								</div>
 							)) : null}
+							{shownGroup && shownLayout
+								? findJunctions(shownLayout.dividers).map(({ row, column }) => (
+									<SplitJunction
+										column={column}
+										key={`${shownGroup.id}:${row.path}:${column.path}`}
+										onResize={resizeSplit}
+										row={row}
+										screenRef={splitScreenRef}
+									/>
+								))
+								: null}
 							{interfaceUi.notice}
 						</div>
 					</div>
@@ -3188,6 +3228,8 @@ type SplitDropState = {
 	splittableKeys: ReadonlySet<string>;
 	selectTab: (key: string) => void;
 	updateGroups: (update: (current: TabGroup[]) => TabGroup[]) => void;
+	/** What releasing says, named inside the drop preview. */
+	labels: { split: string; join: string; unsplit: string };
 };
 
 /**
@@ -3219,6 +3261,7 @@ function resolveSplitDrop(
 		if (!edge) return null;
 		return {
 			rect: halfOf(rect, edge),
+			label: state.labels.split,
 			commit: () => {
 				state.updateGroups((current) => splitBeside(current, target, key, edge));
 				state.selectTab(key);
@@ -3233,6 +3276,7 @@ function resolveSplitDrop(
 		if (!edge) return null;
 		return {
 			rect: halfOf(paneRect, edge),
+			label: state.labels.split,
 			commit: () => {
 				state.updateGroups((current) => splitBeside(current, paneKey, key, edge));
 				state.selectTab(key);
@@ -3268,6 +3312,7 @@ function resolveStripDrop(
 		const remaining = leafKeys(sourceGroup.root).find((candidate) => candidate !== key);
 		return {
 			rect: screen,
+			label: state.labels.unsplit,
 			commit: () => {
 				state.updateGroups((current) => withoutTab(current, key));
 				if (remaining && state.selectedTabKey === key) state.selectTab(remaining);
@@ -3279,6 +3324,7 @@ function resolveStripDrop(
 		// Joining a group adds the tab as a new column beside its layout.
 		return {
 			rect: over.rect,
+			label: state.labels.join,
 			commit: () => {
 				state.updateGroups((current) =>
 					placeInGroup(current, targetGroup, key, (root) => {
@@ -3294,6 +3340,7 @@ function resolveStripDrop(
 	if (!state.splittableKeys.has(target)) return null;
 	return {
 		rect: over.rect,
+		label: state.labels.join,
 		commit: () => {
 			state.updateGroups((current) => [
 				...withoutTab(current, key),

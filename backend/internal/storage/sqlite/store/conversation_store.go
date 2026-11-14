@@ -614,6 +614,11 @@ func (s *Store) CommitProviderSwitch(ctx context.Context, rec domain.SessionReco
 		}); err != nil {
 			return fmt.Errorf("save switched conversation settings: %w", err)
 		}
+		if err := q.UpdateConversationModelReroute(ctx, gen.UpdateConversationModelRerouteParams{
+			ModelRerouteJson: sql.NullString{}, UpdatedAt: rec.UpdatedAt, ID: branch.ConversationID,
+		}); err != nil {
+			return fmt.Errorf("clear switched conversation model reroute: %w", err)
+		}
 		sequence, err := q.NextConversationSequence(ctx, gen.NextConversationSequenceParams{UpdatedAt: rec.UpdatedAt, ID: branch.ConversationID})
 		if err != nil {
 			return fmt.Errorf("allocate provider switch activity sequence: %w", err)

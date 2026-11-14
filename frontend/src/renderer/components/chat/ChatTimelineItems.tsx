@@ -1,4 +1,5 @@
 import { AppLink } from "../AppLink";
+import { TurnForkButton } from "../SessionForkControls";
 import { useAgentAccountLabel } from "../../hooks/useAgentAccounts";
 /**
  * Timeline entries for the Chat surface.
@@ -34,6 +35,7 @@ import {
 	Bot,
 	ArrowRight,
 	ArrowRightLeft,
+	Ban,
 	Brain,
 	ChevronDown,
 	ChevronRight,
@@ -134,6 +136,7 @@ import { isWebLink, openLinkInSystemBrowser } from "../../lib/external-link-poli
 import { useComposerTokenRenderer } from "./sentComposerTokens";
 import { ActivityTitle, ChatMarkdown, OriginPreviewMarkdown, SessionLabelLink, SessionLinkedText, UserMarkdown } from "./ChatMarkdown";
 import { HighlightedCode } from "./HighlightedCode";
+import { ProviderMark } from "./ProviderMark";
 import { CopyButton } from "./CopyButton";
 import { CollapsibleHumanBody } from "./CollapsibleHumanBody";
 import { LatticeLoader } from "./LatticeLoader";
@@ -505,7 +508,7 @@ export function CompactionMarker({ activity }: { activity: ConversationActivity 
 /** The remote host a chat's session runs on, whose catalogs name its models. */
 export const ChatHostId = createContext<string | undefined>(undefined);
 
-/** One side of a handoff: its model by name when one was recorded, else the agent's name. */
+/** One side of a handoff: the agent's mark, then its model by name when one was recorded, else the agent's name. */
 function HandoffSide({ harness, model, effort, compactWindow, bright }: { harness: string; model?: string; effort?: string; compactWindow?: string; bright?: boolean }) {
 	const { t } = useTranslation();
 	// The marker stores the model id. Its name comes from the agent's catalog on the session's host.
@@ -514,6 +517,7 @@ function HandoffSide({ harness, model, effort, compactWindow, bright }: { harnes
 	const name = model ? recordedModelName(harness, model, catalog?.models ?? []) : agentLabel(harness);
 	return (
 		<span className={cn("flex min-w-0 items-center gap-1.5", bright ? "text-foreground" : undefined)}>
+			<ProviderMark provider={harness} />
 			<span className="truncate">{name.replace(/\s*\b1M\b/g, "")}</span>
 			{effort ? <span className="shrink-0 text-muted-foreground">{formatEffortLabel(effort, t)}</span> : null}
 			{compactWindow ? <span className="shrink-0 text-muted-foreground" title="Compacts on its own at this size">· {compactWindow.toUpperCase()}</span> : null}
@@ -608,6 +612,13 @@ const TURN_OUTCOME_COPY = {
 		tone: "font-medium text-destructive",
 		iconTone: "text-destructive",
 	},
+	// It ended before the agent started on it; the reason follows in the turn's voice.
+	not_run: {
+		label: "This message was not run",
+		icon: Ban,
+		tone: "text-muted-foreground",
+		iconTone: "text-muted-foreground/70",
+	},
 	// The controller went away mid-turn, so nothing reported how it ended.
 	unknown: {
 		label: "The agent stopped before this turn finished",
@@ -638,7 +649,7 @@ export function TurnOutcome({
 	rollbackDisabled,
 	timestamp,
 }: {
-	state: "recovered" | "interrupted" | "failed" | "unknown";
+	state: "recovered" | "interrupted" | "failed" | "unknown" | "not_run";
 	error?: string;
 	failureCode?: "provider_key_missing";
 	onConfigure?: () => void;
@@ -798,6 +809,7 @@ export function TurnActions({
 						<TooltipContent side="bottom">Roll back to here</TooltipContent>
 					</Tooltip>
 				) : null}
+				<TurnForkButton />
 				{time ? (
 					<span
 						className="w-auto shrink-0 px-1 text-caption tabular-nums text-muted-foreground/75 opacity-0 transition-opacity duration-150 ease-out group-hover/message:opacity-100 group-focus-within/message:opacity-100 motion-reduce:transition-none"
@@ -1656,6 +1668,7 @@ export function ActivityRow({
 	else if (activity.detail?.event === "workspace.script.run" && activity.detail.scriptRun) content = <ScriptRunPanel collapsible run={activity.detail.scriptRun} />;
 	else if (activity.detail?.event === "workspace.setup") content = <ProjectSetupRow activity={activity} />;
 	else if (activity.detail?.event === "account.switched") content = <AccountSwitchedRow accountId={activity.detail.accountId} />;
+	else if (activity.detail?.event === "account.limit_handoff") content = <AccountHandoffRow accountId={activity.detail.accountId} retry={activity.detail.retry} />;
 	else if (renderRef) content = <RenderFrame render={renderRef} />;
 	else if (artifactRef) content = <RenderFrame artifact={artifactRef} />;
 	else content = <GenericActivityRow activity={activity} repeats={repeats} />;
@@ -3318,8 +3331,15 @@ function ProjectSetupRow({ activity }: { activity: ConversationActivity }) {
  * continues on the new account with the next message. */
 function AccountSwitchedRow({ accountId }: { accountId?: string }) {
 	const { t } = useTranslation();
-	const label = useAgentAccountLabel();
+	const label = useAgentAccountLabel(true, useContext(ChatHostId));
 	return <TwoRowTimelineMarker message={t("chat.accountSwitched", { email: label(accountId) })} detail={t("chat.accountSwitchedDetail")} wrapDetail />;
+}
+
+function AccountHandoffRow({ accountId, retry }: { accountId?: string; retry?: "sent" | "skipped" }) {
+	const { t } = useTranslation();
+	const label = useAgentAccountLabel();
+	const detail = retry === "sent" ? t("chat.accountHandoffRetried") : retry === "skipped" ? t("chat.accountHandoffNotRetried") : undefined;
+	return <TwoRowTimelineMarker message={t("chat.accountHandoff", { email: label(accountId) })} detail={detail} wrapDetail />;
 }
 
 function ReauthRow({ activity }: { activity: ConversationActivity }) {

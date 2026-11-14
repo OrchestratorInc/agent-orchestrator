@@ -134,6 +134,9 @@ type SessionArtifactFile struct {
 	Size      int64               `json:"size"`
 	UpdatedAt time.Time           `json:"updatedAt"`
 	ShareURL  string              `json:"shareUrl,omitempty"`
+	// ShareAccess is who ShareURL opens for, as the desktop last recorded it:
+	// restricted (invited people only) or anyone. Empty when not recorded.
+	ShareAccess string `json:"shareAccess,omitempty"`
 	// Registered is set on a file the agent registered as a deliverable, or
 	// inside a bundle directory it registered.
 	Registered bool `json:"registered,omitempty"`

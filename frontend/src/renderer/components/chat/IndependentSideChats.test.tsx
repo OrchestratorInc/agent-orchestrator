@@ -196,6 +196,6 @@ describe("side composer slash menu", () => {
 	it("insets its draft and send button the same from both sides as the main composer", () => {
 		const { field } = renderSideComposer();
 		expect(field).toHaveClass("px-[7px]", "[scrollbar-gutter:stable_both-edges]");
-		expect(screen.getByRole("button", { name: "Send message" })).toHaveClass("me-2.5");
+		expect(screen.getByRole("button", { name: "Send message" }).className).not.toMatch(/(^|\s)(me|mr|pe|pr)-/);
 	});
 });

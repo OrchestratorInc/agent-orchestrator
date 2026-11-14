@@ -4,7 +4,7 @@ import { useProjectAvatars } from "../hooks/useProjectAvatars";
 import { ProjectIcon } from "./ProjectIcon";
 import { ScrollArea } from "radix-ui";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useId, useMemo, useState, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useId, useMemo, useState, type ReactNode } from "react";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useCloudMeUserId } from "../hooks/useCloudMeUserId";
 import { useTranslation } from "react-i18next";
@@ -57,6 +57,7 @@ import {
 import { Pressable } from "./ui/pressable";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { useEdgeFadeRef } from "../hooks/useEdgeFade";
+import { GridSpacer, useVirtualGridRows } from "../hooks/useVirtualGridRows";
 
 // Three previews a row; narrow panels drop to two, then one.
 const ARTIFACT_GRID_CLASS = "grid grid-cols-1 gap-4 @lg:grid-cols-2 @2xl:grid-cols-3";
@@ -81,7 +82,12 @@ function ArtifactProjectIcon({ workspace, avatarUrl }: { workspace: Pick<Workspa
  * in cloud sessions when the control plane keeps artifacts.
  */
 export function ArtifactsView() {
-	const fadeRef = useEdgeFadeRef<HTMLDivElement>();
+	const edgeFadeRef = useEdgeFadeRef<HTMLDivElement>();
+	const [scrollElement, setScrollElement] = useState<HTMLDivElement | null>(null);
+	const fadeRef = useCallback((node: HTMLDivElement | null) => {
+		edgeFadeRef(node);
+		setScrollElement(node);
+	}, [edgeFadeRef]);
 	const { t } = useTranslation();
 	const cloudArtifacts = useCloudOffering().artifacts;
 	const workspaceQuery = useWorkspaceQuery({ includeCloud: cloudArtifacts });
@@ -101,7 +107,7 @@ export function ArtifactsView() {
 	const [types, setTypes] = useState<readonly ArtifactType[]>([]);
 	const [sharings, setSharings] = useState<readonly ArtifactSharing[]>([]);
 	const [preview, setPreview] = useState<{ row: ArtifactRow; projectName: string } | null>(null);
-	const openPreview = (row: ArtifactRow, projectName: string) => setPreview({ row, projectName });
+	const openPreview = useCallback((row: ArtifactRow, projectName: string) => setPreview({ row, projectName }), []);
 	// The open preview follows its row as the list refreshes, so a file an
 	// agent rewrites shows its new content.
 	const previewRow = useMemo(() => {
@@ -131,6 +137,8 @@ export function ArtifactsView() {
 			.sort((left, right) => Number(right.pinned) - Number(left.pinned)
 				|| (Date.parse(right.row.updatedAt) || 0) - (Date.parse(left.row.updatedAt) || 0));
 	}, [visibleGroups, pinnedArtifactIds, t]);
+	// Only the cards on screen and near it are built; a long list would otherwise build every card at once.
+	const grid = useVirtualGridRows(cards.length, scrollElement);
 	// Only the first few pages and PDFs render live; the rest show their thumbnail.
 	const livePreviews = useMemo(() => {
 		const live = new Set<string>();
@@ -417,10 +425,12 @@ export function ArtifactsView() {
 									</Button>
 								</div>
 							) : (
-								<ul aria-label={t("artifacts.title")} className={view === "gallery" ? ARTIFACT_GRID_CLASS : "grid grid-cols-[minmax(0,1fr)] gap-1.5"}>
-									{cards.map(({ row, projectName, pinned }) => (
+								<ul ref={grid.listRef} aria-label={t("artifacts.title")} className={view === "gallery" ? ARTIFACT_GRID_CLASS : "grid grid-cols-[minmax(0,1fr)] gap-1.5"}>
+									<GridSpacer height={grid.before} />
+									{cards.slice(grid.start, grid.end).map(({ row, projectName, pinned }) => (
 										<ArtifactCard key={artifactKey(row)} row={row} projectName={projectName} pinned={pinned} view={view} previewLive={livePreviews.has(artifactKey(row))} onPreview={openPreview} selection={selectionFor(row, projectName)} />
 									))}
+									<GridSpacer height={grid.after} />
 								</ul>
 							)}
 						</div>
@@ -475,7 +485,8 @@ function FilterOption({ checked, onToggle, children }: { checked: boolean; onTog
  * Published mark and last change, with Pin, Open in session and its menu.
  * Opening it previews the file on this page; while selecting it toggles.
  */
-function ArtifactCard({ row, projectName, pinned, view, previewLive = true, onPreview, selection }: { row: ArtifactRow; projectName: string; pinned: boolean; view: ArtifactViewMode; previewLive?: boolean; onPreview: (row: ArtifactRow, projectName: string) => void; selection?: ArtifactCardSelection }) {
+// Memoized: a row scrolling into view re-renders the list, and only the new cards need to render.
+const ArtifactCard = memo(function ArtifactCard({ row, projectName, pinned, view, previewLive = true, onPreview, selection }: { row: ArtifactRow; projectName: string; pinned: boolean; view: ArtifactViewMode; previewLive?: boolean; onPreview: (row: ArtifactRow, projectName: string) => void; selection?: ArtifactCardSelection }) {
 	const { t } = useTranslation();
 	const id = artifactKey(row);
 	const togglePinnedArtifact = useArtifactsViewStore((state) => state.togglePinnedArtifact);
@@ -594,7 +605,7 @@ function ArtifactCard({ row, projectName, pinned, view, previewLive = true, onPr
 			)}
 		/>
 	);
-}
+});
 
 function EmptyArtifacts({ workspaces }: { workspaces: readonly WorkspaceSummary[] }) {
 	const { t } = useTranslation();

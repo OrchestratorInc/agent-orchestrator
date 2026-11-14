@@ -47,6 +47,12 @@ func (m *memStore) GetSessionAgentAccount(_ context.Context, id domain.SessionID
 func (m *memStore) AgentAccountUsageSince(context.Context, time.Time) ([]domain.AgentAccountUsage, error) {
 	return nil, nil
 }
+func (m *memStore) SessionAccountPinned(context.Context, domain.SessionID) (bool, error) {
+	return false, nil
+}
+func (m *memStore) SetSessionAccountPinned(context.Context, domain.SessionID, bool) error {
+	return nil
+}
 
 // fakeClaude reports who each folder is signed in as; "" is the device.
 // unshared makes every account folder fail to link.
@@ -58,6 +64,8 @@ type fakeClaude struct {
 	failing    map[string]bool   // folders whose check fails (a timeout)
 	windows    []domain.AgentAccountLimitWindow
 	limitsErr  error
+	orgOf      map[string]string
+	orgNameOf  map[string]string
 }
 
 func (*fakeClaude) Provider() domain.AgentAccountProvider { return domain.AgentAccountProviderClaude }
@@ -73,7 +81,7 @@ func (f *fakeClaude) Identity(_ context.Context, home string) (domain.AgentAccou
 	if f.apiKey[home] {
 		return domain.AgentAccountIdentityCheck{LoggedIn: true}, nil
 	}
-	return domain.AgentAccountIdentityCheck{SignedIn: ok, LoggedIn: ok, Email: email}, nil
+	return domain.AgentAccountIdentityCheck{SignedIn: ok, LoggedIn: ok, Email: email, OrgID: f.orgOf[home], OrgName: f.orgNameOf[home]}, nil
 }
 func (f *fakeClaude) Limits(context.Context, string) (domain.AgentAccountLimits, error) {
 	if f.limitsErr != nil {
