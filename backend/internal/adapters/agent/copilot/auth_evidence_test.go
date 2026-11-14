@@ -125,3 +125,35 @@ func TestGitHubCLIUserReadsTheActiveHostLogin(t *testing.T) {
 		})
 	}
 }
+
+// The full probe reports a JSONC array login as configured — a definite
+// account observation that readiness must never render as ready (issue #8219
+// reported it as an inconclusive check instead).
+func TestCopilotLocalAuthStatusConfiguredForJSONCStoredLogin(t *testing.T) {
+	clearCopilotAuthProbeEnv(t)
+	dir := t.TempDir()
+	t.Setenv("COPILOT_HOME", dir)
+	path := filepath.Join(dir, "config.json")
+	config := "{\n  // Copilot configuration comment\n  \"loggedInUsers\": [\n    {\"host\": \"github.com\", \"login\": \"example-user\"}\n  ]\n}"
+	if err := os.WriteFile(path, []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	previous := authprobe.CmdRunner
+	t.Cleanup(func() { authprobe.CmdRunner = previous })
+	authprobe.CmdRunner = func(context.Context, string, ...string) ([]byte, error) {
+		return nil, errors.New("gh: not logged in")
+	}
+
+	ctx, evidence := ports.WithAuthEvidence(context.Background())
+	status, ok, err := copilotLocalAuthStatus(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || status != ports.AgentAuthStatusConfigured {
+		t.Fatalf("status = (%q, %v), want (%q, true)", status, ok, ports.AgentAuthStatusConfigured)
+	}
+	want := authprobe.FileSource(path).WithMethod(domain.AgentAccountMethodAccount)
+	if got := evidence.Identity(); got != want {
+		t.Fatalf("evidence = %+v, want %+v", got, want)
+	}
+}
