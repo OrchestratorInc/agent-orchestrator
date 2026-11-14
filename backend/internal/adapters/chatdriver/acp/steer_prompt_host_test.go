@@ -27,6 +27,8 @@ type scriptedHost struct {
 	t      *testing.T
 	conn   net.Conn
 	frames chan map[string]json.RawMessage
+	// lastPrompt holds the params of the last session/prompt nextPrompt read.
+	lastPrompt json.RawMessage
 }
 
 func (h *scriptedHost) send(frame string) {
@@ -46,6 +48,7 @@ func (h *scriptedHost) nextPrompt() string {
 			var method string
 			_ = json.Unmarshal(frame["method"], &method)
 			if method == "session/prompt" {
+				h.lastPrompt = frame["params"]
 				return string(frame["id"])
 			}
 		case <-deadline:
@@ -736,5 +739,59 @@ func TestACPSteerPromptCancelledAdoptedAnswerIsNoHandoff(t *testing.T) {
 		persistenthost.ACPEventIDMetaKey + `":"acp-host:22"}}}`)
 	if err := steerOutcome(t, outcome); !errors.Is(err, errSteerCancelled) {
 		t.Fatalf("Steer = %v, want uncertain because its own answer was cancelled", err)
+	}
+}
+
+// A turn the straggler wait ended remembers the prompts that never answered.
+// If one answers after a later steered turn has settled, it is still dropped,
+// so it cannot complete the old turn again under the newer turn's items.
+func TestACPSteerPromptStragglerAnswersAfterALaterSteeredTurnAreDropped(t *testing.T) {
+	conv, host := startScriptedHostConversation(t, "")
+	conv.stragglerWait = 100 * time.Millisecond
+	_ = nextEvent(t, conv.Events()) // controller.ready
+
+	first, firstRoot := startScriptedTurn(t, conv, host)
+	firstSteer, outcome := steerAsync(t, conv, host, first)
+	// The host's result arrives on the steer prompt; the turn's own prompt
+	// never answers in time.
+	host.send(receiptResult(firstSteer, "acp-host:23"))
+	if err := steerOutcome(t, outcome); err != nil {
+		t.Fatalf("first Steer = %v, want delivered", err)
+	}
+	if done := completionsOf(t, conv, first); len(done) != 1 {
+		t.Fatalf("first turn completions = %+v, want one", done)
+	}
+	if err := conv.AcknowledgeProviderEvent(context.Background(), "acp-host:23"); err != nil {
+		t.Fatalf("AcknowledgeProviderEvent: %v", err)
+	}
+
+	second, secondRoot := startScriptedTurn(t, conv, host)
+	secondSteer, outcome := steerAsync(t, conv, host, second)
+	host.send(plainResult(secondRoot))
+	if err := steerOutcome(t, outcome); err != nil {
+		t.Fatalf("second Steer = %v, want delivered at the handoff", err)
+	}
+	host.send(receiptResult(secondSteer, "acp-host:24"))
+	if done := completionsOf(t, conv, second); len(done) != 1 {
+		t.Fatalf("second turn completions = %+v, want one", done)
+	}
+
+	host.send(plainResult(firstRoot))
+	deadline := time.After(300 * time.Millisecond)
+	for {
+		select {
+		case event := <-conv.Events():
+			if event.Kind == ports.ChatEventTurnCompleted || event.Kind == ports.ChatEventControllerState {
+				t.Fatalf("the first turn's late answer emitted %+v", event)
+			}
+		case <-deadline:
+			conv.mu.Lock()
+			left := len(conv.stragglers)
+			conv.mu.Unlock()
+			if left != 0 {
+				t.Fatalf("stragglers left = %d, want the answered one forgotten", left)
+			}
+			return
+		}
 	}
 }

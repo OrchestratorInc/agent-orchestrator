@@ -92,18 +92,33 @@ type SteerDrain struct {
 }
 
 // SteerPrompt is for an agent that takes mid-turn guidance as another
-// session/prompt on the running session, as Antigravity's `agy acp` does. The
-// agent answers the earlier prompt with end_turn once it has the guidance and
-// carries on the same work under the new prompt. The turn's prompts overlap,
-// and AO keeps one turn open across them until every one has returned.
+// session/prompt on the running session. The turn's prompts overlap, and AO
+// keeps one turn open across them until every one has returned. Agents show
+// in two ways that they took the guidance:
 //
-// Steer reports the guidance delivered only once the agent shows it took it:
-// an earlier prompt hands off, or the steer prompt itself completes inside the
-// turn. If the steer prompt fails instead, the agent refused it and the
-// earlier prompt keeps the turn.
+//   - Antigravity's `agy acp` answers the earlier prompt with end_turn at once
+//     and carries the work on under the new prompt (a handoff).
+//   - Hermes answers a `/steer` prompt at once with a note, and delivers the
+//     guidance to the running turn at its next step (an acknowledgement; see
+//     Ack).
+//
+// Steer reports the guidance delivered only on that evidence, or when the
+// steer prompt itself completes inside the turn. If the steer prompt fails
+// instead, the agent refused it and the earlier prompt keeps the turn.
 type SteerPrompt struct {
 	// Supported reports from the handshake whether the agent steers this way.
 	Supported func(acpsdk.InitializeResponse) bool
+	// Prompt optionally reshapes the guidance into the prompt the agent steers
+	// with, such as Hermes' `/steer <text>`. An error means the guidance cannot
+	// be sent this way; nothing is sent.
+	Prompt func([]acpsdk.ContentBlock) ([]acpsdk.ContentBlock, error)
+	// Ack optionally recognises the agent message that acknowledges a steer
+	// prompt. A recognised message is not part of the reply, and a non-nil
+	// error means the agent declined the guidance. With Ack set, only the
+	// acknowledgement says whether a steer took: other prompts' answers say
+	// nothing about it, and a steer prompt that answers with none is a refusal,
+	// since an agent that does not know the command answered it another way.
+	Ack func(text string) (recognised bool, declined error)
 	// Wait bounds how long Steer waits for the agent to show it took the
 	// guidance. Zero uses five seconds. Past it the guidance may still reach the
 	// turn, so Steer reports the delivery uncertain rather than guess.
@@ -415,6 +430,12 @@ type promptSteer struct {
 	seq     int
 	result  chan error
 	settled bool
+	// ackKnown is set once the agent's acknowledgement is recognised (see
+	// SteerPrompt.Ack), and ackSeen is closed then. awaitingAck means its
+	// prompt has answered and awaitSteerAck is waiting for the note.
+	ackKnown    bool
+	ackSeen     chan struct{}
+	awaitingAck bool
 	// sent is set once the prompt is handed to the connection; until then
 	// Stop can withdraw it, and withdrawn is set so it is never written.
 	sent      bool
@@ -470,6 +491,14 @@ func (c *conversation) steerByPrompt(
 	clientMessageID string,
 	prompt []acpsdk.ContentBlock,
 ) (ports.ChatTurnRef, error) {
+	binding := c.steering.prompt
+	if binding.Prompt != nil {
+		shaped, err := binding.Prompt(prompt)
+		if err != nil {
+			return ports.ChatTurnRef{}, fmt.Errorf("%w: %w", ports.ErrChatSteerContentUnsupported, err)
+		}
+		prompt = shaped
+	}
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
@@ -489,7 +518,7 @@ func (c *conversation) steerByPrompt(
 	c.promptSeq++
 	seq := c.promptSeq
 	c.outstanding[seq] = true
-	waiter := &promptSteer{turn: providerTurnID, seq: seq, result: make(chan error, 1)}
+	waiter := &promptSteer{turn: providerTurnID, seq: seq, result: make(chan error, 1), ackSeen: make(chan struct{})}
 	c.promptSteers = append(c.promptSteers, waiter)
 	turnCtx := c.turnCtx
 	c.mu.Unlock()
@@ -497,6 +526,13 @@ func (c *conversation) steerByPrompt(
 	messageID := strings.TrimSpace(clientMessageID)
 	if messageID == "" {
 		messageID = uuid.NewString()
+	}
+	// A persistent host admits it into the running turn by this mark. An
+	// acknowledging agent answers the steer as a command while the turn's
+	// earlier prompt keeps the work, so that answer is never the turn's result.
+	meta := map[string]any{persistenthost.ACPSteerPromptMetaKey: true}
+	if binding.Ack != nil {
+		meta[persistenthost.ACPSteerKeepsTurnMetaKey] = true
 	}
 	go func() {
 		if c.promptSending != nil {
@@ -520,8 +556,7 @@ func (c *conversation) steerByPrompt(
 			SessionId: acpsdk.SessionId(sessionID),
 			MessageId: &messageID,
 			Prompt:    prompt,
-			// A persistent host admits it into the running turn by this mark.
-			Meta: map[string]any{persistenthost.ACPSteerPromptMetaKey: true},
+			Meta:      meta,
 		})
 		if c.promptReturned != nil {
 			c.promptReturned(seq)
@@ -529,7 +564,7 @@ func (c *conversation) steerByPrompt(
 		c.finishTurnPrompt(providerTurnID, seq, resp, err)
 	}()
 
-	wait := c.steering.prompt.Wait
+	wait := binding.Wait
 	if wait <= 0 {
 		wait = defaultSteerPromptWait
 	}
@@ -577,8 +612,9 @@ func steerPromptError(err error) error {
 	}
 	wrapped := fmt.Errorf("ACP session/prompt while a turn is running: %w", err)
 	var requestErr *acpsdk.RequestError
-	if errors.As(err, &requestErr) {
-		// An earlier prompt still owns the turn, so nothing was lost.
+	if errors.As(err, &requestErr) || errors.Is(err, errSteerDeclined) || errors.Is(err, errSteerNotAcknowledged) {
+		// The agent answered: a definite refusal. An earlier prompt still owns
+		// the turn, so nothing was lost.
 		return &providerRefusal{err: wrapped}
 	}
 	return wrapped
@@ -624,8 +660,13 @@ func hostResultEventID(resp acpsdk.PromptResponse, err error) string {
 // receipt, since its first prompt belongs to the host, not this conversation.
 func (c *conversation) finishTurnPrompt(turnID string, seq int, resp acpsdk.PromptResponse, err error) {
 	c.mu.Lock()
-	if c.activeTurn != turnID {
-		lateAnswer := c.steerSettledTurn == turnID
+	if c.activeTurn != turnID || c.settlingTurn == turnID {
+		// The turn is over. A steer prompt's late answer never ends a turn: its
+		// turn ended without it, and another turn may be running now. The
+		// turn's own prompt keeps the path to finishPrompt it had before
+		// steering, unless its steered turn has already settled.
+		straggler := c.takeStragglerLocked(turnID)
+		lateAnswer := seq > 0 || straggler || c.steerSettledTurn == turnID
 		c.mu.Unlock()
 		if !lateAnswer {
 			c.finishPrompt(turnID, resp, err)
@@ -639,6 +680,7 @@ func (c *conversation) finishTurnPrompt(turnID string, seq int, resp acpsdk.Prom
 	if result {
 		c.turnResult = &answer
 	}
+	acknowledged := c.steering.prompt != nil && c.steering.prompt.Ack != nil
 	cancelled := err == nil && resp.StopReason == acpsdk.StopReasonCancelled
 	// A steer prompt answered "Session not found" was not delivered, and the
 	// provider can never serve this conversation again. It is stopped below,
@@ -648,9 +690,10 @@ func (c *conversation) finishTurnPrompt(turnID string, seq int, resp acpsdk.Prom
 		c.sessionLost = true
 	}
 	// A handoff passes the work to the next prompt of the turn, the one that
-	// arrived after this one. A cancelled answer hands nothing on.
+	// arrived after this one. A cancelled answer hands nothing on, and an
+	// acknowledging agent says itself whether a steer took.
 	handoffTo := noPrompt
-	if err == nil && !cancelled && !result {
+	if !acknowledged && err == nil && !cancelled && !result {
 		handoffTo = c.nextOutstandingLocked(seq)
 	}
 	for _, w := range c.promptSteers {
@@ -664,13 +707,27 @@ func (c *conversation) finishTurnPrompt(turnID string, seq int, resp acpsdk.Prom
 			w.settle(err) // refused
 		case w.seq == seq && cancelled:
 			w.settle(errSteerCancelled) // stopped before the agent acted on it
-		case w.seq == seq:
+		case w.seq == seq && !acknowledged:
 			c.steerTookLocked(w) // it ran inside this turn
+		case w.seq == seq && !w.awaitingAck:
+			// The acknowledgement can trail the answer; let it decide.
+			w.awaitingAck = true
+			go c.awaitSteerAck(w)
 		case w.seq == handoffTo:
 			c.steerTookLocked(w) // the earlier prompt handed the work on to it
 		}
 	}
 	final, done := c.turnEndLocked(turnID)
+	if !done && result && len(c.outstanding) > 0 {
+		// The host has ended the turn; its other prompts' answers are on
+		// their way. A steer command's answer could still go missing, so
+		// the wait for them is bounded.
+		wait := c.stragglerWait
+		if wait <= 0 {
+			wait = promptStragglerWait
+		}
+		go c.finishAfterStragglers(turnID, c.turnResult, wait)
+	}
 	c.mu.Unlock()
 	if done {
 		c.finishPrompt(turnID, final.resp, final.err)
@@ -711,11 +768,56 @@ func (c *conversation) turnEndLocked(turnID string) (promptAnswer, bool) {
 // written. If the turn's other prompts have all returned meanwhile, the turn
 // ends now, since no answer for this one will come. Callers must hold c.mu.
 func (c *conversation) dropUnsentPromptLocked(turnID string, seq int) (promptAnswer, bool) {
-	if c.activeTurn != turnID {
+	if c.activeTurn != turnID || c.settlingTurn == turnID {
 		return promptAnswer{}, false
 	}
 	delete(c.outstanding, seq)
 	return c.turnEndLocked(turnID)
+}
+
+// takeStragglerLocked reports whether turnID ended without the answers of some
+// of its prompts, and counts this answer as one of them. Callers must hold c.mu.
+func (c *conversation) takeStragglerLocked(turnID string) bool {
+	left, ok := c.stragglers[turnID]
+	if !ok {
+		return false
+	}
+	if left <= 1 {
+		delete(c.stragglers, turnID)
+	} else {
+		c.stragglers[turnID] = left - 1
+	}
+	return true
+}
+
+// promptStragglerWait bounds how long a turn whose host result has arrived
+// waits for its other prompts' answers, which normally follow at once.
+const promptStragglerWait = 10 * time.Second
+
+// finishAfterStragglers ends a turn with the host's result if its other
+// prompts have still not answered after wait. Their late answers are then
+// dropped.
+func (c *conversation) finishAfterStragglers(turnID string, result *promptAnswer, wait time.Duration) {
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	<-timer.C
+	c.mu.Lock()
+	if c.activeTurn != turnID || c.turnResult != result || len(c.outstanding) == 0 || c.settlingTurn == turnID {
+		c.mu.Unlock()
+		return
+	}
+	c.log.Warn("ACP turn ended without every prompt answering; finishing it with the host's result",
+		"turn", turnID, "unanswered", len(c.outstanding))
+	// Their answers can still come after later turns have settled, so this
+	// turn is remembered until each has arrived.
+	if c.stragglers == nil {
+		c.stragglers = map[string]int{}
+	}
+	c.stragglers[turnID] = len(c.outstanding)
+	c.steerSettledTurn = turnID
+	c.settlingTurn = turnID // the stragglers' answers are late from here on
+	c.mu.Unlock()
+	c.finishPrompt(turnID, result.resp, result.err)
 }
 
 // adoptedPromptHandoff hears that the prompt an earlier attachment sent
@@ -731,7 +833,8 @@ func (c *conversation) adoptedPromptHandoff(answer promptAnswer) {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.activeTurn == "" || !c.adoptedPrompt {
+	if c.activeTurn == "" || !c.adoptedPrompt || c.steering.prompt == nil || c.steering.prompt.Ack != nil {
+		// An acknowledging agent says itself whether a steer took.
 		return
 	}
 	// The adopted prompt came before every prompt this attachment sent.
@@ -741,6 +844,65 @@ func (c *conversation) adoptedPromptHandoff(answer promptAnswer) {
 			c.steerTookLocked(w)
 		}
 	}
+}
+
+// errSteerDeclined marks guidance the agent acknowledged but did not take.
+var errSteerDeclined = errors.New("the agent declined the guidance")
+
+// errSteerNotAcknowledged marks a steer prompt the agent answered without
+// acknowledging it as a steer.
+var errSteerNotAcknowledged = errors.New("the agent answered without acknowledging the guidance")
+
+// steerAckWait bounds how long a steer prompt that has answered waits for the
+// agent's acknowledgement message, which can trail the answer.
+const steerAckWait = 300 * time.Millisecond
+
+// steerAcknowledgement reports whether an agent message is a steer prompt's
+// acknowledgement, which is not part of the reply. It settles the oldest steer
+// still waiting to hear one: the agent took the guidance or declined it.
+func (c *conversation) steerAcknowledgement(turnID, text string) bool {
+	if c.steering.prompt == nil || c.steering.prompt.Ack == nil || text == "" {
+		return false
+	}
+	recognised, declined := c.steering.prompt.Ack(text)
+	if !recognised {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.activeTurn != turnID || c.promptSeq == 0 {
+		// Only a turn that sent a steer prompt hides the acknowledgement.
+		return false
+	}
+	for _, w := range c.promptSteers {
+		if w.turn != turnID || w.ackKnown || w.settled {
+			continue // a steer the agent refused outright sends no note
+		}
+		w.ackKnown = true
+		close(w.ackSeen)
+		if declined != nil {
+			w.settle(fmt.Errorf("%w: %w", errSteerDeclined, declined))
+		} else {
+			c.steerTookLocked(w)
+		}
+		break
+	}
+	return true
+}
+
+// awaitSteerAck gives a steer prompt that answered before its acknowledgement
+// a moment for the note to arrive. No note means the agent did not take it.
+func (c *conversation) awaitSteerAck(w *promptSteer) {
+	timer := time.NewTimer(steerAckWait)
+	defer timer.Stop()
+	select {
+	case <-w.ackSeen:
+		return // steerAcknowledgement settled it
+	case <-timer.C:
+	}
+	c.mu.Lock()
+	w.settle(errSteerNotAcknowledged)
+	c.mu.Unlock()
 }
 
 // noPrompt is no prompt of the turn.
@@ -771,7 +933,9 @@ func (c *conversation) nextOutstandingLocked(seq int) int {
 // Callers must hold c.mu.
 func (c *conversation) resetPromptSteeringLocked() {
 	for _, w := range c.promptSteers {
-		w.settle(errSteerUnconfirmed)
+		if !w.awaitingAck {
+			w.settle(errSteerUnconfirmed)
+		}
 	}
 	c.promptSteers = nil
 	c.promptSeq = 0

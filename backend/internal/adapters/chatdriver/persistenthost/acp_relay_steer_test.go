@@ -69,6 +69,26 @@ func TestACPRelaySettlesTheTurnOnTheSteerPrompt(t *testing.T) {
 	}
 }
 
+// agy ends the first prompt only when the steer prompt takes the work over, so
+// once it has handed off, the steer prompt's failure is the turn's failure.
+func TestACPRelayHandedOffTurnFailsWhenTheSteerPromptFails(t *testing.T) {
+	relay := newTestACPRelay(t)
+	first := startRelayPrompt(t, relay)
+	steer := frameID(t, relayClientFrame(t, relay, []byte(`{"jsonrpc":"2.0","id":3,"method":"session/prompt","params":`+steerPromptParams+`}`+"\n"), 1))
+
+	handoff, journaled := relayProviderFrame(t, relay, []byte(`{"jsonrpc":"2.0","id":`+first+`,"result":{"stopReason":"end_turn"}}`+"\n"), 1, true)
+	if journaled || frameID(t, handoff) != "2" || strings.Contains(string(handoff), ACPEventIDMetaKey) {
+		t.Fatalf("handed-off answer = journaled:%v frame:%s, want a plain answer to client id 2", journaled, handoff)
+	}
+	failed, journaled := relayProviderFrame(t, relay, []byte(`{"jsonrpc":"2.0","id":`+steer+`,"error":{"code":-32603,"message":"model request failed"}}`+"\n"), 1, true)
+	if !journaled || frameID(t, failed) != "3" || !strings.Contains(string(failed), ACPEventIDMetaKey) || !strings.Contains(string(failed), "model request failed") {
+		t.Fatalf("failed steer prompt answer = journaled:%v frame:%s, want it to settle the turn", journaled, failed)
+	}
+	if state := relay.snapshot(); state.ActivePrompt || state.PendingResultEventID == "" {
+		t.Fatalf("state after the failed steer prompt = %+v, want the turn settled", state)
+	}
+}
+
 func TestACPRelayRefusedSteerPromptLeavesTheTurnToTheFirstPrompt(t *testing.T) {
 	relay := newTestACPRelay(t)
 	first := startRelayPrompt(t, relay)
@@ -273,5 +293,168 @@ func TestACPRelayRefusesASteerPromptOnceTheTurnIsBeingCancelled(t *testing.T) {
 				t.Fatalf("pending = %v, want only the turn's own prompt", relay.pending)
 			}
 		})
+	}
+}
+
+const steerCommandParams = `{"sessionId":"s","prompt":[{"type":"text","text":"/steer use staging"}],"_meta":{"ao.steerPrompt":true,"ao.steerKeepsTurn":true}}`
+
+// A steer command's answer is never the turn's result. The turn's own prompt's
+// answer is, success or failure. Answered first, the command leaves the turn
+// to that prompt as usual.
+func TestACPRelayNeverSettlesTheTurnOnASteerCommand(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		answer string
+		failed bool
+	}{
+		{"the turn's prompt succeeds", `"result":{"stopReason":"end_turn"}`, false},
+		{"the turn's prompt fails", `"error":{"code":-32603,"message":"model request failed"}`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			relay := newTestACPRelay(t)
+			first := startRelayPrompt(t, relay)
+			steer := frameID(t, relayClientFrame(t, relay, []byte(`{"jsonrpc":"2.0","id":3,"method":"session/prompt","params":`+steerCommandParams+`}`+"\n"), 1))
+
+			ack, journaled := relayProviderFrame(t, relay, []byte(`{"jsonrpc":"2.0","id":`+steer+`,"result":{"stopReason":"end_turn"}}`+"\n"), 1, true)
+			if journaled || frameID(t, ack) != "3" || strings.Contains(string(ack), ACPEventIDMetaKey) {
+				t.Fatalf("steer command answer = journaled:%v frame:%s, want a plain answer to client id 3", journaled, ack)
+			}
+			if !relay.snapshot().ActivePrompt {
+				t.Fatal("the steer command's answer ended the turn")
+			}
+			final, journaled := relayProviderFrame(t, relay, []byte(`{"jsonrpc":"2.0","id":`+first+`,`+tc.answer+`}`+"\n"), 1, true)
+			if !journaled || frameID(t, final) != "2" || !strings.Contains(string(final), ACPEventIDMetaKey) ||
+				strings.Contains(string(final), `"error"`) != tc.failed {
+				t.Fatalf("turn's prompt answer = journaled:%v frame:%s, want the turn's result", journaled, final)
+			}
+			if state := relay.snapshot(); state.ActivePrompt || state.PendingResultEventID == "" {
+				t.Fatalf("state after the turn's prompt = %+v, want the turn settled", state)
+			}
+		})
+	}
+}
+
+// Hermes runs the guidance inside its `/steer` request when the turn ended just
+// before the command arrived ("No active turn"). The turn's own answer then
+// waits for the command's, so the run's output stays in the turn and the next
+// prompt does not reach a busy agent. The result is still the turn's own answer.
+func TestACPRelayKeepsTheTurnOpenWhileASteerCommandRuns(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		answer string
+		failed bool
+	}{
+		{"the turn's prompt succeeds", `"result":{"stopReason":"end_turn"}`, false},
+		{"the turn's prompt fails", `"error":{"code":-32603,"message":"model request failed"}`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			relay := newTestACPRelay(t)
+			first := startRelayPrompt(t, relay)
+			steer := frameID(t, relayClientFrame(t, relay, []byte(`{"jsonrpc":"2.0","id":3,"method":"session/prompt","params":`+steerCommandParams+`}`+"\n"), 1))
+
+			held, journaled := relayProviderFrame(t, relay, []byte(`{"jsonrpc":"2.0","id":`+first+`,`+tc.answer+`}`+"\n"), 1, true)
+			if len(held) != 0 || journaled {
+				t.Fatalf("turn's prompt answer = journaled:%v frame:%s, want it held while the command runs", journaled, held)
+			}
+			if state := relay.snapshot(); !state.ActivePrompt || state.PendingResultEventID != "" {
+				t.Fatalf("state while the command runs = %+v, want the turn still active", state)
+			}
+			if busy := relayClientFrame(t, relay, []byte(`{"jsonrpc":"2.0","id":4,"method":"session/prompt","params":{"sessionId":"s","prompt":[]}}`+"\n"), 1); len(busy) != 0 {
+				t.Fatalf("a new prompt reached the agent while the command ran: %s", busy)
+			}
+			run, _ := relayProviderFrame(t, relay, []byte(`{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"editing staging.yaml"}}}}`+"\n"), 1, true)
+			if !strings.Contains(string(run), ACPEventIDMetaKey) {
+				t.Fatalf("the command's run = %s, want it journaled in the turn", run)
+			}
+
+			frames, journaled := relayProviderFrame(t, relay, []byte(`{"jsonrpc":"2.0","id":`+steer+`,"result":{"stopReason":"end_turn"}}`+"\n"), 1, true)
+			answers := bytes.SplitAfter(frames, []byte{'\n'})
+			if !journaled || len(answers) != 3 || len(answers[2]) != 0 {
+				t.Fatalf("frames when the command answers = %q, want its answer and then the turn's result", frames)
+			}
+			if frameID(t, answers[0]) != "3" || strings.Contains(string(answers[0]), ACPEventIDMetaKey) {
+				t.Fatalf("command answer = %s, want a plain answer to client id 3", answers[0])
+			}
+			if frameID(t, answers[1]) != "2" || !strings.Contains(string(answers[1]), ACPEventIDMetaKey) ||
+				strings.Contains(string(answers[1]), `"error"`) != tc.failed {
+				t.Fatalf("turn's result = %s, want the turn's own answer with the receipt", answers[1])
+			}
+			if state := relay.snapshot(); state.ActivePrompt || state.PendingResultEventID == "" {
+				t.Fatalf("state after the command answered = %+v, want the turn settled", state)
+			}
+		})
+	}
+}
+
+// The stall watchdog cancels the turn first. If the adapter answers the
+// cancel, the turn's own answer, held for a running command, ends the turn
+// with the stall marker once the command answers too.
+func TestACPRelayStalledTurnWithARunningSteerCommandEndsOnceTheCommandAnswers(t *testing.T) {
+	relay, root := startStallTestPrompt(t)
+	steer := frameID(t, relayClientFrame(t, relay, []byte(stalledSteerCommand), 1))
+
+	stalledAt := time.Now().Add(2 * promptStallTimeout)
+	if first := failStalled(t, relay, 1, stalledAt); len(first.provider) == 0 || first.client != nil {
+		t.Fatalf("watchdog's first step = %+v, want only a session/cancel", first)
+	}
+	if held, _ := relayProviderFrame(t, relay, []byte(`{"jsonrpc":"2.0","id":`+root+`,"result":{"stopReason":"cancelled"}}`+"\n"), 1, true); len(held) != 0 {
+		t.Fatalf("turn's prompt answer = %s, want it held while the command runs", held)
+	}
+	frames, _ := relayProviderFrame(t, relay, []byte(`{"jsonrpc":"2.0","id":`+steer+`,"result":{"stopReason":"cancelled"}}`+"\n"), 1, true)
+	answers := bytes.SplitAfter(frames, []byte{'\n'})
+	if len(answers) != 3 || frameID(t, answers[0]) != "4" || frameID(t, answers[1]) != "3" ||
+		!strings.Contains(string(answers[1]), `"`+ACPPromptStalledDataKey+`":true`) {
+		t.Fatalf("frames when the command answers = %q, want its answer, then the stall failure as the turn's result", frames)
+	}
+	if state := relay.snapshot(); state.ActivePrompt || state.PendingResultEventID == "" {
+		t.Fatalf("state after the command answered = %+v, want the turn settled", state)
+	}
+}
+
+const stalledSteerCommand = `{"jsonrpc":"2.0","id":4,"method":"session/prompt","params":{"sessionId":"session-live","prompt":[],"_meta":{"ao.steerPrompt":true,"ao.steerKeepsTurn":true}}}` + "\n"
+
+// If the adapter ignores the cancel, the watchdog answers a pending steer
+// command first, so the turn's own prompt's failure is its result.
+func TestACPRelayStallWatchdogEndsTheTurnOnItsOwnPrompt(t *testing.T) {
+	relay, _ := startStallTestPrompt(t)
+	relayClientFrame(t, relay, []byte(stalledSteerCommand), 1)
+
+	stalledAt := time.Now().Add(2 * promptStallTimeout)
+	failStalled(t, relay, 1, stalledAt)
+	frames := failStalled(t, relay, 1, stalledAt.Add(promptStallCancelGrace))
+	answers := bytes.SplitAfter(frames.client, []byte{'\n'})
+	if len(answers) != 3 || len(answers[2]) != 0 {
+		t.Fatalf("watchdog client frames = %q, want one answer per prompt", frames.client)
+	}
+	if frameID(t, answers[0]) != "4" || strings.Contains(string(answers[0]), ACPEventIDMetaKey) {
+		t.Fatalf("steer command's answer = %s, want a failure that is not the turn's result", answers[0])
+	}
+	if frameID(t, answers[1]) != "3" || !strings.Contains(string(answers[1]), ACPEventIDMetaKey) {
+		t.Fatalf("turn's prompt answer = %s, want the turn's result", answers[1])
+	}
+}
+
+// When the turn's own prompt has answered and only a running command is left,
+// a watchdog whose cancel is ignored fails the command and then the turn. The
+// held success would release the queue into a wedged adapter, so it becomes a
+// failure, without the stall marker.
+func TestACPRelayStallWatchdogSettlesAHeldResultWhenTheCancelIsIgnored(t *testing.T) {
+	relay, root := startStallTestPrompt(t)
+	relayClientFrame(t, relay, []byte(stalledSteerCommand), 1)
+	if held, _ := relayProviderFrame(t, relay, []byte(`{"jsonrpc":"2.0","id":`+root+`,"result":{"stopReason":"end_turn"}}`+"\n"), 1, true); len(held) != 0 {
+		t.Fatalf("turn's prompt answer = %s, want it held while the command runs", held)
+	}
+
+	stalledAt := time.Now().Add(2 * promptStallTimeout)
+	failStalled(t, relay, 1, stalledAt)
+	frames := failStalled(t, relay, 1, stalledAt.Add(promptStallCancelGrace))
+	answers := bytes.SplitAfter(frames.client, []byte{'\n'})
+	if len(answers) != 3 || frameID(t, answers[0]) != "4" || frameID(t, answers[1]) != "3" ||
+		strings.Contains(string(answers[1]), `"end_turn"`) || !strings.Contains(string(answers[1]), "stopped responding") ||
+		!strings.Contains(string(answers[1]), ACPEventIDMetaKey) || strings.Contains(string(frames.client), ACPPromptStalledDataKey) {
+		t.Fatalf("watchdog client frames = %q, want the command's failure, then the turn failed without the marker", frames.client)
+	}
+	if state := relay.snapshot(); state.ActivePrompt || state.PendingResultEventID == "" {
+		t.Fatalf("state after the watchdog = %+v, want the turn settled", state)
 	}
 }
