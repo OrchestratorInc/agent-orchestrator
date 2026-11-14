@@ -702,17 +702,11 @@ retryProjection:
 		m.mu.Unlock()
 		return nil
 	}
-	if semanticDeliverySignal && mode != domain.SessionModeChat {
-		if s.LaunchID == "" {
-			m.mu.Unlock()
-			return fmt.Errorf("lifecycle: semantic delivery %s has no runtime launch", s.CoordinationID)
-		}
-		var ok bool
-		semanticDeliveryStore, ok = m.store.(semanticDeliveryActivityStore)
-		if !ok {
-			m.mu.Unlock()
-			return fmt.Errorf("lifecycle: semantic delivery acceptance storage is unavailable")
-		}
+	// Acceptance is scoped to a runtime launch. Without one, or without a store
+	// that records it, the projection below still applies; SendSemantic refuses
+	// sessions that have no launch, so nothing waits on that acceptance.
+	if semanticDeliverySignal && mode != domain.SessionModeChat && s.LaunchID != "" {
+		semanticDeliveryStore, _ = m.store.(semanticDeliveryActivityStore)
 	}
 	if s.ExpectedRevision != nil && rec.Revision != *s.ExpectedRevision {
 		m.mu.Unlock()

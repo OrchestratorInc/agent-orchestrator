@@ -5379,7 +5379,9 @@ func (m *Manager) SendSemantic(ctx context.Context, id domain.SessionID, message
 	if err != nil {
 		return err
 	}
-	if accepted {
+	// A delivery accepted before the daemon recorded accepted deliveries
+	// separately is still matched by the conversation checkpoint.
+	if accepted || semanticMessageAccepted(rec, clientMessageID) {
 		return nil
 	}
 	if rec.IsTerminated || rec.Activity.State == domain.ActivityExited {

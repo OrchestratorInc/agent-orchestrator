@@ -11245,6 +11245,33 @@ func TestSendSemanticTUIRequiresCorrelatedPromptAcceptance(t *testing.T) {
 	}
 }
 
+// A batch accepted before the upgrade that added accepted-delivery columns is
+// recorded only in the conversation checkpoint, and must not be pasted again.
+func TestSendSemanticTUIAcceptsCheckpointRecordedBeforeUpgrade(t *testing.T) {
+	const deliveryID = "report-batch:preupgrade1"
+	st := newFakeStore()
+	st.sessions["s1"] = pastStartupGate(domain.SessionRecord{
+		ID: "s1", Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeTUI,
+		Activity: domain.Activity{State: domain.ActivityIdle},
+		Metadata: domain.SessionMetadata{
+			RuntimeLaunchID:                  "launch-1",
+			ConversationCheckpointState:      domain.ConversationCheckpointCoordination,
+			ConversationCheckpointGeneration: "launch-1",
+			ConversationCheckpointTurnID:     deliveryID,
+		},
+	})
+	msg := &fakeMessenger{}
+	m := newSendTestManager(t, semanticSignalingAgent{}, msg, st)
+	m.store = newFakeSemanticReceiptStore(st)
+
+	if err := m.SendSemantic(context.Background(), "s1", "report", deliveryID); err != nil {
+		t.Fatalf("SendSemantic: %v", err)
+	}
+	if len(msg.msgs) != 0 {
+		t.Fatalf("pane writes = %d, want 0", len(msg.msgs))
+	}
+}
+
 func TestSendSemanticTUIDoesNotAcceptPaneWrite(t *testing.T) {
 	st := newFakeStore()
 	st.sessions["s1"] = pastStartupGate(domain.SessionRecord{

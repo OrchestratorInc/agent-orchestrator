@@ -840,20 +840,37 @@ func TestActivity_MixedHumanPromptKeepsSemanticReceiptAfterCheckpointOverwrite(t
 	}
 }
 
-func TestActivity_CoordinationIDRequiresReceiptStore(t *testing.T) {
-	m, store, _ := newManager()
-	rec := working("mer-1")
-	rec.Metadata.RuntimeLaunchID = "launch-1"
-	store.sessions[rec.ID] = rec
-	err := m.ApplyActivitySignal(ctx, rec.ID, ports.ActivitySignal{
-		Valid: true, State: domain.ActivityActive, Event: "user-prompt-submit", LaunchID: "launch-1",
-		CoordinationID: "report-batch:missing-store",
-	})
-	if err == nil || !strings.Contains(err.Error(), "semantic delivery acceptance storage is unavailable") {
-		t.Fatalf("ApplyActivitySignal error = %v, want missing receipt storage", err)
-	}
-	if store.sessions[rec.ID].Revision != rec.Revision {
-		t.Fatalf("missing receipt store projected activity: revision %d -> %d", rec.Revision, store.sessions[rec.ID].Revision)
+// Acceptance needs a runtime launch and a store that can record it. Without
+// either, the prompt's activity projection still applies, as before acceptance
+// was recorded at all.
+func TestActivity_CoordinationIDWithoutAcceptanceStillProjectsActivity(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		launchID   string
+		acceptance bool
+	}{
+		{name: "no runtime launch", launchID: "", acceptance: true},
+		{name: "store cannot record acceptance", launchID: "launch-1", acceptance: false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			m, store, _ := newManager()
+			if tt.acceptance {
+				m.store = &fakeSemanticDeliveryActivityStore{fakeStore: store}
+			}
+			rec := working("mer-1")
+			rec.Activity.State = domain.ActivityIdle
+			rec.Metadata.RuntimeLaunchID = tt.launchID
+			store.sessions[rec.ID] = rec
+			if err := m.ApplyActivitySignal(ctx, rec.ID, ports.ActivitySignal{
+				Valid: true, State: domain.ActivityActive, Event: "user-prompt-submit", LaunchID: tt.launchID,
+				CoordinationID: "report-batch:no-acceptance",
+			}); err != nil {
+				t.Fatalf("ApplyActivitySignal: %v", err)
+			}
+			if got := store.sessions[rec.ID].Activity.State; got != domain.ActivityActive {
+				t.Fatalf("activity = %q, want active", got)
+			}
+		})
 	}
 }
 
