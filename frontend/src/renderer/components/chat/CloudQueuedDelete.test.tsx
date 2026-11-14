@@ -162,6 +162,28 @@ describe("Delete on a Cloud chat's queue", () => {
 			expect(row()).not.toBeInTheDocument();
 		});
 
+		// The delete waits for the steer's answer by reading the events after the
+		// ones the chat already holds, not the session's whole history from its
+		// first event, a hundred at a time, as it did.
+		it("waits for the steer's answer from the newest event the chat holds", async () => {
+			cloudMocks.listChatEvents.mockResolvedValue(page(steering));
+			const delivered = [
+				at(7, "chat.turn_steered", { ...requested.payload, deleteRequested: true }),
+				at(8, "chat.turn_interrupted", { turnId: "turn-mine", attempt: 0, reason: "steered" })];
+			cloudMocks.deleteQueuedMessage.mockImplementation(async () => {
+				cloudMocks.listChatEvents.mockResolvedValue(page([...steering, ...delivered]));
+				return { ok: true, pending: true };
+			});
+			mount();
+			await waitFor(() => expect(statusOf("turn-mine")).toBe("Steering into the running turn…"));
+			cloudMocks.listChatEvents.mockClear();
+			await userEvent.click(deleteButton());
+			await waitFor(() => expect(row()).not.toBeInTheDocument(), { timeout: 4000 });
+			const reads = cloudMocks.listChatEvents.mock.calls.map(([, , options]) => options as { after?: number } | undefined);
+			expect(reads.length).toBeGreaterThan(0);
+			expect(reads.filter((options) => options?.after === 0)).toEqual([]);
+		});
+
 		it("says the message was delivered when the delete comes after the agent took it", async () => {
 			cloudMocks.listChatEvents.mockResolvedValue(page(steering));
 			cloudMocks.deleteQueuedMessage.mockRejectedValue(new CloudCpError("The agent already took this message.", { status: 409, code: "ALREADY_STEERED" }));

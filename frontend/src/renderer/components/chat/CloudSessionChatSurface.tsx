@@ -1767,6 +1767,8 @@ export function CloudSessionChatSurface({
 	const cancelQueued = useMutation({
 		mutationFn: async (turnId: string) => {
 			if (!cloud) throw new Error("Cloud session context is unavailable.");
+			// The newest event the chat holds: a steer's answer comes after it.
+			const heldThrough = eventsQuery.data?.at(-1)?.sequence ?? 0;
 			let pending = false;
 			try {
 				if (queuedDeleteOffered) pending = (await client.deleteQueuedMessage(cloud.orgId, session.id, turnId)).pending === true;
@@ -1779,7 +1781,9 @@ export function CloudSessionChatSurface({
 			if (!pending) return;
 			// The agent was taking the message as a steer: its answer decides.
 			// Deleted if it did not take it; delivered, and said so, if it did.
-			let after = 0;
+			// Read from the events the chat already holds on, not from the
+			// session's first event.
+			let after = heldThrough;
 			const deadline = Date.now() + QUEUED_STEER_STALE_MS;
 			while (Date.now() < deadline) {
 				let page: Awaited<ReturnType<typeof client.listChatEvents>>;
