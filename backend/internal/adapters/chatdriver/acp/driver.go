@@ -1082,6 +1082,7 @@ func (d *Driver) connectProcess(
 	proc := &process{
 		stdin: transport.Stdin, stdout: gate, gate: gate,
 		reconnected: transport.Reconnected, acpState: transport.ACPState,
+		hostExited: func() bool { return persistenthost.HostExited(transport.PID) },
 	}
 	proc.stop = persistentStop(gate, transport.Stdin)
 	if d.cfg.QuickStop {

@@ -30,6 +30,7 @@ const (
 	// terminated (quickSessionCloseWait for a QuickStop provider).
 	sessionCloseWait      = 2 * time.Second
 	quickSessionCloseWait = 500 * time.Millisecond
+	hostExitSettleWait    = 5 * time.Second
 )
 
 var (
@@ -254,6 +255,7 @@ type conversation struct {
 	eventMu      sync.RWMutex
 	events       chan ports.ChatEvent
 	eventsClosed bool
+	hostGone     atomic.Bool
 	closeOnce    sync.Once
 	closing      chan struct{}
 
@@ -1504,6 +1506,9 @@ func (c *conversation) watchConnection() {
 	detaching := c.detaching
 	preserve := !c.closed && c.proc.terminate != nil
 	c.mu.Unlock()
+	hostExited := preserve && c.proc.hostExited != nil && c.proc.hostExited()
+	preserve = preserve && !hostExited
+	c.hostGone.Store(hostExited)
 	// SDK Done cancels only its logical connection. Release both the forwarding
 	// pipe and the actual socket, including a host blocked writing replay under
 	// its ownership lock. Stopping this transport must not terminate the host.
@@ -1513,22 +1518,62 @@ func (c *conversation) watchConnection() {
 		c.failPendingPermissions()
 		c.failPendingInputs()
 	}
-	event := ports.ChatEvent{Kind: ports.ChatEventControllerState, ControllerState: ports.ChatControllerStopped}
-	if preserve {
-		event.Err = ports.ErrChatRecoveryInconclusive
+	var events []ports.ChatEvent
+	if hostExited {
+		c.awaitSettlingTurn()
+		events = c.hostExitedTurn()
 	}
+	stopped := ports.ChatEvent{Kind: ports.ChatEventControllerState, ControllerState: ports.ChatControllerStopped}
+	if preserve {
+		stopped.Err = ports.ErrChatRecoveryInconclusive
+	}
+	events = append(events, stopped)
 	c.eventMu.Lock()
 	if !c.eventsClosed {
 		// Deliver the recovery boundary even though conn.Done is already closed;
 		// emit's disconnect select could otherwise drop this ownership signal.
-		select {
-		case c.events <- event:
-		case <-c.closing:
+		for _, event := range events {
+			select {
+			case c.events <- event:
+			case <-c.closing:
+			}
 		}
 		c.eventsClosed = true
 		close(c.events)
 	}
 	c.eventMu.Unlock()
+}
+
+func (c *conversation) awaitSettlingTurn() {
+	deadline := time.Now().Add(hostExitSettleWait)
+	for {
+		c.mu.Lock()
+		settling := c.activeTurn != "" && c.settlingTurn == c.activeTurn
+		c.mu.Unlock()
+		if !settling || time.Now().After(deadline) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func (c *conversation) hostExitedTurn() []ports.ChatEvent {
+	c.mu.Lock()
+	turnID := c.activeTurn
+	compacting := turnID != "" && c.compactingTurnID == turnID
+	c.mu.Unlock()
+	if turnID == "" {
+		return nil
+	}
+	c.log.Warn("chat: persistent ACP host exited during a turn", "turn", turnID)
+	event := ports.ChatEvent{
+		Kind: ports.ChatEventTurnCompleted, ProviderTurnID: turnID, TurnState: domain.TurnStateFailed,
+		Err: errors.New("the agent's process exited before this turn finished"),
+	}
+	if compacting {
+		return []ports.ChatEvent{{Kind: ports.ChatEventError, ProviderTurnID: turnID, Err: event.Err}, event}
+	}
+	return []ports.ChatEvent{event}
 }
 
 func (c *conversation) emit(event ports.ChatEvent) {
@@ -1543,9 +1588,13 @@ func (c *conversation) emit(event ports.ChatEvent) {
 	if c.proc != nil && c.proc.terminate != nil {
 		// Host-journaled frames must reach durable projection; dropping one here
 		// would make a successful replay look exactly-once while losing content.
+		done := c.conn.Done()
+		if c.hostGone.Load() {
+			done = nil
+		}
 		select {
 		case c.events <- event:
-		case <-c.conn.Done():
+		case <-done:
 		case <-c.closing:
 		}
 		return
