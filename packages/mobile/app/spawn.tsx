@@ -412,6 +412,13 @@ export default function SpawnScreen() {
 		void selectSpawnHost(nextHostId, { select: setSelectedHostId, persistDefault: isCloudHost(nextHostId) ? async () => {} : switchHost })
 			.catch(() => setError("Could not make that machine the default. Try again."));
 	};
+	const moveToProject = (nextProjectId: string | null) => {
+		setProjectDetail(undefined);
+		setProjectDetailLoadedFor(null);
+		setProjectId(nextProjectId);
+	};
+	// The sheet moved itself: a first seed, or its project was deleted. Nothing
+	// was picked for where it landed, so no pick follows it there.
 	const changeProject = (nextProjectId: string | null) => {
 		if (nextProjectId === NEW_CLOUD_PROJECT) {
 			// A cloud project starts from a repository, on its own sheet over this
@@ -421,10 +428,26 @@ export default function SpawnScreen() {
 		}
 		if (!spawnModelSourceChanged({ projectId, agentId: harness }, { projectId: nextProjectId, agentId: harness })) return;
 		resetModelSource();
-		setProjectDetail(undefined);
-		setProjectDetailLoadedFor(null);
 		setAgentTouched(false);
-		setProjectId(nextProjectId);
+		moveToProject(nextProjectId);
+	};
+	// The user moved it, Standalone included, and that says nothing about the
+	// agent or model they picked. A picked model holds its agent as well: it is
+	// only valid for that agent, and the new scope's default may be another one.
+	const pickProject = (nextProjectId: string) => {
+		if (nextProjectId === projectId) return;
+		// "New cloud project" opens its own sheet and leaves this one where it is.
+		if (nextProjectId === NEW_CLOUD_PROJECT) return changeProject(nextProjectId);
+		if (agentTouched || modelTouched) {
+			setAgentTouched(true);
+			setModelError(undefined);
+			// A level picked for this scope's default model doesn't follow it:
+			// the next scope can run another one.
+			if (!modelTouched) setEffort(undefined);
+		} else {
+			resetModelSource();
+		}
+		moveToProject(nextProjectId);
 	};
 	const selectAgent = (nextHarness: string) => {
 		if (!spawnModelSourceChanged({ projectId, agentId: harness }, { projectId, agentId: nextHarness })) return;
@@ -460,9 +483,11 @@ export default function SpawnScreen() {
 		}
 		setEffort(nextEffort);
 	};
-	// The agent menu picks an agent and one of its models together.
+	// The agent menu picks an agent and one of its models together, so even its
+	// default model, for the agent already shown, picks that agent.
 	const selectAgentModel = (nextHarness: string, nextModel: string) => {
 		selectAgent(nextHarness);
+		setAgentTouched(true);
 		selectModel(nextModel);
 	};
 	// An agent's whole catalog, searchable, for one too long for its menu.
@@ -674,7 +699,7 @@ export default function SpawnScreen() {
 						? [...unlistedProject, ...projects.map((item) => ({ id: item.id, label: item.name, icon: "folder" as const })), { id: NEW_CLOUD_PROJECT, label: "New cloud project", icon: "folder-plus" as const, sectionBreakBefore: unlistedProject.length + projects.length > 0 }]
 						: [...unlistedProject, ...projects.map((item) => ({ id: item.id, label: item.name, icon: "folder" as const })), { id: STANDALONE_PROJECT, label: "Standalone agent", icon: "message-square-plus" as const, sectionBreakBefore: true }]}
 					projectId={projectId}
-					onSelectProject={changeProject}
+					onSelectProject={pickProject}
 					agents={agents.filter((item) => item.selectable).map((item) => ({ id: item.id, label: item.label }))}
 					harness={harness}
 					onSelectHarness={selectAgent}
