@@ -319,9 +319,9 @@ func TestChordedEnterIsGated(t *testing.T) {
 	}
 }
 
-func TestApprovedActIsBoundToTheApprovedElement(t *testing.T) {
+func TestApprovedActionIsBoundToTheApprovedPage(t *testing.T) {
 	described := placeOrder()
-	described["resolvedRef"] = "e7"
+	described["binding"] = map[string]interface{}{"ref": "e7", "tabId": "t1", "document": float64(3)}
 	rt := &scriptedRuntime{describe: described}
 	svc, gate, token := approvalService(t, rt)
 	answer(t, gate, approval.DecisionAllowOnce)
@@ -330,7 +330,8 @@ func TestApprovedActIsBoundToTheApprovedElement(t *testing.T) {
 	}
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
-	if rt.lastArgs["expectRef"] != "e7" || rt.lastArgs["instruction"] != "place order" {
+	binding, _ := rt.lastArgs["approvalBinding"].(map[string]interface{})
+	if binding["ref"] != "e7" || binding["tabId"] != "t1" || binding["document"] != float64(3) || rt.lastArgs["instruction"] != "place order" {
 		t.Fatalf("dispatched args = %v", rt.lastArgs)
 	}
 }

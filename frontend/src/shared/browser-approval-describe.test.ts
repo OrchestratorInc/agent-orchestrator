@@ -80,6 +80,19 @@ describe("describeApprovalTarget", () => {
 		});
 	});
 
+	it("is not fooled by fields named elements or action", () => {
+		const doc = page(`<form action="/orders" method="post"><input name="elements"><input name="action"><input autocomplete="cc-number"><button id="b">Continue</button></form>`);
+		const facts = describeApprovalTarget(doc, { mode: "element" }, doc.getElementById("b"));
+		expect(facts).toMatchObject({ formHasPayment: true, formMethod: "post" });
+		expect(facts?.formAction).toContain("/orders");
+	});
+
+	it("finds an image button as the default submitter for Enter", () => {
+		const doc = page(`<form method="get"><input id="d" aria-label="Details"><input type="password"><input type="image" alt="Continue" formmethod="post"></form>`);
+		(doc.getElementById("d") as HTMLInputElement).focus();
+		expect(describeApprovalTarget(doc, { mode: "focused" })).toMatchObject({ formMethod: "post", submitName: "Continue", formHasPassword: true });
+	});
+
 	it("returns null when nothing matches or nothing is focused", () => {
 		const doc = page(`<button>Other</button>`);
 		expect(describeApprovalTarget(doc, { mode: "match", role: "button", name: "Delete" })).toBeNull();

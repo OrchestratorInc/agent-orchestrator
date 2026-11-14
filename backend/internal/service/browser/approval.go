@@ -56,8 +56,9 @@ func (s *Service) Preflight(ctx context.Context, sessionID domain.SessionID, act
 }
 
 // preflight asks the user when the action is consequential. It returns the
-// arguments to dispatch: an approved act carries the approved element's ref
-// (expectRef), so the runtime refuses if the page moved it in the meantime.
+// arguments to dispatch: an approved action carries the binding the runtime
+// reported (tab, document, and act's element), so the runtime refuses it if
+// the page changed while the user was deciding.
 func (s *Service) preflight(ctx context.Context, sessionID domain.SessionID, rt runtime, action string, args map[string]interface{}) (map[string]interface{}, error) {
 	if !mayActConsequentially(action, args) {
 		return args, nil
@@ -105,12 +106,12 @@ func (s *Service) preflight(ctx context.Context, sessionID domain.SessionID, rt 
 	if !outcome.Allowed() {
 		return nil, approvalRefusal(outcome.Decision, verdict.Summary, s.approvalTimeout)
 	}
-	if action == "act" && described.ref != "" {
+	if described.binding != nil {
 		bound := make(map[string]interface{}, len(args)+1)
 		for key, value := range args {
 			bound[key] = value
 		}
-		bound["expectRef"] = described.ref
+		bound["approvalBinding"] = described.binding
 		return bound, nil
 	}
 	return args, nil
@@ -166,8 +167,9 @@ func mayActConsequentially(action string, args map[string]interface{}) bool {
 type describedTarget struct {
 	target approval.Target
 	image  string
-	// ref is the element act resolved to, when the runtime reports it.
-	ref string
+	// binding identifies what the user approved: the tab, the document, and
+	// for act the element. The runtime checks it again before dispatch.
+	binding map[string]interface{}
 	// identified is false when nothing about the element could be read.
 	identified bool
 	// partial means the runtime named the element but could not read its form
@@ -198,10 +200,10 @@ func (s *Service) describe(ctx context.Context, sessionID domain.SessionID, rt r
 		return describedTarget{target: fallback}
 	}
 	var described struct {
-		Target      approval.Target `json:"target"`
-		Image       string          `json:"image"`
-		ResolvedRef string          `json:"resolvedRef"`
-		Partial     bool            `json:"partial"`
+		Target  approval.Target        `json:"target"`
+		Image   string                 `json:"image"`
+		Binding map[string]interface{} `json:"binding"`
+		Partial bool                   `json:"partial"`
 	}
 	raw, err := json.Marshal(result.Value)
 	if err != nil || json.Unmarshal(raw, &described) != nil {
@@ -216,7 +218,7 @@ func (s *Service) describe(ctx context.Context, sessionID domain.SessionID, rt r
 		target.Key = fallback.Key
 	}
 	identified := target.Role != "" || target.Name != "" || target.IsSubmit
-	return describedTarget{target: target, image: described.Image, ref: described.ResolvedRef, identified: identified, partial: described.Partial}
+	return describedTarget{target: target, image: described.Image, binding: described.Binding, identified: identified, partial: described.Partial}
 }
 
 func approvalRefusal(decision approval.Decision, summary string, timeout time.Duration) *ApprovalError {

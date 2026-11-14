@@ -125,7 +125,7 @@ export class Executor {
 					text: stringArg(args, "text", "INVALID_ARGUMENT", "text is required", true),
 				});
 			case "press":
-				return this.press(ctx, stringArg(args, "key", "INVALID_ARGUMENT", "key is required"));
+				return this.press(ctx, stringArg(args, "key", "INVALID_ARGUMENT", "key is required"), args.approvalBinding);
 			case "drag":
 				return this.drag(
 					ctx,
@@ -516,20 +516,14 @@ export class Executor {
 				return { outcome, instruction, ...(outcome === "ambiguous" ? { candidates } : {}), snapshot, untrustedExternalContent: true };
 			};
 			let dispatched = false;
-			// The daemon passes the ref the user approved; a page that moved the
-			// match to another element during the wait is refused.
-			const expectRef = typeof args.expectRef === "string" && args.expectRef ? args.expectRef.replace(/^@/, "") : undefined;
 			const perform = async (candidate: ActCandidate, retried: boolean, beforeSnapshot: string) => {
-				if (expectRef && candidate.ref !== expectRef) {
-					throw new BridgeError(
-						"BROWSER_TARGET_CHANGED",
-						"The page changed while the action waited for approval, so the approved element is no longer the one this instruction matches. Take a new snapshot and try again.",
-					);
-				}
 				const beforeNavigations = this.navigationCounts.get(page.tabId) ?? 0;
 				const before = { tabId: page.logicalId, url: sanitizeBrowserURL(page.tab.url ?? "") };
 				const alreadySatisfied = postcondition ? await this.postconditionHoldsNow(ctx, page, postcondition) : false;
-				const result = (await this.elementAction(ctx, verb, candidate.ref, value !== undefined ? { text: value } : {})) as Record<string, unknown>;
+				const result = (await this.elementAction(ctx, verb, candidate.ref, {
+					...(value !== undefined ? { text: value } : {}),
+					...(args.approvalBinding !== undefined ? { approvalBinding: args.approvalBinding } : {}),
+				})) as Record<string, unknown>;
 				dispatched = true;
 				const observed = !postcondition
 					? undefined
@@ -645,8 +639,30 @@ export class Executor {
 		return { x, y };
 	}
 
+	/**
+	 * An approved action may only land on the tab, document, and (for act) the
+	 * element the user approved. The daemon passes what describe reported.
+	 */
+	private async assertApprovalBinding(ctx: Context, page: ActiveTab, binding: unknown, ref?: string): Promise<void> {
+		if (binding === undefined) return;
+		const bound = isRecord(binding) ? binding : {};
+		const current = (await this.content(page, ctx, { op: "ping" })) as { documentId?: string };
+		const changed =
+			bound.tabId !== page.logicalId ||
+			typeof bound.document !== "string" ||
+			bound.document !== current.documentId ||
+			(typeof bound.ref === "string" && bound.ref !== "" && ref !== undefined && bound.ref.replace(/^@/, "") !== ref.replace(/^@/, ""));
+		if (changed) {
+			throw new BridgeError(
+				"BROWSER_TARGET_CHANGED",
+				"The page changed while the action waited for approval, so it no longer acts on what the user approved. Take a new snapshot and try again.",
+			);
+		}
+	}
+
 	private async elementAction(ctx: Context, action: string, ref: string, args: Record<string, unknown>): Promise<unknown> {
 		return this.withPage(ctx, async (page) => {
+			if (action === "click" || action === "dblclick") await this.assertApprovalBinding(ctx, page, args.approvalBinding, ref);
 			const trusted = await this.useTrustedInput(ctx, page);
 			let value: unknown;
 			switch (action) {
@@ -686,8 +702,9 @@ export class Executor {
 		});
 	}
 
-	private async press(ctx: Context, key: string): Promise<unknown> {
+	private async press(ctx: Context, key: string, approvalBinding?: unknown): Promise<unknown> {
 		return this.withPage(ctx, async (page) => {
+			await this.assertApprovalBinding(ctx, page, approvalBinding);
 			let input = {};
 			if (await this.useTrustedInput(ctx, page)) {
 				input = await this.deps.trusted.press(page.tabId, key, ctx.signal);
@@ -876,11 +893,15 @@ export class Executor {
 				const match = matchInstruction(instruction ?? "", snapshot.refs, { nth });
 				ref = match.outcome === "matched" ? match.candidate.ref : undefined;
 			}
-			if (action !== "press" && !ref) return { target: pageFacts, untrustedExternalContent: true };
+			if (action !== "press" && !ref) {
+				const current = (await this.content(fresh, ctx, { op: "ping" })) as { documentId?: string };
+				return { target: pageFacts, binding: { tabId: fresh.logicalId, document: current.documentId ?? "" }, untrustedExternalContent: true };
+			}
 			const described = (await this.content(fresh, ctx, { op: "describe", ...(ref ? { ref } : {}) })) as {
 				facts: ApprovalElementFacts | null;
 				viewport: { width: number; height: number };
 				dpr: number;
+				documentId: string;
 			};
 			let image: string | undefined;
 			const crop = approvalCropRect(described.facts?.rect, described.viewport);
@@ -894,6 +915,7 @@ export class Executor {
 			return {
 				target: { ...(described.facts ?? {}), ...pageFacts },
 				...(ref ? { resolvedRef: ref } : {}),
+				binding: { tabId: fresh.logicalId, document: described.documentId, ...(ref ? { ref } : {}) },
 				// The element could not be read, so its form facts are unknown.
 				...(!described.facts ? { partial: true } : {}),
 				...(image ? { image } : {}),
