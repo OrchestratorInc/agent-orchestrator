@@ -1010,6 +1010,9 @@ func (c *conversation) finishPrompt(
 			state = domain.TurnStateFailed
 			turnErr = errors.New(compactionFailure)
 		}
+		if state == domain.TurnStateFailed && turnErr == nil {
+			turnErr = stopReasonFailure(resp.StopReason)
+		}
 		if resp.Usage != nil {
 			cached := 0
 			if resp.Usage.CachedReadTokens != nil {
@@ -1260,6 +1263,28 @@ func turnState(reason acpsdk.StopReason) domain.TurnState {
 	default:
 		return domain.TurnStateFailed
 	}
+}
+
+// stopReasonFailure says why a turn the agent ended on a failing stop reason
+// failed, for when no provider binding explained it. The turn-completed event
+// is the only place the turn's error message is recorded.
+func stopReasonFailure(reason acpsdk.StopReason) error {
+	var title string
+	switch reason {
+	case acpsdk.StopReasonMaxTokens:
+		title = "The agent reached its output token limit"
+	case acpsdk.StopReasonMaxTurnRequests:
+		title = "The agent reached its request limit for this turn"
+	case acpsdk.StopReasonRefusal:
+		title = "The agent refused to continue"
+	default:
+		title = "The agent stopped before finishing the turn"
+	}
+	detail := ""
+	if reason != "" {
+		detail = "Stop reason: " + string(reason)
+	}
+	return ports.NewChatProviderFailure(title, detail, nil)
 }
 
 func (c *conversation) Interrupt(ctx context.Context, providerTurnID string) error {

@@ -482,6 +482,50 @@ func promptResponseFailure(meta map[string]any) error {
 	return ports.NewChatProviderFailure(title, details, cause)
 }
 
+// A turn the agent ended on a failing stop reason must say why it failed, or
+// the timeline shows a bare "The agent ran into a problem".
+func TestFailingStopReasonRecordsWhyTheTurnFailed(t *testing.T) {
+	bindingFailure := ports.NewChatProviderFailure("Usage limit reached", "Resets at 10:00 tomorrow.", nil)
+	for _, tc := range []struct {
+		name    string
+		reason  acpsdk.StopReason
+		binding error
+		want    string
+	}{
+		{"max tokens", acpsdk.StopReasonMaxTokens, nil, "The agent reached its output token limit\n\nStop reason: max_tokens"},
+		{"max turn requests", acpsdk.StopReasonMaxTurnRequests, nil, "The agent reached its request limit for this turn\n\nStop reason: max_turn_requests"},
+		{"refusal", acpsdk.StopReasonRefusal, nil, "The agent refused to continue\n\nStop reason: refusal"},
+		{"unknown reason", acpsdk.StopReason("future_reason"), nil, "The agent stopped before finishing the turn\n\nStop reason: future_reason"},
+		{"empty reason", acpsdk.StopReason(""), nil, "The agent stopped before finishing the turn"},
+		{"binding error wins", acpsdk.StopReasonMaxTokens, bindingFailure, bindingFailure.Error()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			conv := &conversation{
+				activeTurn: "turn-1", events: make(chan ports.ChatEvent, 16), log: slog.New(slog.DiscardHandler),
+				promptResponseFailure: func(acpsdk.PromptResponse, string) error { return tc.binding },
+			}
+			conv.finishPrompt("turn-1", acpsdk.PromptResponse{StopReason: tc.reason}, nil)
+			close(conv.events)
+			completions := 0
+			for event := range conv.events {
+				if event.Kind != ports.ChatEventTurnCompleted {
+					continue
+				}
+				completions++
+				if event.TurnState != domain.TurnStateFailed {
+					t.Fatalf("turn state = %q, want failed", event.TurnState)
+				}
+				if event.Err == nil || event.Err.Error() != tc.want {
+					t.Fatalf("completion error = %v, want %q", event.Err, tc.want)
+				}
+			}
+			if completions != 1 {
+				t.Fatalf("completions = %d, want 1", completions)
+			}
+		})
+	}
+}
+
 func TestClaudeUsageLimitResetFromRateLimitEvents(t *testing.T) {
 	now := time.Date(2026, 11, 8, 12, 10, 0, 0, time.UTC)
 	fiveHour := now.Add(40 * time.Minute)
@@ -522,5 +566,18 @@ func TestClaudeUsageLimitResetFromRateLimitEvents(t *testing.T) {
 				t.Fatalf("reset = %v, %v; want %v", got, ok, tc.want)
 			}
 		})
+	}
+}
+
+func TestSettledStopReasonsCarryNoError(t *testing.T) {
+	for _, reason := range []acpsdk.StopReason{acpsdk.StopReasonEndTurn, acpsdk.StopReasonCancelled} {
+		conv := &conversation{activeTurn: "turn-1", events: make(chan ports.ChatEvent, 16), log: slog.New(slog.DiscardHandler)}
+		conv.finishPrompt("turn-1", acpsdk.PromptResponse{StopReason: reason}, nil)
+		close(conv.events)
+		for event := range conv.events {
+			if event.Kind == ports.ChatEventTurnCompleted && event.Err != nil {
+				t.Fatalf("%s: completion error = %v, want none", reason, event.Err)
+			}
+		}
 	}
 }
