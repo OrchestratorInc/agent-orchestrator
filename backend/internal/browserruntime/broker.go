@@ -85,10 +85,18 @@ type livenessConfig struct {
 
 var defaultLiveness = livenessConfig{interval: 5 * time.Second, stallLimit: 15 * time.Second}
 
-// Status describes whether Electron is connected to the browser command broker.
+// Status describes whether a runtime is connected to the browser command broker.
 type Status struct {
 	Connected   bool
 	ConnectedAt time.Time
+	// Transport names the runtime kind this broker serves.
+	Transport string
+	// Client and ClientVersion are what the connected runtime reported in its
+	// hello, for example the AO Chrome extension and its version.
+	Client        string
+	ClientVersion string
+	// Target is set by the session router: which browser the session uses.
+	Target string
 }
 
 // Command is one session-scoped operation sent to the Electron browser runtime.
@@ -119,16 +127,19 @@ type Result struct {
 }
 
 type wireMessage struct {
-	Type      string                 `json:"type"`
-	Version   int                    `json:"version,omitempty"`
-	Token     string                 `json:"token,omitempty"`
-	RequestID string                 `json:"requestId,omitempty"`
-	SessionID domain.SessionID       `json:"sessionId,omitempty"`
-	Action    string                 `json:"action,omitempty"`
-	Args      map[string]interface{} `json:"args,omitempty"`
-	OK        bool                   `json:"ok,omitempty"`
-	Result    json.RawMessage        `json:"result,omitempty"`
-	Error     *CommandError          `json:"error,omitempty"`
+	Type    string `json:"type"`
+	Version int    `json:"version,omitempty"`
+	Token   string `json:"token,omitempty"`
+	// Client and ClientVersion are optional hello metadata.
+	Client        string                 `json:"client,omitempty"`
+	ClientVersion string                 `json:"clientVersion,omitempty"`
+	RequestID     string                 `json:"requestId,omitempty"`
+	SessionID     domain.SessionID       `json:"sessionId,omitempty"`
+	Action        string                 `json:"action,omitempty"`
+	Args          map[string]interface{} `json:"args,omitempty"`
+	OK            bool                   `json:"ok,omitempty"`
+	Result        json.RawMessage        `json:"result,omitempty"`
+	Error         *CommandError          `json:"error,omitempty"`
 }
 
 type pendingResult struct {
@@ -149,6 +160,11 @@ type Broker struct {
 	writeGate         chan struct{}
 	connectionChanged chan struct{}
 	token             string
+	transport         string
+	client            string
+	clientVersion     string
+	verifyPeer        func(net.Conn) error
+	exclusive         bool
 	pongAt            time.Time
 
 	liveness livenessConfig
@@ -165,7 +181,36 @@ func New(log *slog.Logger, token ...string) *Broker {
 	if len(token) > 0 {
 		runtimeToken = token[0]
 	}
-	return &Broker{log: log, pending: make(map[string]chan pendingResult), writeGate: gate, connectionChanged: make(chan struct{}), token: runtimeToken, liveness: defaultLiveness}
+	return &Broker{log: log, pending: make(map[string]chan pendingResult), writeGate: gate, connectionChanged: make(chan struct{}), token: runtimeToken, transport: TransportElectron, liveness: defaultLiveness}
+}
+
+// TransportElectron is the desktop app's WebContentsView runtime.
+const TransportElectron = "electron-webcontents-debugger"
+
+// SetTransport names the runtime kind this broker serves. Call before Serve.
+func (b *Broker) SetTransport(name string) {
+	b.mu.Lock()
+	b.transport = name
+	b.mu.Unlock()
+}
+
+// SetExclusive makes the first connected runtime keep the bridge: a second
+// runtime is told it was rejected and closed instead of replacing the first.
+// The Chrome runtime uses this so two Chrome profiles cannot keep displacing
+// each other. Call before Serve.
+func (b *Broker) SetExclusive(exclusive bool) {
+	b.mu.Lock()
+	b.exclusive = exclusive
+	b.mu.Unlock()
+}
+
+// SetPeerVerifier installs a check that runs on every accepted connection
+// before its hello is read. A failing check closes the connection. Call
+// before Serve.
+func (b *Broker) SetPeerVerifier(verify func(net.Conn) error) {
+	b.mu.Lock()
+	b.verifyPeer = verify
+	b.mu.Unlock()
 }
 
 // NewToken returns a per-daemon-launch secret used to authenticate the desktop
@@ -182,7 +227,13 @@ func NewToken() (string, error) {
 func (b *Broker) Status() Status {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return Status{Connected: b.conn != nil, ConnectedAt: b.connectedAt}
+	return Status{
+		Connected:     b.conn != nil,
+		ConnectedAt:   b.connectedAt,
+		Transport:     b.transport,
+		Client:        b.client,
+		ClientVersion: b.clientVersion,
+	}
 }
 
 // Execute sends one browser command to the connected Electron runtime.
@@ -269,6 +320,16 @@ func (b *Broker) Serve(ctx context.Context, ln net.Listener) error {
 }
 
 func (b *Broker) serveConn(ctx context.Context, conn net.Conn) {
+	b.mu.Lock()
+	verify := b.verifyPeer
+	b.mu.Unlock()
+	if verify != nil {
+		if err := verify(conn); err != nil {
+			b.log.Warn("browser runtime peer rejected", "transport", b.transport, "err", err)
+			_ = conn.Close()
+			return
+		}
+	}
 	_ = conn.SetReadDeadline(time.Now().Add(helloTimeout))
 	scanner := bufio.NewScanner(conn)
 	scanner.Buffer(make([]byte, 64*1024), maxRuntimeFrameBytes)
@@ -286,7 +347,12 @@ func (b *Broker) serveConn(ctx context.Context, conn net.Conn) {
 		return
 	}
 	var hello wireMessage
-	_ = json.Unmarshal(helloFrame, &hello)
+	_ = json.Unmarshal(helloFrame, &hello) // validated by helloRejection
+	if b.busy() {
+		_ = writeHelloReply(conn, wireMessage{Type: "hello-rejected", Error: errRuntimeBusy})
+		_ = conn.Close()
+		return
+	}
 	_ = conn.SetReadDeadline(time.Time{})
 	// Nothing else can write to conn until it is published below, so hello-ok is
 	// always the first frame the runtime reads.
@@ -296,9 +362,20 @@ func (b *Broker) serveConn(ctx context.Context, conn net.Conn) {
 	}
 
 	b.mu.Lock()
+	if b.exclusive && b.conn != nil {
+		// Another runtime connected while this one was being accepted.
+		b.mu.Unlock()
+		frame, _ := json.Marshal(wireMessage{Type: "rejected", Error: errRuntimeBusy})
+		_ = conn.SetWriteDeadline(time.Now().Add(time.Second))
+		_, _ = conn.Write(append(frame, '\n'))
+		_ = conn.Close()
+		return
+	}
 	old := b.conn
 	b.conn = conn
 	b.connectedAt = time.Now().UTC()
+	b.client = hello.Client
+	b.clientVersion = hello.ClientVersion
 	b.signalConnectionChangedLocked()
 	pending := b.takePendingLocked()
 	// A v3 runtime is probed; v2 peers keep their connection but are never pinged.
@@ -310,7 +387,7 @@ func (b *Broker) serveConn(ctx context.Context, conn net.Conn) {
 		_ = old.Close()
 	}
 	failPending(pending, ErrUnavailable)
-	b.log.Info("browser runtime connected")
+	b.log.Info("browser runtime connected", "transport", b.transport, "client", hello.Client, "clientVersion", hello.ClientVersion)
 
 	if hello.Version >= ProtocolVersion {
 		go b.runLiveness(ctx, conn)
@@ -438,6 +515,15 @@ func (b *Broker) write(ctx context.Context, conn net.Conn, msg wireMessage) erro
 	return err
 }
 
+var errRuntimeBusy = &CommandError{Code: "BROWSER_RUNTIME_BUSY", Message: "Another browser runtime is already connected"}
+
+// busy reports whether an exclusive broker already has a runtime.
+func (b *Broker) busy() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.exclusive && b.conn != nil
+}
+
 // helloRejection reports why a runtime's first frame is not an acceptable hello,
 // or nil if it is.
 func helloRejection(frame []byte, token string) *CommandError {
@@ -512,6 +598,8 @@ func (b *Broker) disconnect(conn net.Conn, cause error) {
 	}
 	b.conn = nil
 	b.connectedAt = time.Time{}
+	b.client = ""
+	b.clientVersion = ""
 	b.signalConnectionChangedLocked()
 	pending := b.takePendingLocked()
 	b.mu.Unlock()

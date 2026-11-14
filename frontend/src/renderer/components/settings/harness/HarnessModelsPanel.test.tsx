@@ -32,28 +32,29 @@ vi.mock("../../../hooks/useAgentModelsQuery", () => ({
 }));
 
 describe("HarnessModelsPanel", () => {
-	it.each(["direct", undefined] as const)("explains model-ID entry when the native catalog is freeform (%s)", async (customModelEntry) => {
+	it.each(["direct", undefined] as const)("explains Mastra Code model-ID entry when its native catalog is freeform (%s)", async (customModelEntry) => {
 		h.catalog = { models: [], allowCustom: true, customModelEntry };
 		render(
 			<QueryClientProvider client={new QueryClient()}>
-				<HarnessModelsPanel agentId="codex" installed needsLogin={false} onOpenAccount={() => {}} />
+				<HarnessModelsPanel agentId="mastra-code" installed needsLogin={false} onOpenAccount={() => {}} />
 			</QueryClientProvider>,
 		);
 		expect(await screen.findByText(/Enter a model ID in New Task/)).toBeInTheDocument();
 		expect(screen.queryByText("This harness reported no models.")).not.toBeInTheDocument();
 	});
 
-	it.each(["configured", "none"] as const)("does not advertise direct entry for a %s catalog", async (customModelEntry) => {
+	it.each([
+		["mastra-code", "configured"], ["mastra-code", "none"], ["codex", "direct"],
+	] as const)("does not advertise model-ID entry for %s with a %s catalog", async (agentId, customModelEntry) => {
 		h.catalog = { models: [], allowCustom: true, customModelEntry };
 		render(
 			<QueryClientProvider client={new QueryClient()}>
-				<HarnessModelsPanel agentId="codex" installed needsLogin={false} onOpenAccount={() => {}} />
+				<HarnessModelsPanel agentId={agentId} installed needsLogin={false} onOpenAccount={() => {}} />
 			</QueryClientProvider>,
 		);
 		expect(await screen.findByText("This harness reported no models.")).toBeInTheDocument();
 		expect(screen.queryByText(/Enter a model ID in New Task/)).not.toBeInTheDocument();
 	});
-
 
 	it("switches a Cursor model's variants together", async () => {
 		render(

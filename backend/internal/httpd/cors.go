@@ -67,27 +67,34 @@ func corsMiddleware(allowedOrigins []string) func(http.Handler) http.Handler {
 	}
 }
 
-// codexAccountOriginMiddleware gives credential-management routes a stricter
-// browser boundary for credentials, including on authenticated LAN requests.
-// Neither previews nor mobile clients may manage these credentials.
-// Native clients do not send Origin and remain unauthenticated;
-// browser clients must present one of the exact configured renderer origins.
-func codexAccountOriginMiddleware(allowedOrigins []string) func(http.Handler) http.Handler {
+// rendererOriginMiddleware gives credential-management and desktop-control
+// routes a stricter browser boundary, including on authenticated LAN requests.
+// Previews may never manage these credentials or drive the desktop through Cua
+// Driver; paired mobile clients may manage only the subscription accounts.
+// Native clients do not send Origin and remain unauthenticated; browser
+// clients must present one of the exact configured renderer origins.
+func rendererOriginMiddleware(allowedOrigins []string) func(http.Handler) http.Handler {
 	allowed := exactAllowedOrigins(allowedOrigins)
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			origin := r.Header.Get("Origin")
-			if origin != "" && isCodexAccountPath(r.URL.Path) {
+			if area := rendererOnlyArea(r.URL.Path); origin != "" && area != "" {
 				w.Header().Add("Vary", "Origin")
-				if _, ok := allowed[origin]; !ok {
+				if _, ok := allowed[origin]; !ok && !mobileAgentAccountsRequest(r, area) {
 					envelope.WriteAPIError(w, r, http.StatusForbidden, "forbidden", "ORIGIN_FORBIDDEN",
-						"Origin is not allowed to access Codex account management", nil)
+						"Origin is not allowed to access "+area, nil)
 					return
 				}
 			}
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+const agentAccountsArea = "agent accounts"
+
+func mobileAgentAccountsRequest(r *http.Request, area string) bool {
+	return area == agentAccountsArea && r.Header.Get("Origin") == "http://localhost" && authenticatedLANBearer(r)
 }
 
 func exactAllowedOrigins(origins []string) map[string]struct{} {
@@ -104,17 +111,44 @@ func exactAllowedOrigins(origins []string) map[string]struct{} {
 	return allowed
 }
 
-func isCodexAccountPath(path string) bool {
-	for _, prefix := range []string{
-		"/api/v1/agents/codex/accounts",
-		"/api/v1/agents/codex/account-switches",
-		"/api/v1/agents/accounts",
-	} {
-		if path == prefix || strings.HasPrefix(path, prefix+"/") {
-			return true
+// rendererOnlyArea names the area a path belongs to when only the configured
+// renderer origins may reach it from a browser, or "" for ordinary routes.
+func rendererOnlyArea(path string) string {
+	// Generic harness login operations can write native credentials.
+	if rest, ok := strings.CutPrefix(path, "/api/v1/agents/"); ok {
+		parts := strings.Split(rest, "/")
+		if len(parts) >= 3 && parts[0] != "" && parts[1] == "auth" && parts[2] == "operations" {
+			return "agent credential management"
 		}
 	}
-	return false
+	for _, area := range []struct {
+		name     string
+		prefixes []string
+	}{
+		{"Codex account management", []string{
+			"/api/v1/agents/codex/accounts",
+			"/api/v1/agents/codex/account-switches",
+		}},
+		{agentAccountsArea, []string{"/api/v1/agents/accounts"}},
+		{"agent credential management", []string{
+			"/api/v1/agents/codex/auth/operations",
+			"/api/v1/agents/claude-code/auth/operations",
+			"/api/v1/agents/provider-keys",
+		}},
+		// Cua Driver operates native apps with the user's OS permissions, and
+		// the settings toggle decides whether agents are told to use it.
+		{"computer use", []string{
+			"/api/v1/computer-use",
+			"/api/v1/settings/computer-use",
+		}},
+	} {
+		for _, prefix := range area.prefixes {
+			if path == prefix || strings.HasPrefix(path, prefix+"/") {
+				return area.name
+			}
+		}
+	}
+	return ""
 }
 
 // browserRequestAllowed guards browser access to REST routes. Local HTTP

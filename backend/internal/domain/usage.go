@@ -2,6 +2,7 @@ package domain
 
 import (
 	"errors"
+	"slices"
 	"time"
 )
 
@@ -12,11 +13,46 @@ type UsageSourceKind string
 
 // UsageSourceKind values identify certified native usage artifact shapes.
 const (
-	UsageSourceClaudeMain     UsageSourceKind = "claude_main"
-	UsageSourceClaudeSubagent UsageSourceKind = "claude_subagent"
-	UsageSourceCodexRollout   UsageSourceKind = "codex_rollout"
-	UsageSourceKimiWire       UsageSourceKind = "kimi_wire"
+	UsageSourceClaudeMain        UsageSourceKind = "claude_main"
+	UsageSourceClaudeSubagent    UsageSourceKind = "claude_subagent"
+	UsageSourceCodexRollout      UsageSourceKind = "codex_rollout"
+	UsageSourceKimiWire          UsageSourceKind = "kimi_wire"
+	UsageSourcePiSession         UsageSourceKind = "pi_session"
+	UsageSourceQwenMonthly       UsageSourceKind = "qwen_monthly"
+	UsageSourceOMPSession        UsageSourceKind = "omp_session"
+	UsageSourceKimchiSession     UsageSourceKind = "kimchi_session"
+	UsageSourcePrimeAgentSession UsageSourceKind = "prime_agent_session"
+	UsageSourceGooseLedger       UsageSourceKind = "goose_ledger"
+	UsageSourceOpenCodeDB        UsageSourceKind = "opencode_db"
+	UsageSourceKiloDB            UsageSourceKind = "kilo_db"
+	UsageSourceGrokUsage         UsageSourceKind = "grok_usage"
+	UsageSourceDeepSeekSession   UsageSourceKind = "deepseek_session"
+	UsageSourceAgyConversation   UsageSourceKind = "agy_conversation"
 )
+
+// AllUsageSourceKinds lists every certified usage artifact shape.
+var AllUsageSourceKinds = []UsageSourceKind{
+	UsageSourceClaudeMain,
+	UsageSourceClaudeSubagent,
+	UsageSourceCodexRollout,
+	UsageSourceKimiWire,
+	UsageSourcePiSession,
+	UsageSourceQwenMonthly,
+	UsageSourceOMPSession,
+	UsageSourceKimchiSession,
+	UsageSourcePrimeAgentSession,
+	UsageSourceGooseLedger,
+	UsageSourceOpenCodeDB,
+	UsageSourceKiloDB,
+	UsageSourceGrokUsage,
+	UsageSourceDeepSeekSession,
+	UsageSourceAgyConversation,
+}
+
+// IsKnown reports whether k is a certified usage source kind.
+func (k UsageSourceKind) IsKnown() bool {
+	return slices.Contains(AllUsageSourceKinds, k)
+}
 
 // UsageBindingState tracks the root native-session binding lifecycle.
 type UsageBindingState string
@@ -208,25 +244,34 @@ type ModelUsageEvent struct {
 	MeasurementKind       UsageMeasurementKind
 	Tokens                UsageTokenMetrics
 	ProviderUsageJSON     string
+	ServiceTier           string
+	ProviderMessageID     string
 	Costs                 UsageEventCosts
 	CreatedAt             time.Time
 	SourceEventKey        string
 }
 
-// UsageCostCandidate is one still-total-null event selected for an exact
-// provider catalog attempt. Source facts remain immutable and are carried back
-// to storage as compare-and-swap guards.
+// UsagePriceOverride is the user's own price for one stored model ID: either their own rates in USD per million tokens, or the rates of a catalog model to price as.
+type UsagePriceOverride struct {
+	ModelID                              string
+	Input, Output, CacheRead, CacheWrite string
+	PriceAs                              string
+}
+
+// UsageCostCandidate is one event selected for a catalog or override pricing attempt.
 type UsageCostCandidate struct {
-	ID                int64
-	BindingID         int64
-	ProviderID        UsageProviderID
-	BillingProviderID string
-	ModelID           string
-	MeasurementKind   UsageMeasurementKind
-	Tokens            UsageTokenMetrics
-	ProviderUsageJSON string
-	PricingVersion    string
-	SourceEventKey    string
+	ID                 int64
+	BindingID          int64
+	ProviderID         UsageProviderID
+	BillingProviderID  string
+	ModelID            string
+	MeasurementKind    UsageMeasurementKind
+	Tokens             UsageTokenMetrics
+	ProviderUsageJSON  string
+	ServiceTier        string
+	PricingVersion     string
+	SourceEventKey     string
+	EstimatedCostNanos *int64
 }
 
 // UsageCostUpdate carries one candidate's immutable compare-and-swap facts and
@@ -266,6 +311,7 @@ type LegacyUsageRepair struct {
 	BillingProviderID       string
 	BillingProviderSource   UsageBillingProviderSource
 	ProviderUsageJSON       string
+	ServiceTier             string
 	Costs                   UsageEventCosts
 }
 
@@ -352,40 +398,6 @@ type CompactSessionUsage struct {
 	ProcessedTokens *int64
 	Incomplete      bool
 	EstimatedCost   *EstimatedCost
-}
-
-// UsageMetricTotals is the aggregate metric block used by session, harness,
-// and model summaries.
-type UsageMetricTotals struct {
-	InputTokens         *int64
-	CachedInputTokens   *int64
-	UncachedInputTokens *int64
-	OutputTokens        *int64
-	ProcessedTokens     *int64
-	EstimatedCost       *EstimatedCost
-}
-
-// ModelUsageSummary is a per-model aggregate. The billing provider stays a
-// pricing input: every event was costed against its own provider's rates before
-// it reached this sum, so the total is exact without splitting the model apart.
-type ModelUsageSummary struct {
-	ModelID string
-	Totals  UsageMetricTotals
-}
-
-// HarnessUsageSummary groups model summaries by AO harness.
-type HarnessUsageSummary struct {
-	Harness AgentHarness
-	Totals  UsageMetricTotals
-	Models  []ModelUsageSummary
-}
-
-// SessionUsageSummary is the read model returned by the session usage service.
-type SessionUsageSummary struct {
-	SessionID  SessionID
-	Incomplete bool
-	Totals     UsageMetricTotals
-	Harnesses  []HarnessUsageSummary
 }
 
 // SourceCursorState is the durable source state to commit after parsing a

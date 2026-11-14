@@ -1,5 +1,7 @@
 package terminal
 
+import "encoding/json"
+
 // The wire protocol is a single multiplexed JSON stream tagged by channel
 // ("ch"), mirroring the legacy Node mux server so the existing xterm client can
 // connect unchanged. One socket carries every logical stream:
@@ -7,15 +9,22 @@ package terminal
 //	ch "terminal" — per-pane byte stream, keyed by an opaque runtime handle id
 //	ch "subscribe" — the client opts into the session-state channel
 //	ch "sessions"  — server-pushed session-state messages (CDC-fed)
+//	ch "shell-agents" — agents running in shell terminals; the client sends
+//	                    "subscribe", the server pushes "snapshot" frames
+//	ch "panes"     — split panes for agents: the desktop sends "subscribe",
+//	                 then "layout" frames as a session's tabs change and a
+//	                 "result" for each "command" frame the server pushes
 //	ch "system"    — liveness; ws-level ping/pong also runs underneath
 //
 // Terminal payloads are base64 in the Data field: PTY output is arbitrary bytes
 // and need not be valid UTF-8, which a raw JSON string could not carry.
 const (
-	chTerminal  = "terminal"
-	chSubscribe = "subscribe"
-	chSessions  = "sessions"
-	chSystem    = "system"
+	chTerminal    = "terminal"
+	chSubscribe   = "subscribe"
+	chSessions    = "sessions"
+	chShellAgents = "shell-agents"
+	chPanes       = "panes"
+	chSystem      = "system"
 )
 
 // client message types (ch "terminal" unless noted).
@@ -26,6 +35,8 @@ const (
 	msgClose     = "close"
 	msgSubscribe = "subscribe" // ch "subscribe"
 	msgPing      = "ping"      // ch "system"
+	msgLayout    = "layout"    // ch "panes"
+	msgResult    = "result"    // ch "panes"
 )
 
 // server message types.
@@ -35,6 +46,7 @@ const (
 	msgError    = "error"
 	msgSnapshot = "snapshot" // ch "sessions"
 	msgPong     = "pong"     // ch "system"
+	msgCommand  = "command"  // ch "panes"
 	// msgResize is reused as a SERVER frame too: the daemon pushes the shared
 	// PTY's authoritative grid (Cols/Rows) to every attached client so followers
 	// render the exact grid the PTY is using instead of their own fitted size.
@@ -65,6 +77,12 @@ type clientMsg struct {
 	// Role is the client's role for a terminal "open" (see roleSecondary). Empty
 	// means primary.
 	Role string `json:"role,omitempty"`
+	// SessionID and Layout are a ch "panes" / type "layout" report; a null
+	// Layout means the window no longer shows the session.
+	SessionID string          `json:"sessionId,omitempty"`
+	Layout    json.RawMessage `json:"layout,omitempty"`
+	// Result is a ch "panes" / type "result" answer to a command.
+	Result json.RawMessage `json:"result,omitempty"`
 }
 
 // serverMsg is one outbound frame.
@@ -80,6 +98,10 @@ type serverMsg struct {
 	Rows    uint16         `json:"rows,omitempty"`
 	Error   string         `json:"error,omitempty"`
 	Session *sessionUpdate `json:"session,omitempty"`
+	// Agents is the ch "shell-agents" snapshot, already JSON-encoded.
+	Agents json.RawMessage `json:"agents,omitempty"`
+	// Command is a ch "panes" request for the window, already JSON-encoded.
+	Command json.RawMessage `json:"command,omitempty"`
 
 	// raw holds a data frame's PTY output until the writer encodes it into
 	// Data, so consecutive queued output for one terminal can be merged.

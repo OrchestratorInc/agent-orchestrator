@@ -255,18 +255,26 @@ func TestFirstTaskStartupRetryAfterDaemonSIGKILL(t *testing.T) {
 	}
 	var retry struct {
 		spawned
-		Error json.RawMessage `json:"error"`
+		Error   json.RawMessage `json:"error"`
+		Code    string          `json:"code"`
+		Message string          `json:"message"`
 	}
 	// Workspace cleanup runs after the listener binds. An incomplete-key 409
-	// may briefly precede cleanup; retrying the same key must eventually succeed.
+	// may briefly precede cleanup. A 500 or 503 in that same window is the
+	// retry hitting the killed workspace before cleanup finishes. Retrying the
+	// same key must eventually succeed.
 	deadline = time.Now().Add(30 * time.Second)
 	for {
 		status, err := restarted.call("POST", "/sessions", req, &retry)
 		if err == nil && status == http.StatusCreated && retry.Session.ID != "" {
 			break
 		}
-		if err != nil || status != http.StatusConflict || time.Now().After(deadline) {
-			t.Fatalf("first-start retry did not create a session: status=%d err=%v apiError=%s session=%q", status, err, retry.Error, retry.Session.ID)
+		settling := status == http.StatusConflict ||
+			status == http.StatusInternalServerError ||
+			status == http.StatusServiceUnavailable
+		if err != nil || !settling || time.Now().After(deadline) {
+			t.Fatalf("first-start retry did not create a session: status=%d err=%v apiError=%s code=%s message=%s session=%q\n%s",
+				status, err, retry.Error, retry.Code, retry.Message, retry.Session.ID, restarted.tailLog())
 		}
 		time.Sleep(20 * time.Millisecond)
 	}

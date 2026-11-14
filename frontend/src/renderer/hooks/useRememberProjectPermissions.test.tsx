@@ -94,3 +94,13 @@ it("shows a mode changed elsewhere once the project refetches", async () => {
 	await act(async () => { await client.invalidateQueries({ queryKey: ["project", "project-one"] }); });
 	await waitFor(() => expect(result.current.savedMode).toBe("bypass-permissions"));
 });
+
+it("does not read a project for a Scratchpad session", async () => {
+	const client = new QueryClient();
+	const wrapper = ({ children }: { children: ReactNode }) =>
+		<QueryClientProvider client={client}>{children}</QueryClientProvider>;
+	const { result } = renderHook(() => useRememberProjectPermissions("__standalone__"), { wrapper });
+	await act(async () => {});
+	expect(get).not.toHaveBeenCalled();
+	expect(result.current.savedMode).toBeUndefined();
+});

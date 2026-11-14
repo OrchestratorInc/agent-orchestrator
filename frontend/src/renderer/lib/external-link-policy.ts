@@ -1,9 +1,20 @@
 import { aoBridge } from "./bridge";
+import { decodePath } from "./workspace-file-path";
 
 export function isWebLink(url: string): boolean {
 	try {
 		const { protocol } = new URL(url);
 		return protocol === "http:" || protocol === "https:";
+	} catch {
+		return false;
+	}
+}
+
+/** Schemes the renderer hands to the OS: web pages and mail, never file:, javascript: or app routes. */
+export function isSystemBrowserLink(url: string): boolean {
+	try {
+		const { protocol } = new URL(url);
+		return protocol === "http:" || protocol === "https:" || protocol === "mailto:";
 	} catch {
 		return false;
 	}
@@ -19,13 +30,9 @@ function decodedPath(url: string): string {
 			return "";
 		}
 	}
-	try {
-		path = decodeURIComponent(path);
-	} catch {
-		// Keep malformed percent escapes inert; the preview endpoint will reject
-		// anything it cannot resolve inside the session workspace.
-	}
-	return path.replace(/\\/g, "/");
+	// A malformed percent escape stays as written; the preview endpoint will
+	// reject anything it cannot resolve inside the session workspace.
+	return decodePath(path).replace(/\\/g, "/");
 }
 
 function hasParentTraversal(path: string): boolean {
@@ -69,10 +76,6 @@ export function isPotentialWorkspaceFileLink(url: string): boolean {
 	if (/^[a-z][a-z\d+.-]*:/i.test(path) && !/^[a-z]:\//i.test(path)) return false;
 
 	return path.includes("/") || /^\.[^/]+$/.test(path) || /\.[a-z\d][a-z\d._-]*$/i.test(path);
-}
-
-export function isWorkspaceHtmlLink(url: string, workspacePaths: string[]): boolean {
-	return /\.html?$/i.test(url.split(/[?#]/, 1)[0]) && isWorkspaceFileLink(url, workspacePaths);
 }
 
 export async function openLinkInSystemBrowser(url: string): Promise<void> {

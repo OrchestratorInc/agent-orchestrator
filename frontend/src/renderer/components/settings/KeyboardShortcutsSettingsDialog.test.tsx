@@ -25,6 +25,24 @@ describe("KeyboardShortcutsSettingsDialog", () => {
 		window.ao!.keybindings.setRecording = setRecording;
 		useKeybindingsStore.setState({ overrides: {}, loaded: true });
 	});
+	it("edits the selection shortcut, detects its conflicts, and restores the default", async () => {
+		const user = userEvent.setup();
+		renderDialog();
+		await user.click(screen.getByRole("button", { name: "Change Add selection to chat" }));
+		await waitFor(() => expect(setRecording).toHaveBeenCalledWith(true));
+		fireEvent.keyDown(window, { key: "j", code: "KeyJ", ctrlKey: true, shiftKey: true, altKey: true });
+		await waitFor(() => expect(persistBindings).toHaveBeenCalledWith({
+			"add-selection-to-chat": [{ key: "j", code: "KeyJ", ctrl: true, meta: false, shift: true, alt: true }],
+		}));
+		await user.click(screen.getByRole("button", { name: "More options for Add selection to chat" }));
+		await user.click(screen.getByRole("button", { name: "Reset Add selection to chat" }));
+		await waitFor(() => expect(useKeybindingsStore.getState().overrides).toEqual({}));
+		await user.click(screen.getByRole("button", { name: "Change New session" }));
+		fireEvent.keyDown(window, { key: "l", code: "KeyL", ctrlKey: true });
+		expect(await screen.findByRole("dialog", { name: "Shortcut already in use" })).toHaveTextContent("Add selection to chat");
+		await user.click(screen.getByRole("button", { name: "Reassign" }));
+		await waitFor(() => expect(useKeybindingsStore.getState().overrides["add-selection-to-chat"]).toEqual([]));
+	});
 
 	it("records an application-owned chord and makes Undo keyboard-accessible in the dialog", async () => {
 		const user = userEvent.setup();
@@ -35,8 +53,7 @@ describe("KeyboardShortcutsSettingsDialog", () => {
 
 		fireEvent.keyDown(window, { key: "j", code: "KeyJ", ctrlKey: true });
 
-		const toast = await screen.findByRole("status");
-		expect(toast).toHaveTextContent("Shortcut updated");
+		await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Shortcut updated"));
 		expect(useKeybindingsStore.getState().overrides["new-session"]).toEqual([
 			{ key: "j", ctrl: true, meta: false, shift: false, alt: false },
 		]);
@@ -82,7 +99,7 @@ describe("KeyboardShortcutsSettingsDialog", () => {
 		expect(persistBindings).not.toHaveBeenCalled();
 
 		fireEvent.keyDown(window, { key: "c", code: "KeyC", ctrlKey: true });
-		expect(await screen.findByRole("status")).toHaveTextContent("Shortcut is reserved");
+		expect(await screen.findByRole("alert")).toBeInTheDocument();
 		expect(screen.getByText(/Press shortcut/)).toBeInTheDocument();
 
 		fireEvent.blur(window);
@@ -101,6 +118,7 @@ describe("KeyboardShortcutsSettingsDialog", () => {
 		});
 		renderDialog();
 
+		await user.click(screen.getByRole("button", { name: "More options for Toggle terminal" }));
 		await user.click(screen.getByRole("button", { name: "Add alternative for Toggle terminal" }));
 		fireEvent.keyDown(window, { key: "k", code: "KeyK", altKey: true });
 		await waitFor(() => expect(useKeybindingsStore.getState().overrides["toggle-terminal"]).toHaveLength(2));
@@ -176,7 +194,7 @@ describe("KeyboardShortcutsSettingsDialog", () => {
 		const user = userEvent.setup();
 		renderDialog(true);
 
-		expect(screen.getByText("⌘N")).toBeInTheDocument();
+		expect(screen.getByRole("img", { name: "Command + N" })).toBeInTheDocument();
 		await user.click(screen.getByRole("button", { name: "Change Toggle terminal" }));
 		fireEvent.keyDown(window, { key: "j", code: "KeyJ", metaKey: true });
 

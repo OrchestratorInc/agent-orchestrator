@@ -1,5 +1,16 @@
 import { clsx, type ClassValue } from "clsx";
-import { twMerge } from "tailwind-merge";
+import { extendTailwindMerge } from "tailwind-merge";
+
+// The renderer's own font-size steps (styles.css @theme --text-*). Without
+// them tailwind-merge reads `text-caption` as a text colour and drops it, or
+// the colour, whenever both reach the same cn() call.
+const twMerge = extendTailwindMerge({
+	extend: {
+		theme: {
+			text: ["micro", "2xs", "caption", "sm-md", "md-sm", "control", "brand", "subtitle", "heading-sm", "heading", "heading-lg"],
+		},
+	},
+});
 
 export function cn(...inputs: ClassValue[]) {
 	return twMerge(clsx(inputs));

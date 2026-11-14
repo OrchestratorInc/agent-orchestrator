@@ -163,7 +163,7 @@ func TestNativeAuthDiagnosticsNeverExposeProviderOutput(t *testing.T) {
 		t.Run(tc.outcome, func(t *testing.T) {
 			fixtureNativeAuth(t, "stored", "zai/glm-test", tc.outcome)
 			status, identity, steps, err := New().AuthStatusWithDiagnostics(t.Context())
-			if err != nil || len(steps) != 1 || steps[0].Code != tc.code || identity.Provider != "zai" {
+			if err != nil || len(steps) != 1 || steps[0].Code != tc.code || steps[0].Method != "provider_validation" || identity.Provider != "zai" {
 				t.Fatalf("diagnostics = %s, %#v, %#v, %v", status, identity, steps, err)
 			}
 			safe, _ := json.Marshal(struct {
@@ -225,7 +225,7 @@ func TestNativeAuthCancellation(t *testing.T) {
 func TestNativeAuthWithoutSelectedModelHasActionableDiagnostic(t *testing.T) {
 	fixtureNativeAuth(t, "stored", "", "success")
 	status, _, steps, err := New().AuthStatusWithDiagnostics(t.Context())
-	if err != nil || status != ports.AgentAuthStatusConfigured || len(steps) != 1 || steps[0].Code != "mastra_model_unselected" || steps[0].NextStep == "" {
+	if err != nil || status != ports.AgentAuthStatusConfigured || len(steps) != 1 || steps[0].Code != "model_selection_unresolved" || steps[0].NextStep == "" {
 		t.Fatalf("no selected model = %s, %#v, %v", status, steps, err)
 	}
 }
@@ -248,7 +248,7 @@ func TestNativeAuthIgnoresModelEnvironmentReplacedByLaunch(t *testing.T) {
 	fixtureNativeAuth(t, "stored", "", "success")
 	t.Setenv("MASTRACODE_MODEL_ID", "zai/glm-test")
 	status, _, steps, err := New().AuthStatusWithDiagnostics(t.Context())
-	if err != nil || status != ports.AgentAuthStatusConfigured || len(steps) != 1 || steps[0].Code != "mastra_model_unselected" {
+	if err != nil || status != ports.AgentAuthStatusConfigured || len(steps) != 1 || steps[0].Code != "model_selection_unresolved" {
 		t.Fatalf("inherited model should not be probed = %s, %#v, %v", status, steps, err)
 	}
 }

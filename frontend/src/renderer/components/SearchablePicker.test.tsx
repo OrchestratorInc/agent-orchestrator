@@ -27,7 +27,7 @@ it("filters a long repository list and selects the matching private repository",
 	await user.type(screen.getByPlaceholderText("Search repositories"), "private");
 	expect(screen.queryByRole("option", { name: "acme/public" })).not.toBeInTheDocument();
 	const option = screen.getByRole("option", { name: "acme/private" });
-	expect(option.querySelector("svg.lucide-lock")).not.toBeNull();
+	expect(option.querySelector("svg.icon-lock")).not.toBeNull();
 	await user.click(option);
 	expect(screen.getByRole("combobox", { name: "Repository" })).toHaveTextContent("acme/private");
 });

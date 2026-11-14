@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { DashboardSession, PRReviewState, ReviewRun, SessionPRSummary, SessionReviews } from "./api";
-import { latestAutoReviewFailure, pullRequestSummaryForURL, reviewBatchAction, reviewerControls, reviewerDestination, reviewForPullRequest, reviewPrimaryAction, reviewPrimaryActionLabel, reviewRouteForSession, reviewRunMeta, reviewRunSendable, reviewStatusLabel, reviewStatusVisual, reviewVerdictLabel, sessionPRReadyForReview, shortCommit } from "./reviewView";
+import { latestAutoReviewFailure, previousRouteIsWorker, pullRequestSummaryForURL, reviewBatchAction, reviewerControls, reviewerDestination, reviewForPullRequest, reviewPrimaryAction, reviewPrimaryActionLabel, reviewRouteForSession, reviewRunMeta, reviewRunSendable, reviewStatusLabel, reviewStatusVisual, reviewVerdictLabel, sessionPRReadyForReview, shortCommit, workerRouteForSession } from "./reviewView";
 
 const run = (over: Partial<ReviewRun> = {}): ReviewRun => ({
 	id: "run-1", reviewId: "review-1", sessionId: "worker-1", batchId: "", harness: "codex",
@@ -15,6 +15,26 @@ const state = (over: Partial<PRReviewState> = {}): PRReviewState => ({
 });
 
 describe("mobile review presentation", () => {
+	it("opens the worker's chat on the PR's machine", () => {
+		expect(workerRouteForSession({ id: "worker-1", projectId: "repo" }, "host-a")).toEqual({
+			pathname: "/session/[id]",
+			params: { id: "worker-1", projectId: "repo", hostId: "host-a" },
+		});
+		expect(workerRouteForSession({ id: "worker-1", projectId: "repo" }).params).not.toHaveProperty("hostId");
+	});
+
+	it("goes back to the worker only when its own chat is directly under the PR page", () => {
+		const tabs = { name: "(tabs)" };
+		const chat = (id: string) => ({ name: "session/[id]", params: { id } });
+		const page = { name: "review/[sessionId]", params: { sessionId: "worker-1" } };
+
+		expect(previousRouteIsWorker([tabs, chat("worker-1"), page], 2, "worker-1")).toBe(true);
+		// From the PR tab, or from another worker's chat, the worker is opened instead.
+		expect(previousRouteIsWorker([tabs, page], 1, "worker-1")).toBe(false);
+		expect(previousRouteIsWorker([tabs, chat("worker-2"), page], 2, "worker-1")).toBe(false);
+		expect(previousRouteIsWorker([page], 0, "worker-1")).toBe(false);
+	});
+
 	it("offers the first open PR in a session and skips closed or merged PRs", () => {
 		const merged = { number: 10, url: "merged", state: "merged" };
 		const open = { number: 12, url: "open", state: "open" };

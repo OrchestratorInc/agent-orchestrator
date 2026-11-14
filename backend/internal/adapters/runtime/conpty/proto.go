@@ -11,8 +11,12 @@ import (
 )
 
 const (
-	conPTYHostProtocolVersion         = 2
+	conPTYHostProtocolVersion         = 4
 	conPTYStyledOutputProtocolVersion = 2
+	// Older hosts ignore MsgWatchForegroundReq and would stream raw output.
+	conPTYForegroundProtocolVersion = 3
+	// Older hosts ignore MsgWatchTitleReq and never report a title.
+	conPTYTitleProtocolVersion = 4
 )
 
 // Message type constants. Values must match pty-host.ts MSG_* constants exactly.
@@ -27,6 +31,10 @@ const (
 	MsgKillReq            byte = 0x08 // client -> host: empty
 	MsgGetStyledOutputReq byte = 0x09 // client -> host: JSON {lines}
 	MsgGetStyledOutputRes byte = 0x0a // host -> client: rendered UTF-8 text with ANSI styles
+	MsgWatchForegroundReq byte = 0x0b // client -> host: empty; turns the connection into a foreground watcher
+	MsgForegroundState    byte = 0x0c // host -> watcher: JSON ForegroundPayload, sent on change
+	MsgWatchTitleReq      byte = 0x0d // client -> host: empty; turns the connection into a title watcher
+	MsgTitleState         byte = 0x0e // host -> watcher: JSON TitlePayload, sent on change
 )
 
 // JSON payload structs shared with later tasks (kept minimal).
@@ -43,6 +51,23 @@ type StatusPayload struct {
 	PID             int  `json:"pid"`
 	ExitCode        *int `json:"exitCode,omitempty"`
 	ProtocolVersion int  `json:"protocolVersion,omitempty"`
+}
+
+// ForegroundPayload is the MsgForegroundState body: the foreground process
+// group, its leader's argv (capped), and whether it is drawing output.
+type ForegroundPayload struct {
+	PGID int      `json:"pgid"`
+	Argv []string `json:"argv,omitempty"`
+	Busy bool     `json:"busy"`
+	// EchoOnly marks a settled-screen update whose only new output was the
+	// echo of typed input. Hosts from before this field never set it.
+	EchoOnly bool `json:"echoOnly,omitempty"`
+}
+
+// TitlePayload is the MsgTitleState body: the normalized title the program last
+// set. Empty means it has set none, or reset the one it had.
+type TitlePayload struct {
+	Title string `json:"title"`
 }
 
 // GetOutputReq is the JSON body for MsgGetOutputReq.

@@ -1,0 +1,224 @@
+name: Sync contributor Project
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '*/15 * * * *'
+  pull_request:
+    paths:
+      - ".github/scripts/contributor-project/**"
+      - ".github/workflows/contributor-project.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Run contributor Project tests
+        working-directory: .github/scripts/contributor-project
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: python3 -m unittest discover -s tests -v
+
+  owners:
+    if: github.event_name != 'pull_request' && github.repository == 'OrchestratorInc/agent-orchestrator' && vars.AO_CONTRIBUTOR_PROJECT_URL != ''
+    permissions:
+      contents: read
+      pull-requests: read
+    concurrency:
+      group: ao-contributor-owners
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+    defaults:
+      run:
+        working-directory: .github/scripts/contributor-project
+    steps:
+      - name: Check out trusted automation
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.event.repository.default_branch || 'main' }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Get UTC owner cache date
+        id: date
+        run: echo "day=$(date -u +%F)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore daily owners
+        id: owners
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        continue-on-error: true
+        with:
+          path: .github/scripts/contributor-project/research/owners
+          key: contributor-owners-v3-${{ hashFiles('.github/scripts/contributor-project/data/*.json', '.github/scripts/contributor-project/scripts/*.py', '!.github/scripts/contributor-project/scripts/sync_project.py') }}-${{ steps.date.outputs.day }}
+          restore-keys: contributor-owners-v3-${{ hashFiles('.github/scripts/contributor-project/data/*.json', '.github/scripts/contributor-project/scripts/*.py', '!.github/scripts/contributor-project/scripts/sync_project.py') }}-
+
+      - name: Restore merged PR evidence
+        if: steps.owners.outputs.cache-hit != 'true'
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        continue-on-error: true
+        with:
+          path: |
+            .github/scripts/contributor-project/research/ownership-raw.json
+            .github/scripts/contributor-project/research/ownership-progress.json
+            .github/scripts/contributor-project/research/ownership-cache
+          key: contributor-evidence-v1-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: contributor-evidence-v1-
+
+      - name: Fingerprint restored PR evidence
+        id: evidence
+        if: steps.owners.outputs.cache-hit != 'true'
+        run: echo "restored=${{ hashFiles('.github/scripts/contributor-project/research/ownership-raw.json', '.github/scripts/contributor-project/research/ownership-progress.json', '.github/scripts/contributor-project/research/ownership-cache/**') }}" >> "$GITHUB_OUTPUT"
+
+      - name: Refresh merged PR evidence
+        id: extract
+        if: steps.owners.outputs.cache-hit != 'true'
+        continue-on-error: true
+        timeout-minutes: 15
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/ownership_extract.py
+
+      - name: Rebuild owners once per UTC day
+        id: owner-build
+        if: steps.extract.outcome == 'success'
+        continue-on-error: true
+        run: python3 scripts/build_owners.py
+
+      - name: Warn when owner build fails
+        if: always() && (steps.extract.outcome == 'failure' || steps.owner-build.outcome == 'failure')
+        run: echo '::warning::Owner build failed; sync keeps restored owners if available.'
+
+      # Save after a failed extraction only if it made progress, and after a successful one only once owners
+      # build or when no evidence was cached, so a persistently failing build does not save every 15 minutes.
+      - name: Save refreshed PR evidence
+        if: >-
+          always() && ((steps.extract.outcome == 'failure' &&
+          hashFiles('.github/scripts/contributor-project/research/ownership-raw.json', '.github/scripts/contributor-project/research/ownership-progress.json', '.github/scripts/contributor-project/research/ownership-cache/**') != steps.evidence.outputs.restored)
+          || (steps.extract.outcome == 'success' && (steps.owner-build.outcome == 'success' || steps.evidence.outputs.restored == '')))
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        continue-on-error: true
+        with:
+          path: |
+            .github/scripts/contributor-project/research/ownership-raw.json
+            .github/scripts/contributor-project/research/ownership-progress.json
+            .github/scripts/contributor-project/research/ownership-cache
+          key: contributor-evidence-v1-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Save today's successful owner build
+        if: always() && steps.owner-build.outcome == 'success' && steps.owners.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: .github/scripts/contributor-project/research/owners
+          key: contributor-owners-v3-${{ hashFiles('.github/scripts/contributor-project/data/*.json', '.github/scripts/contributor-project/scripts/*.py', '!.github/scripts/contributor-project/scripts/sync_project.py') }}-${{ steps.date.outputs.day }}
+
+  sync:
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+    concurrency:
+      group: ao-contributor-project
+      cancel-in-progress: false
+    if: github.event_name != 'pull_request' && github.repository == 'OrchestratorInc/agent-orchestrator' && vars.AO_CONTRIBUTOR_PROJECT_URL != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: .github/scripts/contributor-project
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      PROJECT_URL: ${{ vars.AO_CONTRIBUTOR_PROJECT_URL }}
+    steps:
+      - name: Check configuration
+        working-directory: .
+        env:
+          APP_CLIENT_ID: ${{ vars.AO_CONTRIBUTOR_APP_CLIENT_ID }}
+          APP_KEY: ${{ secrets.AO_CONTRIBUTOR_APP_PRIVATE_KEY }}
+        run: |
+          test -n "$APP_CLIENT_ID" || { echo "Set AO_CONTRIBUTOR_APP_CLIENT_ID."; exit 1; }
+          test -n "$APP_KEY" || { echo "Set AO_CONTRIBUTOR_APP_PRIVATE_KEY."; exit 1; }
+
+      - name: Check out trusted automation
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.event.repository.default_branch || 'main' }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Run Project sync tests
+        run: python3 -m unittest discover -s tests -v
+
+      - name: Get UTC owner cache date
+        id: date
+        run: echo "day=$(date -u +%F)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore daily owners
+        id: owners
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        continue-on-error: true
+        with:
+          path: .github/scripts/contributor-project/research/owners
+          key: contributor-owners-v3-${{ hashFiles('.github/scripts/contributor-project/data/*.json', '.github/scripts/contributor-project/scripts/*.py', '!.github/scripts/contributor-project/scripts/sync_project.py') }}-${{ steps.date.outputs.day }}
+          restore-keys: contributor-owners-v3-${{ hashFiles('.github/scripts/contributor-project/data/*.json', '.github/scripts/contributor-project/scripts/*.py', '!.github/scripts/contributor-project/scripts/sync_project.py') }}-
+
+      - name: Read open issues
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p research
+          gh api --paginate --slurp 'repos/OrchestratorInc/agent-orchestrator/issues?state=open&sort=created&direction=asc&per_page=100' > research/open-issues.json
+
+      - name: Create a Project-scoped installation token
+        id: project-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.AO_CONTRIBUTOR_APP_CLIENT_ID }}
+          private-key: ${{ secrets.AO_CONTRIBUTOR_APP_PRIVATE_KEY }}
+          owner: OrchestratorInc
+          repositories: agent-orchestrator
+          permission-organization-projects: write
+          permission-issues: read
+
+      - name: Sync issues and bot suggestions
+        env:
+          GH_TOKEN: ${{ steps.project-token.outputs.token }}
+        run: |
+          set +e
+          python3 scripts/sync_project.py \
+            --mapping-file data/issue-areas.json \
+            --owners-file research/owners/area-owners.json \
+            --issues-file research/open-issues.json \
+            --project-url "$PROJECT_URL" \
+            --max-writes 100 --write-interval 1 \
+            --apply > research/sync-summary.json
+          sync_exit_code=$?
+          set -e
+          cat research/sync-summary.json
+          if [ -s research/sync-summary.json ]; then
+            {
+              echo '### Contributor Project sync'
+              echo '```json'
+              cat research/sync-summary.json
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [ "$sync_exit_code" -eq 3 ]; then
+            echo '::warning::Project sync is incomplete; remaining items resume on the next scheduled run.'
+            exit 0
+          fi
+          if [ "$sync_exit_code" -eq 4 ]; then
+            echo '::error::Project sync deferred without writing anything; the backlog is not moving.'
+            exit 1
+          fi
+          exit "$sync_exit_code"

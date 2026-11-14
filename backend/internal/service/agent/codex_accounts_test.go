@@ -261,6 +261,7 @@ func newTestCodexAccountManager(t *testing.T, factory ports.CodexAccountClientFa
 		filepath.Join(root, "switch-staging"), filepath.Join(root, "device-home"),
 		factory, nil)
 	manager.snapshotRevision = 0
+	manager.resolveBinary = func(context.Context) (string, error) { return "/test/bin/codex", nil }
 	if state != nil {
 		if active, ok := state.testDeviceAccount(); ok && active.AccountID != "" {
 			manager.deviceAccountID = active.AccountID
@@ -372,7 +373,7 @@ func TestNativeLoginTerminalUsesOnePrivatePendingHomeAndNoName(t *testing.T) {
 		t.Fatalf("terminal opens = %d", len(terminal.opened))
 	}
 	opened := terminal.opened[0]
-	if !slices.Equal(opened.Argv, []string{"/Applications/AO.app/Contents/MacOS/ao", "codex-login"}) {
+	if !slices.Equal(opened.Argv, []string{"/Applications/AO.app/Contents/MacOS/ao", "codex-login", "--executable", "/test/bin/codex"}) {
 		t.Fatalf("argv = %#v", opened.Argv)
 	}
 	home := opened.Env["CODEX_HOME"]
@@ -2509,5 +2510,32 @@ func TestRecheckAfterExternalLoginFindsTheNewDeviceCredential(t *testing.T) {
 	authentication, ok := service.structuredCodexAuthentication(context.Background(), string(domain.HarnessCodex), domain.AgentReadinessPurposeDisplay)
 	if !ok || authentication.State != domain.AgentAuthenticationAuthorized {
 		t.Fatalf("authentication after login recheck = %#v (structured=%t)", authentication, ok)
+	}
+}
+
+func TestCustomModelProviderSkipsCodexAccountCheck(t *testing.T) {
+	root := t.TempDir()
+	globalHome := filepath.Join(root, "global-codex")
+	if err := ensurePrivateDirectory(globalHome); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CODEX_HOME", globalHome)
+	manager := newCodexAccountManager(context.Background(), filepath.Join(root, "accounts"), filepath.Join(root, "pending"), filepath.Join(root, "staging"), globalHome, nil, nil)
+	manager.accountStoreReady = true
+	manager.factory = &fakeCodexAccountFactory{capabilities: supportedCodexAccountCapabilities()}
+	service := &Service{codexAccounts: manager, readiness: newReadinessCoordinator(readinessCoordinatorConfig{})}
+	if err := manager.reconcileGlobal(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if auth, handled := service.authenticationWithAccount(context.Background(), string(domain.HarnessCodex), domain.AgentReadinessPurposeLaunch); !handled || auth.State != domain.AgentAuthenticationUnauthorized {
+		t.Fatalf("signed out with the OpenAI provider = %#v (handled=%t)", auth, handled)
+	}
+
+	config := "model_provider = \"litellm\"\n[model_providers.litellm]\nenv_key = \"LITELLM_API_KEY\"\n"
+	if err := os.WriteFile(filepath.Join(globalHome, "config.toml"), []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if auth, handled := service.authenticationWithAccount(context.Background(), string(domain.HarnessCodex), domain.AgentReadinessPurposeLaunch); handled {
+		t.Fatalf("custom provider was decided by the Codex account check: %#v", auth)
 	}
 }

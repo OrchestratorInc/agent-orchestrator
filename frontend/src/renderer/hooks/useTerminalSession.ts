@@ -21,13 +21,14 @@ import { LOCAL_ECHO_ENABLED, withLineBufferedLocalInput } from "../lib/terminal-
 import { createTerminalMux, muxUrlFromApiBase, type TerminalMux } from "../lib/terminal-mux";
 import { sessionIsActive, type WorkspaceSession } from "../types/workspace";
 import { workspaceQueryKeyForHost } from "./useWorkspaceQuery";
+import { shellTerminalsQueryKey } from "./useShellTerminals";
 import { recordDirectWorkerInteraction } from "../lib/session-management-telemetry";
 
 /**
  * The slice of xterm's Terminal the attachment needs. Structural, so tests can
  * drive the hook with a tiny fake instead of a real xterm + DOM.
  */
-export type TerminalUserInputSource = "keyboard" | "paste" | "composition" | "shortcut" | "wheel" | "protocol";
+export type TerminalUserInputSource = "keyboard" | "paste" | "composition" | "shortcut" | "wheel" | "mouse" | "hover" | "protocol";
 export type TerminalWriteSource = "live" | "replay";
 
 export type AttachableTerminal = {
@@ -270,7 +271,14 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 		// A standalone shell has no session row behind it, so its exit carries no
 		// news for the session board. Refetching every workspace on `exit` would
 		// be pure churn — the shell terminal list owns that pane's fate instead.
-		if (optionsRef.current.shellTerminalHandleId) return;
+		// The list drops a shell whose process has exited, so refetching it closes
+		// the tab (and collapses a split it was in), as closing a terminal app's
+		// tab on `exit` does.
+		if (optionsRef.current.shellTerminalHandleId) {
+			void queryClient.invalidateQueries({ queryKey: shellTerminalsQueryKey });
+			void queryClient.invalidateQueries({ queryKey: ["remote-shell-terminals"] });
+			return;
+		}
 		void queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(sessionRef.current?.hostId) });
 	}, [queryClient]);
 
@@ -772,7 +780,7 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 				// and its error text inspectable while disposing the failed socket;
 				// an explicit session restore can create a fresh attachment later.
 				teardownMux();
-				void captureRendererEvent("ao.renderer.terminal_attach_failed", { reason: "pane_error" });
+				void captureRendererEvent("ao.terminals.attach_failed", { reason: "pane_error" });
 				invalidateWorkspaces();
 			}),
 			mux.onConnectionChange((connectionState) => {
@@ -823,6 +831,14 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 			// flush the replay gate or reveal the tail (that was the theme-toggle jank).
 			if (optionsRef.current.inputDisabled || optionsRef.current.isVisible === false) {
 				return false;
+			}
+			// Pointer movement with no button held, reported to a program that
+			// tracks every mouse event. The program needs it, but it is not the user
+			// acting on the session: it must not end the replay gate or count as
+			// interaction.
+			if (source === "hover") {
+				mux.sendInput(handle, data);
+				return true;
 			}
 			// Input is accepted from `opened`, which lands before the replay — so a
 			// user can type while the gate still holds the burst, and their echo
@@ -908,7 +924,7 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 				// Only the first timeout of a reattach sequence is reported; the
 				// backoff loop retrying against a restarting daemon is not news.
 				if (r.attempts === 0) {
-					void captureRendererEvent("ao.renderer.terminal_attach_failed", { reason: "open_timeout" });
+					void captureRendererEvent("ao.terminals.attach_failed", { reason: "open_timeout" });
 				}
 				transition("reattaching");
 				teardownMux();

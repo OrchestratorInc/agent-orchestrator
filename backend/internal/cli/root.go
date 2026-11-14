@@ -14,6 +14,8 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/claudecode"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codex"
 	"github.com/aoagents/agent-orchestrator/backend/internal/daemon"
 	"github.com/aoagents/agent-orchestrator/backend/internal/datadirlock"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
@@ -28,6 +30,16 @@ func Execute() error {
 
 func executeWithDeps(deps Deps, args []string) error {
 	deps = deps.withDefaults()
+	// A configured self-hosted agent browser has its own command interface, so
+	// `ao browser` must reach it before Cobra parses desktop-only commands
+	// (AO also pins its own executable first on session PATHs, so a shell
+	// alias or wrapper cannot intercept it there).
+	if remote, rest, err := remoteBrowserForward(os.Getenv, args); remote != nil || err != nil {
+		if err != nil {
+			return err
+		}
+		return runRemoteBrowserCommand(context.Background(), deps, *remote, rest)
+	}
 	cmd := NewRootCommand(deps)
 	cmd.SetArgs(args)
 	err := cmd.Execute()
@@ -78,9 +90,10 @@ type Deps struct {
 	StartProcess          func(processStartConfig) error
 	ProcessAlive          func(pid int) bool
 	LookPath              func(file string) (string, error)
+	ResolveAgentBinary    func(context.Context, string) (string, error)
 	CommandOutput         func(ctx context.Context, name string, args ...string) ([]byte, error)
 	CommandOutputInDir    func(ctx context.Context, dir, name string, args ...string) ([]byte, error)
-	RunInteractiveCommand func(ctx context.Context, name string, args []string, stdin io.Reader, stdout, stderr io.Writer) error
+	RunInteractiveCommand func(ctx context.Context, name, dir string, args []string, stdin io.Reader, stdout, stderr io.Writer) error
 	ReadSecret            func(io.Reader) ([]byte, error)
 	// DoctorGitHubRESTBase lets tests point the doctor GitHub token probe at
 	// httptest without mutating package-global state.
@@ -111,6 +124,13 @@ func DefaultDeps() Deps {
 		DoctorGitLabRESTBase:  defaultDoctorGitLabRESTBase,
 		Now:                   time.Now,
 		Sleep:                 time.Sleep,
+
+		ResolveAgentBinary: func(ctx context.Context, name string) (string, error) {
+			if name == "claude" {
+				return claudecode.ResolveClaudeBinary(ctx)
+			}
+			return codex.ResolveCodexBinary(ctx)
+		},
 	}
 }
 
@@ -148,6 +168,9 @@ func (d Deps) withDefaults() Deps {
 		d.ProcessAlive = def.ProcessAlive
 	}
 	if d.LookPath == nil {
+		if d.ResolveAgentBinary == nil {
+			d.ResolveAgentBinary = def.ResolveAgentBinary
+		}
 		d.LookPath = def.LookPath
 	}
 	if d.CommandOutput == nil {
@@ -212,14 +235,19 @@ func NewRootCommand(deps Deps) *cobra.Command {
 	root.AddCommand(newStatusCommand(ctx))
 	root.AddCommand(newRemoteHostCommand(ctx))
 	root.AddCommand(newDoctorCommand(ctx))
+	root.AddCommand(newTriageCommand(ctx))
 	root.AddCommand(newAgentCommand(ctx))
+	root.AddCommand(newAccountCommand(ctx))
 	root.AddCommand(newSpawnCommand(ctx))
 	root.AddCommand(newSendCommand(ctx))
 	root.AddCommand(newReportCommand(ctx))
+	root.AddCommand(newArtifactCommand(ctx))
 	root.AddCommand(newPreviewCommand(ctx))
+	root.AddCommand(newPaneCommand(ctx))
 	root.AddCommand(newRenderCommand(ctx))
 	root.AddCommand(newMCPCommand(ctx))
 	root.AddCommand(newBrowserCommand(ctx))
+	root.AddCommand(newBrowserHostCommand())
 	root.AddCommand(newHooksCommand(ctx))
 	root.AddCommand(newAgentProcessCommand(ctx))
 	root.AddCommand(newChatHostCommand())
@@ -237,6 +265,7 @@ func NewRootCommand(deps Deps) *cobra.Command {
 	root.AddCommand(newReviewCommand(ctx))
 	root.AddCommand(newAutomationCommand(ctx))
 	root.AddCommand(newCueCommand(ctx))
+	root.AddCommand(newSearchCommand(ctx))
 	root.AddCommand(newCompletionCommand())
 	root.AddCommand(newVersionCommand())
 
@@ -255,9 +284,9 @@ func shouldEmitCLIInvocation(cmd *cobra.Command) bool {
 	switch commandPath {
 	// "ao daemon"/"ao start" are supervisor-driven bootstrapping, and
 	// "ao completion"/"ao help" are shell setup and self-documentation.
-	// "ao pty-host", "ao agent-process", and "ao mcp" are internal runtime
+	// "ao pty-host", "ao browser-host", "ao agent-process", and "ao mcp" are internal runtime
 	// processes. None reflect user activity.
-	case "ao daemon", "ao start", "ao completion", "ao help", "ao pty-host", "ao chat-host", "ao unreal-provider", "ao codex-login", "ao claude-login", "ao agent-process", "ao agent-process supervise", "ao mcp":
+	case "ao triage", "ao daemon", "ao start", "ao completion", "ao help", "ao pty-host", "ao chat-host", "ao browser-host", "ao unreal-provider", "ao codex-login", "ao claude-login", "ao agent-process", "ao agent-process supervise", "ao mcp":
 		return false
 	default:
 		return true
@@ -352,7 +381,7 @@ func atMostOneArg(cmd *cobra.Command, args []string) error {
 func newDaemonCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:    "daemon",
-		Short:  "Run the AO backend daemon",
+		Short:  "Run the Orchestrator backend daemon",
 		Hidden: true,
 		Args:   noArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {

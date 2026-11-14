@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
@@ -49,7 +50,12 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 func (p *Plugin) AuthStatusWithDiagnostics(ctx context.Context) (ports.AgentAuthStatus, domain.AgentAccountIdentity, []domain.AgentAuthDiagnostic, error) {
 	started := time.Now()
 	finish := func(status ports.AgentAuthStatus, code, provider string, httpStatus int, err error) (ports.AgentAuthStatus, domain.AgentAccountIdentity, []domain.AgentAuthDiagnostic, error) {
-		step := domain.NewAgentAuthDiagnostic("Mastra native SDK provider check", code)
+		// Use the shared diagnostic vocabulary so Settings reports a configured
+		// but unconfirmed provider as unverified rather than signed in.
+		step := domain.NewAgentAuthDiagnostic("provider_validation", code)
+		if code == "mastra_model_unselected" {
+			step = domain.NewAgentAuthDiagnostic("model_selection", "model_selection_unresolved")
+		}
 		step.DurationMs = time.Since(started).Milliseconds()
 		step.Provider, step.HTTPStatus = provider, httpStatus
 		switch code {
@@ -90,7 +96,7 @@ func (p *Plugin) AuthStatusWithDiagnostics(ctx context.Context) (ports.AgentAuth
 	probeCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	cmd := aoprocess.CommandContext(probeCtx, node, "--input-type=module", "-e", nativeAuthProbe, "--", binary, profile)
-	cmd.Env = append(os.Environ(), "MASTRA_APP_DATA_DIR="+profile)
+	cmd.Env = append(authprobe.Environ(ctx, os.Environ()), "MASTRA_APP_DATA_DIR="+profile)
 	output := &authProbeOutput{}
 	cmd.Stdout, cmd.Stderr = output, io.Discard
 	err = cmd.Run()
