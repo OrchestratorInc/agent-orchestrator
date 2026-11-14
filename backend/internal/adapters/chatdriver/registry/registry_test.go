@@ -47,8 +47,7 @@ func TestShippedChatDrivers(t *testing.T) {
 	}
 
 	// Every other harness stays TUI-only, and asking for chat must be refused with a
-	// typed answer rather than quietly producing a terminal session. MiniMax Code
-	// has an ACP binding, but Chat admission stays gated until it is qualified.
+	// typed answer rather than quietly producing a terminal session.
 	for _, harness := range []domain.AgentHarness{
 		domain.HarnessAider,
 		domain.HarnessMiniMaxCode,

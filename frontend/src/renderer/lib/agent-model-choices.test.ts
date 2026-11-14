@@ -6,7 +6,6 @@ import {
 	filterDisabledModels,
 	foldClaudeAliasDefault,
 	mergeSameNamedModels,
-	miniMaxChoiceModelID,
 	offeredCatalogModels,
 	splitClaudeModels,
 	withoutLocalAvailability,
@@ -143,31 +142,6 @@ describe("filterDisabledModels", () => {
 	it("matches entries through modelID", () => {
 		const aliases = [{ id: "opus" }, { id: "sonnet" }];
 		expect(filterDisabledModels(aliases, ["claude-opus-5-5"], [], (item) => `claude-${item.id}-5-5`).models).toEqual([{ id: "sonnet" }]);
-	});
-});
-
-describe("miniMaxChoiceModelID", () => {
-	it("maps a native ACP selection to its provider/model catalog id", () => {
-		expect(miniMaxChoiceModelID("m:custom_provider%3Aao:native-other:v:")).toBe("custom_provider:ao/native-other");
-		expect(miniMaxChoiceModelID("m:minimax:MiniMax-M2%2E5:v:high")).toBe("minimax/MiniMax-M2.5");
-		expect(miniMaxChoiceModelID("m:minimax:MiniMax-M2:u")).toBe("minimax/MiniMax-M2");
-	});
-
-	it("leaves catalog ids and malformed values as they are", () => {
-		for (const value of ["custom_provider:ao/native-other", "m::model:u", "m:p:m:x", "m:p:%E0:u"]) {
-			expect(miniMaxChoiceModelID(value)).toBe(value);
-		}
-	});
-
-	it("hides a Settings-disabled model while keeping the current native choice and its raw value", () => {
-		const choices = [
-			{ id: "m:custom_provider%3Aao:native-test:v:" },
-			{ id: "m:custom_provider%3Aao:native-other:v:" },
-			{ id: "m:custom_provider%3Aao:native-other:v:high" },
-		];
-		const disabled = ["custom_provider:ao/native-other", "custom_provider:ao/native-test"];
-		const offered = filterDisabledModels(choices, disabled, ["m:custom_provider%3Aao:native-test:v:"], (choice) => miniMaxChoiceModelID(choice.id));
-		expect(offered).toEqual({ models: [{ id: "m:custom_provider%3Aao:native-test:v:" }], narrowed: true });
 	});
 });
 

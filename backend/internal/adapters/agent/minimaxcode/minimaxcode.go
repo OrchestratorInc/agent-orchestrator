@@ -176,8 +176,8 @@ var runVersionProbe = func(ctx context.Context, binary string) ([]byte, error) {
 	return aoprocess.CommandContext(ctx, binary, "--version").Output()
 }
 
-// minimumVersion is the oldest MiniMax release whose native history, hooks and
-// ACP surface AO was qualified against. The official installers always install
+// minimumVersion is the oldest MiniMax release whose native history and hooks
+// AO was qualified against. The official installers always install
 // npm latest, so newer releases are accepted.
 const minimumVersion = "0.6.5"
 

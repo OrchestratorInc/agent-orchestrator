@@ -19,10 +19,6 @@ import (
 const maxHistoryManifestBytes = 1 << 20
 
 func validateNativeHistory(ctx context.Context, profile, id, workspace string) error {
-	return validateNativeHistoryAllowEmpty(ctx, profile, id, workspace, false)
-}
-
-func validateNativeHistoryAllowEmpty(ctx context.Context, profile, id, workspace string, allowEmpty bool) error {
 	dbPath := filepath.Join(profile, "v2", "sqlite", "runtime-state.sqlite")
 	info, err := os.Lstat(dbPath)
 	if err != nil {
@@ -99,7 +95,7 @@ func validateNativeHistoryAllowEmpty(ctx context.Context, profile, id, workspace
 	}
 	messages := filepath.Join(history, "messages.jsonl")
 	st, err := os.Lstat(messages)
-	if err != nil || !st.Mode().IsRegular() || (!allowEmpty && st.Size() == 0) || st.Size() > 128<<20 {
+	if err != nil || !st.Mode().IsRegular() || st.Size() == 0 || st.Size() > 128<<20 {
 		return errors.New("native conversation history is missing or outside supported bounds")
 	}
 	f, err := os.Open(messages)

@@ -83,10 +83,6 @@ func New(drivers ...ports.ChatDriver) *Registry {
 // packages a second provider CLI.
 // Unreal Agent is compiled into AO and runs behind the same detached host seam.
 //
-// MiniMax Code has an ACP binding (minimaxacp) that is deliberately not
-// registered here: it stays TUI-only until its native Chat qualification is
-// complete.
-//
 // Every other harness stays TUI-only until the same is true of it. The driver
 // reuses the harness's existing agent plugin for binary resolution and auth, so
 // registration adds no second answer to "is this agent installed and logged in".

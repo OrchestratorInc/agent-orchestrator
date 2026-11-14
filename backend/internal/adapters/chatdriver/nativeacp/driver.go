@@ -49,9 +49,6 @@ type Config struct {
 	SessionMode       func(ports.PermissionMode) string
 	SessionOptions    func(ports.ChatTurnSettings) []acpdriver.SessionOption
 	PromptFailureCode func(error) domain.ConversationFailureCode
-	// ResolveSessionOption maps a selection using the live provider catalog.
-	// See acpdriver.Config.ResolveSessionOption.
-	ResolveSessionOption func(acpdriver.SessionOption, []ports.ChatConfigOption) (acpdriver.SessionOption, error)
 	// LaunchSessionOptions, RequireAdvertisedOptions, and
 	// CloseSessionBeforeReload: see acpdriver.Config.
 	LaunchSessionOptions     func(acpdriver.LaunchConfig) []acpdriver.SessionOption
@@ -90,8 +87,6 @@ type Config struct {
 	DecodeProviderConversationID func(string) (string, error)
 	// VersionProbe optionally gates admission on a minimum binary version.
 	VersionProbe VersionProbe
-	// AfterInterrupt verifies native quiescence before the interrupted turn settles.
-	AfterInterrupt func(context.Context, acpdriver.AgentRequest, string) error
 	// QuickStop: see acpdriver.Config.QuickStop.
 	QuickStop bool
 }
@@ -179,12 +174,10 @@ func buildConfig(plugin Plugin, cfg Config, log *slog.Logger) acpdriver.Config {
 		SessionMode:                  cfg.SessionMode,
 		SessionOptions:               cfg.SessionOptions,
 		PromptFailureCode:            cfg.PromptFailureCode,
-		ResolveSessionOption:         cfg.ResolveSessionOption,
 		LaunchSessionOptions:         cfg.LaunchSessionOptions,
 		RequireAdvertisedOptions:     cfg.RequireAdvertisedOptions,
 		CloseSessionBeforeReload:     cfg.CloseSessionBeforeReload,
 		ValidateInitialize:           cfg.ValidateInitialize,
-		AfterInterrupt:               cfg.AfterInterrupt,
 		SessionMeta:                  cfg.SessionMeta,
 		SessionPreamble:              cfg.SessionPreamble,
 		ResetsConversation:           cfg.ResetsConversation,

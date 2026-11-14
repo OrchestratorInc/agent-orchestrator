@@ -64,8 +64,7 @@ type legacyModelInfo struct {
 }
 
 type legacyACPResponse struct {
-	result json.RawMessage
-	err    error
+	err error
 }
 
 func newLegacyACPTransport(stdin io.WriteCloser) (*legacyACPTransport, io.WriteCloser, io.Reader) {
@@ -152,7 +151,7 @@ func (t *legacyACPTransport) intercept(line []byte, notification func(string, js
 			if envelope.Error != nil {
 				responseErr = envelope.Error
 			}
-			pending <- legacyACPResponse{result: envelope.Result, err: responseErr}
+			pending <- legacyACPResponse{err: responseErr}
 		}
 		return true
 	}
@@ -194,15 +193,6 @@ func (t *legacyACPTransport) setModel(ctx context.Context, sessionID, modelID st
 // lacks ACP's underscore extension prefix, and waits for its error or success.
 // The result body is not read.
 func (t *legacyACPTransport) call(ctx context.Context, method string, params any) error {
-	_, err := t.request(ctx, method, params)
-	return err
-}
-
-// request is call for a method whose result body the caller reads.
-func (t *legacyACPTransport) request(ctx context.Context, method string, params any) (json.RawMessage, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
 	requestID := fmt.Sprintf("ao-legacy-%d", t.nextID.Add(1))
 	response := make(chan legacyACPResponse, 1)
 	t.mu.Lock()
@@ -222,15 +212,15 @@ func (t *legacyACPTransport) request(ctx context.Context, method string, params 
 	}
 	if err != nil {
 		t.removePending(requestID)
-		return nil, err
+		return err
 	}
 
 	select {
 	case result := <-response:
-		return result.result, result.err
+		return result.err
 	case <-ctx.Done():
 		t.removePending(requestID)
-		return nil, ctx.Err()
+		return ctx.Err()
 	}
 }
 

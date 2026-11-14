@@ -25,58 +25,46 @@ func writeRefreshFixture(t *testing.T, path, content string) {
 }
 
 func TestProfileRefreshPreservesPrivateAuthWhenSourceAuthIsMissing(t *testing.T) {
-	for _, mode := range []string{"tui", "chat"} {
-		t.Run(mode, func(t *testing.T) {
-			source, data := t.TempDir(), t.TempDir()
-			writeRefreshFixture(t, filepath.Join(source, "config.yaml"), "defaultModel: p/original\n")
-			writeRefreshFixture(t, filepath.Join(source, "auth", "token"), "working-token")
-			plugin := New()
-			env := map[string]string{"MINIMAX_DATA_DIR": source}
-			var profile string
-			prepare := func() error {
-				if mode == "chat" {
-					path, err := plugin.PrepareChatProfile(context.Background(), data, "refresh-1", env)
-					if err == nil {
-						profile = path
-					}
-					return err
-				}
-				profile, _ = profilePath(data, "refresh-1")
-				return plugin.GetAgentHooks(context.Background(), ports.WorkspaceHookConfig{
-					DataDir: data, SessionID: "refresh-1", Env: env,
-					Config: ports.AgentConfig{Permissions: ports.PermissionModeAuto},
-				})
-			}
-			if err := prepare(); err != nil {
-				t.Fatal(err)
-			}
-			writeRefreshFixture(t, filepath.Join(profile, "v2", "history-proof"), "native-history")
-			if err := os.Remove(filepath.Join(source, "auth", "token")); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.Remove(filepath.Join(source, "auth")); err != nil {
-				t.Fatal(err)
-			}
-			writeRefreshFixture(t, filepath.Join(source, "config.yaml"), "defaultModel: p/replacement\n")
-			if err := prepare(); err != nil {
-				t.Fatalf("missing source auth prevented profile reuse: %v", err)
-			}
-			config, err := os.ReadFile(filepath.Join(profile, "config.yaml"))
-			if err != nil || !strings.Contains(string(config), "defaultModel: p/replacement") {
-				t.Fatalf("config-only provider settings were not refreshed: %q, %v", config, err)
-			}
-			if mode == "tui" && !strings.Contains(string(config), "permissionMode: auto") {
-				t.Fatalf("config refresh lost AO permission selection: %s", config)
-			}
-			for name, want := range map[string]string{
-				"auth/token": "working-token", "v2/history-proof": "native-history",
-			} {
-				got, err := os.ReadFile(filepath.Join(profile, name))
-				if err != nil || string(got) != want {
-					t.Fatalf("missing source auth changed %s: %q, %v", name, got, err)
-				}
-			}
+	source, data := t.TempDir(), t.TempDir()
+	writeRefreshFixture(t, filepath.Join(source, "config.yaml"), "defaultModel: p/original\n")
+	writeRefreshFixture(t, filepath.Join(source, "auth", "token"), "working-token")
+	plugin := New()
+	env := map[string]string{"MINIMAX_DATA_DIR": source}
+	profile, _ := profilePath(data, "refresh-1")
+	prepare := func() error {
+		return plugin.GetAgentHooks(context.Background(), ports.WorkspaceHookConfig{
+			DataDir: data, SessionID: "refresh-1", Env: env,
+			Config: ports.AgentConfig{Permissions: ports.PermissionModeAuto},
 		})
+	}
+	if err := prepare(); err != nil {
+		t.Fatal(err)
+	}
+	writeRefreshFixture(t, filepath.Join(profile, "v2", "history-proof"), "native-history")
+	if err := os.Remove(filepath.Join(source, "auth", "token")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(source, "auth")); err != nil {
+		t.Fatal(err)
+	}
+	writeRefreshFixture(t, filepath.Join(source, "config.yaml"), "defaultModel: p/replacement\n")
+	if err := prepare(); err != nil {
+		t.Fatalf("missing source auth prevented profile reuse: %v", err)
+	}
+	config, err := os.ReadFile(filepath.Join(profile, "config.yaml"))
+	if err != nil || !strings.Contains(string(config), "defaultModel: p/replacement") {
+		t.Fatalf("config-only provider settings were not refreshed: %q, %v", config, err)
+	}
+	if !strings.Contains(string(config), "permissionMode: auto") {
+		t.Fatalf("config refresh lost AO permission selection: %s", config)
+	}
+	for name, want := range map[string]string{
+		"auth/token": "working-token", "v2/history-proof": "native-history",
+	} {
+		got, err := os.ReadFile(filepath.Join(profile, name))
+		if err != nil || string(got) != want {
+			t.Fatalf("missing source auth changed %s: %q, %v", name, got, err)
+		}
 	}
 }
 
@@ -251,45 +239,32 @@ func TestTUIProfileKeepsGlobalPermissionPolicy(t *testing.T) {
 // With auth state for both Global and China accounts, the saved region is what
 // keeps MiniMax on the signed-in namespace.
 func TestProfilesKeepAndRefreshNativeRegion(t *testing.T) {
-	for _, mode := range []string{"tui", "chat"} {
-		t.Run(mode, func(t *testing.T) {
-			source, data := t.TempDir(), t.TempDir()
-			writeRefreshFixture(t, filepath.Join(source, "auth", "prod", "en", "mcode-public", "auth-state.json"), `{"status":"authenticated"}`)
-			writeRefreshFixture(t, filepath.Join(source, "auth", "prod", "cn", "mcode-public", "auth-state.json"), `{"status":"expired"}`)
-			region := filepath.Join(source, "preferences", "mcode-region.json")
-			writeRefreshFixture(t, region, `{"prod":"en"}`)
-			plugin := New()
-			env := map[string]string{"MINIMAX_DATA_DIR": source}
-			var profile string
-			prepare := func() {
-				t.Helper()
-				if mode == "chat" {
-					path, err := plugin.PrepareChatProfile(context.Background(), data, "region-1", env)
-					if err != nil {
-						t.Fatal(err)
-					}
-					profile = path
-					return
-				}
-				profile, _ = profilePath(data, "region-1")
-				if err := plugin.GetAgentHooks(context.Background(), ports.WorkspaceHookConfig{DataDir: data, SessionID: "region-1", Env: env}); err != nil {
-					t.Fatal(err)
-				}
-			}
-			assertRegion := func(want string) {
-				t.Helper()
-				got, err := os.ReadFile(filepath.Join(profile, "preferences", "mcode-region.json"))
-				if err != nil || string(got) != want {
-					t.Fatalf("private region = %q, %v; want %q", got, err, want)
-				}
-			}
-			prepare()
-			assertRegion(`{"prod":"en"}`)
-			writeRefreshFixture(t, region, `{"prod":"cn"}`)
-			prepare()
-			assertRegion(`{"prod":"cn"}`)
-		})
+	source, data := t.TempDir(), t.TempDir()
+	writeRefreshFixture(t, filepath.Join(source, "auth", "prod", "en", "mcode-public", "auth-state.json"), `{"status":"authenticated"}`)
+	writeRefreshFixture(t, filepath.Join(source, "auth", "prod", "cn", "mcode-public", "auth-state.json"), `{"status":"expired"}`)
+	region := filepath.Join(source, "preferences", "mcode-region.json")
+	writeRefreshFixture(t, region, `{"prod":"en"}`)
+	plugin := New()
+	env := map[string]string{"MINIMAX_DATA_DIR": source}
+	profile, _ := profilePath(data, "region-1")
+	prepare := func() {
+		t.Helper()
+		if err := plugin.GetAgentHooks(context.Background(), ports.WorkspaceHookConfig{DataDir: data, SessionID: "region-1", Env: env}); err != nil {
+			t.Fatal(err)
+		}
 	}
+	assertRegion := func(want string) {
+		t.Helper()
+		got, err := os.ReadFile(filepath.Join(profile, "preferences", "mcode-region.json"))
+		if err != nil || string(got) != want {
+			t.Fatalf("private region = %q, %v; want %q", got, err, want)
+		}
+	}
+	prepare()
+	assertRegion(`{"prod":"en"}`)
+	writeRefreshFixture(t, region, `{"prod":"cn"}`)
+	prepare()
+	assertRegion(`{"prod":"cn"}`)
 }
 
 // The official installer's launcher runs a private Node by absolute path, so

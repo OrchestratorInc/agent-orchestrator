@@ -130,14 +130,9 @@ type conversation struct {
 	sessionLost bool
 	modeFor     func(ports.PermissionMode) string
 	optionsFor  func(ports.ChatTurnSettings) []SessionOption
-
-	// Cancel provider settlement when shutdown or detach closes this attachment.
-	interruptSettlementCancel context.CancelFunc
-
 	// requireAdvertised refuses a config option the session did not advertise
 	// instead of sending it. See Config.RequireAdvertisedOptions.
 	requireAdvertised bool
-	resolveOption     func(SessionOption, []ports.ChatConfigOption) (SessionOption, error)
 	permissionMode    ports.PermissionMode
 	permissionFor     PermissionPolicy
 	initialPermission ports.PermissionMode
@@ -174,9 +169,6 @@ type conversation struct {
 	// daemon attachment (live reconnect). The host passes its answers on as
 	// private notifications, and only the host's result ends the turn.
 	adoptedPrompt bool
-	// adoptedResultTurn is the adopted turn whose host result an AfterInterrupt
-	// driver is already settling, so a replay of that result is ignored.
-	adoptedResultTurn string
 	// turnResult is the host's result for the running turn, the answer that
 	// carries its receipt, once one of the turn's prompts has returned it.
 	turnResult *promptAnswer
@@ -218,7 +210,6 @@ type conversation struct {
 	// sessionPromptResponseFailure is promptResponseFailure given the session.
 	sessionPromptResponseFailure func(string, acpsdk.PromptResponse, bool) error
 	hibernationCheck             func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId) (bool, error)
-	afterInterrupt               func(context.Context, AgentRequest, string) error
 	historyNotice                func(string) bool
 	// promptErrorFailure: see Config.PromptErrorFailure.
 	promptErrorFailure func(error, bool) error
@@ -784,19 +775,7 @@ func (c *conversation) setSessionOption(ctx context.Context, sessionID string, o
 	}
 	c.mu.Lock()
 	requireAdvertised := c.requireAdvertised
-	resolver := c.resolveOption
-	var catalog []ports.ChatConfigOption
-	if resolver != nil {
-		catalog = cloneConfigOptions(c.configOptions)
-	}
 	c.mu.Unlock()
-	if resolver != nil {
-		resolved, err := resolver(option, catalog)
-		if err != nil {
-			return fmt.Errorf("resolve ACP session option %q: %w", option.ID, err)
-		}
-		option = resolved
-	}
 	if requireAdvertised {
 		// An agent that acknowledges an option it never offered may simply drop
 		// it, which would leave the user believing a choice took effect.
@@ -950,15 +929,6 @@ func (c *conversation) finishPrompt(
 	resp acpsdk.PromptResponse,
 	err error,
 ) {
-	c.finishPromptContext(context.Background(), turnID, resp, err)
-}
-
-func (c *conversation) finishPromptContext(
-	ctx context.Context,
-	turnID string,
-	resp acpsdk.PromptResponse,
-	err error,
-) {
 	eventID := hostResultEventID(resp, err)
 	// A transport error may win the race with watchConnection. The host still
 	// owns this prompt; its journal, not an SDK disconnect, supplies the outcome.
@@ -966,7 +936,7 @@ func (c *conversation) finishPromptContext(
 		return
 	}
 	c.mu.Lock()
-	if c.detaching || (c.closed && c.afterInterrupt != nil) {
+	if c.detaching {
 		c.mu.Unlock()
 		return
 	}
@@ -982,9 +952,7 @@ func (c *conversation) finishPromptContext(
 		turnModel = c.turnModel
 	}
 	c.mu.Unlock()
-	if c.afterInterrupt == nil {
-		c.settleOpenItems(turnID)
-	}
+	c.settleOpenItems(turnID)
 	interruptedLocally := false
 	if interrupt != nil && interrupt.turnID == turnID {
 		// ACP cancellation and Prompt completion can race. Wait for the sender's
@@ -1056,43 +1024,6 @@ func (c *conversation) finishPromptContext(
 				TotalsKnown: true,
 			}})
 		}
-	}
-	// A cancelled request context can come from shutdown, without a native
-	// cancellation receipt. Fence only an accepted local stop or native result;
-	// the latter also covers replay after the interrupt attempt was lost.
-	nativeInterrupted := err == nil && resp.StopReason == acpsdk.StopReasonCancelled
-	if (nativeInterrupted || interruptedLocally) && c.afterInterrupt != nil {
-		c.mu.Lock()
-		if c.closed || c.detaching {
-			c.mu.Unlock()
-			return
-		}
-		sessionID := c.sessionID
-		settleCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		c.interruptSettlementCancel = cancel
-		c.mu.Unlock()
-		fenceErr := c.afterInterrupt(settleCtx, c.legacyWire.request, sessionID)
-		cancel()
-		c.mu.Lock()
-		c.interruptSettlementCancel = nil
-		closing := c.closed || c.detaching
-		c.mu.Unlock()
-		if closing {
-			return // Shutdown owns teardown; do not report a recovery failure.
-		}
-		if fenceErr != nil {
-			// Do not commit/ACK the native terminal receipt or release activeTurn.
-			// A replacement daemon must replay it and verify the fence again.
-			c.emit(ports.ChatEvent{Kind: ports.ChatEventControllerState,
-				ControllerState: ports.ChatControllerStopped,
-				Err:             fmt.Errorf("%w: ACP interrupt settlement: %w", ports.ErrChatRecoveryInconclusive, fenceErr)})
-			return
-		}
-	}
-	if c.afterInterrupt != nil {
-		// The reader has consumed any native updates preceding the stop reply.
-		// Settle items only after that provider-owned quiescence boundary.
-		c.settleOpenItems(turnID)
 	}
 	var usageLimitResetsAt time.Time
 	if turnErr != nil && domain.ParseConversationUsageLimit(turnErr.Error(), nil) != nil {
@@ -1522,12 +1453,8 @@ func (c *conversation) closeProvider(terminate, closeSession bool) error {
 		persistent := c.proc.terminate != nil
 		c.detaching = persistent && !terminate
 		cancel := c.turnCancel
-		settlementCancel := c.interruptSettlementCancel
 		sessionID := c.sessionID
 		c.mu.Unlock()
-		if settlementCancel != nil {
-			settlementCancel()
-		}
 		if persistent && !terminate {
 			closeErr = c.proc.stop()
 			return

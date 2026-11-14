@@ -57,9 +57,7 @@ type LaunchConfig struct {
 
 // Config binds one harness to an ACP agent implementation.
 type Config struct {
-	Harness domain.AgentHarness
-	// Explicit false prompt capabilities stay disabled even when advertised by
-	// the native agent. Absent entries are discovered during initialization.
+	Harness      domain.AgentHarness
 	Capabilities ports.ChatCapabilities
 	Probe        func(context.Context) error
 	// InstallCheck optionally reports a missing chat adapter without starting
@@ -125,12 +123,6 @@ type Config struct {
 	ImplicitWorkspaceDirectories bool
 	// SessionOptions maps AO's per-turn choices onto ACP config option ids.
 	SessionOptions func(ports.ChatTurnSettings) []SessionOption
-	// ResolveSessionOption optionally maps a provider-neutral selection against
-	// a snapshot of the live advertised catalog before sending it. Bindings use
-	// this when an initial model ID omits provider-owned variants. The result
-	// still passes RequireAdvertisedOptions; resolution never grants a choice
-	// the provider did not offer. Nil preserves the existing wire value.
-	ResolveSessionOption func(SessionOption, []ports.ChatConfigOption) (SessionOption, error)
 	// LaunchSessionOptions returns config options whose value is fixed for the
 	// whole session and known only from the launch, such as a persona the agent
 	// lets AO select by id but not by launch flag. They are set once after
@@ -202,10 +194,6 @@ type Config struct {
 	// into its own transcript. Replay starts no turn for it, so the agent's
 	// output after it stays in the turn before, as it did live.
 	HistoryNotice func(string) bool
-	// AfterInterrupt verifies provider quiescence before committing an interrupted
-	// turn or announcing Ready. A failed check preserves the host receipt for
-	// recovery rather than allowing another prompt. The callback must honor ctx.
-	AfterInterrupt func(context.Context, AgentRequest, string) error
 	// HistoryUserChunkIsMessage makes each id-less replayed user chunk its own
 	// prompt, for an agent that replays a user message as one chunk (pi-acp).
 	HistoryUserChunkIsMessage bool
@@ -236,10 +224,6 @@ type Config struct {
 	// and Vertex chains AO cannot inspect at all. Optional.
 	OnAuthRejected func()
 }
-
-// AgentRequest calls a provider-owned JSON-RPC method, including legacy extension
-// names without the underscore required by the SDK. It never resends prompts.
-type AgentRequest func(context.Context, string, any) (json.RawMessage, error)
 
 // TurnSettingsValidator validates live turn settings against launch-time state.
 type TurnSettingsValidator func(ports.PermissionMode, ports.ChatTurnSettings) error
@@ -935,14 +919,12 @@ func (d *Driver) initialize(
 	conv.sessionPromptResponseFailure = d.cfg.SessionPromptResponseFailure
 	conv.promptErrorFailure = d.cfg.PromptErrorFailure
 	conv.hibernationCheck = d.cfg.CanHibernate
-	conv.afterInterrupt = d.cfg.AfterInterrupt
 	conv.decodeConversationID = d.cfg.DecodeProviderConversationID
 	conv.historyNotice = d.cfg.HistoryNotice
 	conv.historyUserChunkIsMessage = d.cfg.HistoryUserChunkIsMessage
 	conv.historyReconciler = d.cfg.HistoryReconciler
 	conv.plansSpanTurns = d.cfg.PlansSpanTurns
 	conv.requireAdvertised = d.cfg.RequireAdvertisedOptions
-	conv.resolveOption = d.cfg.ResolveSessionOption
 	if d.cfg.ServedModel != nil {
 		servedModel := d.cfg.ServedModel
 		conv.servedModel = func(ctx context.Context, sessionID, selectedModel string) (string, string) {
@@ -1161,13 +1143,11 @@ func conversationCapabilities(
 	caps[ports.ChatCapabilityFork] = false // ACP has no turn-anchored fork in the pinned SDK.
 	caps[ports.ChatCapabilityForkCurrent] = init.AgentCapabilities.SessionCapabilities.Fork != nil &&
 		supportsSessionRestore(init)
-	// A driver's explicit false withholds a capability even when the agent
-	// advertises it.
-	if negotiatedPromptCapability(configured, ports.ChatCapabilitySteer, steer.supported(init)) {
+	if steer.supported(init) {
 		caps[ports.ChatCapabilitySteer] = true
 	}
-	caps[ports.ChatCapabilityImages] = negotiatedPromptCapability(configured, ports.ChatCapabilityImages, init.AgentCapabilities.PromptCapabilities.Image)
-	caps[ports.ChatCapabilityEmbeddedContext] = negotiatedPromptCapability(configured, ports.ChatCapabilityEmbeddedContext, init.AgentCapabilities.PromptCapabilities.EmbeddedContext)
+	caps[ports.ChatCapabilityImages] = init.AgentCapabilities.PromptCapabilities.Image
+	caps[ports.ChatCapabilityEmbeddedContext] = init.AgentCapabilities.PromptCapabilities.EmbeddedContext
 	// ResourceLink is a baseline ACP content block rather than an optional prompt
 	// capability. Every ACP conversation preserves it natively.
 	caps[ports.ChatCapabilityResourceLinks] = true
@@ -1177,11 +1157,6 @@ func conversationCapabilities(
 	caps[ports.ChatCapabilityNestedAgents] = true
 	caps[ports.ChatCapabilityTerminalOutput] = true
 	return caps
-}
-
-func negotiatedPromptCapability(configured ports.ChatCapabilities, capability ports.ChatCapability, advertised bool) bool {
-	enabled, explicit := configured[capability]
-	return advertised && (!explicit || enabled)
 }
 
 func supportsSessionRestore(init acpsdk.InitializeResponse) bool {

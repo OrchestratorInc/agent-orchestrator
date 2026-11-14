@@ -464,28 +464,17 @@ func (p *Plugin) CleanupWorkspace(ctx context.Context, cfg ports.WorkspaceHookCo
 	if err != nil {
 		return err
 	}
-	profiles := []struct {
-		path, marker string
-	}{
-		{path, profileMarker},
-		{filepath.Join(cfg.DataDir, "agents", adapterID, "chat", cfg.SessionID), chatProfileMarker},
+	b, err := os.ReadFile(filepath.Join(path, ".ao-managed"))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
 	}
-	for _, profile := range profiles {
-		b, err := os.ReadFile(filepath.Join(profile.path, ".ao-managed"))
-		if errors.Is(err, os.ErrNotExist) {
-			continue
-		}
-		if err != nil {
-			return err
-		}
-		if string(b) != profile.marker {
-			return errors.New("refusing to remove non-AO MiniMax profile")
-		}
-		if err := os.RemoveAll(profile.path); err != nil {
-			return err
-		}
+	if err != nil {
+		return err
 	}
-	return nil
+	if string(b) != profileMarker {
+		return errors.New("refusing to remove non-AO MiniMax profile")
+	}
+	return os.RemoveAll(path)
 }
 
 // PrepareRuntimeLaunch captures only AO's hook routing fields after the runtime

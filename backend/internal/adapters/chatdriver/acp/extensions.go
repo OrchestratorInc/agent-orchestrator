@@ -126,20 +126,6 @@ func (c *conversation) HandleExtensionMethod(
 		if ignore {
 			c.ignorePromptResult = false
 		}
-		settleAsync := c.afterInterrupt != nil
-		if !ignore && turnID != "" && settleAsync {
-			// finishTurnPrompt reads a settling turn as already over, so an
-			// adopted turn's result claims its own marker instead.
-			claim := &c.settlingTurn
-			if adopted {
-				claim = &c.adoptedResultTurn
-			}
-			if *claim == turnID {
-				c.mu.Unlock()
-				return nil, nil // This attachment already owns the replayed receipt.
-			}
-			*claim = turnID
-		}
 		c.mu.Unlock()
 		if ignore {
 			return nil, nil
@@ -147,25 +133,12 @@ func (c *conversation) HandleExtensionMethod(
 		if turnID == "" {
 			return nil, errors.New("persistent ACP prompt result has no durable active turn")
 		}
-		// The synchronous replay reader must remain free to receive the
-		// provider settlement RPC's reply. activeTurn stays fenced until
-		// this single worker verifies settlement and commits the receipt.
 		if adopted {
 			// A steer prompt this attachment sent may still be answering.
-			if settleAsync {
-				go c.finishTurnPrompt(turnID, adoptedPromptSeq, response, promptErr)
-			} else {
-				c.finishTurnPrompt(turnID, adoptedPromptSeq, response, promptErr)
-			}
+			c.finishTurnPrompt(turnID, adoptedPromptSeq, response, promptErr)
 			return nil, nil
 		}
-		if settleAsync {
-			// The notification's request lifetime ends on return; keep its
-			// values while the bounded durable settlement finishes independently.
-			go c.finishPromptContext(context.WithoutCancel(ctx), turnID, response, promptErr)
-		} else {
-			c.finishPrompt(turnID, response, promptErr)
-		}
+		c.finishPrompt(turnID, response, promptErr)
 		return nil, nil
 	}
 	original, configured := c.extensionMethods[method]
