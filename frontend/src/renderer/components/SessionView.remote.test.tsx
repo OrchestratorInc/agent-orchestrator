@@ -26,7 +26,7 @@ vi.mock("@tanstack/react-router", async (importOriginal) => ({
 }));
 vi.mock("../hooks/useCloudCp", () => ({ useCloudCp: () => ({ ready: false, baseUrl: "", client: {} }) }));
 vi.mock("../hooks/useCloudOrg", () => ({ useCloudOrg: () => ({ org: undefined, ready: false }) }));
-vi.mock("../lib/shell-context", () => ({ useShell: () => ({ daemonStatus: { state: "ready" } }) }));
+vi.mock("../lib/shell-context", async (importOriginal) => ({ ...await importOriginal<typeof import("../lib/shell-context")>(), useShell: () => ({ daemonStatus: { state: "ready" } }) }));
 vi.mock("./SessionTopbarActions", () => ({ SessionTopbarActions: () => <div data-testid="shared-shell-topbar" /> }));
 vi.mock("./NotificationCenter", () => ({ NotificationCenter: () => <button aria-label="Notifications" type="button" /> }));
 vi.mock("./TerminalPane", () => ({ TerminalPane: ({ session, terminalTarget, inputDisabled, createMux }: { session?: { hostId?: string; terminalHandleId?: string }; terminalTarget?: { kind: string; handleId?: string }; inputDisabled?: boolean; createMux?: () => unknown }) => <div data-testid="remote-terminal-base" data-host-id={session?.hostId ?? ""} data-terminal-handle={terminalTarget?.handleId ?? session?.terminalHandleId ?? ""} data-input-disabled={inputDisabled ? "true" : "false"} data-remote-mux={createMux ? "true" : "false"}>{session?.hostId ? baseUrlForHost(session.hostId) : "local"}</div> }));
@@ -41,6 +41,7 @@ import { SessionView } from "./SessionView";
 import { SessionTopbarProvider } from "./SessionTopbarPortal";
 import { PageTopbarSurface } from "./PageTopbar";
 import { TooltipProvider } from "./ui/tooltip";
+import { ShellProvider, type ShellContextValue } from "../lib/shell-context";
 
 function renderRemoteSession(queryClient: QueryClient, hostId = "box-a") {
 	return render(<QueryClientProvider client={queryClient}>
@@ -239,6 +240,34 @@ it("hides the stale stopped-agent banner while the host is away and brings it ba
 	expect(screen.queryByRole("button", { name: "Open shell" })).not.toBeInTheDocument();
 	await act(async () => { await connectHost("http://box-a:3001"); });
 	expect(await screen.findByRole("button", { name: "Open shell" })).toBeInTheDocument();
+});
+
+it("shows the host as offline above the chat while it is away, with Retry", async () => {
+	localGet.mockReset();
+	localPost.mockReset();
+	remoteConnect.mockResolvedValue({ hostId: "box-a", label: "Box A", url: "http://box-a:3001", base: "http://127.0.0.1:4000" });
+	vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+		const request = input instanceof Request ? input : new Request(input);
+		const path = new URL(request.url).pathname;
+		if (path.endsWith("/projects")) return Response.json({ projects: [{ id: "project-1", name: "Remote", path: "/remote" }] });
+		if (path.endsWith("/sessions")) return Response.json({ sessions: [{ id: "session-1", projectId: "project-1", harness: "codex", status: "working", mode: "chat", prs: [] }] });
+		if (path.endsWith("/conversation")) return Response.json(conversationBody({ messages: [{ id: "saved", role: "assistant", text: "Saved answer", sequence: 1 }] }));
+		return Response.json({});
+	}));
+	await connectHost("http://box-a:3001");
+	const retryRemoteHosts = vi.fn();
+	const shell = { remoteHosts: [{ hostId: "box-a", label: "Box A", url: "http://box-a:3001", status: "offline" }], retryRemoteHosts } as unknown as ShellContextValue;
+	render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+		<ShellProvider value={shell}><TooltipProvider><SessionTopbarProvider><PageTopbarSurface notifications><SessionView hostId="box-a" sessionId="session-1" /></PageTopbarSurface></SessionTopbarProvider></TooltipProvider></ShellProvider>
+	</QueryClientProvider>);
+	expect(await screen.findByText("Saved answer")).toBeInTheDocument();
+	expect(screen.queryByTestId("host-offline")).not.toBeInTheDocument();
+	await act(async () => { await disconnectHost("box-a"); });
+	expect(await screen.findByTestId("host-offline")).toHaveTextContent("Offline");
+	await userEvent.click(screen.getByRole("button", { name: "Retry Box A" }));
+	expect(retryRemoteHosts).toHaveBeenCalledOnce();
+	await act(async () => { await connectHost("http://box-a:3001"); });
+	await waitFor(() => expect(screen.queryByTestId("host-offline")).not.toBeInTheDocument());
 });
 
 it("locks the last saved chat when the upstream daemon fails but its proxy remains connected", async () => {
@@ -842,6 +871,39 @@ it("retries reviewer Chat on Box B with the same delivery ID", async () => {
 	expect(queryClient.getQueryData(reviewerConversationQueryKey("review-1", "box-b"))).toBeDefined();
 	expect(localGet).not.toHaveBeenCalled();
 	expect(localPost).not.toHaveBeenCalled();
+});
+
+it("does not read reviewer models while the host is away", async () => {
+	HTMLElement.prototype.scrollTo = vi.fn();
+	localGet.mockReset();
+	localPost.mockReset();
+	remoteConnect.mockResolvedValue({ hostId: "box-a", label: "Box A", url: "http://box-a:3001", base: "http://127.0.0.1:4000" });
+	vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+		const request = input instanceof Request ? input : new Request(input);
+		const path = new URL(request.url).pathname;
+		if (path.endsWith("/projects")) return Response.json({ projects: [{ id: "project-1", name: "Todo", path: "/remote" }] });
+		if (path.endsWith("/sessions")) return Response.json({ sessions: [{ id: "session-1", projectId: "project-1", harness: "codex", status: "working", mode: "chat", prs: [{ url: "https://github.com/acme/todo/pull/7", number: 7, state: "open", ci: "passing", review: "none", mergeability: "mergeable", reviewComments: false, updatedAt: "2026-09-28T00:00:00Z" }] }] });
+		if (path.endsWith("/sessions/session-1/reviews")) return Response.json({ reviewerHandleId: "", reviewerSurface: { mode: "chat", reviewId: "review-1", harness: "codex" }, reviews: [], runs: [] });
+		if (path.endsWith("/reviews/review-1/conversation")) return Response.json(conversationBody({ sessionId: "review-1", messages: [{ id: "msg-review", role: "assistant", text: "Review ready", sequence: 1 }] }));
+		if (path.endsWith("/reviews/review-1/conversation/models")) return Response.json({ models: [{ id: "gpt-5", displayName: "GPT-5", efforts: ["high"] }] });
+		if (path.endsWith("/sessions/session-1/conversation")) return Response.json(conversationBody());
+		return Response.json({});
+	}));
+	await connectHost("http://box-a:3001");
+	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	renderRemoteSession(queryClient);
+	await userEvent.click(await screen.findByRole("tab", { name: "Reviewer" }));
+	expect(await screen.findByText("Review ready")).toBeInTheDocument();
+	const modelsKey = [...reviewerConversationQueryKey("review-1", "box-a"), "models"];
+	await waitFor(() => expect(queryClient.getQueryData(modelsKey)).toBeDefined());
+	await act(async () => { await disconnectHost("box-a"); });
+	expect(await screen.findByTestId("host-offline")).toBeInTheDocument();
+	// The cached catalog going stale (or the tab opening again) reads it once more.
+	await act(async () => {
+		await queryClient.refetchQueries({ queryKey: modelsKey });
+		await new Promise((resolve) => setTimeout(resolve, 20));
+	});
+	expect(screen.queryByText(/is not connected/)).not.toBeInTheDocument();
 });
 
 it("opens the returned reviewer Chat when a remote review is triggered", async () => {

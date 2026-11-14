@@ -83,7 +83,17 @@ it.each([
 	const dispatched = vi.spyOn(window, "dispatchEvent");
 	const { result } = renderHook(() => useWorkspaceSession("session-1", hostId), { wrapper });
 	await waitFor(() => expect(result.current.isError).toBe(true));
-	expect(dispatched.mock.calls.some(([event]) => event.type === "ao:remote-hosts-changed")).toBe(shouldRecheck);
+	expect(dispatched.mock.calls.some(([event]) => event.type === "ao:remote-host-check" && (event as CustomEvent<string>).detail === hostId)).toBe(shouldRecheck);
+});
+
+it("rechecks a connected host when a remote read gets no answer", async () => {
+	remoteConnect.mockResolvedValue({ hostId: "box-silent", label: "Box", url: "http://box:3001", base: "http://127.0.0.1:4000" });
+	vi.stubGlobal("fetch", vi.fn(async () => { throw new TypeError("fetch failed"); }));
+	await connectHost("http://box:3001");
+	const dispatched = vi.spyOn(window, "dispatchEvent");
+	const { result } = renderHook(() => useRemoteWorkspaces(), { wrapper });
+	await waitFor(() => expect(result.current.failedHostIds).toEqual(["box-silent"]), { timeout: 3000 });
+	expect(dispatched.mock.calls.some(([event]) => event.type === "ao:remote-host-check" && (event as CustomEvent<string>).detail === "box-silent")).toBe(true);
 });
 
 it("coalesces simultaneous and repeated remote request failures into one host recheck", async () => {
@@ -94,13 +104,13 @@ it("coalesces simultaneous and repeated remote request failures into one host re
 	const dispatched = vi.spyOn(window, "dispatchEvent");
 	const { result } = renderHook(() => useRemoteWorkspaces(), { wrapper });
 	await waitFor(() => expect(result.current.failedHostIds).toEqual(["box-gate"]), { timeout: 3000 });
-	const refreshCount = () => dispatched.mock.calls.filter(([event]) => event.type === "ao:remote-hosts-changed").length;
-	expect(refreshCount()).toBe(1);
+	const checkCount = () => dispatched.mock.calls.filter(([event]) => event.type === "ao:remote-host-check").length;
+	expect(checkCount()).toBe(1);
 	await act(async () => { await result.current.refetch(); });
-	expect(refreshCount()).toBe(1);
-	now.mockReturnValue(1_015_000);
+	expect(checkCount()).toBe(1);
+	now.mockReturnValue(1_002_000);
 	await act(async () => { await result.current.refetch(); });
-	expect(refreshCount()).toBe(2);
+	expect(checkCount()).toBe(2);
 });
 
 it("keeps a host's registered projects visible when its sessions request fails", async () => {

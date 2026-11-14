@@ -9,7 +9,7 @@ import {
 	largestSession,
 	type ChipTone,
 } from "@aoagents/product-ui";
-import { AlertTriangle, Archive, RotateCw, WifiOff } from "@/components/app-icons";
+import { AlertTriangle, Archive, RotateCw } from "@/components/app-icons";
 import {
 	CLOUD_PROJECT_KIND,
 	isScratchpadWorkspace,
@@ -37,9 +37,7 @@ import { useCloudOffering } from "../hooks/useCloudOffering";
 import { FREESTYLE_PROVIDER, projectSandboxProvider } from "../lib/cloud-offering";
 import { BoardWelcome, ProjectBoardEmpty } from "./BoardEmptyStates";
 import { ProjectImportOffer } from "./ProjectImportOffer";
-import { noDragStyle, PageTopbar, PageTopbarTitle } from "./PageTopbar";
-import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
-import { formatTimeCompact } from "../lib/format-time";
+import { PageTopbar, PageTopbarTitle } from "./PageTopbar";
 import { restartProjectOrchestrator } from "../lib/restart-orchestrator";
 import { usesPreviewWorkspaceData } from "../lib/preview-mode";
 import { demoBoardSessions } from "../lib/demo-board-sessions";
@@ -49,7 +47,7 @@ import { useBoardPresentation } from "../hooks/useBoardPresentation";
 import { useProjectOrchestratorAction } from "../hooks/useProjectOrchestratorAction";
 import { openRemoteOrchestrator } from "../lib/remote-orchestrator";
 import { labelForHost } from "../lib/host-clients";
-import type { RemoteHost } from "../hooks/useRemoteHosts";
+import { HostOfflineStatus, hostOfflineReasonKey } from "./HostOfflineStatus";
 import { cn } from "../lib/utils";
 import { useConnectedHosts } from "../hooks/useHostConnection";
 import { LOCAL_HOST, refKey, sessionUiKey } from "../lib/hosts";
@@ -387,40 +385,6 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 				</div>
 			) : null}
 			{showStartup ? <DaemonStartupLoader /> : null}
-		</div>
-	);
-}
-
-function hostOfflineReasonKey(host: RemoteHost | undefined) {
-	return host?.failureReason === "unauthorized" ? "remote.hostUnauthorized" as const
-		: host?.failureReason === "incompatible" ? "remote.hostIncompatible" as const
-		: "remote.hostOffline" as const;
-}
-
-function HostOfflineStatus({ host, label, updatedAt }: { host: RemoteHost | undefined; label: string; updatedAt?: number }) {
-	const { t } = useTranslation();
-	const shell = useShellMaybe();
-	const action = host?.status === "connecting"
-		? <Button type="button" size="sm" variant="secondary" disabled>{t("terminal.connecting")}</Button>
-		: host?.failureReason === "unauthorized"
-			? <Button type="button" size="sm" variant="secondary" onClick={() => useUiStore.getState().openGlobalSettings("remoteHosts", { preserveProject: true })}>{t("remote.editHost", { label })}</Button>
-			: <Button type="button" size="sm" variant="secondary" aria-label={t("remote.retryHost", { label })} disabled={!shell?.retryRemoteHosts} onClick={() => shell?.retryRemoteHosts?.()}>
-				<RotateCw className="size-3.5" aria-hidden="true" />
-				{t("remote.retry")}
-			</Button>;
-	return (
-		<div className="flex min-w-0 items-center gap-2 text-xs" data-testid="board-host-offline" role="status" style={noDragStyle}>
-			<Tooltip>
-				<TooltipTrigger asChild>
-					<span className="inline-flex shrink-0 items-center gap-1.5 text-warning" tabIndex={0}>
-						<WifiOff className="size-icon-sm" aria-hidden="true" />
-						{t("remote.offline")}
-					</span>
-				</TooltipTrigger>
-				<TooltipContent className="max-w-72">{t(hostOfflineReasonKey(host))}{updatedAt ? ` ${t("remote.offlineCopy")}` : ""}</TooltipContent>
-			</Tooltip>
-			{updatedAt ? <span className="truncate text-muted-foreground">· {t("shell.updatedAt", { time: formatTimeCompact(new Date(updatedAt).toISOString()) })}</span> : null}
-			{action}
 		</div>
 	);
 }
