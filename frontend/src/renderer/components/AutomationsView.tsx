@@ -43,11 +43,8 @@ import {
 } from "../lib/agent-select-options";
 import {
 	buildRRuleFromSchedule,
-	clampHourDraft,
-	clampMinuteDraft,
 	clampMonthDayDraft,
 	describeSchedule,
-	formatTimeDraft,
 	nowLocalHHMM,
 	parseHourMinute,
 	parseTimeValue,
@@ -80,6 +77,7 @@ import {
 	type CloudAutomation,
 } from "../hooks/useCloudAutomations";
 import { useCloudOffering } from "../hooks/useCloudOffering";
+import { useProviderConnections } from "../hooks/useProviderConnections";
 import {
 	centeredOnboardingDialogClass,
 	onboardingAlertErrorClass,
@@ -183,6 +181,11 @@ export function AutomationsView() {
 	const remove = useDeleteAutomation();
 	const cloud = useCloudAutomations();
 	const chatHarnesses = useCloudOffering().chatHarnesses;
+	const providerConnections = useProviderConnections().data;
+	const connectedCloudHarnesses = useMemo(
+		() => providerConnections?.filter((connection) => connection.validationState === "valid").map((connection) => connection.provider),
+		[providerConnections],
+	);
 	const createCloud = useCreateCloudAutomation();
 	const updateCloud = useUpdateCloudAutomation();
 	const removeCloud = useDeleteCloudAutomation();
@@ -337,7 +340,7 @@ export function AutomationsView() {
 				</ScrollArea.Scrollbar>
 			</main>
 			</ScrollArea.Root>
-			<AutomationFormDialog initialTemplateId={starter} open={createOpen} workspaces={workspaces} harnesses={harnesses} cloudOrgId={cloud.available ? cloud.orgId : undefined} cloudHarnesses={chatHarnesses} busy={create.isPending || createCloud.isPending} error={create.error?.message ?? cloudAutomationErrorMessage(createCloud.error, t)} onOpenChange={(open) => { setCreateOpen(open); if (!open) createCloud.reset(); }} onSubmit={async ({ runsOn, ...input }) => {
+			<AutomationFormDialog initialTemplateId={starter} open={createOpen} workspaces={workspaces} harnesses={harnesses} cloudOrgId={cloud.available ? cloud.orgId : undefined} cloudHarnesses={chatHarnesses} connectedCloudHarnesses={connectedCloudHarnesses} busy={create.isPending || createCloud.isPending} error={create.error?.message ?? cloudAutomationErrorMessage(createCloud.error, t)} onOpenChange={(open) => { setCreateOpen(open); if (!open) createCloud.reset(); }} onSubmit={async ({ runsOn, ...input }) => {
 				if (runsOn === "cloud") {
 					// A cloud run is unattended: trusted mode, the default time limit.
 					await createCloud.mutateAsync({ projectId: input.projectId!, displayName: input.displayName, prompt: input.prompt, harness: input.harness as CloudAutomation["harness"], timezone: input.timezone!, rrule: input.rrule, mode: "trusted", maxRuntimeMinutes: 60, enabled: true });
@@ -347,7 +350,7 @@ export function AutomationsView() {
 				setCreateOpen(false);
 			}} />
 			<AutomationFormDialog open={Boolean(editTarget)} automation={editTarget ?? undefined} workspaces={workspaces} harnesses={harnesses} busy={update.isPending} error={update.error?.message ?? null} onOpenChange={(open) => { if (!open) setEditTarget(null); }} onSubmit={async ({ runsOn: _runsOn, ...input }) => { if (!editTarget) return; await update.mutateAsync({ id: editTarget.id, body: input }); setEditTarget(null); }} />
-			<AutomationFormDialog open={Boolean(cloudEditTarget)} cloudAutomation={cloudEditTarget ?? undefined} cloudOrgId={cloud.orgId} cloudHarnesses={chatHarnesses} workspaces={workspaces} harnesses={harnesses} busy={updateCloud.isPending} error={cloudAutomationErrorMessage(updateCloud.error, t)} onOpenChange={(open) => { if (!open) { setCloudEditTarget(null); updateCloud.reset(); } }} onSubmit={async (input) => {
+			<AutomationFormDialog open={Boolean(cloudEditTarget)} cloudAutomation={cloudEditTarget ?? undefined} cloudOrgId={cloud.orgId} cloudHarnesses={chatHarnesses} connectedCloudHarnesses={connectedCloudHarnesses} workspaces={workspaces} harnesses={harnesses} busy={updateCloud.isPending} error={cloudAutomationErrorMessage(updateCloud.error, t)} onOpenChange={(open) => { if (!open) { setCloudEditTarget(null); updateCloud.reset(); } }} onSubmit={async (input) => {
 				if (!cloudEditTarget) return;
 				await updateCloud.mutateAsync({ id: cloudEditTarget.id, body: { displayName: input.displayName, prompt: input.prompt, ...(input.harness ? { harness: input.harness as CloudAutomation["harness"] } : {}), ...(input.rrule ? { rrule: input.rrule } : {}) } });
 				setCloudEditTarget(null);
@@ -591,6 +594,8 @@ type AutomationFormDialogProps = {
 	cloudOrgId?: string;
 	/** Harnesses AO Cloud runs in Chat (`/me` chatHarnesses). */
 	cloudHarnesses?: string[];
+	/** Harnesses the user has a valid AO Cloud login for; unset while loading. */
+	connectedCloudHarnesses?: string[];
 	workspaces: WorkspaceOption[];
 	harnesses: AgentReadinessSnapshot[];
 	busy: boolean;
@@ -606,7 +611,8 @@ const AUTOMATION_FIELD_IDS: Record<AutomationField, string> = {
 	projectId: "automation-project",
 	name: "automation-name",
 	prompt: "automation-prompt",
-	time: "automation-time",
+	// Daily and weekly times are picked with the hour and minute fields.
+	time: "automation-hour",
 	hour: "automation-hour",
 	minute: "automation-minute",
 	monthDay: "automation-month-day",
@@ -619,6 +625,7 @@ function AutomationFormDialog({
 	cloudAutomation,
 	cloudOrgId,
 	cloudHarnesses,
+	connectedCloudHarnesses,
 	workspaces,
 	harnesses,
 	busy,
@@ -718,6 +725,8 @@ function AutomationFormDialog({
 	}
 	const cloudHarnessOptions = CLOUD_AUTOMATION_HARNESSES
 		.filter((id) => !cloudHarnesses?.length || cloudHarnesses.includes(id))
+		// A run uses the login of the person it runs as, so offer only harnesses logged in to AO Cloud.
+		.filter((id) => !connectedCloudHarnesses || connectedCloudHarnesses.includes(id) || id === cloudAutomation?.harness)
 		.map((id) => ({ value: id, label: harnesses.find((agent) => agent.id === id)?.label ?? id }));
 	const cloudHarness = cloudHarnessOptions.some((option) => option.value === harness) ? harness : cloudHarnessOptions[0]?.value ?? "";
 	// Prefer an explicit choice, then the project's resolved worker, then the
@@ -915,7 +924,9 @@ function AutomationFormDialog({
 										disabled={busy}
 										onValueChange={setHarness}
 										options={cloudHarnessOptions}
+										placeholder={t("automations.cloud.noConnectedAgent")}
 									/>
+									{cloudHarnessOptions.length === 0 ? <p className={onboardingFieldHintClass}>{t("automations.cloud.connectAgentHint")}</p> : null}
 								</Field>
 							) : <RequiredAgentField
 								id="automation-agent"
@@ -980,26 +991,12 @@ function AutomationFormDialog({
 								</Field>
 							) : null}
 							{schedule.preset === "daily" || schedule.preset === "weekly" ? (
-								<Field label={t("automations.field.localTime")} id={AUTOMATION_FIELD_IDS.time} error={validationErrors.time}>
-									<Input
-										id={AUTOMATION_FIELD_IDS.time}
-										type="text"
-										inputMode="numeric"
-										autoComplete="off"
-										spellCheck={false}
-										required
-										placeholder="09:00"
-										value={schedule.time}
-										aria-invalid={Boolean(validationErrors.time) || undefined}
-										aria-describedby={validationErrors.time ? `${AUTOMATION_FIELD_IDS.time}-error` : undefined}
-										className="tabular-nums"
-										onChange={(event) => {
-											const next = formatTimeDraft(event.target.value);
-											patchSchedule({ time: next });
-											if (parseTimeValue(next)) clearValidationError("time");
-										}}
-									/>
-								</Field>
+								<TimePickerFields
+									hour={schedule.time.split(":")[0] ?? ""}
+									minute={schedule.time.split(":")[1] ?? ""}
+									hourError={validationErrors.time}
+									onChange={(hour, minute) => { patchSchedule({ time: `${hour}:${minute}` }); clearValidationError("time"); }}
+								/>
 							) : null}
 						</div>
 						{schedule.preset === "custom" ? (
@@ -1053,46 +1050,13 @@ function AutomationFormDialog({
 								) : (
 									<div aria-hidden="true" />
 								)}
-								<Field label={t("automations.field.hour")} id={AUTOMATION_FIELD_IDS.hour} error={validationErrors.hour}>
-									<Input
-										id={AUTOMATION_FIELD_IDS.hour}
-										inputMode="numeric"
-										autoComplete="off"
-										required
-										placeholder="09"
-										value={schedule.hour}
-										aria-invalid={Boolean(validationErrors.hour) || undefined}
-										className="tabular-nums"
-										onChange={(event) => {
-											const next = clampHourDraft(event.target.value);
-											patchSchedule({ hour: next });
-											if (parseHourMinute(next, schedule.minute)) {
-												clearValidationError("hour");
-												clearValidationError("minute");
-											}
-										}}
-									/>
-								</Field>
-								<Field label={t("automations.field.minute")} id={AUTOMATION_FIELD_IDS.minute} error={validationErrors.minute}>
-									<Input
-										id={AUTOMATION_FIELD_IDS.minute}
-										inputMode="numeric"
-										autoComplete="off"
-										required
-										placeholder="00"
-										value={schedule.minute}
-										aria-invalid={Boolean(validationErrors.minute) || undefined}
-										className="tabular-nums"
-										onChange={(event) => {
-											const next = clampMinuteDraft(event.target.value);
-											patchSchedule({ minute: next });
-											if (parseHourMinute(schedule.hour, next)) {
-												clearValidationError("hour");
-												clearValidationError("minute");
-											}
-										}}
-									/>
-								</Field>
+								<TimePickerFields
+									hour={schedule.hour}
+									minute={schedule.minute}
+									hourError={validationErrors.hour}
+									minuteError={validationErrors.minute}
+									onChange={(hour, minute) => { patchSchedule({ hour, minute }); clearValidationError("hour"); clearValidationError("minute"); }}
+								/>
 							</div>
 						) : null}
 						<p className={onboardingFieldHintClass}>{t("automations.timezone", { timezone })}</p>
@@ -1111,6 +1075,27 @@ function AutomationFormDialog({
 				</form>
 			</DialogContent>
 		</Dialog>
+	);
+}
+
+const HOUR_OPTIONS = Array.from({ length: 24 }, (_, value) => String(value).padStart(2, "0")).map((value) => ({ value, label: value }));
+const MINUTE_OPTIONS = Array.from({ length: 60 }, (_, value) => String(value).padStart(2, "0")).map((value) => ({ value, label: value }));
+
+/** Hour (00-23) and minute (00-59) pickers; values are two-digit strings. */
+function TimePickerFields({ hour, minute, hourError, minuteError, onChange }: { hour: string; minute: string; hourError?: string; minuteError?: string; onChange: (hour: string, minute: string) => void }) {
+	const { t } = useTranslation();
+	const pad = (value: string) => (/^\d{1,2}$/.test(value.trim()) ? value.trim().padStart(2, "0") : "");
+	const hh = pad(hour);
+	const mm = pad(minute);
+	return (
+		<>
+			<Field label={t("automations.field.hour")} id={AUTOMATION_FIELD_IDS.hour} error={hourError}>
+				<AutomationSelect id={AUTOMATION_FIELD_IDS.hour} label={t("automations.field.hour")} placeholder="09" value={hh} invalid={Boolean(hourError)} onValueChange={(value) => onChange(value, mm || "00")} options={HOUR_OPTIONS} />
+			</Field>
+			<Field label={t("automations.field.minute")} id={AUTOMATION_FIELD_IDS.minute} error={minuteError}>
+				<AutomationSelect id={AUTOMATION_FIELD_IDS.minute} label={t("automations.field.minute")} placeholder="00" value={mm} invalid={Boolean(minuteError)} onValueChange={(value) => onChange(hh || "00", value)} options={MINUTE_OPTIONS} />
+			</Field>
+		</>
 	);
 }
 

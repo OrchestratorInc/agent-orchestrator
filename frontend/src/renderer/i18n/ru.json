@@ -4711,6 +4711,8 @@
 	"automations.cloud.unsubscribe": "Не получать уведомления о {{name}}",
 	"automations.cloud.subscribe.tooltip": "Получать уведомления",
 	"automations.cloud.unsubscribe.tooltip": "Не получать уведомления",
+	"automations.cloud.noConnectedAgent": "Сначала войдите в агента",
+	"automations.cloud.connectAgentHint": "Войдите в агента для AO Cloud в настройках агентов: автоматизация запускается с вашим входом.",
 	"automations.cloud.error.agent_provider_required": "Сначала подключите учётную запись агента в AO Cloud: автоматизация запускается с ней.",
 	"automations.cloud.error.AUTOMATION_LIMIT_REACHED": "В рабочем пространстве уже максимум облачных автоматизаций. Сначала удалите одну.",
 	"automations.cloud.error.AUTOMATION_RUN_ACTIVE": "Эта автоматизация уже выполняется. Дождитесь окончания запуска.",

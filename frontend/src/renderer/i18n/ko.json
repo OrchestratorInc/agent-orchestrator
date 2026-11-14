@@ -4515,6 +4515,8 @@
 	"automations.cloud.unsubscribe": "{{name}} 알림 끄기",
 	"automations.cloud.subscribe.tooltip": "알림 받기",
 	"automations.cloud.unsubscribe.tooltip": "알림 끄기",
+	"automations.cloud.noConnectedAgent": "먼저 에이전트에 로그인하세요",
+	"automations.cloud.connectAgentHint": "에이전트 설정에서 AO Cloud용 에이전트에 로그인하세요. 자동화는 내 로그인으로 실행됩니다.",
 	"automations.cloud.error.agent_provider_required": "먼저 AO Cloud에서 에이전트 계정을 연결하세요. 자동화는 이 계정으로 실행됩니다.",
 	"automations.cloud.error.AUTOMATION_LIMIT_REACHED": "워크스페이스의 클라우드 자동화가 한도에 도달했습니다. 먼저 하나를 삭제하세요.",
 	"automations.cloud.error.AUTOMATION_RUN_ACTIVE": "이 자동화는 이미 실행 중입니다. 실행이 끝날 때까지 기다리세요.",

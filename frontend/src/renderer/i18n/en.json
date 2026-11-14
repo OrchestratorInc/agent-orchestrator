@@ -4575,6 +4575,8 @@
 	"automations.cloud.unsubscribe": "Stop notifications about {{name}}",
 	"automations.cloud.subscribe.tooltip": "Get notified",
 	"automations.cloud.unsubscribe.tooltip": "Stop notifications",
+	"automations.cloud.noConnectedAgent": "Log in to an agent first",
+	"automations.cloud.connectAgentHint": "Log in to an agent for AO Cloud in Settings → Agent Harnesses: an automation runs with your login.",
 	"automations.cloud.error.agent_provider_required": "Connect your agent account in AO Cloud first: the automation runs with it.",
 	"automations.cloud.error.AUTOMATION_LIMIT_REACHED": "Your workspace has as many cloud automations as it can have. Delete one first.",
 	"automations.cloud.error.AUTOMATION_RUN_ACTIVE": "This automation is already running. Wait for the run to finish.",

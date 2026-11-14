@@ -4515,6 +4515,8 @@
 	"automations.cloud.unsubscribe": "{{name}} の通知を停止",
 	"automations.cloud.subscribe.tooltip": "通知を受け取る",
 	"automations.cloud.unsubscribe.tooltip": "通知を停止",
+	"automations.cloud.noConnectedAgent": "先にエージェントにログインしてください",
+	"automations.cloud.connectAgentHint": "エージェント設定で AO Cloud 用のエージェントにログインしてください。オートメーションはあなたのログインで実行されます。",
 	"automations.cloud.error.agent_provider_required": "先に AO Cloud でエージェントアカウントを接続してください。自動化はそのアカウントで実行されます。",
 	"automations.cloud.error.AUTOMATION_LIMIT_REACHED": "ワークスペースのクラウド自動化は上限に達しています。先にどれかを削除してください。",
 	"automations.cloud.error.AUTOMATION_RUN_ACTIVE": "この自動化はすでに実行中です。実行が終わるまでお待ちください。",

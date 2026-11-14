@@ -4617,6 +4617,8 @@
 	"automations.cloud.unsubscribe": "Parar de receber avisos de {{name}}",
 	"automations.cloud.subscribe.tooltip": "Receber avisos",
 	"automations.cloud.unsubscribe.tooltip": "Parar de receber avisos",
+	"automations.cloud.noConnectedAgent": "Entre em um agente primeiro",
+	"automations.cloud.connectAgentHint": "Entre em um agente para o AO Cloud nas configurações de agentes: a automação é executada com o seu login.",
 	"automations.cloud.error.agent_provider_required": "Conecte primeiro sua conta de agente no AO Cloud: a automação é executada com ela.",
 	"automations.cloud.error.AUTOMATION_LIMIT_REACHED": "Seu espaço de trabalho já tem o máximo de automações na nuvem. Exclua uma primeiro.",
 	"automations.cloud.error.AUTOMATION_RUN_ACTIVE": "Esta automação já está em execução. Aguarde o fim da execução.",

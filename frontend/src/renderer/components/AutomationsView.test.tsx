@@ -27,6 +27,7 @@ const mocks = vi.hoisted(() => ({
 	createCloud: vi.fn(),
 	runNow: vi.fn(),
 	subscribe: vi.fn(),
+	providerConnections: undefined as Array<{ provider: string; validationState: string }> | undefined,
 }));
 
 vi.mock("../lib/telemetry", async (importOriginal) => ({
@@ -69,6 +70,7 @@ vi.mock("../hooks/useAutomations", () => ({
 	useAutomationRuns: () => ({ data: [], isLoading: false, error: mocks.runsError }),
 }));
 
+vi.mock("../hooks/useProviderConnections", () => ({ useProviderConnections: () => ({ data: mocks.providerConnections }) }));
 vi.mock("../hooks/useCloudOffering", () => ({ useCloudOffering: () => ({ chatHarnesses: ["claude-code", "codex", "cursor"] }) }));
 vi.mock("../hooks/useCloudAutomations", async (importOriginal) => ({
 	...await importOriginal<typeof import("../hooks/useCloudAutomations")>(),
@@ -80,6 +82,13 @@ vi.mock("../hooks/useCloudAutomations", async (importOriginal) => ({
 	useSubscribeCloudAutomation: () => ({ mutateAsync: mocks.subscribe, isPending: false }),
 	useCloudAutomationRuns: () => ({ data: [], isLoading: false, error: null }),
 }));
+
+async function pickTime(user: ReturnType<typeof userEvent.setup>, dialog: HTMLElement, hour: string, minute: string) {
+	await user.click(within(dialog).getByRole("combobox", { name: "Hour" }));
+	await user.click(await screen.findByRole("option", { name: hour }));
+	await user.click(within(dialog).getByRole("combobox", { name: "Minute" }));
+	await user.click(await screen.findByRole("option", { name: minute }));
+}
 
 function renderView(ui: ReactNode = <AutomationsView />) {
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -95,7 +104,7 @@ async function openBlankCreate(user: Pick<typeof userEvent, "click">) {
 }
 
 describe("AutomationsView", () => {
-	beforeEach(() => { mocks.workspaces = [{ id: "demo", name: "Demo" }]; mocks.defaultWorker = "codex"; mocks.defaultsLoaded = true; mocks.fallbackAmp = false; mocks.workerTuning = {}; mocks.baseTuning = {}; mocks.automations = []; mocks.runsError = null; mocks.cloudAvailable = false; mocks.cloudAutomations = []; mocks.createCloud.mockReset(); mocks.runNow.mockReset(); mocks.subscribe.mockReset(); mocks.create.mockReset(); mocks.update.mockReset(); mocks.capture.mockReset(); });
+	beforeEach(() => { mocks.workspaces = [{ id: "demo", name: "Demo" }]; mocks.defaultWorker = "codex"; mocks.defaultsLoaded = true; mocks.fallbackAmp = false; mocks.workerTuning = {}; mocks.baseTuning = {}; mocks.automations = []; mocks.runsError = null; mocks.cloudAvailable = false; mocks.cloudAutomations = []; mocks.providerConnections = undefined; mocks.createCloud.mockReset(); mocks.runNow.mockReset(); mocks.subscribe.mockReset(); mocks.create.mockReset(); mocks.update.mockReset(); mocks.capture.mockReset(); });
 
 	it("shows a discoverable empty state and create action", () => {
 		renderView();
@@ -195,7 +204,8 @@ describe("AutomationsView", () => {
 		expect(within(dialog).getByRole("textbox", { name: "Prompt" })).toHaveValue("Review");
 		expect(within(dialog).getByRole("combobox", { name: "Project" })).toBeDisabled();
 		expect(within(dialog).getByRole("combobox", { name: "Agent" })).toHaveTextContent("Codex");
-		expect(within(dialog).getByLabelText("Time")).toHaveValue("09:30");
+		expect(within(dialog).getByRole("combobox", { name: "Hour" })).toHaveTextContent("09");
+		expect(within(dialog).getByRole("combobox", { name: "Minute" })).toHaveTextContent("30");
 
 		const name = within(dialog).getByRole("textbox", { name: "Name" });
 		await user.clear(name);
@@ -426,9 +436,7 @@ describe("AutomationsView", () => {
 		await user.click(screen.getByRole("option", { name: "Weekly" }));
 		await user.click(within(dialog).getByRole("combobox", { name: "Day" }));
 		await user.click(screen.getByRole("option", { name: "Friday" }));
-		const time = within(dialog).getByLabelText("Time");
-		await user.clear(time);
-		await user.type(time, "0930");
+		await pickTime(user, dialog, "09", "30");
 		await user.click(within(dialog).getByRole("button", { name: "Create automation" }));
 
 		expect(mocks.create).toHaveBeenCalledWith(
@@ -504,12 +512,7 @@ describe("AutomationsView", () => {
 		await user.click(screen.getByRole("option", { name: "Weekly" }));
 		await user.click(within(dialog).getByRole("combobox", { name: "Day" }));
 		await user.click(screen.getByRole("option", { name: "Wednesday" }));
-		const hour = within(dialog).getByLabelText("Hour");
-		const minute = within(dialog).getByLabelText("Minute");
-		await user.clear(hour);
-		await user.type(hour, "16");
-		await user.clear(minute);
-		await user.type(minute, "45");
+		await pickTime(user, dialog, "16", "45");
 		await user.click(within(dialog).getByRole("button", { name: "Create automation" }));
 
 		expect(mocks.create).toHaveBeenCalledWith(
@@ -623,52 +626,21 @@ describe("AutomationsView", () => {
 		expect(view.container.querySelector('[data-slot="select-content"]')).toBeNull();
 	});
 
-	it("uses a 24-hour text time field that only accepts clock digits", async () => {
+	it("picks the time from 24-hour hour and minute lists", async () => {
 		const user = userEvent.setup();
 		renderView();
 		await openBlankCreate(user);
 
 		const dialog = screen.getByRole("dialog", { name: "Create automation" });
-		const time = within(dialog).getByLabelText("Time");
-		expect(time).toHaveAttribute("type", "text");
-		expect(time).toHaveAttribute("inputMode", "numeric");
-		await user.clear(time);
-		await user.type(time, "0705");
-		expect(time).toHaveValue("07:05");
-	});
-
-	it("rejects out-of-range time digits while typing", async () => {
-		const user = userEvent.setup();
-		renderView();
-		await openBlankCreate(user);
-
-		const time = within(screen.getByRole("dialog", { name: "Create automation" })).getByLabelText("Time");
-		await user.clear(time);
-		await user.type(time, "9999");
-		expect(time).toHaveValue("09");
-		await user.clear(time);
-		await user.type(time, "2560");
-		expect(time).toHaveValue("20");
-		await user.clear(time);
-		await user.type(time, "2360");
-		expect(time).toHaveValue("23:0");
-		await user.clear(time);
-		await user.type(time, "2359");
-		expect(time).toHaveValue("23:59");
-	});
-
-	it("rejects an empty time before create", async () => {
-		const user = userEvent.setup();
-		renderView();
-		await openBlankCreate(user);
-
-		const time = screen.getByLabelText("Time");
-		await user.clear(time);
-		await user.click(screen.getByRole("button", { name: "Create automation" }));
-
-		expect(time).toBeInvalid();
-		expect(time).toHaveAccessibleDescription("Choose a valid time.");
-		expect(mocks.create).not.toHaveBeenCalled();
+		expect(within(dialog).queryByRole("textbox", { name: "Time" })).not.toBeInTheDocument();
+		await user.click(within(dialog).getByRole("combobox", { name: "Hour" }));
+		expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual(Array.from({ length: 24 }, (_, hour) => String(hour).padStart(2, "0")));
+		await user.click(screen.getByRole("option", { name: "07" }));
+		await user.click(within(dialog).getByRole("combobox", { name: "Minute" }));
+		expect(screen.getAllByRole("option")).toHaveLength(60);
+		await user.click(screen.getByRole("option", { name: "05" }));
+		expect(within(dialog).getByRole("combobox", { name: "Hour" })).toHaveTextContent("07");
+		expect(within(dialog).getByRole("combobox", { name: "Minute" })).toHaveTextContent("05");
 	});
 
 	it("uses AO's shared centered dialog without a purpose selector", async () => {
@@ -738,7 +710,8 @@ describe("AutomationsView", () => {
 		vi.setSystemTime(new Date(2026, 8, 22, 14, 7, 0));
 		renderView();
 		await openBlankCreate(userEvent);
-		expect(screen.getByLabelText("Time")).toHaveValue("14:07");
+		expect(screen.getByRole("combobox", { name: "Hour" })).toHaveTextContent("14");
+		expect(screen.getByRole("combobox", { name: "Minute" })).toHaveTextContent("07");
 		vi.useRealTimers();
 	});
 
@@ -965,7 +938,7 @@ describe("automation starters", () => {
 			await user.click(await screen.findByRole("option", { name: "Cloud app" }));
 			await user.type(dialog.getByRole("textbox", { name: "Name" }), "Nightly debt");
 			await user.type(dialog.getByRole("textbox", { name: "Prompt" }), "List the top 10 debt items.");
-			fireEvent.change(dialog.getByRole("textbox", { name: "Time" }), { target: { value: "07:00" } });
+			await pickTime(user, screen.getByRole("dialog"), "07", "00");
 			await user.click(dialog.getByRole("button", { name: "Create automation" }));
 			await waitFor(() => expect(mocks.createCloud).toHaveBeenCalled());
 			expect(mocks.create).not.toHaveBeenCalled();
@@ -973,6 +946,33 @@ describe("automation starters", () => {
 				projectId: "cloud-1", displayName: "Nightly debt", prompt: "List the top 10 debt items.", harness: "claude-code",
 				rrule: "FREQ=DAILY;BYHOUR=7;BYMINUTE=0;BYSECOND=0", timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
 			});
+		});
+
+		it("offers only the agents logged in to AO Cloud", async () => {
+			const user = userEvent.setup();
+			mocks.cloudAvailable = true;
+			mocks.providerConnections = [{ provider: "codex", validationState: "valid" }, { provider: "cursor", validationState: "invalid" }, { provider: "github", validationState: "valid" }];
+			renderView();
+			await openBlankCreate(user);
+			const dialog = within(screen.getByRole("dialog"));
+			await user.click(dialog.getByRole("combobox", { name: "Runs on" }));
+			await user.click(await screen.findByRole("option", { name: "AO Cloud" }));
+			expect(dialog.getByRole("combobox", { name: "Agent" })).toHaveTextContent("Codex");
+			await user.click(dialog.getByRole("combobox", { name: "Agent" }));
+			expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual(["Codex"]);
+		});
+
+		it("asks for an agent login when none is connected to AO Cloud", async () => {
+			const user = userEvent.setup();
+			mocks.cloudAvailable = true;
+			mocks.providerConnections = [];
+			renderView();
+			await openBlankCreate(user);
+			const dialog = within(screen.getByRole("dialog"));
+			await user.click(dialog.getByRole("combobox", { name: "Runs on" }));
+			await user.click(await screen.findByRole("option", { name: "AO Cloud" }));
+			expect(dialog.getByRole("combobox", { name: "Agent" })).toHaveTextContent("Log in to an agent first");
+			expect(dialog.getByText(/Log in to an agent for AO Cloud in Settings/)).toBeInTheDocument();
 		});
 
 		it("lists cloud automations with who they run as, and runs one now", async () => {

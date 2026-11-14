@@ -4515,6 +4515,8 @@
 	"automations.cloud.unsubscribe": "Keine Benachrichtigungen mehr zu {{name}}",
 	"automations.cloud.subscribe.tooltip": "Benachrichtigen",
 	"automations.cloud.unsubscribe.tooltip": "Nicht mehr benachrichtigen",
+	"automations.cloud.noConnectedAgent": "Melde dich zuerst bei einem Agenten an",
+	"automations.cloud.connectAgentHint": "Melde dich in den Agenteneinstellungen bei einem Agenten für AO Cloud an: Eine Automatisierung läuft mit deiner Anmeldung.",
 	"automations.cloud.error.agent_provider_required": "Verbinde zuerst dein Agent-Konto in AO Cloud: Die Automatisierung läuft damit.",
 	"automations.cloud.error.AUTOMATION_LIMIT_REACHED": "Dein Workspace hat bereits so viele Cloud-Automatisierungen wie möglich. Lösche zuerst eine.",
 	"automations.cloud.error.AUTOMATION_RUN_ACTIVE": "Diese Automatisierung läuft bereits. Warte, bis der Lauf fertig ist.",

@@ -4497,6 +4497,8 @@
 	"automations.cloud.unsubscribe": "停止接收 {{name}} 的通知",
 	"automations.cloud.subscribe.tooltip": "接收通知",
 	"automations.cloud.unsubscribe.tooltip": "停止接收通知",
+	"automations.cloud.noConnectedAgent": "请先登录一个代理",
+	"automations.cloud.connectAgentHint": "请在代理设置中为 AO Cloud 登录一个代理：自动化会使用你的登录运行。",
 	"automations.cloud.error.agent_provider_required": "请先在 AO Cloud 中连接你的智能体账户：自动化将使用它运行。",
 	"automations.cloud.error.AUTOMATION_LIMIT_REACHED": "你的工作区的云端自动化已达上限。请先删除一个。",
 	"automations.cloud.error.AUTOMATION_RUN_ACTIVE": "此自动化已在运行。请等待本次运行结束。",
