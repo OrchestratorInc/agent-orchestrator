@@ -258,7 +258,7 @@ func TestDispatcherDeliversLiveEvents(t *testing.T) {
 
 	changes.emit(cdc.Event{Type: cdc.EventSessionUpdated, ProjectID: "web", SessionID: "web-2", Payload: json.RawMessage(`{"id":"web-2","activity":"idle","isTerminated":false}`)})
 	hub.ch <- domain.NotificationEvent{Kind: domain.NotificationCreated, Record: domain.NotificationRecord{
-		SessionID: "web-1", ProjectID: "web", Type: domain.NotificationNeedsInput, Title: "Fix login needs input", Body: "Which branch?", CreatedAt: time.Now(),
+		SessionID: "web-1", ProjectID: "web", Type: domain.NotificationNeedsInput, Title: "Fix login needs input", Body: "Which branch? Key sk-abcdefghijklmnopqrstuvwx in /Users/me/app", CreatedAt: time.Now(),
 	}}
 	changes.emit(cdc.Event{Type: cdc.EventSessionUpdated, ProjectID: "web", SessionID: "web-1", Payload: json.RawMessage(`{"id":"web-1","activity":"idle","isTerminated":false}`)})
 	changes.emit(cdc.Event{Type: cdc.EventSessionUpdated, ProjectID: "web", SessionID: "web-orch", Payload: json.RawMessage(`{"id":"web-orch","terminalTitle":"x"}`)})
@@ -276,7 +276,7 @@ func TestDispatcherDeliversLiveEvents(t *testing.T) {
 		kinds[p.Event] = p
 	}
 	q, ok := kinds[EventNeedsInput]
-	if !ok || q.SessionName != "Fix login" || q.SessionKind != "worker" || q.Text != "Fix login needs input: Which branch?" || q.HostID != "host-1" {
+	if !ok || q.SessionName != "Fix login" || q.SessionKind != "worker" || q.Text != "Fix login needs input: Which branch? Key [key] in ~/app" || q.HostID != "host-1" {
 		t.Fatalf("needs_input payload = %+v", q)
 	}
 	f, ok := kinds[EventFinished]

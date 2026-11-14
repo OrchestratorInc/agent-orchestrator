@@ -367,6 +367,7 @@ func (d *Dispatcher) route(ctx context.Context, p Payload) {
 	if len(targets) == 0 {
 		return
 	}
+	p.Title, p.Text, p.SessionName = d.redact(p.Title), d.redact(p.Text), d.redact(p.SessionName)
 	if (p.Event == EventFinished || p.Event == EventWorkerFinished) && d.deps.History != nil {
 		if turns, _, err := d.deps.History.SessionHistory(ctx, domain.SessionID(p.SessionID), 0, 1); err == nil && len(turns) > 0 {
 			p.LastReply = d.redact(tail(turns[0].AgentResponse, lastReplyLimit))
