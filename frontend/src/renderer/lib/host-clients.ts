@@ -1,11 +1,11 @@
 import createClient from "openapi-fetch";
 import type { paths } from "../../api/schema";
 import { aoBridge } from "./bridge";
-import { apiClient, reportingFetch } from "./api-client";
+import { apiClient, chatImageUrl, reportingFetch } from "./api-client";
 import { markApiError, withApiErrorOwnership } from "./reported-errors";
 import { LOCAL_HOST, type HostId } from "./hosts";
 
-type ConnectedHost = { hostId: HostId; label: string; url: string; base: string };
+type ConnectedHost = { hostId: HostId; label: string; url: string; base: string; ipv6Loopback?: boolean };
 const hosts = new Map<HostId, ConnectedHost>();
 const clients = new Map<HostId, ReturnType<typeof createClient<paths>>>();
 const listeners = new Set<() => void>();
@@ -31,6 +31,13 @@ export function baseUrlForHost(hostId: HostId): string | undefined {
 
 export function connectedHost(hostId: HostId): Readonly<ConnectedHost> | undefined {
 	return hosts.get(hostId);
+}
+
+export function chatImageHostUrl(src: string | undefined): string | undefined {
+	for (const host of hosts.values()) {
+		if (src?.startsWith(`${host.base}/`)) return chatImageUrl(src, host.base, host.ipv6Loopback === true);
+	}
+	return chatImageUrl(src);
 }
 
 export function isQuickTunnelHost(hostId: HostId): boolean {
