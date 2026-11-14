@@ -165,6 +165,39 @@ describe("CloudSessionChatSurface", () => {
 			await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].agentSwitch.pending).toBeUndefined());
 		});
 
+		it("keeps the switch's model and effort as the new agent's choice, so its next message sends them", async () => {
+			const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+			const surface = (provider: WorkspaceSession["provider"]) => <QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...cloudSession, provider }} /></QueryClientProvider>;
+			const view = render(surface("codex"));
+			await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].agentSwitch.agents.length).toBeGreaterThan(1));
+			act(() => cloudMocks.chatProps.mock.lastCall?.[0].agentSwitch.onPendingChange({ harness: "claude-code", model: "sonnet", effort: "low" }));
+			await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].agentSwitch.pending).toMatchObject({ harness: "claude-code" }));
+			await act(async () => { await cloudMocks.chatProps.mock.lastCall?.[0].onSend("now with Claude", undefined, "switch-3"); });
+			expect(cloudMocks.startInterfaceTransition).toHaveBeenCalledWith("org-1", session.id,
+				expect.objectContaining({ targetHarness: "claude-code", model: "sonnet", reasoningEffort: "low" }));
+			// The switch committed: the session now runs Claude Code, on the model and effort it was switched with.
+			view.rerender(surface("claude-code"));
+			await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].snapshot.settings).toMatchObject({ model: "sonnet", reasoningEffort: "low" }));
+			await act(async () => { await cloudMocks.chatProps.mock.lastCall?.[0].onSend("and again", undefined, "after-switch"); });
+			expect(cloudMocks.sendSessionMessage.mock.lastCall?.[2]).toMatchObject({ text: "and again", model: "sonnet", reasoningEffort: "low" });
+
+			// On Claude the effort becomes High; then to Codex and back to Claude, switched on Low again.
+			act(() => cloudMocks.chatProps.mock.lastCall?.[0].onChooseSettings({ ...cloudMocks.chatProps.mock.lastCall?.[0].snapshot.settings, reasoningEffort: "high" }));
+			await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].snapshot.settings).toMatchObject({ reasoningEffort: "high" }));
+			const switchTo = async (harness: string, model: string, provider: WorkspaceSession["provider"]) => {
+				act(() => cloudMocks.chatProps.mock.lastCall?.[0].agentSwitch.onPendingChange({ harness, model, effort: "low" }));
+				await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].agentSwitch.pending).toMatchObject({ harness }));
+				await act(async () => { await cloudMocks.chatProps.mock.lastCall?.[0].onSend(`now with ${harness}`, undefined, `switch-${harness}`); });
+				view.rerender(surface(provider));
+			};
+			await switchTo("codex", "gpt-5.6-terra", "codex");
+			await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].snapshot.settings).toMatchObject({ model: "gpt-5.6-terra", reasoningEffort: "low" }));
+			await switchTo("claude-code", "sonnet", "claude-code");
+			await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].snapshot.settings).toMatchObject({ model: "sonnet", reasoningEffort: "low" }));
+			await act(async () => { await cloudMocks.chatProps.mock.lastCall?.[0].onSend("back on Claude", undefined, "after-switch-back"); });
+			expect(cloudMocks.sendSessionMessage.mock.lastCall?.[2]).toMatchObject({ text: "back on Claude", model: "sonnet", reasoningEffort: "low" });
+		});
+
 		it("keeps the draft and says why when the switch is refused", async () => {
 			cloudMocks.startInterfaceTransition.mockReset().mockRejectedValue(
 				new CloudCpError("The session's owner has no valid cursor login.", { status: 409, code: "AGENT_LOGIN_REQUIRED" }));

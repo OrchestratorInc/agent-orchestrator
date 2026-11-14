@@ -35,7 +35,7 @@ import { scriptRunStatusText, scriptRunTitle } from "../ScriptRunPanel";
 import { agentLabel } from "../../lib/agent-options";
 import { formatEffortLabel } from "../settings/EffortPicker";
 import { cloudModelLabel } from "../../lib/agent-model-choices";
-import { ComposerErrorNotice, type AgentSwitchProps, type PendingAgentSwitch } from "./AgentSwitchPicker";
+import { ComposerErrorNotice, switchEffort, type AgentSwitchProps, type PendingAgentSwitch } from "./AgentSwitchPicker";
 import { AGENT_SWITCH_FAILED } from "./ChatComposer";
 import { useCloudAgentSwitch, type AgentSwitchTransition } from "../../hooks/useCloudAgentSwitch";
 import { apiErrorMessage } from "../../lib/api-client";
@@ -170,6 +170,21 @@ export function readCloudTurnSettings(key: string): CloudTurnSettings {
 function writeCloudTurnSettings(key: string, settings: CloudTurnSettings) {
 	const { approvalMode, ...rest } = settings;
 	localStorage.setItem(key, JSON.stringify(approvalMode ? { ...rest, approvalMode, approvalModeChosen: true } : rest));
+}
+
+// An agent switch starts the new agent on the model and effort picked for it.
+// They become the session's choice for that agent, so its composer shows them
+// and its next message sends them. Otherwise the agent has nothing chosen, and
+// the settings bar fills in its model's default effort as a pick (Claude's
+// "high" after a switch made on "low"), which the next message then sends.
+function rememberAgentSwitchPick(key: string, pick: PendingAgentSwitch) {
+	const reasoningEffort = switchEffort(pick);
+	if (!pick.model && !reasoningEffort) return;
+	try {
+		writeCloudTurnSettings(key, { ...readCloudTurnSettings(key), model: pick.model || undefined, reasoningEffort });
+	} catch {
+		// Storage unavailable: the composer falls back to the agent's own model.
+	}
 }
 
 // The model and effort the session's worker last reported as its own, so a
@@ -1912,6 +1927,13 @@ export function CloudSessionChatSurface({
 				return cloudSwitch.start(pendingSwitch).then(
 					() => {
 						setChosenSwitch(undefined);
+						if (cloud) {
+							const targetKey = `cloud-chat-settings:${cloud.orgId}:${session.id}:${pendingSwitch.harness}`;
+							rememberAgentSwitchPick(targetKey, pendingSwitch);
+							// Settings held from an earlier spell on that agent (a switch back) are
+							// stale now: drop them, so the agent's saved choice is read once it runs.
+							setSelected((current) => current.key === targetKey ? { key: "", settings: {} } : current);
+						}
 						return sendMessage(true);
 					},
 					(error: unknown) => {
