@@ -1903,7 +1903,8 @@ const ProjectItem = memo(function ProjectItem({
 						label: t("shell.projectSettings"),
 						onSelect: () => selection.goSettings(workspace.id, workspace.cloudOrgId),
 					},
-					{
+					// A project shared from another organization is its organization's to delete.
+					...(workspace.shared ? [] : [{
 						kind: "item" as const,
 						id: "remove",
 						icon: <Trash2 aria-hidden="true" />,
@@ -1911,7 +1912,7 @@ const ProjectItem = memo(function ProjectItem({
 						label: isCloudProject ? t("shell.deleteCloudProjectTitle") : t("shell.removeProjectTitle"),
 						destructive: true,
 						onSelect: removeProject,
-					},
+					}]),
 				]
 				: []),
 		];

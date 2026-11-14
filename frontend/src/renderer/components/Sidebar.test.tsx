@@ -2762,6 +2762,21 @@ describe("Sidebar", () => {
 		await waitFor(() => expect(onRemoveProject).toHaveBeenCalledWith("cloud-1", true));
 	});
 
+	it("offers no Delete project on a Cloud project someone else shared: only its own organization deletes it", async () => {
+		const user = userEvent.setup();
+		const sharedProject: WorkspaceSummary = { ...workspace, id: "their-cloud", name: "Their Cloud", kind: "cloud", cloudOrgId: "org-2", path: "", sessions: [], shared: { source: "link" } };
+		renderSidebar({ workspaces: [sharedProject] });
+
+		// The guest's row has no project ⋮ menu; its right-click menu is the way in.
+		expect(screen.queryByLabelText("Project actions for Their Cloud")).toBeNull();
+		const row = document.querySelector('li[data-project-id="their-cloud"]') as HTMLElement;
+		fireEvent.contextMenu(within(row).getAllByText("Their Cloud")[0]!);
+		expect(await screen.findByRole("menuitem", { name: /Pin to top/ })).toBeInTheDocument();
+		expect(screen.queryByRole("menuitem", { name: "Delete project" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("menuitem", { name: "Remove project" })).not.toBeInTheDocument();
+		await user.keyboard("{Escape}");
+	});
+
 	it("warns when removing a project would hide open pull requests", async () => {
 		const user = userEvent.setup();
 		const workspaceWithPullRequests = {
