@@ -186,4 +186,115 @@ describe("ReviewerSelect", () => {
 		expect(onConfigChange).toHaveBeenCalledWith("codex", { model: "gpt-test" });
 	});
 
+	describe("effort", () => {
+		const effortCatalog = {
+			agentId: "codex", selectionMode: "catalog", models: [
+				{ id: "gpt-test", label: "GPT Test", isDefault: true, efforts: ["low", "high"], defaultEffort: "low" },
+				{ id: "gpt-other", label: "GPT Other", efforts: ["low", "high", "max"], defaultEffort: "low" },
+				{ id: "gpt-plain", label: "GPT Plain" },
+			],
+		};
+		const renderWithCatalog = (props: Partial<Parameters<typeof ReviewerSelect>[0]> = {}) => {
+			const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+			client.setQueryData(["agent-models", "codex", ""], effortCatalog);
+			const onConfigChange = vi.fn();
+			render(<QueryClientProvider client={client}><ReviewerSelect
+				ariaLabel="Reviewer" value="codex" defaultHarness="claude-code"
+				onChange={() => undefined} onConfigChange={onConfigChange} {...props}
+			/></QueryClientProvider>);
+			return onConfigChange;
+		};
+		const openCodex = async () => {
+			await userEvent.click(screen.getByRole("button", { name: "Reviewer" }));
+			await userEvent.click(screen.getByRole("menuitem", { name: /Codex/ }));
+		};
+
+		it("shows the chosen effort on the trigger", () => {
+			renderWithCatalog({ model: "gpt-other", effort: "high" });
+			expect(screen.getByRole("button", { name: "Reviewer" })).toHaveTextContent("Codex · GPT Other · High");
+		});
+
+		it("leaves effort off a harness-only trigger", () => {
+			renderWithCatalog({ effort: "high", harnessOnly: true });
+			expect(screen.getByRole("button", { name: "Reviewer" })).toHaveTextContent(/^Codex$/);
+		});
+
+		it("offers the chosen model's efforts and keeps the model when one is picked", async () => {
+			const onConfigChange = renderWithCatalog({ model: "gpt-other" });
+			await openCodex();
+			expect(screen.getByText("Effort")).toBeInTheDocument();
+			expect(screen.getAllByRole("menuitemradio").map((item) => item.textContent)).toEqual(["Low", "High", "Max"]);
+			await userEvent.click(screen.getByRole("menuitemradio", { name: "Max" }));
+			expect(onConfigChange).toHaveBeenCalledWith("codex", { model: "gpt-other", effort: "max" });
+		});
+
+		it("offers the default model's efforts while following the agent model", async () => {
+			const onConfigChange = renderWithCatalog();
+			await openCodex();
+			expect(screen.getAllByRole("menuitemradio").map((item) => item.textContent)).toEqual(["Low", "High"]);
+			// Following the agent's effort marks the reported default.
+			expect(screen.getByRole("menuitemradio", { name: "Low" })).toHaveAttribute("aria-checked", "true");
+			await userEvent.click(screen.getByRole("menuitemradio", { name: "High" }));
+			expect(onConfigChange).toHaveBeenCalledWith("codex", { effort: "high" });
+		});
+
+		it("clears the effort override when the model's default effort is picked", async () => {
+			const onConfigChange = renderWithCatalog({ model: "gpt-other", effort: "high" });
+			await openCodex();
+			expect(screen.getByRole("menuitemradio", { name: "High" })).toHaveAttribute("aria-checked", "true");
+			await userEvent.click(screen.getByRole("menuitemradio", { name: "Low" }));
+			expect(onConfigChange).toHaveBeenCalledWith("codex", { model: "gpt-other" });
+		});
+
+		it("keeps the effort across a model switch only when the new model offers it", async () => {
+			const onConfigChange = renderWithCatalog({ model: "gpt-other", effort: "high" });
+			await openCodex();
+			await userEvent.click(screen.getByRole("menuitem", { name: "GPT Plain" }));
+			expect(onConfigChange).toHaveBeenLastCalledWith("codex", { model: "gpt-plain" });
+		});
+
+		it("carries a supported effort to the newly chosen model", async () => {
+			const onConfigChange = renderWithCatalog({ model: "gpt-other", effort: "high" });
+			await openCodex();
+			await userEvent.click(screen.getByRole("menuitem", { name: "GPT Test" }));
+			expect(onConfigChange).toHaveBeenCalledWith("codex", { effort: "high" });
+		});
+
+		it("drops the effort with the rest of the override when the agent model is chosen", async () => {
+			const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+			client.setQueryData(["agent-models", "codex", ""], {
+				agentId: "codex", selectionMode: "catalog", models: [{ id: "gpt-test", label: "GPT Test", efforts: ["low", "high"] }],
+			});
+			const onConfigChange = vi.fn();
+			render(<QueryClientProvider client={client}><ReviewerSelect
+				ariaLabel="Reviewer" value="codex" model="gpt-test" effort="high" defaultHarness="claude-code"
+				onChange={() => undefined} onConfigChange={onConfigChange}
+			/></QueryClientProvider>);
+			await openCodex();
+			await userEvent.click(screen.getByRole("menuitem", { name: "Use agent model" }));
+			expect(onConfigChange).toHaveBeenCalledWith("codex", {});
+		});
+
+		it("shows no effort group for a model that reports none", async () => {
+			renderWithCatalog({ model: "gpt-plain" });
+			await openCodex();
+			expect(screen.queryByText("Effort")).not.toBeInTheDocument();
+			expect(screen.queryAllByRole("menuitemradio")).toHaveLength(0);
+		});
+
+		it("does not offer effort in a harness submenu that is not the current reviewer", async () => {
+			const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+			client.setQueryData(["agent-models", "codex", ""], effortCatalog);
+			render(<QueryClientProvider client={client}><ReviewerSelect
+				ariaLabel="Reviewer" value="claude-code" defaultHarness="claude-code"
+				agents={[agentReadiness("claude-code", "Claude Code"), agentReadiness("codex", "Codex")]}
+				onChange={() => undefined} onConfigChange={() => undefined}
+			/></QueryClientProvider>);
+			await userEvent.click(screen.getByRole("button", { name: "Reviewer" }));
+			screen.getByRole("menuitem", { name: /Codex/ }).focus();
+			await userEvent.keyboard("{ArrowRight}");
+			await screen.findByRole("menuitem", { name: "Use agent model" });
+			expect(screen.queryByText("Effort")).not.toBeInTheDocument();
+		});
+	});
 });

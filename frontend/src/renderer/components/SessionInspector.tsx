@@ -1859,6 +1859,7 @@ function LocalReviewsSection({
 	);
 	const [reviewerModel, setReviewerModel] = useState(session.reviewerConfig?.model ?? "");
 	const [reviewerMode, setReviewerMode] = useState(session.reviewerConfig?.mode ?? "");
+	const [reviewerEffort, setReviewerEffort] = useState(session.reviewerConfig?.effort ?? "");
 	const reviewerOwnerKey = sessionUiKey(session.id, hostId);
 	const openReviewStates = openReviewStatesFor(session, reviewsQuery.data?.reviews ?? []);
 	const reviewHeads = openReviewStates.map((review) => `${review.prUrl}@${review.targetSha}`).sort().join("\n");
@@ -1875,18 +1876,19 @@ function LocalReviewsSection({
 		setReviewerOverride(session.reviewerHarness ?? "");
 		setReviewerModel(session.reviewerConfig?.model ?? "");
 		setReviewerMode(session.reviewerConfig?.mode ?? "");
-	}, [hostId, session.id, session.reviewerConfig?.mode, session.reviewerConfig?.model, session.reviewerHarness]);
+		setReviewerEffort(session.reviewerConfig?.effort ?? "");
+	}, [hostId, session.id, session.reviewerConfig?.effort, session.reviewerConfig?.mode, session.reviewerConfig?.model, session.reviewerHarness]);
 	const saveReviewer = useMutation({
 		mutationKey: [...reviewsKey, "switch-reviewer"],
-		mutationFn: async ({ harness, model, mode }: { harness: ReviewerHarness | ""; model: string; mode: string }) => {
-			const clearingToProjectDefault = harness === "" && model === "" && mode === "";
+		mutationFn: async ({ harness, model, mode, effort }: { harness: ReviewerHarness | ""; model: string; mode: string; effort: string }) => {
+			const clearingToProjectDefault = harness === "" && model === "" && mode === "" && effort === "";
 			const currentEffectiveReviewerHarness = (session.reviewerHarness ?? "") || currentDefaultReviewerHarness;
 			const nextEffectiveReviewerHarness = harness || currentDefaultReviewerHarness;
 			const existingReviewerConfig =
 				!clearingToProjectDefault && currentEffectiveReviewerHarness === nextEffectiveReviewerHarness
 					? session.reviewerConfig
 					: undefined;
-			const nextReviewerConfig = buildReviewerAgentConfig(existingReviewerConfig, model, mode);
+			const nextReviewerConfig = buildReviewerAgentConfig(existingReviewerConfig, model, mode, effort);
 			const { data, error } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/reviews/switch", {
 				params: { path: { sessionId: session.id } },
 				body: {
@@ -1919,9 +1921,9 @@ function LocalReviewsSection({
 	});
 	const triggerReview = useMutation({
 		mutationFn: async ({ ownerKey, rerun = false }: { ownerKey: string; rerun?: boolean }) => {
-			// Keep agent/model overrides scoped to this pass; the daemon selects the surface.
-			const reviewerConfig = reviewerModel || reviewerMode
-				? { ...(reviewerModel ? { model: reviewerModel } : {}), ...(reviewerMode ? { mode: reviewerMode } : {}) }
+			// Keep agent/model/effort overrides scoped to this pass; the daemon selects the surface.
+			const reviewerConfig = reviewerModel || reviewerMode || reviewerEffort
+				? { ...(reviewerModel ? { model: reviewerModel } : {}), ...(reviewerMode ? { mode: reviewerMode } : {}), ...(reviewerEffort ? { effort: reviewerEffort } : {}) }
 				: undefined;
 			const selectedHarness = reviewerOverride || undefined;
 			const { data, error, response } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/reviews/trigger", {
@@ -2044,16 +2046,19 @@ function LocalReviewsSection({
 				reviewerOverride={reviewerOverride}
 				reviewerModel={reviewerModel}
 				reviewerMode={reviewerMode}
+				reviewerEffort={reviewerEffort}
 				onReviewerOverrideChange={(next, config) => {
 					setReviewerOverride(next);
 					setReviewerModel(config.model ?? "");
 					setReviewerMode(config.mode ?? "");
-					saveReviewer.mutate({ harness: next, model: config.model ?? "", mode: config.mode ?? "" });
+					setReviewerEffort(config.effort ?? "");
+					saveReviewer.mutate({ harness: next, model: config.model ?? "", mode: config.mode ?? "", effort: config.effort ?? "" });
 				}}
 				onReviewerHarnessPreviewChange={(next) => {
 					setReviewerOverride(next);
 					setReviewerModel("");
 					setReviewerMode("");
+					setReviewerEffort("");
 				}}
 				session={session}
 			/>
@@ -2257,6 +2262,7 @@ function CloudReviewsSection({
 				}}
 				onTrigger={() => triggerReview.mutate()}
 				reviewerHandleId={reviewsQuery.data?.reviewerHandleId ?? ""}
+				reviewerEffort=""
 				reviewerMode=""
 				reviewerModel=""
 				reviewerOverride=""
@@ -2730,12 +2736,15 @@ function buildReviewerAgentConfig(
 	existing: WorkspaceSession["reviewerConfig"] | undefined,
 	model: string,
 	mode: string,
-): { model?: string; mode?: string; permissions?: string } | undefined {
+	effort: string,
+): { model?: string; mode?: string; effort?: string; permissions?: string } | undefined {
 	const next = { ...existing };
 	if (model) next.model = model;
 	else delete next.model;
 	if (mode) next.mode = mode;
 	else delete next.mode;
+	if (effort) next.effort = effort;
+	else delete next.effort;
 	return Object.keys(next).length > 0 ? next : undefined;
 }
 
@@ -2821,6 +2830,7 @@ function ReviewPanel({
 	reviewerOverride,
 	reviewerModel,
 	reviewerMode,
+	reviewerEffort,
 	onReviewerOverrideChange,
 	onReviewerHarnessPreviewChange,
 	onTrigger,
@@ -2848,7 +2858,8 @@ function ReviewPanel({
 	reviewerOverride: ReviewerHarness | "";
 	reviewerModel: string;
 	reviewerMode: string;
-	onReviewerOverrideChange: (next: ReviewerHarness | "", config: { model?: string; mode?: string }) => void;
+	reviewerEffort: string;
+	onReviewerOverrideChange: (next: ReviewerHarness | "", config: { model?: string; mode?: string; effort?: string }) => void;
 	onReviewerHarnessPreviewChange: (next: ReviewerHarness | "") => void;
 	onTrigger: () => void;
 	onCancel: () => void;
@@ -3015,6 +3026,7 @@ function ReviewPanel({
 							onConfigChange={(harness, config) => onReviewerOverrideChange(harness as ReviewerHarness | "", config)}
 							model={reviewerModel}
 							mode={reviewerMode}
+							effort={reviewerEffort}
 							hostId={hostId}
 							projectId={session.workspaceId}
 							triggerClassName="review-run-agent-select ml-auto h-control-md w-auto min-w-0 shrink-0 justify-end px-2 text-right text-xs"

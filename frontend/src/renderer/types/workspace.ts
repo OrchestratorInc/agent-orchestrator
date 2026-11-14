@@ -152,6 +152,7 @@ export type WorkspaceSession = {
 	reviewerConfig?: {
 		model?: string;
 		mode?: string;
+		effort?: string;
 		permissions?: string;
 	};
 	/** Whether the daemon may automatically review this session after it becomes idle. */

@@ -20,10 +20,12 @@ import { cn } from "../lib/utils";
 import { useAgentManagementMenu } from "../hooks/useAgentManagementMenu";
 import { AgentAvatar } from "./AgentAvatar";
 import { AgentSelectMenuItem } from "./settings/AgentSelectMenuItem";
+import { EffortMenuItems, formatEffortLabel } from "./settings/EffortPicker";
 import {
 	OptionMenu,
 	OptionMenuContent,
 	OptionMenuItem,
+	OptionMenuLabel,
 	OptionMenuSub,
 	OptionMenuSubContent,
 	OptionMenuSubTrigger,
@@ -56,6 +58,7 @@ export function ReviewerSelect({
 	onConfigChange,
 	model = "",
 	mode = "",
+	effort = "",
 	projectId,
 	hostId,
 	triggerClassName,
@@ -72,6 +75,7 @@ export function ReviewerSelect({
 	onConfigChange?: (harness: string, config: ReviewerAgentConfig) => void;
 	model?: string;
 	mode?: string;
+	effort?: string;
 	projectId?: string;
 	hostId?: string;
 	triggerClassName?: string;
@@ -129,7 +133,7 @@ export function ReviewerSelect({
 	}, [defaultHarness, hostId, menuOpen, menuProjectID, queryClient, selectableOptions]);
 	// An unidentified model is left off the trigger rather than labelled.
 	const selectedModelLabel = modelOrModeLabel(triggerCatalog.data, model, mode, "");
-	const triggerLabel = [value ? agentLabel(value) : defaultHarnessLabel, harnessOnly ? null : selectedModelLabel]
+	const triggerLabel = [value ? agentLabel(value) : defaultHarnessLabel, harnessOnly ? null : selectedModelLabel, harnessOnly || !effort ? null : formatEffortLabel(effort, t)]
 		.filter(Boolean)
 		.join(" · ");
 
@@ -157,6 +161,7 @@ export function ReviewerSelect({
 					currentHarness={value}
 					currentModel={model}
 					currentMode={mode}
+					currentEffort={effort}
 					onSelect={(nextHarness, nextConfig) => {
 						setMenuOpen(false);
 						onChange(nextHarness);
@@ -176,6 +181,7 @@ export function ReviewerSelect({
 						currentHarness={value}
 						currentModel={model}
 						currentMode={mode}
+						currentEffort={effort}
 						onSelect={(nextHarness, nextConfig) => {
 							setMenuOpen(false);
 							onChange(nextHarness);
@@ -200,6 +206,7 @@ function ReviewerHarnessOption({
 	currentHarness,
 	currentModel,
 	currentMode,
+	currentEffort,
 	onSelect,
 	projectId,
 	hostId,
@@ -212,6 +219,7 @@ function ReviewerHarnessOption({
 	currentHarness: string;
 	currentModel: string;
 	currentMode: string;
+	currentEffort: string;
 	onSelect: (harness: string, config: ReviewerAgentConfig) => void;
 	projectId: string;
 	hostId?: string;
@@ -239,6 +247,14 @@ function ReviewerHarnessOption({
 	const catalogKnown = catalogQuery.data !== undefined || catalogQuery.isFetched;
 	const defaultModel = catalog?.models?.find((item) => item.isDefault && isConcreteModelID(item.id))?.id;
 	const selectDefault = () => onSelect(persistHarness, {});
+	// Effort belongs to a model, so it is offered for the model this reviewer
+	// runs with now: the chosen one, or the catalog default.
+	const effortModel = isCurrentHarness ? catalogModel(catalog, currentMode || currentModel || defaultModel || "") : undefined;
+	const effortChoices = (effortModel?.efforts ?? []).filter((value) => value && value.toLowerCase() !== "default").map((value) => ({ value }));
+	const showEffort = isCurrentHarness && (effortChoices.length > 0 || currentEffort !== "");
+	// Switching model keeps the chosen effort only when the new model offers it.
+	const keptEffort = (modelID: string) =>
+		isCurrentHarness && currentEffort && catalogModel(catalog, modelID)?.efforts?.includes(currentEffort) ? { effort: currentEffort } : {};
 
 	if (harnessOnly || (catalogKnown && options.length === 0)) {
 		return (
@@ -294,7 +310,10 @@ function ReviewerHarnessOption({
 					<OptionMenuItem disabled>{t("common.loading", { defaultValue: "Loading…" })}</OptionMenuItem>
 				) : null}
 				{options.map((option) => {
-					const config = option.value === defaultModel ? {} : option.kind === "mode" ? { mode: option.value } : { model: option.value };
+					const config = {
+						...(option.value === defaultModel ? {} : option.kind === "mode" ? { mode: option.value } : { model: option.value }),
+						...keptEffort(option.value),
+					};
 					const selected =
 						isCurrentHarness &&
 						((option.kind === "mode" && currentMode === option.value) ||
@@ -313,9 +332,29 @@ function ReviewerHarnessOption({
 						</OptionMenuItem>
 					);
 				})}
+				{showEffort ? (
+					<>
+						<OptionMenuLabel className="mt-1 border-t border-border pt-2">{t("settings.models.effort")}</OptionMenuLabel>
+						<EffortMenuItems
+							value={currentEffort}
+							choices={effortChoices}
+							defaultEffort={effortModel?.defaultEffort}
+							availability={effortModel?.efforts === undefined ? "unknown" : effortChoices.length > 0 ? "supported" : "unsupported"}
+							onChange={(nextEffort) => onSelect(persistHarness, {
+								...(currentModel ? { model: currentModel } : {}),
+								...(currentMode ? { mode: currentMode } : {}),
+								...(nextEffort ? { effort: nextEffort } : {}),
+							})}
+						/>
+					</>
+				) : null}
 			</OptionMenuSubContent>
 		</OptionMenuSub>
 	);
+}
+
+function catalogModel(catalog: AgentModelCatalog | undefined, id: string) {
+	return id ? catalog?.models?.find((item) => item.id === id) : undefined;
 }
 
 function modelOptions(catalog?: AgentModelCatalog, models = catalog?.models ?? []): Array<{ kind: "model" | "mode"; label: string; value: string }> {
