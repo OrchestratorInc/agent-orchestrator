@@ -261,6 +261,14 @@ describe("cloud control-plane session lifecycle", () => {
 		expect(fetchMock.mock.calls[1]?.[0]).toBe("https://cloud.test/api/cloud/v1/orgs/org%2F1/projects/project%2F1/settings");
 		expect(fetchMock.mock.calls[1]?.[1]).toEqual(expect.objectContaining({ method: "PATCH", body: JSON.stringify({ config: { autoReview: false } }) }));
 	});
+	it("reads an organization's members from its encoded members route", async () => {
+		const members = [{ userId: "u-1", email: "asha@acme.dev", displayName: "Asha Rao", role: "owner", createdAt: "2026-11-01T00:00:00Z" }];
+		const fetchMock = vi.fn(async (_url: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify({ members }), { headers: { "Content-Type": "application/json" } }));
+		const client = createCloudCpClient({ baseUrl: "https://cloud.test", getToken: async () => "token", fetchImpl: fetchMock });
+		await expect(client.listOrgMembers("org/1")).resolves.toEqual({ members });
+		expect(fetchMock.mock.calls[0]?.[0]).toBe("https://cloud.test/api/cloud/v1/orgs/org%2F1/members");
+		expect(fetchMock.mock.calls[0]?.[1]).toEqual(expect.objectContaining({ method: "GET" }));
+	});
 	it("uses the organization GitHub App installation and repository routes", async () => {
 		const responses = [
 			{ installationUrl: "https://github.com/apps/ao/installations/new", expiresAt: "2026-09-22T12:00:00Z" },

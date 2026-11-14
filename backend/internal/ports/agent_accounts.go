@@ -59,8 +59,6 @@ type AgentAccountStore interface {
 	// AgentAccountUsageSince sums each account's model usage since the time,
 	// attributing every usage event to the account its session used then.
 	AgentAccountUsageSince(ctx context.Context, since time.Time) ([]domain.AgentAccountUsage, error)
-	SessionAccountPinned(ctx context.Context, sessionID domain.SessionID) (bool, error)
-	SetSessionAccountPinned(ctx context.Context, sessionID domain.SessionID, pinned bool) error
 }
 
 // AgentLimitReadingStore keeps the recent history of account limit readings.

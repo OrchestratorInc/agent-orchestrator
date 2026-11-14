@@ -53,3 +53,36 @@ func TestAgentAccountsListNamesTheSameLogin(t *testing.T) {
 		t.Fatalf("saved row names a same login: %v", out.Accounts[1])
 	}
 }
+
+// The app words a failed check from its kind; the error text rides along as
+// detail. The identity check's problem comes first, and a limits problem is
+// shown only for a signed-in account.
+func TestAgentAccountsListCarriesTheProblemKind(t *testing.T) {
+	account := func(id string) domain.AgentAccount {
+		return domain.AgentAccount{ID: id, Provider: domain.AgentAccountProviderClaude, Home: "/ao/claude/" + id}
+	}
+	ctrl := &controllers.AgentAccountsController{Svc: listOnlyAgentAccounts{views: []agentaccounts.AccountView{
+		{Account: account("slow"), SignedIn: true, LimitsErr: "context deadline exceeded", LimitsProblem: domain.AgentAccountProblemSlow},
+		{Account: account("other"), SignedIn: true, IdentityErr: "the folder is now signed in as c@example.com, not b@example.com", IdentityProblem: domain.AgentAccountProblemOtherLogin, LimitsErr: "x", LimitsProblem: domain.AgentAccountProblemUnavailable},
+		{Account: account("out"), LimitsErr: "signed out"},
+	}}}
+	r := chi.NewRouter()
+	ctrl.Register(r)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/agents/accounts", nil))
+	var out struct {
+		Accounts []map[string]any `json:"accounts"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil || len(out.Accounts) != 3 {
+		t.Fatalf("status %d body %s: %v", rec.Code, rec.Body, err)
+	}
+	for i, want := range []struct{ problem, kind any }{
+		{"context deadline exceeded", "slow"},
+		{"the folder is now signed in as c@example.com, not b@example.com", "other_login"},
+		{nil, nil},
+	} {
+		if got := out.Accounts[i]; got["problem"] != want.problem || got["problemKind"] != want.kind {
+			t.Errorf("%s: problem %v kind %v, want %v %v", got["id"], got["problem"], got["problemKind"], want.problem, want.kind)
+		}
+	}
+}

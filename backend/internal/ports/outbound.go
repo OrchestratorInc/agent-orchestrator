@@ -585,6 +585,9 @@ type WorkspaceConfig struct {
 	RepoPath string
 	// Path optionally supplies an existing managed worktree path for restore.
 	Path string
+	// StartPoint creates a fresh branch at this commit instead of the base
+	// branch. Session forks use it to start at the source's HEAD.
+	StartPoint string
 }
 
 // WorkspaceInfo describes a created workspace — where it lives and its branch.

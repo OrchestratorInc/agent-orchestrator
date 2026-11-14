@@ -60,6 +60,7 @@ const PICKER_SHEETS = [
 	{ name: "sheets/model", title: "Model" },
 	{ name: "sheets/files-branch", title: "Branch" },
 	{ name: "sheets/files-changes", title: "Changes" },
+	{ name: "sheets/account", title: "Account" },
 ] as const;
 
 // iOS's machine-name sheet, the one sheet with a text input: a native bar

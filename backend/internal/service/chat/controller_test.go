@@ -3477,6 +3477,9 @@ func TestProviderPromptFailureSettlesTurnAndRecordsRecoveryOnce(t *testing.T) {
 	if snapshot.Turns[0].ErrorMessage != message {
 		t.Fatalf("turn error = %q", snapshot.Turns[0].ErrorMessage)
 	}
+	if got := snapshot.Turns[0].FailureCode; got != domain.ConversationFailureAuthRequired {
+		t.Fatalf("failure code = %q, want %q", got, domain.ConversationFailureAuthRequired)
+	}
 	if snapshot.Conversation.Account.ReauthReason != message {
 		t.Fatalf("reauth reason = %q", snapshot.Conversation.Account.ReauthReason)
 	}
@@ -3484,6 +3487,49 @@ func TestProviderPromptFailureSettlesTurnAndRecordsRecoveryOnce(t *testing.T) {
 		if activity.Kind == domain.ActivityKindError || strings.Contains(activity.ProviderItemID, "ao-reauth-") {
 			t.Fatalf("terminal failure was duplicated as an activity: %#v", activity)
 		}
+	}
+}
+
+// Claude's adapter sends "Not logged in · Please run /login" as a typed login
+// failure. The chat turns that into a sign-in button, so the turn carries the
+// code; a failure that is not about the login carries none.
+func TestRefusedLoginTurnCarriesAuthRequiredCode(t *testing.T) {
+	h := newHarness(t)
+	signedOut, err := h.svc.Send(context.Background(), testSession, ports.ChatUserMessage{
+		Text: "hello", ClientMessageID: "signed-out-prompt", Origin: domain.MessageOriginHuman,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.conv.emit(ports.ChatEvent{
+		Kind: ports.ChatEventTurnCompleted, ProviderTurnID: signedOut.ProviderTurnID,
+		TurnState: domain.TurnStateCompleted,
+		Err:       ports.NewChatProviderFailure("Not logged in · Please run /login", "", ports.ErrChatAuthRequired),
+	})
+	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		return len(s.Turns) == 1 && s.Turns[0].State == domain.TurnStateFailed
+	})
+	other, err := h.svc.Send(context.Background(), testSession, ports.ChatUserMessage{
+		Text: "again", ClientMessageID: "overloaded-prompt", Origin: domain.MessageOriginHuman,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.conv.emit(ports.ChatEvent{
+		Kind: ports.ChatEventTurnCompleted, ProviderTurnID: other.ProviderTurnID,
+		TurnState: domain.TurnStateFailed, Err: errors.New("provider overloaded"),
+	})
+	snapshot := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		return len(s.Turns) == 2 && s.Turns[1].State == domain.TurnStateFailed
+	})
+	if got := snapshot.Turns[0].FailureCode; got != domain.ConversationFailureAuthRequired {
+		t.Fatalf("signed-out turn failure code = %q, want %q", got, domain.ConversationFailureAuthRequired)
+	}
+	if snapshot.Turns[0].ErrorMessage != "Not logged in · Please run /login" {
+		t.Fatalf("signed-out turn keeps the provider text for details, got %q", snapshot.Turns[0].ErrorMessage)
+	}
+	if got := snapshot.Turns[1].FailureCode; got != "" {
+		t.Fatalf("ordinary failure code = %q, want none", got)
 	}
 }
 
