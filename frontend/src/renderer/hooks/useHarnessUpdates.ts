@@ -1,3 +1,4 @@
+import { apiErrorException } from "../lib/api-error-exception";
 import { queryOptions, useQueries, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useCallback } from "react";
 import { useTranslation } from "react-i18next";
@@ -22,13 +23,13 @@ const INSTALL_JOB_POLL_MS = 1_000;
 
 export async function fetchInstallers(hostId?: string): Promise<components["schemas"]["AgentInstallPlan"][]> {
 	const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/agents/installers");
-	if (error || !data) throw new Error(apiErrorMessage(error, appI18n.t("settings.harness.loadFailed")));
+	if (error || !data) throw apiErrorException(error, appI18n.t("settings.harness.loadFailed"));
 	return data.agents;
 }
 
 export async function fetchInstallJobs(hostId?: string): Promise<InstallJob[]> {
 	const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/agents/install-jobs");
-	if (error || !data) throw new Error(apiErrorMessage(error, appI18n.t("settings.harness.loadFailed")));
+	if (error || !data) throw apiErrorException(error, appI18n.t("settings.harness.loadFailed"));
 	return data.jobs;
 }
 
@@ -50,7 +51,7 @@ export function isActiveInstallJob(job?: Pick<InstallJob, "status">): boolean {
 	return job?.status === "running" || job?.status === "waiting_for_idle" || job?.status === "installing" || job?.status === "verifying";
 }
 
-/** An update queued until the harness's sessions are idle (Windows). */
+/** An update queued until the harness's sessions are idle. */
 export function isWaitingForIdleJob(job?: Pick<InstallJob, "status">): boolean {
 	return job?.status === "waiting_for_idle";
 }
@@ -61,7 +62,7 @@ export const IDLE_WAIT_DETAIL_MS = 5 * 60_000;
 /** Cancels an update still waiting for idle sessions; sessions are left untouched. */
 export async function cancelHarnessUpdate(agentId: AgentId, hostId?: string): Promise<InstallJob> {
 	const { data, error } = await clientForSessionHost(hostId).POST("/api/v1/agents/{agent}/install/cancel", { params: { path: { agent: agentId } } });
-	if (error || !data) throw new Error(apiErrorMessage(error, appI18n.t("settings.harness.cancelUpdateFailed")));
+	if (error || !data) throw apiErrorException(error, appI18n.t("settings.harness.cancelUpdateFailed"));
 	return data;
 }
 
@@ -129,7 +130,7 @@ function syncInstallerMethods(queryClient: QueryClient, advisory: AgentUpdateAdv
 
 export async function fetchUpdateAdvisory(agentId: AgentId, hostId?: string, refresh = false): Promise<AgentUpdateAdvisory> {
 	const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/agents/{agent}/update-advisory", { params: { path: { agent: agentId }, ...(refresh ? { query: { refresh: true } } : {}) } });
-	if (error || !data) throw new Error(apiErrorMessage(error, appI18n.t("settings.harness.updateCheckUnavailable")));
+	if (error || !data) throw apiErrorException(error, appI18n.t("settings.harness.updateCheckUnavailable"));
 	return data;
 }
 
@@ -154,8 +155,8 @@ export type HarnessUpdateStart = { job?: InstallJob; error?: string; advisory?: 
 /**
  * The sessions an update must wait for, when the advisory says it cannot run
  * alongside them. Otherwise an update installs while sessions
- * run, and they restart on the new release once idle; on Windows the daemon
- * waits for them itself.
+ * run, and they restart on the new release once idle; or the daemon waits for
+ * them to be idle, stops them, updates and resumes them.
  */
 export function advisoryInUse(advisory?: Pick<AgentUpdateAdvisory, "inUse">): HarnessInUse | undefined {
 	const inUse = advisory?.inUse;

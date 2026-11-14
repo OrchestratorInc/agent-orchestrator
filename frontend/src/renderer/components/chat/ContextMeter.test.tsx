@@ -107,10 +107,12 @@ describe("ContextMeter", () => {
 		expect(container).toBeEmptyDOMElement();
 	});
 
-	it("does not claim a failed turn with zero reported used is 0% full", () => {
+	it("draws a failed turn with zero reported used as an empty 0% ring", () => {
 		render(<ContextMeter usage={usage({ contextUsed: 0, contextWindow: 262_144 })} />);
-		expect(screen.getByRole("img", { name: "Context unknown / 262,144" })).toBeInTheDocument();
-		expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
+		expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "0");
+		// An empty track, not the sliver a nearly-empty conversation gets.
+		expect(fill()).toHaveAttribute("stroke-dasharray", "0 100");
+		expect(screen.queryByText("?")).not.toBeInTheDocument();
 	});
 
 	it("renders nothing before the provider has reported anything", () => {
@@ -130,12 +132,12 @@ describe("ContextMeter", () => {
 
 		it("appears once the account is close to a wall", () => {
 			render(<ContextMeter usage={usage()} rateLimits={limits({ primaryUsedPercent: 76 })} />);
-			expect(screen.getByText("76% quota")).toBeInTheDocument();
+			expect(screen.getByText("Session 76% used")).toBeInTheDocument();
 		});
 
 		it("escalates its colour past 90%, where turns start failing", () => {
 			render(<ContextMeter usage={usage()} rateLimits={limits({ primaryUsedPercent: 94 })} />);
-			expect(screen.getByText("94% quota").className).toContain("text-status-exited");
+			expect(screen.getByText("Session 94% used").className).toContain("text-status-exited");
 		});
 
 		it("warns on the tighter of the two windows", () => {
@@ -146,7 +148,7 @@ describe("ContextMeter", () => {
 				/>,
 			);
 			// The tighter window is the one that will actually stop the next turn.
-			expect(screen.getByText("88% quota")).toBeInTheDocument();
+			expect(screen.getByText("Weekly 88% used")).toBeInTheDocument();
 		});
 
 		it("ignores a window the provider did not report", () => {
@@ -166,7 +168,7 @@ describe("ContextMeter", () => {
 			// state a user sees when opening a conversation on a nearly-spent account:
 			// exactly when the warning is most useful.
 			render(<ContextMeter rateLimits={limits({ primaryUsedPercent: 97 })} />);
-			expect(screen.getByText("97% quota")).toBeInTheDocument();
+			expect(screen.getByText("Session 97% used")).toBeInTheDocument();
 			expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
 		});
 	});

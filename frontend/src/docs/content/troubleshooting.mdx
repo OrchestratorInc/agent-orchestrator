@@ -7,7 +7,7 @@ description: Diagnose desktop, daemon, agent, session, GitHub, preview, and mobi
 
 The desktop app owns the local daemon. First quit completely and reopen Orchestrator, then confirm the project and selected session still appear. On macOS, use the menu-bar tray's **Quit AO Completely** action for this restart. The app discovers or restarts its daemon and reconnects live event and terminal streams.
 
-On macOS, closing the window or using **Quit / Cmd+Q** destroys the desktop window but leaves Orchestrator in the Dock and menu-bar tray. Its daemon and enabled mobile/remote access keep running while the Mac stays awake and reachable. Click the Dock icon or **Show Agent Orchestrator** in the tray to reopen the window. Existing unsaved-draft warnings still apply; desktop browser previews and browser automation stop until the window reopens. Windows and Linux quit behavior is unchanged.
+On macOS, closing the window or using **Quit / Cmd+Q** destroys the desktop window but leaves Orchestrator in the Dock and menu-bar tray. Its daemon and enabled mobile/remote access keep running while the Mac stays awake and reachable. Click the Dock icon or **Show Orchestrator** in the tray to reopen the window. Existing unsaved-draft warnings still apply; desktop browser previews and browser automation stop until the window reopens. Windows and Linux quit behavior is unchanged.
 
 If you use the optional CLI, `ao status` and `ao doctor` provide additional local diagnostics:
 
@@ -34,6 +34,9 @@ ao doctor --json
 	<Accordion title="The UI looks stale after a daemon restart">
 		Leave the app open briefly so its SSE connection can reconnect and invalidate current queries. If it does not recover, restart the desktop app. The event stream supports replay, but a full app restart is the safest user-level recovery.
 	</Accordion>
+	<Accordion title="An automatic update check failed">
+		Orchestrator retries failed automatic checks with increasing delays, up to four hours. A manual check remains available from the update menu. A failed check does not turn off update checks.
+	</Accordion>
 </Accordions>
 
 ## Agents and sessions
@@ -57,6 +60,15 @@ ao doctor --json
 	<Accordion title="A session will not restore">
 		Use the desktop restore action or `ao session restore <session-id>`. Restore reuses the same session and worktree when the selected adapter supports recovery. Check that the harness remains installed and authenticated. For a stopped controller on a non-terminated session use `ao session resume-agent <id>` instead. A disabled interface switch can indicate unavailable native history, an unsupported direction, or pending recovery; inspect its reason before retrying.
 	</Accordion>
+	<Accordion title="A session says its workspace no longer exists">
+		The Files pane stops refreshing that session after the daemon confirms its project folder is missing. Restore the folder, then use Retry in Files. Other sessions and hosts continue refreshing normally.
+	</Accordion>
+	<Accordion title="A suggested next message disappears">
+		Prompt suggestions wait until the Chat controller is ready and the previous turn is complete. A suggestion can disappear while the agent reconnects or resumes, then return when the conversation is ready again.
+	</Accordion>
+	<Accordion title="A new task cannot start">
+		Choose an installed, signed-in agent in Harness Settings. If a saved model or effort is no longer supported, review the selected agent default and press Start again. If a branch is checked out elsewhere, enter a new branch name and press Start to confirm it. If the base branch cannot be resolved, set it in Project Settings.
+	</Accordion>
 </Accordions>
 
 ## GitHub and pull requests
@@ -77,6 +89,8 @@ ao doctor --json
 </Accordions>
 
 ## Browser preview
+
+A failed external link preview shows the plain link. Orchestrator waits briefly before trying that same URL again; previews for other URLs still load.
 
 <Accordions>
 	<Accordion title="The Browser tab is blank">
@@ -100,7 +114,7 @@ ao doctor --json
 		The current QR carries the host identity, available endpoints, and connection password in a v2 pairing link. Treat it as a bearer credential: do not share the QR or screenshots of it. Rotate the connection password in desktop settings if it may have been exposed.
 	</Accordion>
 	<Accordion title="Can I use Connect Mobile on public Wi-Fi?">
-		Do not use a plaintext LAN endpoint on an untrusted network. Use an available secure endpoint from [Connect Mobile](/configuration/remote-access). Keep the primary daemon private. If mobile push is missing, check phone notification permission, device mute state, and daemon connectivity.
+		Do not use a plaintext LAN endpoint on an untrusted network. Use an available secure endpoint from [Connect Mobile](/configuration/remote-access). Keep the primary daemon private. If mobile push is missing, check phone notification permission, that the phone is still listed under Connected devices, and daemon connectivity.
 	</Accordion>
 </Accordions>
 
@@ -111,3 +125,6 @@ ao doctor --json
 | macOS Gatekeeper says the developer cannot be verified | Follow the Gatekeeper steps in [Common Installation Problems](/installation#common-installation-problems). |
 
 Open an issue in the [Orchestrator repository](https://github.com/Untrivial-ai/agent-orchestrator/issues). Include the desktop version, operating system, agent harness and interface mode, reproduction steps, and sanitized `ao doctor --json` output when the CLI is available. Never attach credentials, provider transcripts, or the entire `~/.ao` directory.
+
+Unreleased: **Settings → Report a problem** opens an agent to gather diagnostics and draft a report for your approval.
+If the daemon is down, the same action opens a terminal; you can also run `ao triage` directly.

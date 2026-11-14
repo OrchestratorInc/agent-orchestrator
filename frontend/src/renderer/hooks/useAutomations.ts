@@ -1,6 +1,7 @@
+import { apiErrorException } from "../lib/api-error-exception";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { components } from "../../api/schema";
-import { apiClient, apiErrorMessage } from "../lib/api-client";
+import { apiClient } from "../lib/api-client";
 
 export type Automation = components["schemas"]["AutomationResponse"];
 export type AutomationRun = components["schemas"]["AutomationRunResponse"];
@@ -11,7 +12,7 @@ export const automationsQueryKey = ["automations"] as const;
 
 async function fetchAutomationPage(cursor?: string) {
 	const { data, error } = await apiClient.GET("/api/v1/automations", { params: { query: { limit: 100, cursor } } });
-	if (error) throw new Error(apiErrorMessage(error));
+	if (error) throw apiErrorException(error);
 	return data;
 }
 
@@ -37,7 +38,7 @@ export function useCreateAutomation() {
 	return useMutation({
 		mutationFn: async (body: CreateAutomationInput) => {
 			const { data, error } = await apiClient.POST("/api/v1/automations", { body });
-			if (error) throw new Error(apiErrorMessage(error));
+			if (error) throw apiErrorException(error);
 			if (!data) throw new Error("Automation response was empty");
 			return data.automation;
 		},
@@ -50,7 +51,7 @@ export function useUpdateAutomation() {
 	return useMutation({
 		mutationFn: async ({ id, body }: { id: string; body: UpdateAutomationInput }) => {
 			const { data, error } = await apiClient.PATCH("/api/v1/automations/{automationId}", { params: { path: { automationId: id } }, body });
-			if (error) throw new Error(apiErrorMessage(error));
+			if (error) throw apiErrorException(error);
 			if (!data) throw new Error("Automation response was empty");
 			return data.automation;
 		},
@@ -70,7 +71,7 @@ export function useDeleteAutomation() {
 	return useMutation({
 		mutationFn: async (id: string) => {
 			const { error } = await apiClient.DELETE("/api/v1/automations/{automationId}", { params: { path: { automationId: id } } });
-			if (error) throw new Error(apiErrorMessage(error));
+			if (error) throw apiErrorException(error);
 			return id;
 		},
 		onSuccess: (id) => client.setQueryData<Automation[]>(automationsQueryKey, (current = []) => current.filter((item) => item.id !== id)),
@@ -83,7 +84,7 @@ export function useAutomationRuns(id: string | null) {
 		queryFn: async () => {
 			if (!id) return [];
 			const { data, error } = await apiClient.GET("/api/v1/automations/{automationId}/runs", { params: { path: { automationId: id }, query: { limit: 100 } } });
-			if (error) throw new Error(apiErrorMessage(error));
+			if (error) throw apiErrorException(error);
 			return data?.runs ?? [];
 		},
 		enabled: Boolean(id),

@@ -3,6 +3,7 @@ package sessionmanager
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -42,6 +43,10 @@ func (m *Manager) AcquireSessionInput(id domain.SessionID) (release func(), ok b
 	}
 	if m.inputLeases[id] == 0 {
 		m.inputDrained[id] = make(chan struct{})
+		if m.inputLeaseSince == nil {
+			m.inputLeaseSince = make(map[domain.SessionID]time.Time)
+		}
+		m.inputLeaseSince[id] = time.Now()
 	}
 	m.inputLeases[id]++
 	m.agentOpMu.Unlock()
@@ -58,6 +63,7 @@ func (m *Manager) releaseSessionInput(id domain.SessionID) {
 	count := m.inputLeases[id]
 	if count <= 1 {
 		delete(m.inputLeases, id)
+		delete(m.inputLeaseSince, id)
 		if drained := m.inputDrained[id]; drained != nil {
 			close(drained)
 			delete(m.inputDrained, id)
@@ -114,6 +120,8 @@ func (m *Manager) beginAgentOperation(ctx context.Context, id domain.SessionID, 
 			// bounded shutdown completes; it must not make Kill/Switch fail.
 			select {
 			case <-ctx.Done():
+				m.agentWaitLogger().Warn("agent operation gave up waiting for hibernation to finish",
+					"sessionID", id, "operation", kind, "error", ctx.Err())
 				return ctx.Err()
 			case <-time.After(20 * time.Millisecond):
 				continue
@@ -127,13 +135,35 @@ func (m *Manager) beginAgentOperation(ctx context.Context, id domain.SessionID, 
 	if drained == nil {
 		return nil
 	}
+	waitStarted := time.Now()
 	select {
 	case <-drained:
 		return nil
 	case <-ctx.Done():
+		// A lease that outlives the whole wait usually belongs to a write that
+		// is itself waiting on this operation, such as a relay into a sleeping
+		// Chat session that has to wake it first.
+		m.agentOpMu.Lock()
+		leases := m.inputLeases[id]
+		var heldFor time.Duration
+		if since, ok := m.inputLeaseSince[id]; ok {
+			heldFor = time.Since(since).Round(time.Millisecond)
+		}
+		m.agentOpMu.Unlock()
 		m.endAgentOperation(id, kind)
+		m.agentWaitLogger().Warn("agent operation gave up waiting for session input to drain",
+			"sessionID", id, "operation", kind, "waited", time.Since(waitStarted).Round(time.Millisecond),
+			"inputLeases", leases, "oldestLeaseHeldFor", heldFor, "error", ctx.Err())
 		return ctx.Err()
 	}
+}
+
+// Some tests build a Manager without New, so the logger may be unset.
+func (m *Manager) agentWaitLogger() *slog.Logger {
+	if m.logger == nil {
+		return slog.Default()
+	}
+	return m.logger
 }
 
 // beginAgentOperations reserves every currently-unowned session before waiting

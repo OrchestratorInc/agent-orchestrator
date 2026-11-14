@@ -1,61 +1,82 @@
-import { useLocalSearchParams, useRouter } from "expo-router";
-import { Feather } from "../lib/icons";
-import BottomSheet, { BottomSheetView } from "@expo/ui/community/bottom-sheet";
+import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import * as DocumentPicker from "expo-document-picker";
+import * as ImagePicker from "expo-image-picker";
 import { File } from "expo-file-system";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-	InteractionManager,
-	Platform,
-	Pressable,
-	ScrollView,
-	StyleSheet,
-	Text,
-	View,
-} from "react-native";
-import { KeyboardStickyView, useKeyboardState } from "react-native-keyboard-controller";
+import { Keyboard, Pressable, StyleSheet, Text, View } from "react-native";
+import Animated, { useAnimatedStyle } from "react-native-reanimated";
+import { KeyboardAvoidingView, useReanimatedKeyboardAnimation } from "react-native-keyboard-controller";
 import { agentErrorCopy } from "../lib/agentError";
+import { AppSymbol } from "../lib/AppSymbol";
 import { defaultAgent, rankAgents } from "../lib/agentPicker";
-import { ApiError, getAgentModels, getAgents, getProject, getSettings, type AgentCatalog, type AgentModelCatalog, type ProjectDetail, type SessionMode } from "../lib/api";
+import { ApiError, getAgentModels, getAgents, getProject, getSettings, type AgentCatalog, type AgentModelCatalog, type AgentModelInfo, type ProjectDetail, type SessionMode } from "../lib/api";
 import { userFacingError } from "../lib/connectionError";
 import { chatErrorCopy, isChatPreflightError } from "../lib/chatError";
 import { haptics } from "../lib/haptics";
 import { connectedSpawnHosts, initialSpawnHostId, selectSpawnHost, spawnHostRequestIsCurrent } from "../lib/hostRoute";
+import { rememberLastProject, useLastProject } from "../lib/lastProject";
 import { ALL_PROJECTS, STANDALONE_PROJECT, resolveSpawnProject } from "../lib/projectFilter";
-import { modelOverride, resolveSpawnAgent, resolveSpawnModel, spawnModelSourceChanged } from "../lib/spawnModel";
-import { appendSpawnAttachments, readSpawnAttachments, type SpawnAttachment } from "../lib/spawn-attachments";
+import { claudeAliasModel, defaultEffortModel, menuModelName, menuModels, modelOverride, resolveSpawnAgent, resolveSpawnModel, spawnModelSourceChanged } from "../lib/spawnModel";
+import { appendSpawnAttachments, joinAttachmentErrors, MAX_SPAWN_ATTACHMENTS, pastedSpawnAttachments, photoPickerAttachment, readSpawnAttachments, spawnAttachmentPreview, type PickedSpawnAttachment, type SpawnAttachment } from "../lib/spawn-attachments";
+import { ComposerAttachmentTray } from "../lib/chat/ComposerAttachmentTray";
+import type { ComposerImageAsset, PasteOverflow } from "../lib/chat/composerImages";
 import { SpawnComposerControls } from "../lib/spawn-composer-controls";
 import { spawnNotices } from "../lib/spawnNotices";
-import { SpawnPromptInput } from "../lib/spawn-prompt-input";
+import { spawnEffortChoices, spawnEffortToSend } from "../lib/modelEffort";
 import { useApp } from "../lib/store";
+import { useCloud } from "../lib/cloud/CloudProvider";
+import { connectedAgents } from "../lib/cloud/agents";
+import { CLOUD_HOST_ID, CLOUD_HOST_NAME, isCloudHost } from "../lib/cloud/mapping";
+import { cloudPlanBlock, cloudSessionBilled } from "../lib/cloud/plan";
+import { useCloudPlan } from "../lib/cloud/planStore";
+import { agentModelCatalog } from "../lib/cloud/modelCatalog";
+import { cloudAgentCatalog, cloudModelCatalog, cloudProjectDetail, NEW_CLOUD_PROJECT } from "../lib/cloud/spawnSource";
 import { useVoiceInput } from "../lib/voice/useVoiceInput";
 import type { Theme } from "../lib/theme";
 import { useTheme, useThemedStyles } from "../lib/ThemeProvider";
 import { Button } from "../lib/ui";
-import { iconSize, space, type } from "../lib/tokens";
-import { backOr } from "../lib/backNavigation";
+import { iconSize, radius, space, type } from "../lib/tokens";
+import { approvalOptions, resolveApprovalMode, type ApprovalMode } from "../lib/spawnApproval";
+import { modelSheetRoute } from "../lib/sheetResult";
+import { agentAccountLabel, useAgentAccounts } from "../lib/agentAccounts";
+import { useChatKeyboard } from "../lib/chat/useChatKeyboard";
+import { SYSTEM_GLASS_HEADER } from "../lib/stackScreenOptions";
+import { useGlassBarInset } from "../lib/useHeaderOverlap";
+import { KEYBOARD_DOCK_GAP } from "../lib/session/keyboardInset";
 
-export { SheetErrorBoundary as ErrorBoundary } from "../lib/RouteErrorBoundary";
+export { RouteErrorBoundary as ErrorBoundary } from "../lib/RouteErrorBoundary";
 
-export default function SpawnModal() {
-	return <SpawnModalContent />;
-}
-
-function SpawnModalContent() {
+export default function SpawnScreen() {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const router = useRouter();
+	const navigation = useNavigation();
 	const { projectId: routeProjectId, hostId: routeHostId } = useLocalSearchParams<{ projectId?: string; hostId?: string }>();
-	const { hostStates, activeProjectId, currentHostId, configForHost, switchHost, setActiveProject, spawn } = useApp();
-	const connectedHosts = useMemo(() => connectedSpawnHosts(hostStates), [hostStates]);
+	const { hostStates, cloud, activeProjectId, currentHostId, configForHost, switchHost, setActiveProject, spawn } = useApp();
+	const cloudState = useCloud();
+	// Orchestrator Cloud is the picker's last choice, after the connected machines, while signed in.
+	const machineHosts = useMemo(() => connectedSpawnHosts(hostStates), [hostStates]);
+	const connectedHosts = useMemo(() => cloud ? [...machineHosts, { id: CLOUD_HOST_ID, label: CLOUD_HOST_NAME, icon: "cloud" as const }] : machineHosts, [cloud, machineHosts]);
 	const [selectedHostId, setSelectedHostId] = useState<string | null>(null);
 	const hostSelectionInitialized = useRef(false);
 	const catalogGeneration = useRef(0);
 	const selectedHost = hostStates.find((host) => host.hostId === selectedHostId);
-	const config = selectedHostId ? configForHost(selectedHostId) : null;
-	const projects = selectedHost?.projects ?? [];
-	const projectsKnown = selectedHost?.projectsKnown ?? false;
-	const connection = selectedHost?.connection ?? "closed";
+	const cloudSelected = isCloudHost(selectedHostId);
+	const config = selectedHostId && !cloudSelected ? configForHost(selectedHostId) : null;
+	const projects = cloudSelected ? cloud?.projects ?? [] : selectedHost?.projects ?? [];
+	// Cloud's list is known once it loaded, not as soon as Cloud is signed in:
+	// before that, an empty list would ask to create a project that exists.
+	const projectsKnown = cloudSelected ? Boolean(cloud) && cloudState.projectsLoaded : selectedHost?.projectsKnown ?? false;
+	const connection = cloudSelected ? (cloud ? "open" : "closed") : selectedHost?.connection ?? "closed";
+	const cloudAgentsKey = connectedAgents(cloudState.connections).join(",");
+	// Known before anything is typed: a Free organization runs no cloud agents,
+	// and a spent session-hour window starts none until it resets. The control
+	// plane still decides on send; this only spares writing a task it would refuse.
+	const cloudPlan = useCloudPlan(cloudState.client, cloud ? cloudState.org?.id : undefined);
+	const reloadCloudPlan = cloudPlan?.reload;
+	useEffect(() => {
+		if (cloudSelected) void reloadCloudPlan?.();
+	}, [cloudSelected, reloadCloudPlan]);
 	const unreachable = Boolean(selectedHost && selectedHost.connection === "closed");
 	const hostOptions = useMemo(() => {
 		if (!selectedHostId || connectedHosts.some((host) => host.id === selectedHostId)) return connectedHosts;
@@ -66,12 +87,17 @@ function SpawnModalContent() {
 	useEffect(() => {
 		if (hostSelectionInitialized.current) return;
 		const routed = routeHostId ? hostStates.find((host) => host.hostId === routeHostId) : undefined;
-		if ((routeHostId && routed?.loading) || (!routeHostId && connectedHosts.length === 0 && hostStates.some((host) => host.loading))) return;
+		// A machine still connecting is waited for before Cloud can become the default.
+		if ((routeHostId && routed?.loading) || (!routeHostId && machineHosts.length === 0 && hostStates.some((host) => host.loading))) return;
 		hostSelectionInitialized.current = true;
 		setSelectedHostId(initialSpawnHostId({ routeHostId, currentHostId: currentHostId ?? undefined, hosts: connectedHosts }));
-	}, [connectedHosts, currentHostId, hostStates, routeHostId]);
+	}, [connectedHosts, currentHostId, hostStates, machineHosts, routeHostId]);
 
 	const [projectId, setProjectId] = useState<string | null>(null);
+	// Only a session the plan pays for is the plan's to stop: Coder the
+	// organization runs free still starts on Free.
+	const cloudProjectProvider = cloudState.projects.find((item) => item.id === projectId)?.config.sandboxProvider;
+	const planBlock = cloudSelected ? cloudPlanBlock(cloudPlan?.summary, Date.now(), cloudSessionBilled(cloudProjectProvider, cloudState.org?.offering)) : undefined;
 	const [harness, setHarness] = useState("");
 	const [agentTouched, setAgentTouched] = useState(false);
 	const [mode, setMode] = useState<SessionMode>("chat");
@@ -80,10 +106,26 @@ function SpawnModalContent() {
 	const [attachments, setAttachments] = useState<SpawnAttachment[]>([]);
 	const attachmentsRef = useRef<SpawnAttachment[]>([]);
 	const pickingAttachments = useRef(false);
+	// A paste that came in while a pick was loading, said again when it ends.
+	const missedPaste = useRef(false);
 	const [attachmentError, setAttachmentError] = useState<string>();
+	// Keyed by place and name: picked files carry no id of their own, and the
+	// same file can be picked twice.
+	const trayItems = useMemo(() => attachments.map((item, index) => ({ key: `${index}-${item.name}`, name: item.name, previewUri: spawnAttachmentPreview(item) })), [attachments]);
 	const [model, setModel] = useState("");
 	const [modelTouched, setModelTouched] = useState(false);
+	// An effort picked here; until then the model runs at its own default.
+	const [effort, setEffort] = useState<string>();
 	const [modelCatalog, setModelCatalog] = useState<AgentModelCatalog>();
+	// Every agent's own models, so the agent menu can offer each one's list
+	// before it is picked. The picked agent's list is the project-aware catalog.
+	const [agentModelLists, setAgentModelLists] = useState<Record<string, AgentModelInfo[]>>({});
+	const [approvalChoice, setApprovalChoice] = useState<ApprovalMode>();
+	const [accountPick, setAccountPick] = useState<string>();
+	const spawnAccounts = useAgentAccounts(config, cloudSelected ? undefined : harness);
+	useEffect(() => setAccountPick(undefined), [selectedHostId, harness]);
+	const accountOptions = useMemo(() => spawnAccounts.accounts.filter((account) => account.signedIn).map((account) => ({ id: account.id, label: agentAccountLabel(account, spawnAccounts.accounts) })), [spawnAccounts.accounts]);
+	const shownAccountId = accountPick || spawnAccounts.accounts.find((account) => account.default)?.id;
 	const [projectDetail, setProjectDetail] = useState<ProjectDetail>();
 	const [projectDetailLoadedFor, setProjectDetailLoadedFor] = useState<string | null>(null);
 	const [modelLoading, setModelLoading] = useState(false);
@@ -102,28 +144,54 @@ function SpawnModalContent() {
 	// appended, so dictation can extend what was typed rather than replace it.
 	const voice = useVoiceInput({ onTranscript: useCallback((spoken: string) => setPrompt((old) => old ? `${old} ${spoken}` : spoken), []) });
 	const listening = voice.state === "starting" || voice.state === "recording";
-	// iOS: the prompt fills the room above the controls. The controls translate
-	// with the keyboard, which does not reflow their siblings; a spacer below
-	// the attachments and messages makes that entire region reflow instead.
-	const [promptRoom, setPromptRoom] = useState<number>();
-	const keyboardHeight = useKeyboardState((state) => state.height);
+	// The composer docks to the bottom as the chat's does, on the same keyboard
+	// avoidance: its resting inset closes to the keyboard gap as the keys rise.
+	// The page sits below the stack's opaque bar, so the avoider counts it.
+	const chatKeyboard = useChatKeyboard({ underHeader: SYSTEM_GLASS_HEADER });
+	const glassInset = useGlassBarInset();
+	const keyboard = useReanimatedKeyboardAnimation();
+	const { restingInset, dockRiseOverride } = chatKeyboard;
+	const dockRise = useAnimatedStyle(() => ({
+		transform: [{ translateY: (restingInset - KEYBOARD_DOCK_GAP) * (dockRiseOverride ?? keyboard.progress.value) }],
+	}));
+	// A started request can't be called back, so the page holds while it runs.
+	// A ref, not state, so the success path can let go and replace the page in
+	// the same tick.
+	const holding = useRef(false);
+	useEffect(() => navigation.addListener("beforeRemove", (event) => {
+		if (holding.current) event.preventDefault();
+	}), [navigation]);
 
-
-
-	// Seed from this machine's routed project, or the selected machine's active
-	// project. A project id is never carried across machines.
+	// Seed from this machine's routed project, the project last worked in on it,
+	// or the selected machine's active project. A project id is never carried
+	// across machines. Waits for the stored last project, or a board filter
+	// seeded first would stick.
+	const lastProject = useLastProject(selectedHostId);
 	useEffect(() => {
+		if (!lastProject.loaded) return;
 		const nextProjectId = resolveSpawnProject(
 			projectId,
 			routeHostId === selectedHostId ? routeProjectId : undefined,
 			selectedHostId === currentHostId ? activeProjectId : ALL_PROJECTS,
 			projects,
 			projectsKnown,
+			lastProject.projectId,
 		);
 		if (nextProjectId !== projectId) changeProject(nextProjectId);
-	}, [activeProjectId, currentHostId, projects, projectsKnown, projectId, routeHostId, routeProjectId, selectedHostId]);
+	}, [activeProjectId, currentHostId, lastProject.loaded, lastProject.projectId, projects, projectsKnown, projectId, routeHostId, routeProjectId, selectedHostId]);
+
+	// Orchestrator Cloud's catalog: every cloud agent, the connected ones usable.
+	useEffect(() => {
+		if (!cloudSelected) return;
+		setCatalog(cloudAgentCatalog(cloudState.connections));
+		setChatHarnesses([...cloudState.chatHarnesses]);
+		setCatalogError(cloudState.connectionsLoaded && !cloudAgentsKey ? "Connect a coding agent first: Settings → Orchestrator Cloud." : null);
+		setLoading(!cloudState.connectionsLoaded);
+		// eslint-disable-next-line react-hooks/exhaustive-deps -- cloudAgentsKey covers the connections read here
+	}, [cloudAgentsKey, cloudSelected, cloudState.chatHarnesses, cloudState.connectionsLoaded]);
 
 	useEffect(() => {
+		if (cloudSelected) return;
 		const requestedHostId = selectedHostId;
 		if (!config || !requestedHostId) { setCatalog(null); setChatHarnesses([]); setLoading(false); return; }
 		let cancelled = false;
@@ -147,7 +215,7 @@ function SpawnModalContent() {
 		return () => {
 			cancelled = true;
 		};
-	}, [config, reloadKey, selectedHostId]);
+	}, [cloudSelected, config, reloadKey, selectedHostId]);
 
 	// Refreshing the catalog moved into the agent sheet route, which owns its own
 	// copy of it — see app/sheets/agent.tsx.
@@ -157,14 +225,44 @@ function SpawnModalContent() {
 	const projectWorkerModel = projectDetail?.config?.worker?.agentConfig?.model ?? projectDetail?.config?.agentConfig?.model ?? "";
 	const resolvedModel = resolveSpawnModel({ selectedAgent: harness, projectWorkerAgent, projectWorkerModel });
 	const displayedModel = modelTouched ? model : resolvedModel;
-	// "Automatic" when the project pins nothing, because that is the truth: the
-	// provider picks, and naming a model here promised one the session never ran.
-	const displayedModelLabel = displayedModel ? modelCatalog?.models.find((item) => item.id === displayedModel)?.label ?? displayedModel : "Automatic";
+	// The project-aware catalog once it lists something. An empty one (still
+	// discovering, or a project that names none) must not hide the machine's
+	// list, which is what left the menu offering only the default.
+	const currentModels = modelCatalog?.models.length ? modelCatalog.models : agentModelLists[harness] ?? [];
+	// "Default model" when the project pins nothing, because that is the truth:
+	// the provider picks, and naming a model here promised one the session never
+	// ran. Not "Automatic", which reads as an approval mode.
+	const displayedModelLabel = displayedModel ? menuModelName(currentModels.find((item) => item.id === displayedModel)?.label ?? displayedModel) : "Default model";
+	const projectApproval = projectDetail?.config?.worker?.agentConfig?.permissions ?? projectDetail?.config?.agentConfig?.permissions;
+	const approvalMode = resolveApprovalMode({ harness, chosen: approvalChoice, projectMode: projectApproval });
 	const modelSelection = modelTouched ? model : "__auto__";
+	// The model the task will run, picked or the catalog's default, for its
+	// effort levels.
+	const runningModel = displayedModel ? currentModels.find((item) => item.id === displayedModel) : currentModels.find((item) => item.isDefault);
+	// A Claude family alias ("opus", Claude Code's default) takes its newest
+	// model's levels. With nothing picked and no default named, the levels are
+	// a stand-in's, which picking one pins.
+	const aliasModel = harness === "claude-code" && runningModel && !runningModel.efforts?.length ? claudeAliasModel(currentModels, runningModel.id) : undefined;
+	const effortModel = aliasModel ?? runningModel ?? (displayedModel ? undefined : defaultEffortModel(harness, currentModels));
+	const effortChoices = useMemo(() => spawnEffortChoices(effortModel, effort), [effort, effortModel]);
+	// A level picked here is sent; so is the fallback shown for a model that
+	// names no default. Not a stand-in's fallback: no model is sent with it.
+	const usingStandIn = !runningModel && effortModel !== undefined;
+	const chosenEffort = spawnEffortToSend(effortChoices, effort, effortModel, usingStandIn);
+	// Each agent's menu list, built once per change rather than per keystroke:
+	// some catalogs run to thousands of models.
+	const agentMenuModels = useMemo(() => Object.fromEntries(agents.filter((agent) => agent.selectable).map((agent) => [
+		agent.id,
+		menuModels(agent.id === harness ? currentModels : agentModelLists[agent.id] ?? [], agent.id === harness ? modelSelection : "__auto__"),
+	])), [agentModelLists, agents, currentModels, harness, modelSelection]);
 	const hostNotices = selectedHostId === null && hostSelectionInitialized.current
 		? [routeHostId ? "That machine is not connected." : "No connected machines are available."]
 		: [];
-	const notices = [...hostNotices, ...spawnNotices({
+	const cloudNotices = [
+		...(planBlock ? [planBlock.message] : []),
+		...(cloudSelected && projectsKnown && projects.length === 0 ? ["Create a cloud project first: choose New cloud project from the project menu."] : []),
+	];
+	const notices = [...hostNotices, ...cloudNotices, ...spawnNotices({
 		// Only when a reconnect can fix it: a rejected password stops the poll for
 		// good, and its catalog error already says to re-scan the pairing code.
 		offline: unreachable,
@@ -178,13 +276,21 @@ function SpawnModalContent() {
 	const hasComposerMessage = Boolean(
 		notices.length > 0
 		|| attachmentError
-		|| (Platform.OS === "android" && listening)
+		|| listening
 		|| voice.error
 		|| error
 		|| offerTUI,
 	);
 
 	useEffect(() => {
+		if (!cloudSelected) return;
+		const project = cloudState.projects.find((item) => item.id === projectId);
+		setProjectDetail(project ? cloudProjectDetail(project) : undefined);
+		setProjectDetailLoadedFor(project ? project.id : null);
+	}, [cloudSelected, cloudState.projects, projectId]);
+
+	useEffect(() => {
+		if (cloudSelected) return;
 		const requestedHostId = selectedHostId;
 		if (!config || !requestedHostId || !projectId || projectId === STANDALONE_PROJECT) { setProjectDetail(undefined); setProjectDetailLoadedFor(null); return; }
 		let cancelled = false;
@@ -195,7 +301,7 @@ function SpawnModalContent() {
 			.catch((cause) => { if (!cancelled && spawnHostRequestIsCurrent(generation, catalogGeneration.current, requestedHostId, selectedHostId)) setModelError(userFacingError(cause)); })
 			.finally(() => { if (!cancelled && spawnHostRequestIsCurrent(generation, catalogGeneration.current, requestedHostId, selectedHostId)) setProjectDetailLoadedFor(projectId); });
 		return () => { cancelled = true; };
-	}, [config, projectId, reloadKey, selectedHostId]);
+	}, [cloudSelected, config, projectId, reloadKey, selectedHostId]);
 
 	useEffect(() => {
 		if (agentTouched || loading || !catalog) return;
@@ -208,18 +314,73 @@ function SpawnModalContent() {
 		setHarness((current) => current === nextHarness ? current : nextHarness);
 	}, [agentTouched, agents, catalog, loading, projectDetail, projectDetailLoadedFor, projectId]);
 
+	// Each agent's machine-wide models, for the agent menu's lists. Failures
+	// leave that agent's list empty; the picked agent's own load reports errors.
+	const agentIds = agents.filter((agent) => agent.selectable).map((agent) => agent.id).join("|");
+	// Orchestrator Cloud's model lists, one per connected agent, from its catalog.
+	const cloudOrgId = cloudState.org?.id;
 	useEffect(() => {
+		if (!cloudSelected) return;
+		if (!cloudOrgId || !agentIds) { setAgentModelLists({}); return; }
+		let cancelled = false;
+		void Promise.all(agentIds.split("|").map(async (id) => {
+			try {
+				return [id, cloudModelCatalog(id, await agentModelCatalog(cloudState.client, cloudOrgId, id)).models] as const;
+			} catch {
+				return [id, []] as const;
+			}
+		})).then((entries) => { if (!cancelled) setAgentModelLists(Object.fromEntries(entries)); });
+		return () => { cancelled = true; };
+	}, [agentIds, cloudOrgId, cloudSelected, cloudState.client]);
+
+	useEffect(() => {
+		if (cloudSelected) return;
 		const requestedHostId = selectedHostId;
-		if (!config || !requestedHostId || !projectId || !harness) { setModelCatalog(undefined); setModelLoading(false); return; }
+		if (!config || !requestedHostId || !agentIds) { setAgentModelLists({}); return; }
+		let cancelled = false;
+		const generation = catalogGeneration.current;
+		const polling = new AbortController();
+		void Promise.all(agentIds.split("|").map(async (id) => {
+			try {
+				return [id, (await getAgentModels(config, id, undefined, polling.signal)).models ?? []] as const;
+			} catch {
+				return [id, []] as const;
+			}
+		})).then((entries) => {
+			if (!cancelled && spawnHostRequestIsCurrent(generation, catalogGeneration.current, requestedHostId, selectedHostId)) setAgentModelLists(Object.fromEntries(entries));
+		});
+		return () => { cancelled = true; polling.abort(); };
+	}, [agentIds, cloudSelected, config, reloadKey, selectedHostId]);
+
+	// A new cloud task's models come from Orchestrator Cloud's catalog for the agent.
+	useEffect(() => {
+		if (!cloudSelected) return;
+		if (!cloudOrgId || !harness) { setModelCatalog(undefined); setModelLoading(false); return; }
+		let cancelled = false;
+		setModelLoading(true);
+		agentModelCatalog(cloudState.client, cloudOrgId, harness)
+			.then((catalog) => { if (!cancelled) { setModelCatalog(cloudModelCatalog(harness, catalog)); setModelError(undefined); } })
+			.catch(() => { if (!cancelled) setModelCatalog(undefined); })
+			.finally(() => { if (!cancelled) setModelLoading(false); });
+		return () => { cancelled = true; };
+	}, [cloudOrgId, cloudSelected, cloudState.client, harness]);
+
+	useEffect(() => {
+		if (cloudSelected) return;
+		const requestedHostId = selectedHostId;
+		// The machine's own catalog loads before a project is chosen, so the
+		// model menu is never just the default; choosing a project swaps in its.
+		if (!config || !requestedHostId || !harness) { setModelCatalog(undefined); setModelLoading(false); return; }
 		let cancelled = false;
 		const generation = catalogGeneration.current;
 		setModelLoading(true);
-		getAgentModels(config, harness, projectId === STANDALONE_PROJECT ? undefined : projectId)
+		const polling = new AbortController();
+		getAgentModels(config, harness, !projectId || projectId === STANDALONE_PROJECT ? undefined : projectId, polling.signal)
 			.then((nextCatalog) => { if (!cancelled && spawnHostRequestIsCurrent(generation, catalogGeneration.current, requestedHostId, selectedHostId)) { setModelCatalog(nextCatalog); setModelError(nextCatalog.warning); } })
 			.catch((cause) => { if (!cancelled && spawnHostRequestIsCurrent(generation, catalogGeneration.current, requestedHostId, selectedHostId)) setModelError(userFacingError(cause)); })
 			.finally(() => { if (!cancelled && spawnHostRequestIsCurrent(generation, catalogGeneration.current, requestedHostId, selectedHostId)) setModelLoading(false); });
-		return () => { cancelled = true; };
-	}, [config, harness, projectId, reloadKey, selectedHostId]);
+		return () => { cancelled = true; polling.abort(); };
+	}, [cloudSelected, config, harness, projectId, reloadKey, selectedHostId]);
 
 	// Loads that failed while the desktop was unreachable run again once the
 	// board's poll reconnects. Keyed on the reconnect, not on the errors, so an
@@ -232,7 +393,8 @@ function SpawnModalContent() {
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [connection]);
 
-	const clearModelOverride = () => { setModel(""); setModelTouched(false); };
+	// A level belongs to the model it was picked for, so a new model starts at its own default.
+	const clearModelOverride = () => { setModel(""); setModelTouched(false); setEffort(undefined); };
 	const resetModelSource = () => { clearModelOverride(); setModelCatalog(undefined); setModelError(undefined); };
 	const chooseHost = (nextHostId: string) => {
 		if (nextHostId === selectedHostId) return;
@@ -247,13 +409,22 @@ function SpawnModalContent() {
 		setProjectDetailLoadedFor(null);
 		setModelLoading(false);
 		resetModelSource();
+		setAgentModelLists({});
+		setApprovalChoice(undefined);
 		setError(null);
 		setOfferTUI(false);
 		requestRef.current = undefined;
-		void selectSpawnHost(nextHostId, { select: setSelectedHostId, persistDefault: switchHost })
+		// Cloud is never the default machine: choosing it here leaves that alone.
+		void selectSpawnHost(nextHostId, { select: setSelectedHostId, persistDefault: isCloudHost(nextHostId) ? async () => {} : switchHost })
 			.catch(() => setError("Could not make that machine the default. Try again."));
 	};
 	const changeProject = (nextProjectId: string | null) => {
+		if (nextProjectId === NEW_CLOUD_PROJECT) {
+			// A cloud project starts from a repository, on its own sheet over this
+			// page; the project menu offers it once it exists.
+			router.push({ pathname: "/cloud/new-project", params: { placement: "cloud" } });
+			return;
+		}
 		if (!spawnModelSourceChanged({ projectId, agentId: harness }, { projectId: nextProjectId, agentId: harness })) return;
 		resetModelSource();
 		setProjectDetail(undefined);
@@ -284,53 +455,120 @@ function SpawnModalContent() {
 			clearModelOverride();
 			return;
 		}
+		if (nextModel !== model) setEffort(undefined);
 		setModel(nextModel);
 		setModelTouched(true);
 	};
-	const voiceFeedback = listening ? (
-		<View style={styles.voice}>
-			<Feather name="mic" size={iconSize.xs} color={t.red} />
-			<Text numberOfLines={2} style={styles.voiceText}>
-				{voice.partial || (voice.state === "starting" ? "Keep holding…" : "Listening…")}
-			</Text>
-		</View>
-	) : null;
-	const pickAttachments = async () => {
-		if (pickingAttachments.current) return;
+	const selectEffort = (nextEffort: string) => {
+		if (!runningModel && effortModel) {
+			setModel(effortModel.id);
+			setModelTouched(true);
+		}
+		setEffort(nextEffort);
+	};
+	// The agent menu picks an agent and one of its models together.
+	const selectAgentModel = (nextHarness: string, nextModel: string) => {
+		selectAgent(nextHarness);
+		selectModel(nextModel);
+	};
+	// An agent's whole catalog, searchable, for one too long for its menu.
+	const browseModels = (agentId: string) => {
+		router.push(modelSheetRoute({
+			agentId,
+			projectId: projectId && projectId !== STANDALONE_PROJECT ? projectId : "",
+			selected: agentId === harness && modelTouched ? model : "",
+			// A cloud task browses Orchestrator Cloud's catalog, not the machine's.
+			...(cloudSelected ? { hostId: CLOUD_HOST_ID } : {}),
+			// The sheet's default row answers "".
+			onSelect: (id) => selectAgentModel(agentId, id || "__auto__"),
+		}));
+	};
+	/** Adds picks to the task; resolves to how many were added. `notice` says what a paste left out. */
+	const addAttachments = async (pick: () => Promise<PickedSpawnAttachment[] | null>, fallback: string, notice?: string): Promise<number> => {
+		if (pickingAttachments.current) return 0;
+		if (cloudSelected) {
+			setAttachmentError("Cloud tasks can't take attachments yet. Start the task, then add files in its chat.");
+			return 0;
+		}
 		pickingAttachments.current = true;
 		setAttachmentError(undefined);
+		// The pick's own result would replace the paste-again notice, so it is
+		// added back to whatever the pick ends with.
+		const missed = () => {
+			const was = missedPaste.current;
+			missedPaste.current = false;
+			return was ? "Paste the images again: they came in while attachments were loading." : undefined;
+		};
 		try {
-			const result = await DocumentPicker.getDocumentAsync({
-				multiple: true,
-				copyToCacheDirectory: true,
-				type: "*/*",
-			});
-			if (result.canceled) return;
-			const picked = result.assets.map((asset) => {
-				const file = new File(asset.uri);
-				return {
-					name: asset.name,
-					mimeType: asset.mimeType || "application/octet-stream",
-					bytes: asset.size ?? file.size,
-					readData: () => file.base64(),
-				};
-			});
+			const picked = await pick();
+			if (!picked) { setAttachmentError(missed()); return 0; }
 			const before = attachmentsRef.current;
 			const next = await readSpawnAttachments(before, picked);
 			const merged = appendSpawnAttachments(attachmentsRef.current, next.attachments.slice(before.length));
+			const added = merged.attachments.length - attachmentsRef.current.length;
 			attachmentsRef.current = merged.attachments;
 			setAttachments(merged.attachments);
-			setAttachmentError(next.error ?? merged.error);
+			setAttachmentError(joinAttachmentErrors(next.error ?? merged.error, notice, missed()));
+			return added;
 		} catch (cause) {
-			setAttachmentError(userFacingError(cause, "Couldn't read that file."));
+			setAttachmentError(joinAttachmentErrors(userFacingError(cause, fallback), missed()));
+			return 0;
 		} finally {
 			pickingAttachments.current = false;
-
 		}
+	};
+	const pickFiles = () => addAttachments(async () => {
+		const result = await DocumentPicker.getDocumentAsync({
+			multiple: true,
+			copyToCacheDirectory: true,
+			type: "*/*",
+		});
+		if (result.canceled) return null;
+		return result.assets.map((asset) => {
+			const file = new File(asset.uri);
+			return {
+				name: asset.name,
+				mimeType: asset.mimeType || "application/octet-stream",
+				bytes: asset.size ?? file.size,
+				previewUri: asset.uri,
+				readData: () => file.base64(),
+			};
+		});
+	}, "Couldn't read that file.");
+	const pickPhotos = () => addAttachments(async () => {
+		const remaining = MAX_SPAWN_ATTACHMENTS - attachmentsRef.current.length;
+		if (remaining <= 0) throw new Error(`You can attach up to ${MAX_SPAWN_ATTACHMENTS} files.`);
+		// "compatible" asks iOS for a JPEG rather than the library's HEIC
+		// original, which most agents can't open.
+		const result = await ImagePicker.launchImageLibraryAsync({
+			mediaTypes: ["images"],
+			quality: 0.82,
+			allowsMultipleSelection: true,
+			selectionLimit: remaining,
+			preferredAssetRepresentationMode: ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Compatible,
+		});
+		if (result.canceled) return null;
+		return result.assets.map((asset, index) => photoPickerAttachment(asset, index, new File(asset.uri)));
+	}, "Couldn't open your photo library.");
+
+	// Pasting is a way to attach too, so it goes through the same gate as the
+	// menu. Native stops a paste at 8 images or 25 MB and says which.
+	const pasteImages = (assets: ComposerImageAsset[], overflow?: PasteOverflow) => {
+		// A paste can't wait for a pick still loading, and dropping it silently
+		// would look like paste doing nothing.
+		if (pickingAttachments.current) {
+			missedPaste.current = true;
+			setAttachmentError("Wait for attachments to finish loading, then paste again.");
+			return;
+		}
+		const { picks, error } = pastedSpawnAttachments(assets, attachmentsRef.current.length);
+		const skipped = overflow === "count" ? `You can attach up to ${MAX_SPAWN_ATTACHMENTS} files.` : overflow === "size" ? "Pasted images must total under 25 MB." : undefined;
+		void addAttachments(async () => picks, "Couldn't read the pasted image.", joinAttachmentErrors(error, skipped))
+			.then((added) => { if (added > 0) haptics.tap(); });
 	};
 
 	const onSpawn = async () => {
-		if (!selectedHostId || !config) {
+		if (!selectedHostId || (!config && !cloudSelected)) {
 			setError("Choose a connected machine before starting this task.");
 			return;
 		}
@@ -342,6 +580,7 @@ function SpawnModalContent() {
 		// choice, and the better one: a disabled button with no explanation is
 		// worse than a message naming what is missing.
 		setBusy(true);
+		holding.current = true;
 		setError(null);
 		setOfferTUI(false);
 		try {
@@ -351,6 +590,12 @@ function SpawnModalContent() {
 				prompt: prompt.trim() || undefined,
 				harness: harness || undefined,
 				model: modelOverride(displayedModel, modelTouched),
+				// Only a level picked here; otherwise the model's default applies.
+				effort: chosenEffort,
+				accountId: accountPick || undefined,
+				// Only a mode picked here overrides the project's; an untouched
+				// picker names the project's mode, which the daemon applies anyway.
+				approvalMode: approvalChoice === approvalMode ? approvalChoice : undefined,
 				mode,
 				attachments: attachmentsRef.current.map(({ mimeType, data }) => ({ mimeType, data })),
 			};
@@ -361,22 +606,29 @@ function SpawnModalContent() {
 			}
 			const session = await spawn({ ...request, clientRequestId: requestRef.current.id });
 			if (projectId === STANDALONE_PROJECT) setActiveProject(ALL_PROJECTS);
+			else rememberLastProject(selectedHostId, projectId);
+			holding.current = false;
+			// Covered while the request ran (a notification or link can still
+			// open a page over this one): the worker shows up on the board, and
+			// replacing this page now would swap out one the user can't see. The
+			// page lets go again, or coming back to it would find it locked for
+			// good; a second Start reuses the request id, so it can't spawn a
+			// second worker.
+			if (!navigation.isFocused()) {
+				setBusy(false);
+				return;
+			}
 			haptics.success();
-			// Dismiss the modal first, then open the freshly spawned session's mode-aware surface
-			// once the dismiss transition has settled. Firing both navigations in the
-			// same tick overlaps their animations (the modal retracts while the session
-			// is already sliding in); runAfterInteractions waits for the modal's
-			// transition to finish so the two happen back-to-back, not on top of each
-			// other. The session screen shows its own "connecting" state while the
-			// terminal attaches, so landing on it before the PTY is ready is expected.
-			backOr(router);
-			InteractionManager.runAfterInteractions(() => {
-				router.push({
-					pathname: "/session/[id]",
-					params: { id: session.id, projectId: session.projectId, hostId: selectedHostId },
-				});
+			// The new task becomes its conversation in place, as a new chat does:
+			// the session replaces this page, so going back returns to wherever
+			// the task was started from. The session screen shows its own
+			// "connecting" state while the agent attaches.
+			router.replace({
+				pathname: "/session/[id]",
+				params: { id: session.id, projectId: session.projectId, hostId: selectedHostId },
 			});
 		} catch (e) {
+			holding.current = false;
 			haptics.error();
 			setError(spawnErrorCopy(e));
 			setOfferTUI(mode === "chat" && isChatPreflightError(e));
@@ -384,109 +636,94 @@ function SpawnModalContent() {
 		}
 	};
 
-	const content = (
-		<View style={[
-			styles.content,
-			Platform.OS === "ios" && styles.iosContent,
-			Platform.OS === "android" && styles.androidContent,
-		]}>
-				<View
-					style={[styles.promptHost, Platform.OS === "ios" && styles.promptHostFill]}
-					onLayout={Platform.OS === "ios" ? (event) => setPromptRoom(Math.floor(event.nativeEvent.layout.height)) : undefined}
-				>
-					<SpawnPromptInput value={prompt} onChangeText={setPrompt} height={Platform.OS === "ios" ? promptRoom : undefined} />
-				</View>
+	// While a request runs, the back swipe is off too, so it never starts a
+	// transition the hold above would cancel.
+	useEffect(() => {
+		if (!busy) return;
+		navigation.setOptions({ gestureEnabled: false });
+		return () => navigation.setOptions({ gestureEnabled: true });
+	}, [busy, navigation]);
 
-				{attachments.length ? (
-					<ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.attachments}>
-						{attachments.map((item, index) => (
-							<View key={`${item.name}-${index}`} style={styles.attachment}>
-								<Feather name="file-text" size={iconSize.sm} color={t.accent} />
-								<Text numberOfLines={1} style={styles.attachmentName}>{item.name}</Text>
-								<Pressable
-									hitSlop={8}
-									accessibilityLabel={`Remove ${item.name}`}
-									onPress={() => {
-										attachmentsRef.current = attachmentsRef.current.filter((candidate) => candidate !== item);
-										setAttachments(attachmentsRef.current);
-									}}
-								>
-									<Feather name="x" size={iconSize.xs} color={t.textTertiary} />
-								</Pressable>
-							</View>
-						))}
-					</ScrollView>
-				) : null}
+	const harnessLabel = agents.find((item) => item.id === harness)?.label;
+	// Before the list lands the seed can name a project the picker doesn't list
+	// yet. It shows under its id, the name it was created with, so Start never
+	// sends a task somewhere the picker calls "Choose project".
+	const unlistedProject = projectId && projectId !== STANDALONE_PROJECT && projectId !== NEW_CLOUD_PROJECT && !projects.some((item) => item.id === projectId)
+		? [{ id: projectId, label: projectId, icon: "folder" as const }]
+		: [];
 
-		{hasComposerMessage ? <View style={styles.messages}>
+	return (
+		<KeyboardAvoidingView
+			style={[styles.screen, { paddingTop: glassInset }, chatKeyboard.rootStyle]}
+			behavior={chatKeyboard.behavior}
+			keyboardVerticalOffset={chatKeyboard.keyboardVerticalOffset}
+		>
+			{/* The empty conversation the task will become. A tap there puts the
+			    keyboard away, as it does over a conversation. */}
+			<Pressable accessible={false} style={styles.room} onPress={Keyboard.dismiss} />
+
+			<Animated.View style={[styles.dock, { paddingBottom: restingInset }, dockRise]}>
+				{hasComposerMessage ? <View style={styles.messages}>
 					{notices.map((notice) => <Text key={notice} style={styles.warn}>{notice}</Text>)}
 					{attachmentError ? <Text style={styles.warn}>{attachmentError}</Text> : null}
-					{Platform.OS === "android" ? voiceFeedback : null}
 					{voice.error ? <Text accessibilityRole="alert" style={styles.warn}>{voice.error}</Text> : null}
-					{error ? <Text style={styles.error}>{error}</Text> : null}
-					{offerTUI ? <Button title="Create as Terminal UI instead" variant="ghost" icon="terminal" onPress={() => { selectMode("tui"); setOfferTUI(false); setError(null); }} /> : null}
+					{error ? <Text accessibilityRole="alert" style={styles.error}>{error}</Text> : null}
+					{offerTUI ? <Button title="Create as Terminal UI instead" variant="secondary" icon="terminal" onPress={() => { selectMode("tui"); setOfferTUI(false); setError(null); }} /> : null}
+					{planBlock ? <Button title="See plan" variant="secondary" icon="info" onPress={() => router.push("/sheets/cloud-plan")} /> : null}
 				</View> : null}
 
-				{/* The sticky controls move visually but keep their original layout
-				    position. Reserve that movement before them so chips and messages
-				    remain visible above the keyboard, not behind the controls. */}
-				{Platform.OS === "ios" && keyboardHeight > 0 ? (
-					<View pointerEvents="none" style={{ height: keyboardHeight, marginTop: -space.sm }} />
-				) : null}
-
-				{/* The controls ride the keyboard on the UI thread.
-				    iOS does not lift this form sheet for the IME, and every
-				    height-based attempt moved late or not at all: a settled keyboard
-				    height only lands after the animation, animated padding is
-				    interpolated on the JS thread, and a keyboard-avoiding wrapper
-				    mismeasures its own frame inside a sheet, leaving Start task behind
-				    the keyboard. A sticky view translates by the live offset, so
-				    the selectors and the button sit directly above it. */}
-				<KeyboardStickyView offset={{ closed: 0, opened: 0 }}>
-				{Platform.OS === "ios" ? voiceFeedback : null}
 				<SpawnComposerControls
 					hosts={hostOptions}
 					hostId={selectedHostId}
 					onSelectHost={chooseHost}
-					projects={[...projects.map((item) => ({ id: item.id, label: item.name, icon: "folder" as const })), { id: STANDALONE_PROJECT, label: "Standalone agent", icon: "message-square-plus" as const, sectionBreakBefore: true }]}
+					projects={cloudSelected
+						// Cloud sessions always run in a project; a new one is created from here.
+						? [...unlistedProject, ...projects.map((item) => ({ id: item.id, label: item.name, icon: "folder" as const })), { id: NEW_CLOUD_PROJECT, label: "New cloud project", icon: "folder-plus" as const, sectionBreakBefore: unlistedProject.length + projects.length > 0 }]
+						: [...unlistedProject, ...projects.map((item) => ({ id: item.id, label: item.name, icon: "folder" as const })), { id: STANDALONE_PROJECT, label: "Standalone agent", icon: "message-square-plus" as const, sectionBreakBefore: true }]}
 					projectId={projectId}
 					onSelectProject={changeProject}
+					accounts={accountOptions}
+					accountId={shownAccountId}
+					onSelectAccount={setAccountPick}
 					agents={agents.filter((item) => item.selectable).map((item) => ({ id: item.id, label: item.label }))}
 					harness={harness}
 					onSelectHarness={selectAgent}
-					models={modelCatalog?.models.map((item) => ({ id: item.id, label: item.label })) ?? []}
+					models={currentModels.map((item) => ({ id: item.id, label: item.label }))}
+					agentModels={agentMenuModels}
 					modelSelection={modelSelection}
 					modelLabel={displayedModelLabel}
 					onSelectModel={selectModel}
-					onAttach={() => { void pickAttachments(); }}
-					voice={{ state: voice.state, mode: voice.mode, onPressIn: voice.pressIn, onPressOut: voice.pressOut }}
+					onSelectAgentModel={selectAgentModel}
+					usesDefaultModel={!displayedModel}
+					onBrowseModels={browseModels}
+					approvalModes={approvalOptions(harness)}
+					approvalMode={approvalMode}
+					onSelectApprovalMode={(next) => setApprovalChoice(next as ApprovalMode)}
+					effortChoices={effortChoices}
+					onSelectEffort={selectEffort}
+					onChoosePhoto={() => { void pickPhotos(); }}
+					onChooseFile={() => { void pickFiles(); }}
+					onPasteImages={busy ? null : pasteImages}
+					voice={{ state: voice.state, partial: voice.partial, subscribeLevel: voice.subscribeLevel, onToggleLatched: voice.toggleLatched }}
+					prompt={prompt}
+					onChangePrompt={setPrompt}
+					placeholder={harnessLabel ? `Ask ${harnessLabel}` : "What should this worker do?"}
+					attachments={<ComposerAttachmentTray
+						items={trayItems}
+						onRemove={(key) => {
+							const item = attachments[trayItems.findIndex((candidate) => candidate.key === key)];
+							if (!item) return;
+							attachmentsRef.current = attachmentsRef.current.filter((candidate) => candidate !== item);
+							setAttachments(attachmentsRef.current);
+						}}
+					/>}
 					onSpawn={() => { void onSpawn(); }}
 					busy={busy}
-					disabled={!selectedHostId || !config || !projectId || !harness || busy || modelLoading || loading || listening || voice.state === "transcribing"}
+					disabled={!selectedHostId || (!config && !cloudSelected) || !projectId || !harness || busy || modelLoading || loading || listening || voice.state === "transcribing" || Boolean(planBlock)}
 				/>
-				</KeyboardStickyView>
-		</View>
+			</Animated.View>
+		</KeyboardAvoidingView>
 	);
-
-	if (Platform.OS === "android") {
-		return (
-			<View style={styles.androidModalRoot}>
-				<BottomSheet
-					index={0}
-					enablePanDownToClose
-					enableDynamicSizing
-					backgroundStyle={{ backgroundColor: t.bgBase }}
-					onClose={() => backOr(router)}
-				>
-					<BottomSheetView style={styles.androidSheet}>
-						{content}
-					</BottomSheetView>
-				</BottomSheet>
-			</View>
-		);
-	}
-
-	return <View style={styles.screen}>{content}</View>;
 }
 
 // Human copy for a failed spawn, matching every other screen. Never the wire
@@ -494,34 +731,19 @@ function SpawnModalContent() {
 function spawnErrorCopy(e: unknown): string {
 	if (isChatPreflightError(e)) return chatErrorCopy(e);
 	if (e instanceof ApiError && e.code === "PROMPT_TOO_LONG") {
-		return "Task prompt is too long. Keep it to 16 KiB or fewer (emoji and other non-English characters use more than one byte). Shorten it and try again.";
+		return "Task prompt is too long. Keep it to 100 KiB or fewer (emoji and other non-English characters use more than one byte). Shorten it and try again.";
 	}
 	return userFacingError(e, "Couldn't start the worker. Try again.");
 }
 
-// Android's compact field height and the iOS host's minimum layout height.
-const PROMPT_MIN_HEIGHT = 112;
-
 const makeStyles = (t: Theme) =>
 	StyleSheet.create({
+		// The page a conversation is drawn on, since this is where one begins.
 		screen: { flex: 1, backgroundColor: t.bgBase },
-		content: { flex: 1, paddingHorizontal: space.lg, paddingTop: space.lg, paddingBottom: space.sm, gap: space.sm },
-		iosContent: { paddingTop: space.xxxl },
-		androidModalRoot: { flex: 1, backgroundColor: "transparent" },
-		androidSheet: {
-			paddingTop: space.xs,
-			paddingBottom: space.md,
-			backgroundColor: t.bgBase,
-		},
-		androidContent: { flex: 0, paddingTop: space.md, paddingBottom: space.none },
-		messages: { gap: space.xs },
-		voice: { flexDirection: "row", alignItems: "center", gap: space.xs, backgroundColor: t.tintRed, borderRadius: 8, paddingHorizontal: space.sm, paddingVertical: space.xs },
-		voiceText: { fontFamily: "Geist_400Regular", flex: 1, color: t.textSecondary, fontSize: type.caption2.fontSize },
-		promptHost: { width: "100%", height: PROMPT_MIN_HEIGHT },
-		promptHostFill: { height: undefined, flex: 1, minHeight: 0 },
-		attachments: { gap: space.sm },
-		attachment: { maxWidth: 190, height: 36, flexDirection: "row", alignItems: "center", gap: space.xs, paddingHorizontal: space.sm, borderRadius: 12, borderCurve: "continuous", backgroundColor: t.bgElevated, borderWidth: StyleSheet.hairlineWidth, borderColor: t.borderSubtle },
-		attachmentName: { fontFamily: "Geist_400Regular", flexShrink: 1, color: t.textSecondary, fontSize: type.caption1.fontSize },
-		warn: { fontFamily: "Geist_400Regular", color: t.amber, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
-		error: { fontFamily: "Geist_400Regular", color: t.red, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
+		room: { flex: 1 },
+		// The chat composer's dock: its side margin and the gap to the keyboard.
+		dock: { paddingHorizontal: space.md, paddingTop: space.xs, gap: space.xs },
+		messages: { gap: space.xs, paddingHorizontal: space.xs },
+		warn: { fontFamily: "DMSans_400Regular", color: t.amber, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
+		error: { fontFamily: "DMSans_400Regular", color: t.red, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 	});

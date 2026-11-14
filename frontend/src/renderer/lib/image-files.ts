@@ -1,12 +1,5 @@
-/** Raster formats the app previews as images, matching the daemon's workspace blob route. */
-export function isRasterImagePath(path: string): boolean {
-	return /\.(apng|avif|bmp|gif|ico|jpe?g|png|webp)$/i.test(path);
-}
-
-/** SVG is text, so it keeps its code view and gains a rendered one. */
-export function isSvgPath(path: string): boolean {
-	return /\.svg$/i.test(path);
-}
+// The format checks are shared with the mobile app, so both preview the same files.
+export { isMermaidPath, isRasterImagePath, isSvgPath } from "../../../../packages/shared/files/file-formats";
 
 /**
  * An SVG's source as an `<img>` URL. An image context runs no scripts and loads

@@ -104,6 +104,11 @@ func (s *Service) InvalidateAgentInstallation(agentID string) {
 
 // InvalidateAgentAuthentication marks an agent's authentication observation stale.
 func (s *Service) InvalidateAgentAuthentication(agentID string) {
+	if item, ok := s.agent(agentID); ok {
+		if cache, ok := item.Agent.(ports.AgentAuthCacheInvalidator); ok {
+			cache.InvalidateAuthCache()
+		}
+	}
 	s.readiness.Invalidate(agentID, readinessInvalidateAuthentication)
 	s.InvalidateModelCatalogs(agentID)
 	if agentID == string(domain.HarnessCodex) && s.codexAccounts != nil {
@@ -123,8 +128,21 @@ func (s *Service) RecheckAgent(agentID string) {
 }
 
 // WarmReadiness starts the coordinator's bounded asynchronous warm-up and
-// signals after its installation and authentication passes finish.
-func (s *Service) WarmReadiness() <-chan struct{} { return s.readiness.Warm() }
+// signals after its installation and authentication passes finish. Model
+// catalog updates wait for the first pass; the saved catalog is served before it.
+func (s *Service) WarmReadiness() <-chan struct{} {
+	done := s.readiness.Warm()
+	if s.readinessWarm == nil {
+		return done
+	}
+	out := make(chan struct{})
+	go func() {
+		<-done
+		s.readinessWarmOnce.Do(func() { close(s.readinessWarm) })
+		close(out)
+	}()
+	return out
+}
 
 func (s *Service) withReadinessUsage(ctx context.Context, snapshots []domain.AgentReadinessSnapshot) (Readiness, error) {
 	if s.sessions == nil {

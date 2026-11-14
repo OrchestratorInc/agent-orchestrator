@@ -37,13 +37,6 @@ export function filterWorkersByEnvironmentAndProject<T extends { projectId: stri
 	return filterWorkersByProject(environmentWorkers, projectId, projects);
 }
 
-export function workerSearchPresentation(
-	requestedOpen: boolean,
-	query: string,
-): "collapsed" | "expanded" {
-	return requestedOpen || query.trim().length > 0 ? "expanded" : "collapsed";
-}
-
 export function workerProjectLabel(
 	projects: readonly WorkerProject[],
 	projectId: string,
@@ -80,11 +73,28 @@ export function workerProjectForEnvironment(
 		: ALL_WORKER_PROJECTS;
 }
 
+export function workerEnvironmentLabel(environments: readonly WorkerEnvironment[], environmentId: string): string {
+	const options = workerEnvironmentOptions(environments);
+	return (options.find((environment) => environment.id === environmentId) ?? options[0]).label;
+}
+
 export function workerEnvironmentOptions(
 	environments: readonly WorkerEnvironment[],
 ): { id: string; label: string; appearance?: MachineAppearance }[] {
 	return [
-		{ id: ALL_WORKER_ENVIRONMENTS, label: "All environments" },
+		{ id: ALL_WORKER_ENVIRONMENTS, label: "All machines" },
 		...environments.map((environment) => ({ id: environment.id, label: environment.name, ...(environment.appearance ? { appearance: environment.appearance } : {}) })),
 	];
+}
+
+/** Machines in name order, so the filter keeps its order across launches and polls. */
+export function sortWorkerEnvironments<T extends WorkerEnvironment>(environments: readonly T[]): T[] {
+	return [...environments].sort((a, b) =>
+		a.name.toLocaleLowerCase().localeCompare(b.name.toLocaleLowerCase()) || a.id.localeCompare(b.id),
+	);
+}
+
+/** One machine leaves nothing to filter, so the chip row only appears from two. */
+export function showsEnvironmentFilter(environments: readonly WorkerEnvironment[]): boolean {
+	return environments.length > 1;
 }

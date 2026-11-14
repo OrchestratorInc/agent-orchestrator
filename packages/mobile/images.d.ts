@@ -4,3 +4,9 @@ declare module "*.png" {
 	const content: number;
 	export default content;
 }
+
+// A script the app hands to a WebView, shipped as an asset (see metro.config.js).
+declare module "*.webjs" {
+	const content: number;
+	export default content;
+}

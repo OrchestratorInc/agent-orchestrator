@@ -45,6 +45,9 @@ func New(plugin nativeacp.Plugin, log *slog.Logger) ports.ChatDriver {
 }
 
 func validateTurnSettings(initial ports.PermissionMode, settings ports.ChatTurnSettings) error {
+	if err := validateCursorFastParam(settings.Model); err != nil {
+		return err
+	}
 	if settings.Approval == "" {
 		return nil
 	}
@@ -58,6 +61,15 @@ func validateTurnSettings(initial ports.PermissionMode, settings ports.ChatTurnS
 			"cursor ACP permission mode change from %q to %q requires restarting Chat",
 			initial, requested,
 		)
+	}
+	return nil
+}
+
+func validateCursorFastParam(model string) error {
+	_, params, _ := cursorModelParams(model)
+	value, ok := params["fast"]
+	if ok && value != "true" && value != "false" {
+		return fmt.Errorf("cursor model parameter \"fast\" must be true or false, got %q", value)
 	}
 	return nil
 }
@@ -146,14 +158,18 @@ func sessionOptions(settings ports.ChatTurnSettings) []acpdriver.SessionOption {
 	if settings.Model == "" {
 		return nil
 	}
-	model, params := cursorModelParams(settings.Model)
+	model, params, explicitFast := cursorModelParams(settings.Model)
 	if settings.Effort != "" {
 		params["effort"] = settings.Effort
 	}
 	options := []acpdriver.SessionOption{{ID: "model", Value: model}}
 	for _, id := range []string{"thinking", "fast"} {
-		if value := params[id]; value != "" {
-			options = append(options, acpdriver.SessionOption{ID: id, Value: value, Optional: true})
+		if value, ok := params[id]; ok && (id != "thinking" || value != "") {
+			// Only an explicitly selected Fast setting must fail closed. CLI-style
+			// aliases synthesize fast=false when omitted; Thinking remains best-effort.
+			options = append(options, acpdriver.SessionOption{
+				ID: id, Value: value, Optional: id == "thinking" || (id == "fast" && !explicitFast),
+			})
 		}
 	}
 	// Each model names its effort setting its own way; only the one it offers applies.
@@ -166,8 +182,9 @@ func sessionOptions(settings ports.ChatTurnSettings) []acpdriver.SessionOption {
 	return options
 }
 
-func cursorModelParams(id string) (string, map[string]string) {
+func cursorModelParams(id string) (string, map[string]string, bool) {
 	params := map[string]string{}
+	explicitFast := false
 	if base, body, bracketed := strings.Cut(strings.TrimSuffix(id, "]"), "["); bracketed {
 		for _, param := range strings.Split(body, ",") {
 			key, value, _ := strings.Cut(strings.TrimSpace(param), "=")
@@ -175,8 +192,11 @@ func cursorModelParams(id string) (string, map[string]string) {
 				key = "effort"
 			}
 			params[key] = value
+			if key == "fast" {
+				explicitFast = true
+			}
 		}
-		return base, params
+		return base, params, explicitFast
 	}
 	tokens := strings.Split(strings.ReplaceAll(id, "-extra-high", "-xhigh"), "-")
 	end := len(tokens)
@@ -184,6 +204,7 @@ func cursorModelParams(id string) (string, map[string]string) {
 		last := tokens[end-1]
 		if last == "fast" || last == "thinking" {
 			params[last] = "true"
+			explicitFast = explicitFast || last == "fast"
 		} else if slices.Contains(cursorEfforts, last) && params["effort"] == "" {
 			params["effort"] = last
 		} else {
@@ -194,7 +215,7 @@ func cursorModelParams(id string) (string, map[string]string) {
 		if id == "auto" {
 			id = "default"
 		}
-		return id, params
+		return id, params, explicitFast
 	}
 	// A command-line id that leaves a setting out means it is off.
 	for _, flag := range []string{"thinking", "fast"} {
@@ -202,7 +223,7 @@ func cursorModelParams(id string) (string, map[string]string) {
 			params[flag] = "false"
 		}
 	}
-	return cursorChatModelName(strings.Join(tokens[:end], "-")), params
+	return cursorChatModelName(strings.Join(tokens[:end], "-")), params, explicitFast
 }
 
 // cursorOlderClaude matches the command line's older Claude name, version first

@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { ChevronLeft, ChevronRight, Search } from "lucide-react";
+import { ChevronLeft, ChevronRight, Search } from "@/components/app-icons";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { agentModelsQueryOptions } from "../../../hooks/useAgentModelsQuery";
@@ -36,7 +36,9 @@ export function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onO
 	const { i18n, t } = useTranslation();
 	const options = agentModelsQueryOptions(agentId, "", hostId, true);
 	const loginBlocksCatalog = needsLogin && !MULTI_PROVIDER_HARNESSES.has(agentId);
-	const catalog = useQuery({ ...options, enabled: installed && !loginBlocksCatalog });
+	// The saved catalog lists without waiting on readiness; only its refresh
+	// (refreshModelsOnOpen) and the daemon's discovery wait for readiness.
+	const catalog = useQuery(options);
 	const [page, setPage] = useState(0);
 	const [modelSearch, setModelSearch] = useState("");
 	const scope = `${hostId ?? LOCAL_HOST}:${agentId}`;
@@ -89,11 +91,12 @@ export function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onO
 	const selectedProvider = (providerChoice?.scope === scope ? providers.find((provider) => provider.id === providerChoice.id) : undefined) ?? initialProvider;
 	useEffect(() => { setPage(0); setModelSearch(""); }, [scope, selectedProvider?.id]);
 	const agent = agentLabel(agentId);
-	if (!installed || loginBlocksCatalog) {
+	// Readiness explains an empty list; a saved list still shows while it runs.
+	if ((!installed || loginBlocksCatalog) && !catalog.data?.models?.length) {
 		return <div className="space-y-3">
 			<div className="flex flex-col items-center gap-3 px-3 py-8 text-center">
 			<p className="text-sm text-settings-muted">{t(installed ? "settings.harness.models.needsLogin" : "settings.harness.models.notInstalled", { agent })}</p>
-			<Button type="button" size="sm" variant="outline" onClick={onOpenAccount}>{t("settings.harness.tabAccount")}</Button>
+			<Button type="button" size="sm" variant="secondary" onClick={onOpenAccount}>{t("settings.harness.tabAccount")}</Button>
 		</div></div>;
 	}
 	const data = catalog.data;
@@ -166,10 +169,10 @@ export function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onO
 				? { enabled: families.filter((family) => idsOf(family.id).some(isModelEnabled)).length, total: families.length }
 				: { enabled: enabledCount, total: allModelIds.length })}</span> : null}
 			{bulkModelIds.length > 1 ? <span className="ml-auto flex items-center gap-1">
-				<Button type="button" size="sm" variant="ghost" className="h-6 px-2 text-caption"
+				<Button type="button" size="xs" variant="ghost"
 					disabled={bulkModelIds.every(isModelEnabled)}
 					onClick={() => setModelsEnabled(bulkModelIds, true)}>{t("settings.harness.models.enableAll")}</Button>
-				<Button type="button" size="sm" variant="ghost" className="h-6 px-2 text-caption"
+				<Button type="button" size="xs" variant="ghost"
 					disabled={!bulkModelIds.some((id) => id !== keptOnId && isModelEnabled(id))}
 					onClick={() => setModelsEnabled(bulkModelIds, false, keptOnId)}>{t("settings.harness.models.disableAll")}</Button>
 			</span> : null}

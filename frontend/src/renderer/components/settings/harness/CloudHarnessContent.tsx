@@ -1,8 +1,10 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { KeyRound } from "lucide-react";
+import { KeyRound } from "@/components/app-icons";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useCloudCp } from "../../../hooks/useCloudCp";
+import { describeCloudHarness, useCloudHarnessVersions } from "../../../hooks/useCloudHarnessVersions";
+import { versionLabel } from "../../../hooks/useHarnessUpdates";
 import { useCloudOrg } from "../../../hooks/useCloudOrg";
 import { providerConnectionsQueryKey, useProviderConnections } from "../../../hooks/useProviderConnections";
 import { agentLabel, type AgentId } from "../../../lib/agent-options";
@@ -11,6 +13,7 @@ import { cn } from "../../../lib/utils";
 import { AgentAvatar } from "../../AgentAvatar";
 import { GitHubTokenField } from "../../onboarding/GitHubTokenField";
 import { Button } from "../../ui/button";
+import { Pressable } from "../../ui/pressable";
 import { CloudHarnessLoginPanel, type CloudHarness } from "../CloudHarnessLoginPanel";
 import { SettingsRow } from "../SettingsRow";
 import { FOCUS_HIGHLIGHT_MS } from "./harness-ui";
@@ -19,6 +22,7 @@ export function CloudHarnessContent({ focusAgentId, search }: { focusAgentId?: s
 	const { t } = useTranslation();
 	const { org } = useCloudOrg();
 	const connections = useProviderConnections();
+	const versions = useCloudHarnessVersions();
 	const [loginAgent, setLoginAgent] = useState<CloudHarness | null>(null);
 	const [expandedAgentId, setExpandedAgentId] = useState<CloudHarness | null>(null);
 	const [highlightedAgentId, setHighlightedAgentId] = useState<AgentId | null>(null);
@@ -47,6 +51,7 @@ export function CloudHarnessContent({ focusAgentId, search }: { focusAgentId?: s
 			: <div className="settings-grouped-rows flex w-full flex-col" ref={rowsRef}>
 				{rows.map((agentId) => {
 					const connected = isCloudHarnessConnected(connections.data, agentId);
+					const cloudVersion = describeCloudHarness(versions.data, agentId)?.currentVersion;
 					const expanded = expandedAgentId === agentId;
 					const openLogin = () => { setLoginAgent(agentId); setExpandedAgentId(agentId); };
 					return <div
@@ -57,16 +62,16 @@ export function CloudHarnessContent({ focusAgentId, search }: { focusAgentId?: s
 						key={agentId}
 						tabIndex={-1}
 					>
-						<button type="button" className="flex min-w-0 flex-1 items-center gap-3 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label={t(expanded ? "settings.harness.collapseOptions" : "settings.harness.expandOptions", { agent: agentLabel(agentId) })} aria-expanded={expanded} aria-controls={`cloud-harness-options-${agentId}`} onClick={() => setExpandedAgentId(expanded ? null : agentId)}>
+						<Pressable className="flex min-w-0 flex-1 items-center gap-3 rounded-md" aria-label={t(expanded ? "settings.harness.collapseOptions" : "settings.harness.expandOptions", { agent: agentLabel(agentId) })} aria-expanded={expanded} aria-controls={`cloud-harness-options-${agentId}`} onClick={() => setExpandedAgentId(expanded ? null : agentId)}>
 							<AgentAvatar className="size-7 shrink-0" decorative provider={agentId} />
 							<span className="min-w-0 flex-1">
 								<span className="block text-sm font-medium text-settings-label" id={`harness-agent-${agentId}`}>{agentLabel(agentId)}</span>
-								<span className="mt-0.5 flex flex-wrap gap-x-1.5 text-xs text-settings-muted"><span>{connected ? t("settings.harness.loggedIn") : t("settings.harness.cloudNotConnected")}</span><span aria-hidden="true">·</span><span>{t("settings.harness.apiVersionNotReported")}</span></span>
+								<span className="mt-0.5 flex flex-wrap gap-x-1.5 text-xs text-settings-muted"><span>{connected ? t("settings.harness.loggedIn") : t("settings.harness.cloudNotConnected")}</span><span aria-hidden="true">·</span><span>{cloudVersion ? versionLabel(cloudVersion) : t("settings.harness.apiVersionNotReported")}</span></span>
 							</span>
-						</button>
-						{!connected && loginAgent !== agentId ? <Button type="button" data-harness-primary-action="" size="sm" className="h-8 min-w-20 px-3 focus-visible:ring-2 focus-visible:ring-ring" onClick={openLogin}>{t("settings.harness.login")}</Button> : null}
+						</Pressable>
+						{!connected && loginAgent !== agentId ? <Button type="button" data-harness-primary-action="" size="default" className="min-w-20" onClick={openLogin}>{t("settings.harness.login")}</Button> : null}
 						<div id={`cloud-harness-options-${agentId}`} hidden={!expanded} className={cn("basis-full pl-10", !expanded && "hidden")}>
-							{loginAgent === agentId ? <CloudHarnessLoginPanel agent={agentId} onClose={() => setLoginAgent(null)} /> : connected ? <Button type="button" size="sm" variant="outline" className="h-8 px-3" onClick={openLogin}>{t("settings.harness.refreshLogin")}</Button> : null}
+							{loginAgent === agentId ? <CloudHarnessLoginPanel agent={agentId} onClose={() => setLoginAgent(null)} /> : connected ? <Button type="button" size="default" variant="secondary" onClick={openLogin}>{t("settings.harness.refreshLogin")}</Button> : null}
 						</div>
 					</div>;
 				})}
@@ -135,14 +140,14 @@ function CloudGitHubPatRow() {
 				disabled={githubPATBusy}
 				error={githubPATError}
 				submitLabel={githubPATBusy ? t("settings.cloudAgents.github.saving") : t("settings.cloudAgents.github.save")}
-				submitVariant="outline"
+				submitVariant="secondary"
 				submitDisabled={githubPATBusy}
 				onChange={setGitHubPAT}
 				onSubmit={() => void saveGitHubPAT()}
 			/>
 			{githubPATConnected ? (
 				<div className="mt-2 flex justify-end">
-					<Button type="button" variant="footer" disabled={githubPATBusy} onClick={() => void removeGitHubPAT()}>
+					<Button type="button" variant="secondary" disabled={githubPATBusy} onClick={() => void removeGitHubPAT()}>
 						{t("settings.cloudAgents.github.remove")}
 					</Button>
 				</div>

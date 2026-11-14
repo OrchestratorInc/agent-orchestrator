@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/binaryutil"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hookutil"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -300,7 +301,7 @@ func TestCopilotNativeBinaryForNpmLoader(t *testing.T) {
 	if err := os.WriteFile(loader, []byte("#!/usr/bin/env node\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	native := filepath.Join(packageDir, "node_modules", ".bin", "copilot-"+runtime.GOOS+"-"+runtime.GOARCH)
+	native := filepath.Join(packageDir, "node_modules", ".bin", copilotNativeNames(runtime.GOOS, runtime.GOARCH)[0])
 	if err := os.WriteFile(native, []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -319,6 +320,69 @@ func TestCopilotNativeBinaryForNpmLoader(t *testing.T) {
 	}
 	if got != want {
 		t.Fatalf("native binary = %q, want %q", got, want)
+	}
+}
+
+func TestCopilotNativeNamesUseNpmPlatformNames(t *testing.T) {
+	for _, tt := range []struct {
+		goos, goarch string
+		want         []string
+	}{
+		{"darwin", "arm64", []string{"copilot-darwin-arm64"}},
+		{"darwin", "amd64", []string{"copilot-darwin-x64"}},
+		{"linux", "amd64", []string{"copilot-linux-x64", "copilot-linuxmusl-x64"}},
+		{"linux", "arm64", []string{"copilot-linux-arm64", "copilot-linuxmusl-arm64"}},
+	} {
+		if got := copilotNativeNames(tt.goos, tt.goarch); !reflect.DeepEqual(got, tt.want) {
+			t.Errorf("copilotNativeNames(%s, %s) = %v, want %v", tt.goos, tt.goarch, got, tt.want)
+		}
+	}
+}
+
+func TestResolveCopilotBinaryRunsTheManagedNativeBinary(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("npm loader native binary naming is covered on Unix-like platforms")
+	}
+	// AO's managed layout: bin/copilot -> copilot/current/bin/copilot, the
+	// npm loader of release v1.
+	root := t.TempDir()
+	release := filepath.Join(root, "copilot", "versions", "v1")
+	packageDir := filepath.Join(release, "lib", "node_modules", "@github", "copilot")
+	if err := os.MkdirAll(filepath.Join(packageDir, "node_modules", ".bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(packageDir, "npm-loader.js"), []byte("#!/usr/bin/env node\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	nativeName := copilotNativeNames(runtime.GOOS, runtime.GOARCH)[0]
+	if err := os.WriteFile(filepath.Join(packageDir, "node_modules", ".bin", nativeName), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, dir := range []string{filepath.Join(release, "bin"), filepath.Join(root, "bin")} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for link, target := range map[string]string{
+		filepath.Join(release, "bin", "copilot"):  filepath.Join("..", "lib", "node_modules", "@github", "copilot", "npm-loader.js"),
+		filepath.Join(root, "copilot", "current"): filepath.Join("versions", "v1"),
+		filepath.Join(root, "bin", "copilot"):     filepath.Join("..", "copilot", "current", "bin", "copilot"),
+	} {
+		if err := os.Symlink(target, link); err != nil {
+			t.Fatal(err)
+		}
+	}
+	binaryutil.SetManagedBinDir(filepath.Join(root, "bin"))
+	t.Cleanup(func() { binaryutil.SetManagedBinDir("") })
+
+	got, err := ResolveCopilotBinary(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Through current, not v1, so the resolved path follows the next update.
+	want := filepath.Join(root, "copilot", "current", "lib", "node_modules", "@github", "copilot", "node_modules", ".bin", nativeName)
+	if got != want {
+		t.Fatalf("resolved %q, want %q", got, want)
 	}
 }
 
@@ -361,7 +425,7 @@ func TestResolveCopilotBinaryFallbacks(t *testing.T) {
 				if err := os.WriteFile(loader, []byte("#!/usr/bin/env node\n"), 0o755); err != nil {
 					t.Fatal(err)
 				}
-				native := writeExecutable(t, filepath.Join(packageDir, "node_modules", ".bin", "copilot-"+runtime.GOOS+"-"+runtime.GOARCH))
+				native := writeExecutable(t, filepath.Join(packageDir, "node_modules", ".bin", copilotNativeNames(runtime.GOOS, runtime.GOARCH)[0]))
 				link := filepath.Join(binDir, "copilot")
 				if err := os.Symlink(loader, link); err != nil {
 					t.Fatal(err)

@@ -1,17 +1,13 @@
-name: Harness proof build
+name: Harness artifact build
 
 on:
-  pull_request:
-    paths:
-      - "backend/**"
-      - ".github/workflows/harness-proof-build.yml"
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: harness-proof-build-${{ github.event.pull_request.number || github.ref }}
+  group: harness-artifact-build-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -25,7 +21,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.sha }}
       - uses: actions/setup-go@v5
         with:
           go-version-file: backend/go.mod
@@ -41,7 +37,7 @@ jobs:
           sha256sum ao > SHA256SUMS
       - uses: actions/upload-artifact@v4
         with:
-          name: harness-proof-linux-${{ github.event.pull_request.number || github.sha }}
+          name: harness-artifact-linux-${{ github.sha }}
           path: harness-proof/
           retention-days: 7
           if-no-files-found: error

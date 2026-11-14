@@ -14,10 +14,12 @@ import {
  ListChevronsDownUp,
  ListChevronsUpDown,
 	Search,
-} from "lucide-react";
+} from "@/components/app-icons";
 import {
 	sessionSourceFileQueryOptions,
 	sessionWorkspaceFilesQueryOptions,
+	clearMissingWorkspace,
+	isMissingWorkspaceError,
 	type FilesBranchTarget,
 	type FilesSource,
 	type WorkspaceFilesResponse,
@@ -61,10 +63,6 @@ function hasReviewableChanges(manifest: WorkspaceFilesResponse): boolean {
 	return manifest.files.some((file) => file.status !== "unmodified")
 		|| [sections.uncommitted, sections.staged, sections.unstaged, sections.untracked, sections.committed].some((section) => (section?.length ?? 0) > 0);
 }
-
-// Mirrors the browser panel's tab strip (.browser-panel__tab): no container
-// box, 28px rounded tabs, filled only when active.
-const viewTabClass = "inline-flex h-control-md items-center rounded-md px-2.5 text-xs font-medium transition-colors focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent/50";
 
 type SessionFileExplorerProps = {
 	sessionId: string;
@@ -116,7 +114,8 @@ export function SessionFileExplorer({
 
 	const filesQuery = useQuery({
 		...sessionWorkspaceFilesQueryOptions(sessionId, t("files.error.loadWorkspace"), hostId),
-		refetchInterval: (query) => workspaceFilesRefetchInterval(connectionState, Boolean(query.state.data?.degraded)),
+		refetchInterval: (query) => isMissingWorkspaceError(query.state.error)
+			? false : workspaceFilesRefetchInterval(connectionState, Boolean(query.state.data?.degraded)),
 	});
 	useLayoutEffect(() => {
 		if (filesQuery.data) markFileViewerPerformance("manifest-ready");
@@ -322,12 +321,12 @@ export function SessionFileExplorer({
 			<TooltipTrigger asChild onFocus={(event) => { if (!event.currentTarget.matches(":focus-visible")) event.preventDefault(); }}>
 				{/* Sized and toned like the pinned top-bar buttons beside it. */}
 				<Button
-					aria-label={isMaximized ? t("files.minimize") : t("files.maximize")}
-					className="shrink-0 text-muted-foreground hover:text-foreground"
+					aria-label={isMaximized ? t("common.returnToPanel") : t("common.maximize")}
+					className="shrink-0"
 					onClick={() => onToggleMaximized(!isMaximized)}
 					size="icon-sm"
 					type="button"
-					variant="ghost"
+					variant="quiet"
 				>
 					{isMaximized ? (
 						<Minimize2 className="size-icon-md" aria-hidden="true" />
@@ -336,7 +335,7 @@ export function SessionFileExplorer({
 					)}
 				</Button>
 			</TooltipTrigger>
-			<TooltipContent side="bottom">{isMaximized ? t("files.minimize") : t("files.maximize")}</TooltipContent>
+			<TooltipContent side="bottom">{isMaximized ? t("common.returnToPanel") : t("common.maximize")}</TooltipContent>
 		</Tooltip>
 	) : null;
 
@@ -348,11 +347,13 @@ export function SessionFileExplorer({
 			hostId={hostId}
 			filter={filter}
 			onBrowseAll={() => handleViewChange(false)}
-			canOpenInCenter={Boolean(onOpenFile)}
-			onOpenFile={(path,options)=>{
-    if(isMaximized && !options?.center) openInMaximizedPreview(path,options);
-    else {if(isMaximized) onToggleMaximized?.(false);onOpenFile?.(path,options);}
-   }}
+			// Maximized, the overlay already fills the window, so the review opens
+			// files in place and has no "open diff in center" action.
+			canOpenInCenter={Boolean(onOpenFile) && !isMaximized}
+			onOpenFile={(path, options) => {
+				if (isMaximized) openInMaximizedPreview(path, options);
+				else onOpenFile?.(path, options);
+			}}
 			onIncludeCommitsBetween={review.includeCommitsBetween}
 			onShowAllCommits={review.showAllCommits}
 			sessionId={sessionId}
@@ -386,31 +387,31 @@ export function SessionFileExplorer({
 				<div aria-label={t("files.viewMode")} className="flex shrink-0 items-center gap-1" role="tablist">
 					<Tooltip>
 						<TooltipTrigger asChild>
-							<button
+							<Button
 								aria-label={t("files.reviewChanges")}
-								aria-selected={showChanges}
-								className={cn(viewTabClass, "w-control-md justify-center px-0", showChanges ? "bg-interactive-active text-foreground" : "text-muted-foreground hover:bg-interactive-hover hover:text-foreground")}
+								aria-selected={showChanges} data-active={showChanges} role="tab"
 								onClick={() => handleViewChange(true)}
-								role="tab"
+								size="icon-sm"
 								type="button"
+								variant="quiet"
 							>
 								<GitCompareArrows aria-hidden="true" className="size-icon-base" />
-							</button>
+							</Button>
 						</TooltipTrigger>
 						<TooltipContent side="bottom">{t("files.reviewChanges")}</TooltipContent>
 					</Tooltip>
 					<Tooltip>
 						<TooltipTrigger asChild>
-							<button
+							<Button
 								aria-label={allFilesTabLabel}
-								aria-selected={!showChanges}
-								className={cn(viewTabClass, "w-control-md justify-center px-0", !showChanges ? "bg-interactive-active text-foreground" : "text-muted-foreground hover:bg-interactive-hover hover:text-foreground")}
+								aria-selected={!showChanges} data-active={!showChanges} role="tab"
 								onClick={() => (!showChanges && splitView ? setTreeOpen((open) => !open) : handleViewChange(false))}
-								role="tab"
+								size="icon-sm"
 								type="button"
+								variant="quiet"
 							>
 								<Folders aria-hidden="true" className="size-icon-base" />
-							</button>
+							</Button>
 						</TooltipTrigger>
 						<TooltipContent side="bottom">{allFilesTabLabel}</TooltipContent>
 					</Tooltip>
@@ -476,8 +477,12 @@ export function SessionFileExplorer({
 				filesQuery.isPending ? (
 					<PanelMessage>{t("files.loading")}</PanelMessage>
 				) : filesQuery.isError ? (
-					<PanelMessage action={<RetryButton onClick={() => void filesQuery.refetch()} />}>
-						{filesQuery.error.message || t("files.error.loadWorkspace")}
+					<PanelMessage action={<RetryButton onClick={() => {
+						clearMissingWorkspace(sessionId, hostId);
+						void filesQuery.refetch();
+					}} />}>
+						{isMissingWorkspaceError(filesQuery.error)
+							? t("files.error.workspaceMissing") : filesQuery.error.message || t("files.error.loadWorkspace")}
 					</PanelMessage>
 				) : filesData ? (
 					isMaximized ? (

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	explicitWorkspaceFilePath,
+	createWorkspaceFileLookup,
 	findWorkspaceFilePath,
 	isAbsoluteFileReference,
 	matchWorkspaceFilePath,
@@ -8,6 +9,75 @@ import {
 	normalizeWorkspaceFileReference,
 	workspaceFileReferenceLine,
 } from "./workspace-file-path";
+
+describe("workspace file lookup for a catalog", () => {
+	it.each([
+		["./src/a.ts", "src/a.ts"],
+		["file:///repo/src/a.ts%3A42", "src/a.ts"],
+		["C:\\repo\\src\\a.ts:9", "src/a.ts"],
+		["a.ts#L12-L18", "src/a.ts"],
+		["index.ts", undefined],
+		["missing.ts", undefined],
+		["https://example.com/src/a.ts", undefined],
+	])("preserves repeated resolution of %s", (reference, expected) => {
+		const find = createWorkspaceFileLookup(["src/a.ts", "frontend/index.ts", "backend/index.ts"]);
+		expect(find(reference)).toBe(expected);
+		expect(find(reference)).toBe(expected);
+	});
+
+	it("keeps catalogs independent when files appear, disappear, or become ambiguous", () => {
+		const before = createWorkspaceFileLookup(["src/a.ts"]);
+		expect(before("new.ts")).toBeUndefined();
+		expect(before("a.ts")).toBe("src/a.ts");
+		const after = createWorkspaceFileLookup(["src/new.ts", "src/a.ts", "other/a.ts"]);
+		expect(after("new.ts")).toBe("src/new.ts");
+		expect(after("a.ts")).toBeUndefined();
+		expect(createWorkspaceFileLookup([])("a.ts")).toBeUndefined();
+	});
+
+	it("continues resolving after a long stream of distinct references", () => {
+		const find = createWorkspaceFileLookup(["src/a.ts"]);
+		expect(find("a.ts")).toBe("src/a.ts");
+		for (let i = 0; i < 1100; i++) expect(find(`missing${i}.ts`)).toBeUndefined();
+		expect(find("a.ts")).toBe("src/a.ts");
+	});
+
+	it("preserves exact precedence, suffix disambiguation, and duplicate ambiguity", () => {
+		const find = createWorkspaceFileLookup([
+			" ./src/index.ts ", "src/index.ts", "lib/index.ts", "src/only.ts", "copies/only.ts",
+			"src/duplicate.ts", "src/duplicate.ts", "windows\\unique.ts", "notes/",
+		]);
+		expect(find("src/index.ts")).toBe(" ./src/index.ts ");
+		expect(find("index.ts")).toBeUndefined();
+		expect(find("/repo/src/only.ts:12")).toBe("src/only.ts");
+		expect(find("elsewhere/only.ts")).toBeUndefined();
+		expect(find("duplicate.ts")).toBeUndefined();
+		expect(find("src/duplicate.ts")).toBe("src/duplicate.ts");
+		expect(find("unique.ts")).toBe("windows\\unique.ts");
+		expect(find("/repo/notes/")).toBe("notes/");
+	});
+
+	it("matches the linear resolver across path forms and catalog collisions", () => {
+		const catalogs = [
+			[], [""], ["/", ""], ["src/a.ts", "b.ts", "dir/", " spaced/file.ts "],
+			["a.ts", "lib/a.ts", "./src/a.ts", "other\\a.ts", "./src/a.ts"],
+			["C:\\repo\\src\\a.ts", "src/b.ts", "./percent%20name.ts", "docs/hello world.md"],
+		];
+		for (const paths of catalogs) {
+			const find = createWorkspaceFileLookup(paths);
+			const references = ["", "./", "/", "missing.ts", "https://host/a.ts", "//host/a.ts", "file://[", ...paths];
+			for (const path of paths) {
+				const normalized = normalizeWorkspaceFileReference(path);
+				const base = normalized.split("/").at(-1) ?? "";
+				references.push(normalized, base, `./${normalized}`, `/repo/${normalized}`, `${normalized}:12:3`,
+					`${normalized}#L2-L9`, `file:///repo/${encodeURI(normalized)}`, `C:\\repo\\${normalized.replaceAll("/", "\\")}`);
+			}
+			for (const reference of references) {
+				expect(find(reference), `${JSON.stringify(paths)}: ${reference}`).toBe(findWorkspaceFilePath(reference, paths));
+			}
+		}
+	});
+});
 
 describe("matchWorkspaceFilePath", () => {
 	const files = [

@@ -1,6 +1,10 @@
 package systeminstall
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestFindUpdateVersionAcceptsSupportedForms(t *testing.T) {
 	tests := []struct {
@@ -152,5 +156,31 @@ func TestBuildSuffixSchemeAcceptsHashedRegistryRelease(t *testing.T) {
 	result, ok := managedResult("0.0.1791388870-g4d32fb", versionSchemeFor(TargetAmp))
 	if !ok || result != "0.0.1791388870-g4d32fb" {
 		t.Fatalf("result = %+v, %t", result, ok)
+	}
+}
+
+func TestInstalledVersionTextSelectsHermesRelease(t *testing.T) {
+	banner := "Hermes Agent v0.21.6 (2026.9.24) · upstream d87e7536\nInstall directory: /x\nPython: 3.14.8\nOpenAI SDK: 2.24.0\n"
+	if got, ok := versionSemver.find(installedVersionText(TargetHermes, "/missing/hermes", banner)); !ok || got.display != "0.21.6" {
+		t.Fatalf("banner version = %+v, %v; want 0.21.6", got, ok)
+	}
+	// Homebrew's 0.22.2 build prints a stale built-in version; its Cellar wins.
+	root := t.TempDir()
+	cellar := filepath.Join(root, "Cellar", "hermes-agent", "0.22.2", "bin")
+	if err := os.MkdirAll(cellar, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cellar, "hermes"), nil, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "hermes")
+	if err := os.Symlink(filepath.Join(cellar, "hermes"), link); err != nil {
+		t.Skip("symlinks unavailable: ", err)
+	}
+	if got, ok := versionSemver.find(installedVersionText(TargetHermes, link, banner)); !ok || got.display != "0.22.2" {
+		t.Fatalf("Homebrew version = %+v, %v; want 0.22.2", got, ok)
+	}
+	if got := installedVersionText(TargetCodex, link, banner); got != banner {
+		t.Fatalf("other harness output changed: %q", got)
 	}
 }

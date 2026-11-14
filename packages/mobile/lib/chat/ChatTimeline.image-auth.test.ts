@@ -10,8 +10,9 @@ global.IS_REACT_ACT_ENVIRONMENT = true;
 const imageFile = require.resolve("react-native/Libraries/Image/Image.android.js");
 const timelineFile = path.resolve("lib/chat/ChatTimeline.tsx");
 const attachmentsFile = path.resolve("lib/chat/messageAttachments.ts");
+const viewerFile = path.resolve("lib/ImageViewer.tsx");
 const originalLoad = Module._load;
-let AndroidImage, attachmentHelpers;
+let AndroidImage, attachmentHelpers, imageViewer;
 const styles = { create: value => value };
 const nativeModule = value => ({ __esModule: true, default: value });
 Module._load = function(name, parent, main) {
@@ -26,7 +27,8 @@ Module._load = function(name, parent, main) {
   if (name === "./NativeImageLoaderAndroid") return nativeModule({});
   if (name === "./resolveAssetSource") return nativeModule(value => value);
  }
- if (parent?.filename === timelineFile) {
+ if (parent?.filename === timelineFile || parent?.filename === viewerFile) {
+  if (name === "../ImageViewer") return imageViewer;
   if (name === "react-native") return {
    Image: AndroidImage, Platform: { OS: "android" }, StyleSheet: styles,
    View: "View", Pressable: "Pressable", ScrollView: "ScrollView", Text: "Text",
@@ -34,9 +36,16 @@ Module._load = function(name, parent, main) {
    useWindowDimensions: () => ({ width: 390, height: 844 }),
   };
   if (name === "react-native-safe-area-context") return { useSafeAreaInsets: () => ({ top: 0 }) };
-  if (name === "../ThemeProvider") return { useTheme: () => ({}), useThemedStyles: () => ({}) };
-  if (name === "../haptics") return { haptics: { tap: () => {} } };
-  if (name === "../icons") return { Feather: "Feather" };
+  if (name === "../ThemeProvider" || name === "./ThemeProvider") return { useTheme: () => ({}), useThemedStyles: () => ({}) };
+  if (name === "react-native-gesture-handler") {
+   const chain = new Proxy({}, { get: () => () => chain });
+   return { GestureHandlerRootView: "View", GestureDetector: ({ children }) => children, Gesture: chain };
+  }
+  if (name === "react-native-reanimated") return { __esModule: true, default: { View: "View" }, useSharedValue: value => ({ value }), useAnimatedStyle: () => ({}), withSpring: value => value, withTiming: value => value };
+  if (name === "./useReducedMotion") return { useReducedMotion: () => false };
+  if (name === "../haptics" || name === "./haptics") return { haptics: { tap: () => {} } };
+  if (name === "../pressFeedback") return { usePressFeedback: () => ({}) };
+  if (name === "../icons" || name === "./icons") return { Feather: "Feather" };
   if (name === "./messageAttachments") return attachmentHelpers;
   if (name !== "react" && name !== "react/jsx-runtime") return new Proxy({}, { get: (_, key) => key === "__esModule" ? true : () => null });
  }
@@ -51,6 +60,9 @@ AndroidImage = compile(imageFile, babel.transformSync(fs.readFileSync(imageFile,
  plugins: ["babel-plugin-syntax-hermes-parser", ["@babel/plugin-transform-flow-strip-types", { all: true }], "@babel/plugin-transform-react-jsx", "@babel/plugin-transform-modules-commonjs"],
 }).code).default;
 attachmentHelpers = compile(attachmentsFile, ts.transpileModule(fs.readFileSync(attachmentsFile, "utf8"), { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText);
+imageViewer = compile(viewerFile, ts.transpileModule(fs.readFileSync(viewerFile, "utf8"), {
+ compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX },
+}).outputText);
 const timeline = compile(timelineFile, ts.transpileModule(fs.readFileSync(timelineFile, "utf8"), {
  compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX },
 }).outputText + "\nexports.TestAttachment = StagedAttachment;");

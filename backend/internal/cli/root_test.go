@@ -20,6 +20,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/daemonmeta"
+	"github.com/aoagents/agent-orchestrator/backend/internal/datadirlock"
 	"github.com/aoagents/agent-orchestrator/backend/internal/runfile"
 	"github.com/aoagents/agent-orchestrator/backend/internal/telemetrymeta"
 )
@@ -36,6 +37,14 @@ func TestRootHelpDoesNotShowDaemon(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Fatalf("help missing %q:\n%s", want, out)
 		}
+	}
+}
+
+// A daemon refused because another AO process owns its data dir exits 75
+// (EX_TEMPFAIL), so supervisors can tell it apart from a crash (1).
+func TestExitCodeDataDirLocked(t *testing.T) {
+	if got := ExitCode(fmt.Errorf("acquire: %w", datadirlock.ErrLocked)); got != 75 {
+		t.Fatalf("ExitCode = %d, want 75", got)
 	}
 }
 

@@ -18,6 +18,7 @@ func TestDeriveActivityState(t *testing.T) {
 		{"tool or reply -> active", "active", domain.ActivityActive, true},
 		{"stop -> idle", "stop", domain.ActivityIdle, true},
 		{"permission or question -> blocked", "permission-blocked", domain.ActivityBlocked, true},
+		{"permission or question answered -> active", "permission-resolved", domain.ActivityActive, true},
 		{"unknown event -> no signal", "frobnicate", "", false},
 	}
 	for _, tt := range tests {
