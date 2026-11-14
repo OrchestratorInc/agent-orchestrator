@@ -44,6 +44,9 @@ const (
 	CategoryAccount    = "account"
 	CategorySubmit     = "submit"
 	CategoryCredential = "credential"
+	// CategoryScript covers commands whose effect on the page cannot be read
+	// in advance: page scripts, coordinate clicks, unrecognized commands.
+	CategoryScript = "script"
 )
 
 var categoryNouns = map[string]string{

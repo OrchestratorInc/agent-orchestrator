@@ -588,6 +588,7 @@ func TestLoadAgentBrowserURL(t *testing.T) {
 // one would never match, and a missing one must stop the daemon with a reason
 // rather than leave the agent tab silently empty.
 func TestLoadAgentBrowserToken(t *testing.T) {
+	t.Setenv("AO_BROWSER_CAPABILITY", "") // a daemon, not a session process
 	t.Setenv("AO_AGENT_BROWSER_URL", "http://127.0.0.1:8080")
 	t.Setenv("AO_AGENT_BROWSER_TOKEN", " rb-secret\n")
 	if cfg, err := Load(); err != nil || cfg.AgentBrowserToken != "rb-secret" {
@@ -598,6 +599,18 @@ func TestLoadAgentBrowserToken(t *testing.T) {
 		if _, err := Load(); err == nil || !strings.Contains(err.Error(), "AO_AGENT_BROWSER_TOKEN") {
 			t.Errorf("token %q: got %v, want an error naming AO_AGENT_BROWSER_TOKEN", token, err)
 		}
+	}
+}
+
+// A session process gets the service URL without its token; its config must
+// load (the CLI talks to its daemon) and must not claim the agent browser.
+func TestLoadAgentBrowserInSessionProcess(t *testing.T) {
+	t.Setenv("AO_AGENT_BROWSER_URL", "http://127.0.0.1:8080")
+	t.Setenv("AO_AGENT_BROWSER_TOKEN", "")
+	t.Setenv("AO_BROWSER_CAPABILITY", "cap")
+	cfg, err := Load()
+	if err != nil || cfg.AgentBrowserURL != "" || cfg.AgentBrowserToken != "" {
+		t.Fatalf("cfg url=%q token=%q err=%v", cfg.AgentBrowserURL, cfg.AgentBrowserToken, err)
 	}
 }
 

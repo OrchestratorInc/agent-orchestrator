@@ -930,6 +930,11 @@ func Run(buildVersion string) (retErr error) {
 	// Consequential agent browser actions wait for the user; the policy and
 	// audit log live under the data dir.
 	var approvals controllers.ApprovalService
+	// A self-hosted host's agent browser is reached only through the gate:
+	// agents send their commands to this daemon, which holds the token.
+	if cfg.AgentBrowserURL != "" {
+		browserService.UseRemoteBrowser(browsersvc.NewHTTPRemoteBrowser(cfg.AgentBrowserURL, cfg.AgentBrowserToken))
+	}
 	if gate, err := approval.Open(filepath.Join(cfg.DataDir, "approvals")); err != nil {
 		log.Error("browser approvals unavailable; consequential actions will not ask first", "err", err)
 	} else {

@@ -47,6 +47,7 @@ type Service struct {
 
 	approvals       approvalGate
 	approvalTimeout time.Duration
+	remote          RemoteBrowser
 }
 
 // New creates a browser service.
