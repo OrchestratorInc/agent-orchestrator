@@ -3040,6 +3040,168 @@ func TestListDoesNotTreatReviewerProbeFailureAsExit(t *testing.T) {
 	}
 }
 
+func TestListFailsRunningRunWhoseReviewerWasNeverAttached(t *testing.T) {
+	store := &fakeStore{
+		review: &domain.Review{ID: "rev-1", SessionID: "mer-1", Harness: domain.ReviewerAider, ReviewerActivityState: domain.ActivityActive},
+		runs: []domain.ReviewRun{{
+			ID: "run-1", ReviewID: "rev-1", SessionID: "mer-1", Harness: domain.ReviewerAider,
+			PRURL: "https://github.com/o/r/pull/1", TargetSHA: "sha1", Status: domain.ReviewRunRunning,
+		}},
+	}
+	// Even a launcher that would report a live process must not be consulted:
+	// without a handle there is no process to probe.
+	launcher := &fakeLauncher{alive: true}
+	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{}, launcher)
+
+	got, err := eng.List(context.Background(), "mer-1")
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if launcher.aliveChecked {
+		t.Fatal("a missing handle must not be probed")
+	}
+	if got.ReviewerActivityState != domain.ActivityExited {
+		t.Fatalf("activity = %q, want exited", got.ReviewerActivityState)
+	}
+	if len(got.Runs) != 1 || got.Runs[0].Status != domain.ReviewRunFailed || got.Runs[0].Body != reviewerNotAttached {
+		t.Fatalf("runs = %+v, want failed never-attached result", got.Runs)
+	}
+}
+
+func TestListFailsRunningRunWhenReviewerRowAlreadyExited(t *testing.T) {
+	store := &fakeStore{
+		review: &domain.Review{ID: "rev-1", SessionID: "mer-1", Harness: domain.ReviewerAider, ReviewerHandleID: "review-mer-1", ReviewerActivityState: domain.ActivityExited},
+		runs: []domain.ReviewRun{{
+			ID: "run-1", ReviewID: "rev-1", SessionID: "mer-1", Harness: domain.ReviewerAider,
+			PRURL: "https://github.com/o/r/pull/1", TargetSHA: "sha1", Status: domain.ReviewRunRunning,
+		}},
+	}
+	launcher := &fakeLauncher{alive: false}
+	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{}, launcher)
+
+	got, err := eng.List(context.Background(), "mer-1")
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if !launcher.aliveChecked {
+		t.Fatal("expected reviewer liveness probe")
+	}
+	if len(got.Runs) != 1 || got.Runs[0].Status != domain.ReviewRunFailed || got.Runs[0].Body != reviewerExitedBeforeSubmission {
+		t.Fatalf("runs = %+v, want failed reviewer-exit result", got.Runs)
+	}
+}
+
+func TestListKeepsRunningRunWhenExitedRowStillHasLiveProcess(t *testing.T) {
+	store := &fakeStore{
+		review: &domain.Review{ID: "rev-1", SessionID: "mer-1", Harness: domain.ReviewerAider, ReviewerHandleID: "review-mer-1", ReviewerActivityState: domain.ActivityExited},
+		runs: []domain.ReviewRun{{
+			ID: "run-1", ReviewID: "rev-1", SessionID: "mer-1", Harness: domain.ReviewerAider,
+			PRURL: "https://github.com/o/r/pull/1", TargetSHA: "sha1", Status: domain.ReviewRunRunning,
+		}},
+	}
+	launcher := &fakeLauncher{alive: true}
+	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{}, launcher)
+
+	got, err := eng.List(context.Background(), "mer-1")
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(got.Runs) != 1 || got.Runs[0].Status != domain.ReviewRunRunning {
+		t.Fatalf("runs = %+v, want the live pass left running", got.Runs)
+	}
+}
+
+func TestListKeepsRunningChatRunWithoutHandle(t *testing.T) {
+	store := &fakeStore{
+		review: &domain.Review{
+			ID: "rev-1", SessionID: "mer-1", Harness: domain.ReviewerCodex,
+			InterfaceMode: domain.ReviewerInterfaceChat, ProviderConversationID: "conversation-1",
+			ReviewerActivityState: domain.ActivityActive,
+		},
+		runs: []domain.ReviewRun{{
+			ID: "run-1", ReviewID: "rev-1", SessionID: "mer-1", Harness: domain.ReviewerCodex,
+			PRURL: "https://github.com/o/r/pull/1", TargetSHA: "sha1", Status: domain.ReviewRunRunning,
+		}},
+	}
+	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{}, &fakeLauncher{alive: true})
+
+	got, err := eng.List(context.Background(), "mer-1")
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(got.Runs) != 1 || got.Runs[0].Status != domain.ReviewRunRunning {
+		t.Fatalf("runs = %+v, want the restorable Chat pass left running", got.Runs)
+	}
+}
+
+// A Chat reviewer records a "review-chat:" handle, so the liveness probe covers
+// it like any other reviewer. Callers reach this after startup recovery, and
+// review chats are not hibernated, so a controller that is gone cannot finish
+// the pass; leaving the run "running" would wedge the head exactly as the
+// original bug did.
+func TestListFailsRunningChatRunWhoseControllerIsGone(t *testing.T) {
+	store := &fakeStore{
+		review: &domain.Review{
+			ID: "rev-1", SessionID: "mer-1", Harness: domain.ReviewerCodex,
+			InterfaceMode: domain.ReviewerInterfaceChat, ProviderConversationID: "conversation-1",
+			ReviewerHandleID: "review-chat:rev-1", ReviewerActivityState: domain.ActivityActive,
+		},
+		runs: []domain.ReviewRun{{
+			ID: "run-1", ReviewID: "rev-1", SessionID: "mer-1", Harness: domain.ReviewerCodex,
+			PRURL: "https://github.com/o/r/pull/1", TargetSHA: "sha1", Status: domain.ReviewRunRunning,
+		}},
+	}
+	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{}, &fakeLauncher{alive: false})
+
+	got, err := eng.List(context.Background(), "mer-1")
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(got.Runs) != 1 || got.Runs[0].Status != domain.ReviewRunFailed {
+		t.Fatalf("runs = %+v, want the orphaned Chat pass failed", got.Runs)
+	}
+	if got.Runs[0].Body != reviewerExitedBeforeSubmission {
+		t.Fatalf("body = %q, want %q", got.Runs[0].Body, reviewerExitedBeforeSubmission)
+	}
+	if store.review.ReviewerActivityState != domain.ActivityExited {
+		t.Fatalf("activity = %q, want exited", store.review.ReviewerActivityState)
+	}
+}
+
+// A TUI reviewer's pane handle is stable per worker, so an idle review row can
+// still carry the handle another reviewer is working in. Releasing that idle
+// row must not destroy the live pane behind the running pass.
+func TestDestroyIdleReviewersKeepsAHandleAnotherReviewerIsWorkingIn(t *testing.T) {
+	store := &fakeStore{}
+	launcher := &fakeLauncher{alive: true}
+	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{}, launcher)
+	reviews := []domain.Review{
+		{ID: "rev-claude", SessionID: "mer-1", Harness: domain.ReviewerClaudeCode, ReviewerHandleID: "review-mer-1", ReviewerActivityState: domain.ActivityActive},
+		{ID: "rev-codex", SessionID: "mer-1", Harness: domain.ReviewerCodex, ReviewerHandleID: "review-mer-1"},
+	}
+	store.reviews = map[domain.ReviewerHarness]domain.Review{}
+	for _, review := range reviews {
+		store.reviews[review.Harness] = review
+	}
+	runs := []domain.ReviewRun{{
+		ID: "run-1", ReviewID: "rev-claude", SessionID: "mer-1", Harness: domain.ReviewerClaudeCode,
+		PRURL: "https://github.com/o/r/pull/1", TargetSHA: "sha1", Status: domain.ReviewRunRunning,
+	}}
+
+	if err := eng.destroyIdleOtherReviewerHandles(context.Background(), "mer-1", domain.ReviewerClaudeCode, reviews, runs); err != nil {
+		t.Fatalf("destroyIdleOtherReviewerHandles: %v", err)
+	}
+	if launcher.destroyCalls != 0 {
+		t.Fatalf("destroyed %q, want the shared handle of the running reviewer kept", launcher.destroyedHandle)
+	}
+	if got := store.reviews[domain.ReviewerCodex].ReviewerHandleID; got != "" {
+		t.Fatalf("idle codex row handle = %q, want the stale shared claim cleared", got)
+	}
+	if got := store.reviews[domain.ReviewerClaudeCode].ReviewerHandleID; got != "review-mer-1" {
+		t.Fatalf("working claude-code row handle = %q, want kept", got)
+	}
+}
+
 func TestListReturnsActiveOneShotOverrideHandle(t *testing.T) {
 	store := &fakeStore{
 		review: &domain.Review{ID: "rev-1", SessionID: "mer-1", Harness: domain.ReviewerOpenCode, ReviewerHandleID: "opencode-pane"},
