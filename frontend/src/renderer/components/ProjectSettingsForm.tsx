@@ -154,6 +154,7 @@ function SettingsBody({ project, projectId, hostId, hostConnected, onSaved, sect
 		displayName: project.name,
 		defaultBranch: config.defaultBranch ?? DEFAULT_BRANCH_AUTO,
 		sessionPrefix: config.sessionPrefix ?? "",
+		symlinks: config.symlinks ?? [],
 		workerAgent: config.worker?.agent ?? "",
 		orchestratorAgent: config.orchestrator?.agent ?? "",
 		workerModel: config.worker?.agentConfig?.model ?? config.agentConfig?.model ?? "",
@@ -214,6 +215,7 @@ function SettingsBody({ project, projectId, hostId, hostConnected, onSaved, sect
 					...config,
 					defaultBranch: values.defaultBranch.trim() === DEFAULT_BRANCH_AUTO ? undefined : values.defaultBranch || undefined,
 					sessionPrefix: values.sessionPrefix || undefined,
+					symlinks: (values.symlinks ?? []).map((path) => path.trim()).filter(Boolean),
 					worker: {
 						...config.worker,
 						agent: values.workerAgent,
