@@ -58,8 +58,24 @@ const CLOUD_LOGIN_METHODS: Record<CloudHarness, readonly LoginMethod[]> = {
 };
 
 /** Where a login goes when the harness can hold several accounts: "new" saves
- * it as another account, an account id signs that account in again. */
-export type CloudHarnessLoginAccount = { id: "new" | string };
+ * it as another account, an account id signs that account in again. Signing
+ * in again takes only the account's kind of login (credentialType): the
+ * control plane refuses another kind, since its sessions were set up for it. */
+export type CloudHarnessLoginAccount = { id: "new" | string; credentialType?: string };
+
+// The credential a browser login produces, per harness.
+const BROWSER_LOGIN_CREDENTIAL: Partial<Record<CloudHarness, string>> = { "claude-code": "oauth_token", codex: "auth_json" };
+
+// The harness's login methods that produce credentialType, or all of them
+// when none does (a kind the desktop cannot log in with, such as a pasted
+// Codex access token).
+function loginMethodsFor(agent: CloudHarness, credentialType: string | undefined): readonly LoginMethod[] {
+	const methods = CLOUD_LOGIN_METHODS[agent];
+	if (!credentialType) return methods;
+	const matching = methods.filter((method) =>
+		(method.kind === "browser" ? BROWSER_LOGIN_CREDENTIAL[agent] : method.value) === credentialType);
+	return matching.length > 0 ? matching : methods;
+}
 
 // Logs one harness in for cloud sessions, expanded inline under its row on the
 // Harness settings page (the only place cloud agent logins are made). Every
@@ -71,7 +87,7 @@ export function CloudHarnessLoginPanel({ agent, account, onClose }: { agent: Clo
 	const { client, baseUrl } = useCloudCp();
 	const queryClient = useQueryClient();
 	const panelRef = useRef<HTMLDivElement>(null);
-	const methods = CLOUD_LOGIN_METHODS[agent];
+	const methods = loginMethodsFor(agent, account?.id === "new" ? undefined : account?.credentialType);
 	const [credentialType, setCredentialType] = useState<string>(methods[0].value);
 	const [secret, setSecret] = useState("");
 	const [busy, setBusy] = useState(false);

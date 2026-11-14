@@ -209,4 +209,19 @@ describe("CloudHarnessLoginPanel", () => {
 		expect(await screen.findByRole("alert")).toHaveTextContent("state: invalid");
 		expect(cloudMocks.putUserAgentConnection).not.toHaveBeenCalled();
 	});
+
+	it("signs an account in again only with its own kind of login", async () => {
+		renderPanel("claude-code", { id: "account-2", credentialType: "api_key" });
+		// An API key account: no browser login or setup token, which the
+		// control plane would refuse as another kind of login.
+		expect(screen.getByPlaceholderText("Paste your Anthropic API key")).toBeTruthy();
+		expect(screen.queryByRole("button", { name: "Log in with Anthropic" })).toBeNull();
+		expect(screen.queryByText("Or use")).toBeNull();
+	});
+
+	it("signs a subscription account in again with the browser login or its setup token", async () => {
+		renderPanel("claude-code", { id: "account-3", credentialType: "oauth_token" });
+		expect(screen.getByRole("button", { name: "Log in with Anthropic" })).toBeTruthy();
+		expect(screen.queryByRole("button", { name: "Anthropic API key" })).toBeNull();
+	});
 });
