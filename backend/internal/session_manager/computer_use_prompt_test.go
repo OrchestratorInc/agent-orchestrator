@@ -97,3 +97,46 @@ func TestAOMCPServerFollowsComputerUseSetting(t *testing.T) {
 		}
 	}
 }
+
+// Terminal sessions on macOS learn that macOS checks Orchestrator, not the
+// agent's own app, so a refused permission sends the user to the right place.
+// Chat sessions and other platforms do not get the section.
+func TestBuildSystemPromptMacPrivacySection(t *testing.T) {
+	ctx := context.Background()
+	st := newFakeStore()
+	m := New(Deps{
+		Runtime:   &fakeRuntime{},
+		Agents:    singleAgent{agent: &recordingAgent{}},
+		Workspace: &fakeWorkspace{},
+		Store:     st,
+		Messenger: &fakeMessenger{},
+		Lifecycle: &fakeLCM{store: st},
+		DataDir:   t.TempDir(),
+		LookPath:  func(string) (string, error) { return "/bin/true", nil },
+	})
+	original := promptGOOS
+	t.Cleanup(func() { promptGOOS = original })
+
+	for _, goos := range []string{"darwin", "linux", "windows"} {
+		promptGOOS = goos
+		for _, kind := range []domain.SessionKind{domain.KindWorker, domain.KindOrchestrator} {
+			for _, chat := range []bool{false, true} {
+				sp, err := m.buildSystemPrompt(ctx, kind, "mer", "mer-1", "", chat)
+				if err != nil {
+					t.Fatalf("buildSystemPrompt(%s, %s, chat=%v): %v", goos, kind, chat, err)
+				}
+				has := strings.Contains(sp, "## macOS privacy permissions")
+				if want := goos == "darwin" && !chat; has != want {
+					t.Fatalf("%s %s chat=%v: section present=%v, want %v", goos, kind, chat, has, want)
+				}
+				if has {
+					for _, want := range []string{"macOS checks Orchestrator's privacy permissions", "not the permissions of Claude", "Settings > Computer use agents > Orchestrator permissions", "even if the tool names another app", "restart"} {
+						if !strings.Contains(sp, want) {
+							t.Fatalf("%s: section missing %q", kind, want)
+						}
+					}
+				}
+			}
+		}
+	}
+}

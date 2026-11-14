@@ -1,10 +1,11 @@
 import type { Rect, SettingsWindowSnapshot } from "./settings-window-watch";
 
-// A drop strip docked under System Settings while Cua Driver's macOS
-// permissions are missing. AO cannot reach into System Settings, so the strip
-// follows its window and offers CuaDriver.app as a drag source: dropping it on
-// the privacy list adds it there. The user picks which permission's pane to
-// open; each pick reopens System Settings there.
+// A drop strip docked under System Settings while an app's macOS permissions
+// are missing: CuaDriver.app for the Cua tools, or Orchestrator itself, which
+// macOS charges for computer use run by its sessions' agents. AO cannot reach
+// into System Settings, so the strip follows its window and offers the app as a
+// drag source: dropping it on the privacy list adds it there. The user picks
+// which permission's pane to open; each pick reopens System Settings there.
 
 export type PrivacyPane = "accessibility" | "screenRecording";
 
@@ -17,6 +18,15 @@ export const PRIVACY_PANE_URLS: Record<PrivacyPane, string> = {
 };
 
 export const CUA_DRIVER_APP_PATH = "/Applications/CuaDriver.app";
+
+/** Which app the strip asks the user to allow. */
+export type PrivacyGuideTarget = "cuaDriver" | "orchestrator";
+
+/** The app a target names: shown on the strip's tile and dragged from it. */
+export interface PrivacyGuideApp {
+	name: string;
+	path: string;
+}
 
 export type PrivacyGuideScheme = "light" | "dark";
 
@@ -33,15 +43,16 @@ export interface PrivacyGuideAppearance {
 	colors: Partial<PrivacyGuideColors>;
 }
 
-/** What the renderer asks for: which pane to point at, what is already granted, AO's look, and its translated copy. */
+/** What the renderer asks for: which app and pane to point at, what is already granted, AO's look, and its translated copy. */
 export interface PrivacyGuideRequest {
+	target: PrivacyGuideTarget;
 	pane: PrivacyPane;
 	granted: Record<PrivacyPane, boolean>;
 	appearance: PrivacyGuideAppearance;
 	text: {
 		drag: string;
 		hint: string;
-		/** Shown instead of drag/hint on a pane CuaDriver already holds. */
+		/** Shown instead of drag/hint on a pane the app already holds. */
 		allowed: string;
 		allowedHint: string;
 		labels: Record<PrivacyPane, string>;
@@ -85,6 +96,10 @@ export function isPrivacyPane(value: unknown): value is PrivacyPane {
 	return value === "accessibility" || value === "screenRecording";
 }
 
+export function isPrivacyGuideTarget(value: unknown): value is PrivacyGuideTarget {
+	return value === "cuaDriver" || value === "orchestrator";
+}
+
 function text(value: unknown): string | undefined {
 	return typeof value === "string" && value.length > 0 && value.length <= MAX_TEXT ? value : undefined;
 }
@@ -113,12 +128,13 @@ export function coercePrivacyGuideRequest(value: unknown): PrivacyGuideRequest |
 	const granted = input.granted as Record<string, unknown> | undefined;
 	const copy = input.text as Record<string, unknown> | undefined;
 	const labels = copy?.labels as Record<string, unknown> | undefined;
-	if (!isPrivacyPane(input.pane) || !granted || !copy || !labels) return undefined;
+	if (!isPrivacyGuideTarget(input.target) || !isPrivacyPane(input.pane) || !granted || !copy || !labels) return undefined;
 	const drag = text(copy.drag), hint = text(copy.hint), grantedText = text(copy.granted), close = text(copy.close);
 	const allowed = text(copy.allowed), allowedHint = text(copy.allowedHint);
 	const accessibility = text(labels.accessibility), screenRecording = text(labels.screenRecording);
 	if (!drag || !hint || !allowed || !allowedHint || !grantedText || !close || !accessibility || !screenRecording) return undefined;
 	return {
+		target: input.target,
 		pane: input.pane,
 		granted: { accessibility: granted.accessibility === true, screenRecording: granted.screenRecording === true },
 		appearance: coerceAppearance(input.appearance),
@@ -162,7 +178,7 @@ function escapeHtml(value: string): string {
 
 const GEAR_SVG = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>`;
 
-/** The CuaDriver icon once read; until then a gear, spinning while the read is in flight. */
+/** The app's icon once read; until then a gear, spinning while the read is in flight. */
 export type PrivacyGuideIcon = { kind: "loading" } | { kind: "missing" } | { kind: "image"; dataUrl: string };
 
 function iconHtml(icon: PrivacyGuideIcon): string {
@@ -187,10 +203,10 @@ function paletteCss({ scheme, colors }: PrivacyGuideAppearance): string {
 }
 
 /**
- * The strip's whole page, in AO's theme. On a pane CuaDriver already holds it
+ * The strip's whole page, in AO's theme. On a pane the app already holds it
  * says so and offers no drag: there is nothing to add, only a switch to review.
  */
-export function renderPrivacyGuideHtml(request: PrivacyGuideRequest, icon: PrivacyGuideIcon = { kind: "missing" }): string {
+export function renderPrivacyGuideHtml(request: PrivacyGuideRequest, appName: string, icon: PrivacyGuideIcon = { kind: "missing" }): string {
 	const { pane, granted, text: copy } = request;
 	const allowed = granted[pane];
 	const title = allowed ? copy.allowed : copy.drag;
@@ -236,7 +252,7 @@ nav { display: flex; gap: 2px; padding: 3px; border-radius: 9px; background: var
 .close:hover { background: var(--hover); color: var(--fg); }
 </style></head>
 <body>
-${tile}${iconHtml(icon)}<span>CuaDriver</span></div>
+${tile}${iconHtml(icon)}<span>${escapeHtml(appName)}</span></div>
 <div class="copy">
 <strong>${allowed ? CHECK_SVG : ARROW_SVG}<span>${escapeHtml(title)}</span></strong>
 <p>${escapeHtml(hint)}</p>
@@ -262,6 +278,8 @@ export interface PrivacyGuideWindow {
 export interface PrivacyGuideDeps {
 	createWindow(): PrivacyGuideWindow;
 	openExternal(url: string): Promise<unknown>;
+	/** The app a target names; undefined when it has no app bundle to show (Orchestrator run unpackaged). */
+	appFor(target: PrivacyGuideTarget): PrivacyGuideApp | undefined;
 	readIcon(appPath: string): Promise<string | undefined>;
 	/** Streams System Settings snapshots; onError means they will not come. Returns a stop. */
 	watchSettings(onSnapshot: (snapshot: SettingsWindowSnapshot) => void, onError: () => void): () => void;
@@ -275,8 +293,9 @@ export interface PrivacyGuideDeps {
 export class PrivacyGuide {
 	private window?: PrivacyGuideWindow;
 	private request?: PrivacyGuideRequest;
-	private icon: PrivacyGuideIcon = { kind: "loading" };
-	private iconRead?: Promise<void>;
+	private app?: PrivacyGuideApp;
+	// Read once per app, kept across shows.
+	private readonly icons = new Map<string, PrivacyGuideIcon>();
 	private renderId = 0;
 	private stopWatching?: () => void;
 	private sawSettings = false;
@@ -285,15 +304,23 @@ export class PrivacyGuide {
 	constructor(private readonly deps: PrivacyGuideDeps) {}
 
 	async show(request: PrivacyGuideRequest): Promise<void> {
+		const app = this.deps.appFor(request.target);
+		if (!app) throw new Error("No app to grant permissions to.");
 		this.request = request;
+		this.app = app;
 		await this.deps.openExternal(PRIVACY_PANE_URLS[request.pane]);
 		const window = this.ensureWindow();
 		// The strip shows at once with a spinning gear and swaps in the icon when read.
-		this.iconRead ??= this.deps.readIcon(CUA_DRIVER_APP_PATH)
-			.then((dataUrl) => { this.icon = dataUrl ? { kind: "image", dataUrl } : { kind: "missing" }; })
-			.catch(() => { this.icon = { kind: "missing" }; })
-			.then(() => this.render())
-			.catch(() => undefined);
+		if (!this.icons.has(app.path)) {
+			this.icons.set(app.path, { kind: "loading" });
+			void this.deps.readIcon(app.path)
+				.then((dataUrl): PrivacyGuideIcon => (dataUrl ? { kind: "image", dataUrl } : { kind: "missing" }), (): PrivacyGuideIcon => ({ kind: "missing" }))
+				.then((icon) => {
+					this.icons.set(app.path, icon);
+					return this.render();
+				})
+				.catch(() => undefined);
+		}
 		await this.render();
 		// Docked placement waits for the first snapshot so the strip never flashes elsewhere.
 		if (!this.following && !window.isDestroyed()) {
@@ -304,12 +331,13 @@ export class PrivacyGuide {
 
 	private async render(): Promise<void> {
 		const window = this.window;
-		if (!window || window.isDestroyed() || !this.request) return;
+		const app = this.app;
+		if (!window || window.isDestroyed() || !this.request || !app) return;
 		// A newer render (the icon arriving, a pane pick) aborts this load; only
 		// the latest one's failure matters.
 		const id = ++this.renderId;
 		try {
-			await window.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(renderPrivacyGuideHtml(this.request, this.icon))}`);
+			await window.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(renderPrivacyGuideHtml(this.request, app.name, this.icons.get(app.path)))}`);
 		} catch (error) {
 			if (id === this.renderId && !window.isDestroyed()) throw error;
 		}
@@ -320,15 +348,23 @@ export class PrivacyGuide {
 		return this.request !== undefined;
 	}
 
+	/** The app the strip offers for dragging, while it is up. */
+	currentApp(): PrivacyGuideApp | undefined {
+		return this.request ? this.app : undefined;
+	}
+
 	/**
-	 * Updates what is granted; closes once the last missing permission is
-	 * granted. A guide opened to review grants that were all already on stays,
+	 * Updates what is granted for the app shown; grants for another app are
+	 * ignored. Closes once the last missing permission is granted. A guide opened to review grants that were all already on stays,
 	 * and follows a revoke made from it. Resolves to whether the strip is still
 	 * open, so the renderer stops following grants once it is gone.
 	 */
-	async update(granted: Record<PrivacyPane, boolean>): Promise<boolean> {
+	async update(target: PrivacyGuideTarget, granted: Record<PrivacyPane, boolean>): Promise<boolean> {
 		const request = this.request;
 		if (!request) return false;
+		// Grants for another app, polled while the strip was switching apps:
+		// they say nothing about the app shown, and the strip stays open.
+		if (target !== request.target) return this.isOpen();
 		if (PRIVACY_PANES.every((pane) => granted[pane])) {
 			if (!PRIVACY_PANES.every((pane) => request.granted[pane])) {
 				this.close();
@@ -358,6 +394,7 @@ export class PrivacyGuide {
 		this.stopWatching = undefined;
 		this.window = undefined;
 		this.request = undefined;
+		this.app = undefined;
 		this.sawSettings = false;
 		this.following = true;
 	}

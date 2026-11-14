@@ -7,12 +7,15 @@ import {
 	PRIVACY_PANE_URLS,
 	PrivacyGuide,
 	renderPrivacyGuideHtml,
+	type PrivacyGuideApp,
 	type PrivacyGuideRequest,
+	type PrivacyGuideTarget,
 	type PrivacyGuideWindow,
 } from "./privacy-guide";
 import type { SettingsWindowSnapshot } from "./settings-window-watch";
 
 const request: PrivacyGuideRequest = {
+	target: "cuaDriver",
 	pane: "accessibility",
 	granted: { accessibility: false, screenRecording: false },
 	appearance: { scheme: "dark", colors: { bg: "oklch(0.3 0.002 250)", fg: "#fafafa", muted: "rgb(180 180 180)", border: "oklch(1 0 0 / 7%)" } },
@@ -65,6 +68,9 @@ function guide() {
 	const deps = {
 		createWindow: vi.fn(() => window),
 		openExternal: vi.fn().mockResolvedValue(undefined),
+		appFor: vi.fn((target: PrivacyGuideTarget): PrivacyGuideApp | undefined => (target === "orchestrator"
+			? { name: "Orchestrator", path: "/Applications/Agent Orchestrator.app" }
+			: { name: "CuaDriver", path: "/Applications/CuaDriver.app" })),
 		readIcon: vi.fn().mockResolvedValue("data:image/png;base64,AAAA"),
 		watchSettings: vi.fn((onSnapshot: typeof emit, onError: () => void) => {
 			emit = onSnapshot;
@@ -85,7 +91,10 @@ describe("coercePrivacyGuideRequest", () => {
 		expect(coercePrivacyGuideRequest(request)).toEqual(request);
 	});
 
-	it("refuses unknown panes and missing copy", () => {
+	it("refuses unknown apps, unknown panes and missing copy", () => {
+		expect(coercePrivacyGuideRequest({ ...request, target: "Finder" })).toBeUndefined();
+		expect(coercePrivacyGuideRequest({ ...request, target: undefined })).toBeUndefined();
+		expect(coercePrivacyGuideRequest({ ...request, target: "orchestrator" })?.target).toBe("orchestrator");
 		expect(coercePrivacyGuideRequest({ ...request, pane: "camera" })).toBeUndefined();
 		expect(coercePrivacyGuideRequest({ ...request, text: { ...request.text, hint: "" } })).toBeUndefined();
 		expect(coercePrivacyGuideRequest({ ...request, text: { ...request.text, drag: { accessibility: "x" } } })).toBeUndefined();
@@ -139,7 +148,7 @@ describe("placePrivacyGuide", () => {
 
 describe("renderPrivacyGuideHtml", () => {
 	it("offers a draggable CuaDriver tile and marks the chosen permission", () => {
-		const html = renderPrivacyGuideHtml(request, { kind: "image", dataUrl: "data:image/png;base64,AAAA" });
+		const html = renderPrivacyGuideHtml(request, "CuaDriver", { kind: "image", dataUrl: "data:image/png;base64,AAAA" });
 		expect(html).toContain('class="app draggable" draggable="true" data-drag-app');
 		expect(html).toContain('src="data:image/png;base64,AAAA"');
 		expect(html).toContain("Drag CuaDriver into the list above");
@@ -147,7 +156,7 @@ describe("renderPrivacyGuideHtml", () => {
 	});
 
 	it("escapes translated copy, ticks granted panes, and drops non-image icons", () => {
-		const html = renderPrivacyGuideHtml({ ...request, pane: "screenRecording", granted: { accessibility: true, screenRecording: false }, text: { ...request.text, hint: "<b>x</b>" } }, { kind: "image", dataUrl: "javascript:alert(1)" });
+		const html = renderPrivacyGuideHtml({ ...request, pane: "screenRecording", granted: { accessibility: true, screenRecording: false }, text: { ...request.text, hint: "<b>x</b>" } }, "CuaDriver", { kind: "image", dataUrl: "javascript:alert(1)" });
 		expect(html).toContain("&#60;b&#62;x&#60;/b&#62;");
 		expect(html).toContain('aria-label="Granted"');
 		expect(html).not.toContain("<img");
@@ -155,7 +164,7 @@ describe("renderPrivacyGuideHtml", () => {
 	});
 
 	it("says CuaDriver is allowed and offers no drag on a pane it already holds", () => {
-		const html = renderPrivacyGuideHtml({ ...request, granted: { accessibility: true, screenRecording: false } });
+		const html = renderPrivacyGuideHtml({ ...request, granted: { accessibility: true, screenRecording: false } }, "CuaDriver");
 		expect(html).toContain("CuaDriver is allowed here");
 		expect(html).toContain("Turn off its switch to revoke access.");
 		expect(html).not.toContain("data-drag-app");
@@ -163,16 +172,22 @@ describe("renderPrivacyGuideHtml", () => {
 	});
 
 	it("paints in AO's scheme and colors, not the OS appearance", () => {
-		const dark = renderPrivacyGuideHtml(request);
+		const dark = renderPrivacyGuideHtml(request, "CuaDriver");
 		expect(dark).toContain("color-scheme: dark; --bg: oklch(0.3 0.002 250); --fg: #fafafa; --muted: rgb(180 180 180)");
 		expect(dark).not.toContain("prefers-color-scheme");
-		const light = renderPrivacyGuideHtml({ ...request, appearance: { scheme: "light", colors: {} } });
+		const light = renderPrivacyGuideHtml({ ...request, appearance: { scheme: "light", colors: {} } }, "CuaDriver");
 		expect(light).toContain("color-scheme: light; --bg: oklch(1 0 0); --fg: oklch(0.18 0 0)");
 	});
 
+	it("names the app it was given on the tile", () => {
+		const html = renderPrivacyGuideHtml({ ...request, target: "orchestrator" }, "Orchestrator <dev>");
+		expect(html).toContain("<span>Orchestrator &#60;dev&#62;</span></div>");
+		expect(html).not.toContain("<span>CuaDriver</span>");
+	});
+
 	it("shows a spinning gear while the icon loads and a still gear when there is none", () => {
-		expect(renderPrivacyGuideHtml(request, { kind: "loading" })).toContain('class="placeholder loading"');
-		const missing = renderPrivacyGuideHtml(request, { kind: "missing" });
+		expect(renderPrivacyGuideHtml(request, "CuaDriver", { kind: "loading" })).toContain('class="placeholder loading"');
+		const missing = renderPrivacyGuideHtml(request, "CuaDriver", { kind: "missing" });
 		expect(missing).toContain('class="placeholder"');
 		expect(missing).not.toContain("<img");
 	});
@@ -226,9 +241,9 @@ describe("PrivacyGuide", () => {
 	it("moves to the next missing pane, then closes once everything is granted", async () => {
 		const { guide: subject, deps, window, stop } = guide();
 		await subject.show(request);
-		await expect(subject.update({ accessibility: true, screenRecording: false })).resolves.toBe(true);
+		await expect(subject.update("cuaDriver", { accessibility: true, screenRecording: false })).resolves.toBe(true);
 		expect(deps.openExternal).toHaveBeenLastCalledWith(PRIVACY_PANE_URLS.screenRecording);
-		await expect(subject.update({ accessibility: true, screenRecording: true })).resolves.toBe(false);
+		await expect(subject.update("cuaDriver", { accessibility: true, screenRecording: true })).resolves.toBe(false);
 		expect(window.close).toHaveBeenCalled();
 		expect(stop).toHaveBeenCalled();
 	});
@@ -238,27 +253,27 @@ describe("PrivacyGuide", () => {
 		const allGranted = { accessibility: true, screenRecording: true };
 		await subject.show({ ...request, granted: allGranted });
 		expect(window.html()).toContain("CuaDriver is allowed here");
-		await expect(subject.update(allGranted)).resolves.toBe(true);
+		await expect(subject.update("cuaDriver", allGranted)).resolves.toBe(true);
 		expect(window.close).not.toHaveBeenCalled();
 
 		// Revoked on the shown pane: the strip turns back into a drop target, in place.
-		await expect(subject.update({ accessibility: false, screenRecording: true })).resolves.toBe(true);
+		await expect(subject.update("cuaDriver", { accessibility: false, screenRecording: true })).resolves.toBe(true);
 		expect(window.html()).toContain("data-drag-app");
 		expect(deps.openExternal).toHaveBeenCalledTimes(1);
 	});
 
 	it("reports itself closed once its X or System Settings quitting took it down", async () => {
 		const { guide: subject, window } = guide();
-		await expect(subject.update({ accessibility: false, screenRecording: false })).resolves.toBe(false);
+		await expect(subject.update("cuaDriver", { accessibility: false, screenRecording: false })).resolves.toBe(false);
 		await subject.show(request);
 		window.navigate("ao-privacy-guide://close");
-		await expect(subject.update({ accessibility: true, screenRecording: false })).resolves.toBe(false);
+		await expect(subject.update("cuaDriver", { accessibility: true, screenRecording: false })).resolves.toBe(false);
 
 		const again = guide();
 		await again.guide.show(request);
 		again.emit(front());
 		again.emit({ frontPid: 7, settingsPid: -1, bounds: null });
-		await expect(again.guide.update({ accessibility: true, screenRecording: false })).resolves.toBe(false);
+		await expect(again.guide.update("cuaDriver", { accessibility: true, screenRecording: false })).resolves.toBe(false);
 	});
 
 	it("renders with a loading gear first, then swaps in the icon", async () => {
@@ -290,6 +305,45 @@ describe("PrivacyGuide", () => {
 		const { guide: subject, window } = guide();
 		await subject.show(request);
 		window.navigate("ao-privacy-guide://close");
+		expect(window.close).toHaveBeenCalled();
+	});
+
+	it("offers Orchestrator itself when asked for it, and drags whichever app is up", async () => {
+		const { guide: subject, deps, window } = guide();
+		expect(subject.currentApp()).toBeUndefined();
+		await subject.show({ ...request, target: "orchestrator" });
+		expect(deps.readIcon).toHaveBeenCalledWith("/Applications/Agent Orchestrator.app");
+		expect(subject.currentApp()).toEqual({ name: "Orchestrator", path: "/Applications/Agent Orchestrator.app" });
+		await vi.waitFor(() => expect(window.html()).toContain("<span>Orchestrator</span>"));
+
+		await subject.show(request);
+		expect(subject.currentApp()?.path).toBe("/Applications/CuaDriver.app");
+		expect(window.html()).toContain("<span>CuaDriver</span>");
+		subject.close();
+		expect(subject.currentApp()).toBeUndefined();
+	});
+
+	it("refuses an app with no bundle to drag, before opening System Settings", async () => {
+		const { guide: subject, deps } = guide();
+		deps.appFor.mockReturnValue(undefined);
+		await expect(subject.show({ ...request, target: "orchestrator" })).rejects.toThrow();
+		expect(deps.openExternal).not.toHaveBeenCalled();
+		expect(subject.isOpen()).toBe(false);
+	});
+
+	it("ignores grants polled for an app it no longer shows", async () => {
+		const { guide: subject, window } = guide();
+		await subject.show(request);
+		// Switching to Orchestrator; a Cua Driver poll lands before the page
+		// learns the strip changed apps. Cua Driver holding both permissions
+		// must not close Orchestrator's strip.
+		const switching = subject.show({ ...request, target: "orchestrator" });
+		await expect(subject.update("cuaDriver", { accessibility: true, screenRecording: true })).resolves.toBe(true);
+		await switching;
+		expect(window.close).not.toHaveBeenCalled();
+		expect(subject.currentApp()?.name).toBe("Orchestrator");
+
+		await expect(subject.update("orchestrator", { accessibility: true, screenRecording: true })).resolves.toBe(false);
 		expect(window.close).toHaveBeenCalled();
 	});
 });

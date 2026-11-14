@@ -56,7 +56,7 @@ import {
 	type TelemetryPolicyView,
 } from "./shared/telemetry-policy";
 import type { MigrationState } from "./main/app-state";
-import type { PrivacyGuideRequest, PrivacyPane } from "./main/privacy-guide";
+import type { PrivacyGuideRequest, PrivacyGuideTarget, PrivacyPane } from "./main/privacy-guide";
 import type { UpdateSettings, UpdateStatus, UpdateInstallResult } from "./main/update-settings";
 import type { CloudAccount, CloudPendingSignIn } from "./shared/cloud-account";
 import {
@@ -286,8 +286,10 @@ const api = {
 		checkGitRepository: (remoteUrl: string) => ipcRenderer.invoke("app:checkGitRepository", remoteUrl) as Promise<boolean>,
 		openExternal: (url: string) => ipcRenderer.invoke("app:openExternal", url) as Promise<void>,
 		showPrivacyGuide: (request: PrivacyGuideRequest) => ipcRenderer.invoke("app:showPrivacyGuide", request) as Promise<void>,
-		updatePrivacyGuide: (granted: Record<PrivacyPane, boolean>) => ipcRenderer.invoke("app:updatePrivacyGuide", granted) as Promise<boolean>,
+		updatePrivacyGuide: (target: PrivacyGuideTarget, granted: Record<PrivacyPane, boolean>) => ipcRenderer.invoke("app:updatePrivacyGuide", target, granted) as Promise<boolean>,
 		closePrivacyGuide: () => ipcRenderer.invoke("app:closePrivacyGuide") as Promise<void>,
+		getAppPrivacy: () => ipcRenderer.invoke("app:getAppPrivacy") as Promise<Record<PrivacyPane, boolean> | undefined>,
+		requestAppPrivacy: () => ipcRenderer.invoke("app:requestAppPrivacy") as Promise<Record<PrivacyPane, boolean> | undefined>,
 		openChromeExtensions: () => ipcRenderer.invoke("app:openChromeExtensions") as Promise<void>,
 		scanImportFolder: (input: { path: string; mode: ImportFolderMode }) =>
 			ipcRenderer.invoke("app:scanImportFolder", input) as Promise<ImportFolderScan>,

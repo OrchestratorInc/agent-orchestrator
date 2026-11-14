@@ -13,6 +13,7 @@ import {
 	BrowserWindow,
 	clipboard,
 	ClipboardItem,
+	desktopCapturer,
 	dialog,
 	ipcMain,
 	Menu,
@@ -26,6 +27,7 @@ import {
 	screen,
 	shell,
 	session,
+	systemPreferences,
 	WebContentsView,
 	webContents,
 	type WebContents,
@@ -254,7 +256,8 @@ import { planDaemonAutoRestart, daemonExitWasUngraceful } from "./main/daemon-au
 import { readProcessStartMs } from "./main/process-start";
 import { claimFirstRunExperimentExposure, markFirstRunProjectPromptSeen, readFirstRunProjectPrompt, readMigrationState, updateMigration, writeAppStateMarker, type MigrationState } from "./main/app-state";
 import { isAllowedAppExternalURL, openAllowedAppExternalURL } from "./main/external-open";
-import { coercePrivacyGuideRequest, CUA_DRIVER_APP_PATH, PRIVACY_GUIDE_HEIGHT, PrivacyGuide, type PrivacyPane } from "./main/privacy-guide";
+import { coercePrivacyGuideRequest, CUA_DRIVER_APP_PATH, isPrivacyGuideTarget, PRIVACY_GUIDE_HEIGHT, PrivacyGuide, type PrivacyGuideApp, type PrivacyPane } from "./main/privacy-guide";
+import { appBundlePath, readAppPrivacy, requestAppPrivacy, type AppPrivacyGrants } from "./main/app-privacy";
 import { watchSettingsWindow } from "./main/settings-window-watch";
 import {
 	dockBounceType,
@@ -3270,12 +3273,18 @@ ipcMain.handle("app:openChromeExtensions", () =>
 	openChromeExtensionsPage(process.platform, (file, args) => promisify(execFile)(file, args)),
 );
 
-// Docks under System Settings while Cua Driver's permissions are missing. It is
-// a non-activating, always-on-top panel so System Settings keeps focus; its only
-// script is a preload that turns a drag of the CuaDriver tile into a native file
-// drag, and its links are intercepted here.
+// Docks under System Settings while Cua Driver's or Orchestrator's own
+// permissions are missing. It is a non-activating, always-on-top panel so
+// System Settings keeps focus; its only script is a preload that turns a drag
+// of the app tile into a native file drag, and its links are intercepted here.
 let privacyGuideContents: WebContents | undefined;
-let privacyGuideIcon: Electron.NativeImage | undefined;
+const privacyGuideIcons = new Map<string, Electron.NativeImage>();
+// Orchestrator's own bundle; a dev build runs from Electron.app, which macOS
+// then charges for its sessions instead.
+function orchestratorApp(): PrivacyGuideApp | undefined {
+	const bundle = appBundlePath(process.execPath);
+	return bundle ? { name: app.getName(), path: bundle } : undefined;
+}
 const privacyGuide = new PrivacyGuide({
 	createWindow: () => {
 		const window = new BrowserWindow({
@@ -3297,8 +3306,10 @@ const privacyGuide = new PrivacyGuide({
 		});
 		window.setAlwaysOnTop(true, "floating");
 		window.setVisibleOnAllWorkspaces(true);
-		window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
-		privacyGuideContents = window.webContents;
+		// Kept from here: a closed window's webContents getter throws.
+		const contents = window.webContents;
+		contents.setWindowOpenHandler(() => ({ action: "deny" }));
+		privacyGuideContents = contents;
 		return {
 			loadURL: (url) => window.loadURL(url),
 			setBounds: (bounds) => window.setBounds(bounds),
@@ -3308,23 +3319,24 @@ const privacyGuide = new PrivacyGuide({
 			isFocused: () => window.isFocused(),
 			close: () => window.close(),
 			isDestroyed: () => window.isDestroyed(),
-			onNavigate: (handler) => window.webContents.on("will-navigate", (event, url) => {
+			onNavigate: (handler) => contents.on("will-navigate", (event, url) => {
 				event.preventDefault();
 				handler(url);
 			}),
 			onClosed: (handler) => window.on("closed", () => {
-				if (privacyGuideContents === window.webContents) privacyGuideContents = undefined;
+				if (privacyGuideContents === contents) privacyGuideContents = undefined;
 				handler();
 			}),
 		};
 	},
 	openExternal: (url) => openAllowedAppExternalURL(url, shell),
+	appFor: (target) => (target === "orchestrator" ? orchestratorApp() : { name: "CuaDriver", path: CUA_DRIVER_APP_PATH }),
 	// Quick Look renders the app's real icon at a crisp size; getFileIcon only
 	// offers a 32px generic placeholder for it on macOS.
 	readIcon: async (appPath) => {
 		const icon = await nativeImage.createThumbnailFromPath(appPath, { width: 128, height: 128 }).catch(() => undefined);
 		const image = icon && !icon.isEmpty() ? icon : await app.getFileIcon(appPath, { size: "normal" });
-		privacyGuideIcon = image.resize({ width: 64, height: 64 });
+		privacyGuideIcons.set(appPath, image.resize({ width: 64, height: 64 }));
 		return image.toDataURL();
 	},
 	watchSettings: watchSettingsWindow,
@@ -3336,10 +3348,33 @@ const privacyGuide = new PrivacyGuide({
 	},
 	ownPid: process.pid,
 });
-// Dropping CuaDriver.app on a System Settings privacy list adds it there.
+// Dropping the app on a System Settings privacy list adds it there.
 ipcMain.on("privacyGuide:startDrag", (event) => {
-	if (!privacyGuideContents || event.sender !== privacyGuideContents || !privacyGuideIcon || privacyGuideIcon.isEmpty()) return;
-	event.sender.startDrag({ file: CUA_DRIVER_APP_PATH, icon: privacyGuideIcon });
+	const target = privacyGuide.currentApp();
+	const icon = target && privacyGuideIcons.get(target.path);
+	if (!privacyGuideContents || event.sender !== privacyGuideContents || !target || !icon || icon.isEmpty()) return;
+	event.sender.startDrag({ file: target.path, icon });
+});
+// Orchestrator's own Accessibility and Screen Recording grants, which Claude
+// Code's built-in computer use in a terminal session needs. Undefined off
+// macOS, or when they cannot be read.
+const readOrchestratorPrivacy = () => readAppPrivacy(execFileAsync);
+ipcMain.handle("app:getAppPrivacy", async (event): Promise<AppPrivacyGrants | undefined> => {
+	if (event.sender !== getShellWebContents()) throw new Error("Untrusted app privacy request.");
+	if (process.platform !== "darwin") return undefined;
+	return readOrchestratorPrivacy();
+});
+ipcMain.handle("app:requestAppPrivacy", async (event): Promise<AppPrivacyGrants | undefined> => {
+	if (event.sender !== getShellWebContents()) throw new Error("Untrusted app privacy request.");
+	if (process.platform !== "darwin") return undefined;
+	const granted = await readOrchestratorPrivacy();
+	if (!granted) return undefined;
+	await requestAppPrivacy(granted, {
+		accessibility: () => { systemPreferences.isTrustedAccessibilityClient(true); },
+		// Listing the screens is a screen capture: macOS prompts and lists Orchestrator.
+		screenRecording: async () => { await desktopCapturer.getSources({ types: ["screen"], thumbnailSize: { width: 0, height: 0 } }).catch(() => undefined); },
+	});
+	return readOrchestratorPrivacy();
 });
 ipcMain.handle("app:showPrivacyGuide", async (event, input: unknown) => {
 	if (event.sender !== getShellWebContents()) throw new Error("Untrusted privacy guide request.");
@@ -3348,9 +3383,10 @@ ipcMain.handle("app:showPrivacyGuide", async (event, input: unknown) => {
 	if (!request) throw new Error("Invalid privacy guide request.");
 	await privacyGuide.show(request);
 });
-ipcMain.handle("app:updatePrivacyGuide", async (event, granted: Partial<Record<PrivacyPane, unknown>>) => {
+ipcMain.handle("app:updatePrivacyGuide", async (event, target: unknown, granted: Partial<Record<PrivacyPane, unknown>>) => {
 	if (event.sender !== getShellWebContents()) throw new Error("Untrusted privacy guide request.");
-	return privacyGuide.update({ accessibility: granted?.accessibility === true, screenRecording: granted?.screenRecording === true });
+	if (!isPrivacyGuideTarget(target)) throw new Error("Invalid privacy guide request.");
+	return privacyGuide.update(target, { accessibility: granted?.accessibility === true, screenRecording: granted?.screenRecording === true });
 });
 ipcMain.handle("app:closePrivacyGuide", (event) => {
 	if (event.sender !== getShellWebContents()) throw new Error("Untrusted privacy guide request.");

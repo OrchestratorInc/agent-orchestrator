@@ -2617,3 +2617,64 @@ func TestClaudeHookArtifactNudgeFailsOpen(t *testing.T) {
 		t.Fatalf("stdout=%q err=%v", stdout, err)
 	}
 }
+
+// Claude Code's built-in computer use tells the user to grant "the Claude
+// desktop app"; inside AO macOS checks Orchestrator. The hook answers that
+// refusal with a notice for the user and corrected guidance for the model,
+// and stays silent for every other tool result.
+func TestClaudeHookAnswersComputerUsePermissionRefusal(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "qa-1")
+	cfg := setConfigEnv(t)
+	srv, _ := activityServer(t, http.StatusOK, `{"ok":true}`)
+	writeRunFileFor(t, cfg, srv)
+	run := func(agent, event string, payload map[string]any) string {
+		t.Helper()
+		body, _ := json.Marshal(payload)
+		stdout, _, err := executeCLI(t, Deps{In: strings.NewReader(string(body)), ProcessAlive: func(int) bool { return true }}, "hooks", agent, event)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return stdout
+	}
+	refused := map[string]any{
+		"session_id": "native",
+		"tool_name":  "mcp__computer-use__request_access",
+		"tool_response": []map[string]string{{"type": "text", "text": "The user saw the permission prompt but macOS Accessibility permission(s) are still not granted. " +
+			"Do not retry in this turn. Let the user know these permissions need to be granted in the Claude desktop app."}},
+	}
+
+	for _, event := range []string{"post-tool-use", "post-tool-use-failure"} {
+		var got claudePostToolUseOutput
+		if err := json.Unmarshal([]byte(run("claude-code", event, refused)), &got); err != nil {
+			t.Fatalf("%s: %v", event, err)
+		}
+		wantEvent := map[string]string{"post-tool-use": "PostToolUse", "post-tool-use-failure": "PostToolUseFailure"}[event]
+		if got.HookSpecificOutput.HookEventName != wantEvent ||
+			!strings.Contains(got.SystemMessage, "Settings > Computer use agents > Orchestrator permissions") ||
+			!strings.Contains(got.HookSpecificOutput.AdditionalContext, "Ignore the advice to grant Claude") ||
+			!strings.Contains(got.HookSpecificOutput.AdditionalContext, "restart") {
+			t.Fatalf("%s: unexpected output %+v", event, got)
+		}
+	}
+
+	failure := map[string]any{"session_id": "native", "tool_name": "mcp__computer-use__screenshot", "error": "Screen Recording permission(s) are still not granted"}
+	if out := run("claude-code", "post-tool-use-failure", failure); !strings.Contains(out, "Orchestrator permissions") {
+		t.Fatalf("refusal in error field not answered: %q", out)
+	}
+
+	granted := map[string]any{"session_id": "native", "tool_name": "mcp__computer-use__screenshot", "tool_response": "ok"}
+	otherTool := map[string]any{"session_id": "native", "tool_name": "Bash", "tool_response": "permission not granted"}
+	for name, tc := range map[string]struct {
+		agent, event string
+		payload      map[string]any
+	}{
+		"granted result":   {"claude-code", "post-tool-use", granted},
+		"other tool":       {"claude-code", "post-tool-use", otherTool},
+		"pre-tool-use":     {"claude-code", "pre-tool-use", refused},
+		"non-Claude agent": {"codex", "post-tool-use", refused},
+	} {
+		if out := run(tc.agent, tc.event, tc.payload); out != "" {
+			t.Fatalf("%s produced output: %q", name, out)
+		}
+	}
+}
