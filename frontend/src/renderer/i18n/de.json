@@ -423,8 +423,6 @@
 	"firstRun.orchPoint2Body": "Jeder Worker hat eine eigene Kopie deines Codes, so kommen mehrere Aufgaben gleichzeitig voran.",
 	"firstRun.orchPointCiTitle": "CI und Code-Review laufen für dich",
 	"firstRun.orchPointCiBody": "Jeder Worker öffnet einen Pull Request. GitHub führt CI-Checks und Code-Review aus, und die Ergebnisse landen wieder auf dem Board.",
-	"firstRun.orchPoint3Title": "Ein Board für alles",
-	"firstRun.orchPoint3Body": "Jede Sitzung sortiert danach, was sie von dir braucht. Du greifst nur ein, wenn du gefragt wirst.",
 	"firstRun.projectTitle": "Projekt einrichten",
 	"firstRun.projectBody": "Ein Projekt ist ein Ordner mit Code, in dem deine Agenten arbeiten. Öffne einen auf diesem Computer oder hol einen von GitHub.",
 	"firstRun.startTitle": "Orchestrieren starten",

@@ -423,8 +423,6 @@
 	"firstRun.orchPoint2Body": "ワーカーはそれぞれコードのコピーを持つので、複数のタスクが同時に進みます。",
 	"firstRun.orchPointCiTitle": "CI とコードレビューは自動で実行",
 	"firstRun.orchPointCiBody": "各ワーカーがプルリクエストを作成します。GitHub が CI チェックとコードレビューを実行し、結果がボードに戻ります。",
-	"firstRun.orchPoint3Title": "すべてをひとつのボードで",
-	"firstRun.orchPoint3Body": "各セッションは、あなたに必要なことの順に並びます。呼ばれたときだけ対応すれば大丈夫です。",
 	"firstRun.projectTitle": "プロジェクトを設定",
 	"firstRun.projectBody": "プロジェクトは、エージェントが作業するコードのフォルダーです。このコンピューターから開くか、GitHub から取り込みます。",
 	"firstRun.startTitle": "オーケストレーションを始める",
