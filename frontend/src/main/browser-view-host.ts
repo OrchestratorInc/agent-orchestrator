@@ -1,4 +1,5 @@
 import { describePanelApprovalTarget } from "./browser-approval-panel";
+import { APPROVAL_FOCUS_SCRIPT } from "../shared/browser-approval-describe";
 import {
   sanitizeBrowserTitle,
   sanitizeBrowserURL,
@@ -342,7 +343,10 @@ const APPROVAL_DESCRIBE_WORLD_ID = 1013;
 // Input actions the approval binding (tab, document, element) is checked for.
 const APPROVAL_BOUND_ACTIONS = new Set(["click", "dblclick", "press"]);
 
-type ApprovalBinding = { tabId: string; document: number; ref?: string };
+type ApprovalBinding = { tabId: string; document: number; ref?: string; focus?: string };
+
+// The optional element crop in an approval prompt never holds up a command.
+const APPROVAL_CAPTURE_TIMEOUT_MS = 2_000;
 
 /** The daemon's record of what the user approved, if this action was gated. */
 function parseApprovalBinding(value: unknown): ApprovalBinding | undefined {
@@ -352,7 +356,13 @@ function parseApprovalBinding(value: unknown): ApprovalBinding | undefined {
     // A binding the runtime cannot read must not be ignored.
     return { tabId: "", document: -1 };
   }
-  return { tabId, document, ...(typeof ref === "string" && ref ? { ref: ref.replace(/^@/, "") } : {}) };
+  const focus = (value as Record<string, unknown>).focus;
+  return {
+    tabId,
+    document,
+    ...(typeof ref === "string" && ref ? { ref: ref.replace(/^@/, "") } : {}),
+    ...(typeof focus === "string" && focus ? { focus } : {}),
+  };
 }
 
 type BrowserWebContents = Pick<
@@ -4435,6 +4445,19 @@ export function createBrowserViewHost(
                     "The page changed while the action waited for approval, so it no longer acts on what the user approved. Take a new snapshot and try again.",
                   );
                 }
+                // Enter lands on whatever has focus: it must still be the
+                // element the user approved.
+                if (nativeAction === "press" && approvalBinding.focus) {
+                  const focused = await targetEntry.view.webContents
+                    .executeJavaScriptInIsolatedWorld(APPROVAL_DESCRIBE_WORLD_ID, [{ code: APPROVAL_FOCUS_SCRIPT }])
+                    .catch(() => "");
+                  if (focused !== approvalBinding.focus) {
+                    throw browserError(
+                      "BROWSER_TARGET_CHANGED",
+                      "Focus moved while the action waited for approval, so Enter would not reach what the user approved. Focus the field again and retry.",
+                    );
+                  }
+                }
               }
               const targetBeforeAction = agentActionTarget(targetEntry);
               const activationRevision = session.activationRevision;
@@ -5061,8 +5084,17 @@ export function createBrowserViewHost(
                 evaluate: (code) =>
                   contents.executeJavaScriptInIsolatedWorld(APPROVAL_DESCRIBE_WORLD_ID, [{ code }]),
                 capture: async (rect) => {
-                  const image = await contents.capturePage(rect);
-                  return image.isEmpty() ? undefined : image.toPNG().toString("base64");
+                  let timer: ReturnType<typeof setTimeout> | undefined;
+                  const bounded = new Promise<undefined>((resolve) => {
+                    timer = setTimeout(() => resolve(undefined), APPROVAL_CAPTURE_TIMEOUT_MS);
+                    signal?.addEventListener("abort", () => resolve(undefined), { once: true });
+                  });
+                  try {
+                    const image = await Promise.race([contents.capturePage(rect), bounded]);
+                    return !image || image.isEmpty() ? undefined : image.toPNG().toString("base64");
+                  } finally {
+                    if (timer) clearTimeout(timer);
+                  }
                 },
               },
             });
@@ -5075,6 +5107,7 @@ export function createBrowserViewHost(
                 tabId: describeEntry.tabId,
                 document: describeDocument,
                 ...(boundRef ? { ref: boundRef } : {}),
+                ...(described.focus ? { focus: described.focus } : {}),
               },
             };
           }

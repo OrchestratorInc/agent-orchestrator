@@ -56,7 +56,8 @@ func placeOrder() map[string]interface{} {
 			"role": "button", "name": "Place order", "tag": "button", "isSubmit": true,
 			"formMethod": "post", "pageUrl": "https://shop.example/checkout", "pageTitle": "Checkout",
 		},
-		"image": "iVBORw0KGgo=",
+		"image":   "iVBORw0KGgo=",
+		"binding": map[string]interface{}{"tabId": "t1", "document": float64(1), "ref": "e4"},
 	}
 }
 
@@ -268,10 +269,28 @@ func TestPreflightForBatchSteps(t *testing.T) {
 	rt := &scriptedRuntime{describe: placeOrder()}
 	svc, gate, _ := approvalService(t, rt)
 	answer(t, gate, approval.DecisionDeny)
-	err := svc.Preflight(context.Background(), "s1", "click", map[string]interface{}{"ref": "e4"})
+	_, err := svc.Preflight(context.Background(), "s1", "click", map[string]interface{}{"ref": "e4"})
 	var denied *ApprovalError
 	if !errors.As(err, &denied) || denied.Decision != approval.DecisionDeny {
 		t.Fatalf("err = %v", err)
+	}
+	// An allowed step comes back with the binding the batch must dispatch.
+	answer(t, gate, approval.DecisionAllowOnce)
+	bound, err := svc.Preflight(context.Background(), "s1", "click", map[string]interface{}{"ref": "e4"})
+	if err != nil || bound["approvalBinding"] == nil || bound["ref"] != "e4" {
+		t.Fatalf("bound=%v err=%v", bound, err)
+	}
+}
+
+func TestApprovedActionWithoutBindingIsRefused(t *testing.T) {
+	// An older runtime describes nothing; the user still approves, but the
+	// runtime could not confirm the target at dispatch, so it is refused.
+	rt := &scriptedRuntime{describeErr: errors.New("unknown action describe")}
+	svc, gate, token := approvalService(t, rt)
+	answer(t, gate, approval.DecisionAllowOnce)
+	_, _, err := svc.Execute(context.Background(), "s1", token, "click", map[string]interface{}{"ref": "e4"})
+	if apiErrorCode(err) != "BROWSER_APPROVAL_UNBOUND" || slices.Contains(rt.received(), "click") {
+		t.Fatalf("err=%v received=%v", err, rt.received())
 	}
 }
 

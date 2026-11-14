@@ -42,11 +42,33 @@ function documentId(document: Document): string {
 	return id;
 }
 
+// Focus ids the approval gate checks: Enter goes wherever focus is, so an
+// approved Enter must still find the element that was focused when described.
+const focusIds = new WeakMap<Element, string>();
+function focusIdOf(document: Document, mark: boolean): string {
+	const el = document.activeElement;
+	if (!el || el === document.body) return "";
+	let id = focusIds.get(el);
+	if (!id && mark) {
+		id = typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
+		focusIds.set(el, id);
+	}
+	return id ?? "";
+}
+
 export function handleContentRequest(document: Document, registry: RefRegistry, request: ContentRequest): unknown | Promise<unknown> {
 	const element = () => registry.resolve(String(request.ref ?? ""));
 	switch (request.op) {
 		case "ping":
-			return { url: document.location?.href ?? "", title: document.title, visibility: document.visibilityState, documentId: documentId(document) };
+			return {
+				url: document.location?.href ?? "",
+				title: document.title,
+				visibility: document.visibilityState,
+				documentId: documentId(document),
+				focusId: focusIdOf(document, false),
+				viewport: { width: document.defaultView?.innerWidth ?? 0, height: document.defaultView?.innerHeight ?? 0 },
+				dpr: document.defaultView?.devicePixelRatio ?? 1,
+			};
 		case "snapshot": {
 			const result = buildSnapshot(document, registry, { interactive: request.interactive === true });
 			return { snapshot: result.snapshot, refs: result.refs, truncated: result.truncated };
@@ -113,6 +135,11 @@ export function handleContentRequest(document: Document, registry: RefRegistry, 
 				viewport: { width: document.defaultView?.innerWidth ?? 0, height: document.defaultView?.innerHeight ?? 0 },
 				dpr: document.defaultView?.devicePixelRatio ?? 1,
 				documentId: documentId(document),
+				// The described document's own address: in a selected frame this is
+				// the frame's site, which the approval is scoped to.
+				url: document.location?.href ?? "",
+				title: document.title,
+				...(request.ref ? {} : { focusId: focusIdOf(document, true) }),
 			};
 		default:
 			throw new BridgeError("INVALID_ARGUMENT", `Unknown content operation: ${request.op}`);

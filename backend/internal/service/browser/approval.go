@@ -48,11 +48,12 @@ func (s *Service) UseApprovals(gate approvalGate, timeout time.Duration) {
 
 // Preflight checks one action against the approval gate without running it,
 // asking the user when it is consequential. Execute calls it for every
-// command; a multi-step batch must call it (or Execute) for each step.
-func (s *Service) Preflight(ctx context.Context, sessionID domain.SessionID, action string, args map[string]interface{}) error {
+// command; a multi-step batch must call it (or Execute) for each step and
+// dispatch the arguments it returns, which carry the approval binding the
+// runtime checks before acting.
+func (s *Service) Preflight(ctx context.Context, sessionID domain.SessionID, action string, args map[string]interface{}) (map[string]interface{}, error) {
 	action = strings.ToLower(strings.TrimSpace(action))
-	_, err := s.preflight(ctx, sessionID, s.runtimeFor(s.targetFor(sessionID)), action, args)
-	return err
+	return s.preflight(ctx, sessionID, s.runtimeFor(s.targetFor(sessionID)), action, args)
 }
 
 // preflight asks the user when the action is consequential. It returns the
@@ -106,15 +107,18 @@ func (s *Service) preflight(ctx context.Context, sessionID domain.SessionID, rt 
 	if !outcome.Allowed() {
 		return nil, approvalRefusal(outcome.Decision, verdict.Summary, s.approvalTimeout)
 	}
-	if described.binding != nil {
-		bound := make(map[string]interface{}, len(args)+1)
-		for key, value := range args {
-			bound[key] = value
-		}
-		bound["approvalBinding"] = described.binding
-		return bound, nil
+	if described.binding == nil {
+		// Without a binding the runtime cannot confirm, at dispatch, that the
+		// action still lands on what the user approved.
+		return nil, apierr.Conflict("BROWSER_APPROVAL_UNBOUND",
+			"The user approved this action, but this browser could not identify the page it targets, so it was not run. Update the Orchestrator browser extension, or take a new snapshot and try again.", nil)
 	}
-	return args, nil
+	bound := make(map[string]interface{}, len(args)+1)
+	for key, value := range args {
+		bound[key] = value
+	}
+	bound["approvalBinding"] = described.binding
+	return bound, nil
 }
 
 // unidentifiedSummary says what will happen when the target is unknown.

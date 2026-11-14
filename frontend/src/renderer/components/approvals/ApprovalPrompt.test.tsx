@@ -54,6 +54,18 @@ describe("ApprovalPrompt", () => {
 		expect(onDecide).toHaveBeenCalledWith("deny");
 	});
 
+	it("does not approve when Enter is pressed on a focused approval button", () => {
+		const onDecide = vi.fn();
+		render(<ApprovalPrompt request={request} onDecide={onDecide} />);
+		for (const name of ["Allow once", "Always allow on shop.example"]) {
+			const button = screen.getByRole("button", { name });
+			button.focus();
+			// fireEvent returns false when the default (the native click) was prevented.
+			expect(fireEvent.keyDown(button, { key: "Enter" })).toBe(false);
+		}
+		expect(onDecide).not.toHaveBeenCalled();
+	});
+
 	it("disables decisions while one is being sent and shows a failure in place", () => {
 		const onDecide = vi.fn();
 		render(<ApprovalPrompt request={request} onDecide={onDecide} busy error="daemon offline" />);

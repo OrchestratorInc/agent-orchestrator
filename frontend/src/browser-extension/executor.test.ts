@@ -603,6 +603,19 @@ describe("Executor", () => {
 		expect(clicks).toBe(1);
 	});
 
+	it("refuses an approved Enter once focus has moved", async () => {
+		const { run, approve } = setup();
+		await approve("s1", false);
+		await run("open", { url: "https://shop.test/" });
+		(document.getElementById("q") as HTMLInputElement).focus();
+		const { binding } = (await run("describe", { action: "press", key: "Enter" })) as { binding: Record<string, unknown> };
+		expect(binding.focus).toEqual(expect.any(String));
+		(document.getElementById("buy") as HTMLButtonElement).focus();
+		await expect(run("press", { key: "Enter", approvalBinding: binding })).rejects.toMatchObject({ code: "BROWSER_TARGET_CHANGED" });
+		(document.getElementById("q") as HTMLInputElement).focus();
+		expect(await run("press", { key: "Enter", approvalBinding: binding })).toMatchObject({ pressed: "Enter" });
+	});
+
 	it("resolves act instructions and reports unmatched ones with the snapshot", async () => {
 		const { run, approve } = setup();
 		await approve("s1", false);

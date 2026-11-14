@@ -646,11 +646,12 @@ export class Executor {
 	private async assertApprovalBinding(ctx: Context, page: ActiveTab, binding: unknown, ref?: string): Promise<void> {
 		if (binding === undefined) return;
 		const bound = isRecord(binding) ? binding : {};
-		const current = (await this.content(page, ctx, { op: "ping" })) as { documentId?: string };
+		const current = (await this.content(page, ctx, { op: "ping" })) as { documentId?: string; focusId?: string };
 		const changed =
 			bound.tabId !== page.logicalId ||
 			typeof bound.document !== "string" ||
 			bound.document !== current.documentId ||
+			(typeof bound.focus === "string" && bound.focus !== "" && bound.focus !== current.focusId) ||
 			(typeof bound.ref === "string" && bound.ref !== "" && ref !== undefined && bound.ref.replace(/^@/, "") !== ref.replace(/^@/, ""));
 		if (changed) {
 			throw new BridgeError(
@@ -882,11 +883,14 @@ export class Executor {
 		const nth = typeof args.nth === "number" && Number.isFinite(args.nth) ? Math.trunc(args.nth) : undefined;
 		return this.withPage(ctx, async (page) => {
 			const fresh = await this.refreshed(page);
-			const pageFacts = {
-				pageUrl: sanitizeBrowserURL(fresh.tab.url ?? ""),
-				pageTitle: sanitizeBrowserTitle(fresh.tab.title ?? ""),
+			// In a selected frame the approval is scoped to the frame's own site,
+			// read from its document; otherwise Chrome's tab address decides.
+			const inFrame = this.frameFor(ctx, fresh) !== 0;
+			const factsFor = (doc: { url?: string; title?: string }) => ({
+				pageUrl: sanitizeBrowserURL((inFrame && doc.url) || fresh.tab.url || ""),
+				pageTitle: sanitizeBrowserTitle((inFrame ? doc.title : undefined) ?? fresh.tab.title ?? ""),
 				...(instruction ? { instruction } : {}),
-			};
+			});
 			let ref = action !== "press" && typeof args.ref === "string" ? args.ref.replace(/^@/, "") : undefined;
 			if (action === "act") {
 				const snapshot = await this.rawSnapshot(ctx, fresh, true);
@@ -894,34 +898,68 @@ export class Executor {
 				ref = match.outcome === "matched" ? match.candidate.ref : undefined;
 			}
 			if (action !== "press" && !ref) {
-				const current = (await this.content(fresh, ctx, { op: "ping" })) as { documentId?: string };
-				return { target: pageFacts, binding: { tabId: fresh.logicalId, document: current.documentId ?? "" }, untrustedExternalContent: true };
+				const current = (await this.content(fresh, ctx, { op: "ping" })) as { documentId?: string; url?: string; title?: string };
+				return { target: factsFor(current), binding: { tabId: fresh.logicalId, document: current.documentId ?? "" }, untrustedExternalContent: true };
 			}
 			const described = (await this.content(fresh, ctx, { op: "describe", ...(ref ? { ref } : {}) })) as {
 				facts: ApprovalElementFacts | null;
 				viewport: { width: number; height: number };
 				dpr: number;
 				documentId: string;
+				url?: string;
+				title?: string;
+				focusId?: string;
 			};
 			let image: string | undefined;
-			const crop = approvalCropRect(described.facts?.rect, described.viewport);
+			const placed = await this.inTabViewport(ctx, fresh, described.facts?.rect, described.viewport, described.dpr);
+			const crop = approvalCropRect(placed.rect, placed.viewport);
 			if (crop) {
 				try {
-					image = bytesToBase64(await cropPng(base64ToBytes(await this.captureTab(ctx, fresh)), crop, described.dpr || 1));
+					image = bytesToBase64(await cropPng(base64ToBytes(await this.captureTab(ctx, fresh)), crop, placed.dpr || 1));
 				} catch {
 					// The prompt still shows the page, action, and reason.
 				}
 			}
 			return {
-				target: { ...(described.facts ?? {}), ...pageFacts },
+				target: { ...(described.facts ?? {}), ...factsFor(described) },
 				...(ref ? { resolvedRef: ref } : {}),
-				binding: { tabId: fresh.logicalId, document: described.documentId, ...(ref ? { ref } : {}) },
+				binding: {
+					tabId: fresh.logicalId,
+					document: described.documentId,
+					...(ref ? { ref } : {}),
+					...(described.focusId ? { focus: described.focusId } : {}),
+				},
 				// The element could not be read, so its form facts are unknown.
 				...(!described.facts ? { partial: true } : {}),
 				...(image ? { image } : {}),
 				untrustedExternalContent: true,
 			};
 		});
+	}
+
+	/**
+	 * An element rectangle in the selected frame, moved into the tab's
+	 * viewport (the screenshot's coordinates) through every enclosing iframe,
+	 * as point() does for input.
+	 */
+	private async inTabViewport(
+		ctx: Context,
+		page: ActiveTab,
+		rect: { x: number; y: number; width: number; height: number } | undefined,
+		viewport: { width: number; height: number },
+		dpr: number,
+	): Promise<{ rect?: { x: number; y: number; width: number; height: number }; viewport: { width: number; height: number }; dpr: number }> {
+		const frame = ctx.extras.frame;
+		if (!rect || !frame || frame.logicalTabId !== page.logicalId) return { rect, viewport, dpr };
+		let x = rect.x;
+		let y = rect.y;
+		for (const link of frame.chain) {
+			const offset = (await this.content(page, ctx, { op: "frameOffset", ref: link.ref }, link.parentFrameId)) as { x: number; y: number };
+			x += offset.x;
+			y += offset.y;
+		}
+		const top = (await this.content(page, ctx, { op: "ping" }, 0)) as { viewport?: { width: number; height: number }; dpr?: number };
+		return { rect: { ...rect, x, y }, viewport: top.viewport ?? viewport, dpr: top.dpr ?? dpr };
 	}
 
 	private async screenshot(ctx: Context, annotate: boolean): Promise<unknown> {
