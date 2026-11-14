@@ -217,6 +217,20 @@ beforeEach(() => {
 	useUiStore.setState({ isSidebarOpen: true, inspectorSessions: {} });
 });
 
+describe("ChatWorkspace quota fallback", () => {
+	it("retains quota and reset information without agent switching, including exhaustion", async () => {
+		const snapshot = { ...chatFixtureSettled, rateLimits: { primaryUsedPercent: 80, secondaryUsedPercent: -1, primaryResetsInSeconds: 8100 } };
+		const { container, rerender } = render(<ChatWorkspace snapshot={snapshot} />);
+		expect(container.querySelector("[data-quota-readout]")).toHaveTextContent("Approaching limit");
+		rerender(<ChatWorkspace snapshot={{ ...snapshot, rateLimits: { ...snapshot.rateLimits, primaryUsedPercent: 100 } }} />);
+		// The incoming pill; the outgoing warning may still be fading out beside it.
+		const pill = container.querySelector("[data-quota-readout][data-severity=full]")!;
+		expect(pill).toHaveTextContent("2h 15m");
+		expect(pill).toHaveAttribute("data-severity", "full");
+		expect(screen.getAllByRole("status").some((node) => node.textContent?.includes("Usage limit reached. Resets in 2h 15m"))).toBe(true);
+	});
+});
+
 describe("ChatWorkspace prompt suggestions", () => {
 	it("forwards the Cloud message budget to its composer", async () => {
 		const snapshot = { ...chatFixtureSettled, sessionId: "cloud-budget-workspace" };
@@ -1029,14 +1043,20 @@ describe("ChatWorkspace timeline", () => {
 	});
 
 	// The meter can warn about the account's quota, but only if it is handed it.
-	it("warns beside the composer once the account's quota passes 75%", () => {
-		const reported = { ...idleSnapshot(chatFixture), rateLimits: { primaryUsedPercent: 40, secondaryUsedPercent: -1 } };
-		const view = render(<ChatWorkspace snapshot={reported} />);
-		const composer = screen.getByLabelText("Message the agent").closest("form") as HTMLElement;
-		expect(within(composer).queryByText(/% used/)).not.toBeInTheDocument();
-
-		view.rerender(<ChatWorkspace snapshot={{ ...reported, rateLimits: { primaryUsedPercent: 40, secondaryUsedPercent: 82 } }} />);
-		expect(within(composer).getByText("Weekly 82% used")).toBeInTheDocument();
+	it("flashes the usage warning beside the composer's own model controls, still announcing it after", () => {
+		vi.useFakeTimers();
+		try {
+			render(<ChatWorkspace snapshot={{ ...idleSnapshot(chatFixture), rateLimits: { primaryUsedPercent: 82, secondaryUsedPercent: -1 } }} />);
+			const composer = screen.getByLabelText("Message the agent").closest("form") as HTMLElement;
+			expect(composer.querySelector("[data-quota-readout]")).toHaveTextContent("Approaching limit");
+			// The flash, then the outgoing layer's fade. The screen-reader status stays.
+			act(() => { vi.advanceTimersByTime(5_000); });
+			act(() => { vi.advanceTimersByTime(300); });
+			expect(composer.querySelector("[data-quota-readout]")).toBeNull();
+			expect(within(composer).getAllByRole("status").some((node) => node.textContent?.includes("Approaching limit"))).toBe(true);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it("refreshes the owning workspace after renaming the primary chat tab", async () => {

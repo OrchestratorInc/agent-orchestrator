@@ -48,6 +48,8 @@ import { CloseButton } from "../ui/close-button";
 import { Pressable } from "../ui/pressable";
 import { ModelMenuChoices } from "./ModelMenuChoices";
 import { ProviderMark } from "./ProviderMark";
+import { SmoothSwap } from "./SmoothSwap";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../ui/tooltip";
 import { sharesAgentMark } from "../AgentAvatar";
 import { useCloudAgentCatalogOptions } from "../../hooks/useCloudModelCatalog";
 
@@ -115,6 +117,17 @@ export interface AccountChoice {
 	value?: string;
 	onPick: (id: string) => void;
 	disabled?: boolean;
+}
+
+/** Something to show beside the agent's logo for now, such as the usage limit near its end. */
+export interface PickerOverride {
+	/** Changes when the label means something else, so the picker crossfades to it. */
+	key: string;
+	label: ReactNode;
+	/** The hover tooltip's first line. */
+	title: string;
+	/** Its second line, ahead of the model the picker still opens to. */
+	detail?: string;
 }
 
 export interface PickerModel {
@@ -211,8 +224,14 @@ export function AgentModelPicker({
 	extras,
 	terminal = false,
 	pendingFooter,
+	override,
+	notice,
 	onCloseAutoFocus,
 }: {
+	/** Shown after the agent's logo in place of the model and effort; the menu is unchanged. */
+	override?: PickerOverride;
+	/** A line under the Agent row of the open menu, such as the agent's usage limit near its end. */
+	notice?: ReactNode;
 	/** Shown under the settings of the agent picked to switch to, such as its Switch and Cancel buttons. */
 	pendingFooter?: ReactNode;
 	currentHarness: string;
@@ -322,6 +341,9 @@ export function AgentModelPicker({
 	);
 	// The rows below always describe who answers next: the pending agent, or the running one.
 	const shownHarness = pending?.harness ?? currentHarness;
+	// An override (the usage limit) is the running agent's, so a pending switch
+	// keeps it off the trigger and its tooltip, as it does the menu's notice.
+	const shownOverride = pending ? undefined : override;
 	const source = pending ? otherSource(pending.harness, pending) : currentSource;
 	const settable = !terminal || Boolean(pending);
 	// A catalog that could not be read says why, instead of an empty model list.
@@ -402,46 +424,68 @@ export function AgentModelPicker({
 	const offersAutoCompact = compactsEarly(pending?.harness, pending?.model);
 	// Only while there is nothing to show yet: a reload after a pick keeps the rows in place.
 	const waiting = loading && !pending && source.efforts.length === 0 && source.fast === undefined && source.thinking === undefined;
+	const focusFromMenu = useRef(false);
+	// The agent's model, effort and flags as the trigger shows them.
+	const labelContent = () => (<>
+		{loadingModels && !savedLabel && !pending && !terminal ? (
+			<span className="flex items-center gap-1.5 text-muted-foreground">
+				<Loader2 aria-hidden="true" className="size-3 animate-spin" />
+				{t("settings.models.loading")}
+			</span>
+		) : <>
+		<span className={cn("min-w-0 max-w-[28ch] truncate", shownUltra && !terminal ? "ultra-text" : undefined)}>
+			{terminal ? agentLabel(currentHarness) : shownModel}
+		</span>
+		{terminal ? <ChevronRight aria-hidden="true" className="ml-auto size-icon-sm shrink-0 text-muted-foreground" /> : (
+			<>
+				{shownFast ? <Zap aria-label={t("agentSwitch.fastMode")} className="size-3 shrink-0 fill-current" /> : null}
+				{shownThinking ? <Brain aria-label={t("agentSwitch.thinking")} className="size-3 shrink-0" /> : null}
+				{shownEffort ? <span className={cn("shrink-0", shownUltra ? "ultra-text" : "text-muted-foreground")}>{shownEffort}</span> : null}
+				{mark}
+			</>
+		)}
+		</>}
+	</>);
 
 	return (
 		// Not modal, so one click on the composer both closes the menu and focuses it.
 		<OptionMenu open={open} onOpenChange={setOpen} modal={false}>
+			{/* Always mounted, so the trigger (and its label's crossfade) never remounts; it only has content during an override. */}
+			<TooltipProvider><Tooltip><TooltipTrigger asChild
+				// Focus handed back by the closing menu is not a request for the tooltip; a later Tab still is.
+				onFocus={(event) => { if (focusFromMenu.current) event.preventDefault(); focusFromMenu.current = false; }}>
 			<OptionMenuTrigger variant="ghost"
 				ref={management.triggerRef}
 				disabled={disabled && agentSwitch.disabled}
 				onPointerEnter={warmCatalogs}
 				onFocus={warmCatalogs}
 				aria-label={terminal ? t("agentSwitch.terminalAgent") : t("agentSwitch.pickerLabel")}
-				title={title ?? (terminal ? t("agentSwitch.switchAnother") : t("agentSwitch.pickerLabel"))}
+				title={shownOverride && !terminal ? undefined : title ?? (terminal ? t("agentSwitch.switchAnother") : t("agentSwitch.pickerLabel"))}
 				className={cn(TRIGGER_CLASS, terminal ? "w-full justify-start" : undefined)}
 				showCaret={false}
 				data-shortcut-target={terminal ? undefined : "model-picker"}
 			>
 				<ProviderMark provider={terminal ? currentHarness : shownHarness} className="size-3.5" />
-				{loadingModels && !savedLabel && !pending && !terminal ? (
-					<span className="flex items-center gap-1.5 text-muted-foreground">
-						<Loader2 aria-hidden="true" className="size-3 animate-spin" />
-						{t("settings.models.loading")}
-					</span>
-				) : <>
-				<span className={cn("min-w-0 max-w-[28ch] truncate", shownUltra && !terminal ? "ultra-text" : undefined)}>
-					{terminal ? agentLabel(currentHarness) : shownModel}
-				</span>
-				{terminal ? <ChevronRight aria-hidden="true" className="ml-auto size-icon-sm shrink-0 text-muted-foreground" /> : (
-					<>
-						{shownFast ? <Zap aria-label={t("agentSwitch.fastMode")} className="size-3 shrink-0 fill-current" /> : null}
-						{shownThinking ? <Brain aria-label={t("agentSwitch.thinking")} className="size-3 shrink-0" /> : null}
-						{shownEffort ? <span className={cn("shrink-0", shownUltra ? "ultra-text" : "text-muted-foreground")}>{shownEffort}</span> : null}
-						{mark}
-					</>
+				{/* The model and an override crossfade, and the trigger's width eases between them. */}
+				{terminal ? labelContent() : (
+					<SmoothSwap swapKey={shownOverride ? `override:${shownOverride.key}` : "model"}>
+						{shownOverride ? shownOverride.label : labelContent()}
+					</SmoothSwap>
 				)}
-				</>}
 			</OptionMenuTrigger>
+			</TooltipTrigger>{shownOverride && !terminal ? (
+				<TooltipContent>
+					<p>{shownOverride.title}</p>
+					<p className="text-muted-foreground">{[shownOverride.detail, [shownModel, shownEffort].filter(Boolean).join(" ")].filter(Boolean).join(" · ")}</p>
+				</TooltipContent>
+			) : null}</Tooltip></TooltipProvider>
 			{/* Pinned to the trigger's left edge, which stays put while its label changes width. */}
 			<OptionMenuContent align="start" side={terminal ? "right" : "top"} steady className="chat-settings-menu w-64 text-[12px]!"
 				onCloseAutoFocus={(event) => {
 					management.onCloseAutoFocus(event);
 					if (!event.defaultPrevented) onCloseAutoFocus?.(event);
+					// Focus about to return to the trigger: keep its tooltip shut for that one focus.
+					focusFromMenu.current = !event.defaultPrevented;
 				}}
 			>
 				<ModelMenuChoices models={searchRows} searchable searchPlaceholder={t("agentSwitch.search")}>
@@ -479,7 +523,8 @@ export function AgentModelPicker({
 							))}
 							<div className={setups.length > 0 ? DIVIDER : undefined}>
 								<OptionMenuSub closeOnSelect>
-									<OptionMenuSubTrigger label={t("agentSwitch.agent")} value={agentLabel(shownHarness)} />
+									{/* The agent's account note sits inside its row, under the agent it belongs to. */}
+									<OptionMenuSubTrigger label={t("agentSwitch.agent")} value={agentLabel(shownHarness)} detail={terminal || pending ? undefined : notice} />
 									<OptionMenuSubContent scrollable className={SUB_CLASS}>
 										<div className="model-menu-scroll max-h-[calc(var(--size-select-menu-max)-var(--space-2)*2)] overflow-y-auto overscroll-contain">
 											{agents.map((agent) => (

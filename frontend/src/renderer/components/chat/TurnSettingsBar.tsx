@@ -38,7 +38,7 @@ import { Switch } from "../ui/switch";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../ui/tooltip";
 import { Button, GHOST_PILL_CLASS } from "../ui/button";
 import { agentLabel } from "../../lib/agent-options";
-import { AgentModelPicker, AutoCompactRow, compactsEarly, ToggleRow, type AgentSwitchProps, type PickerSource } from "./AgentSwitchPicker";
+import { AgentModelPicker, AutoCompactRow, compactsEarly, ToggleRow, type AgentSwitchProps, type PickerOverride, type PickerSource } from "./AgentSwitchPicker";
 import { ModelMenuChoices } from "./ModelMenuChoices";
 import { providerQualifiedChoice } from "../../lib/model-variants";
 import type {
@@ -135,6 +135,8 @@ export function TurnSettingsBar({
 	autoSelectEffortOnOpen = false,
 	agentSwitch,
 	beforePicker,
+	pickerOverride,
+	pickerNotice,
 	modelsLoading,
 	lastModel,
 	unsetModelLabel,
@@ -188,6 +190,10 @@ export function TurnSettingsBar({
 	agentSwitch?: AgentSwitchProps;
 	/** Drawn just before that picker, such as the context meter. */
 	beforePicker?: ReactNode;
+	/** Shown in the picker after the agent's logo, in place of the model and effort, such as the usage limit near its end. */
+	pickerOverride?: PickerOverride;
+	/** A line under the Agent row of the open model menu, such as the usage limit near its end. */
+	pickerNotice?: ReactNode;
 	/** The agent is starting again; the picker names no model until it reports its own. */
 	modelsLoading?: boolean;
 	/** The model the chat's agent last reported running, when none is saved. */
@@ -500,6 +506,8 @@ export function TurnSettingsBar({
 								loading={configPending && !nativeModelMenu}
 								loadingModels={modelsLoading}
 								savedModel={settings.model || lastModel}
+								override={pickerOverride}
+								notice={pickerNotice}
 								title={reroute ? `The provider answered with ${rerouted} instead of ${reroute.fromModel ?? chosenLabel}` : undefined}
 								extras={pickerExtras}
 								onCloseAutoFocus={restoreComposerFocus}
@@ -525,6 +533,7 @@ export function TurnSettingsBar({
 							toggles={grouped.toggles}
 							extraOptions={grouped.extra}
 							onChangeConfigOption={onChangeConfigOption ? applyOption : undefined}
+							notice={pickerNotice}
 						/>
 					) : null}
 
@@ -539,6 +548,7 @@ export function TurnSettingsBar({
 							extraOptions={grouped.extra}
 							disabled={optionDisabled}
 							onChange={applyOption}
+							notice={pickerNotice}
 						/>
 					) : null}
 
@@ -778,7 +788,9 @@ function ModelEffortPicker({
 	toggles = [],
 	extraOptions = [],
 	onChangeConfigOption,
+	notice,
 }: {
+	notice?: ReactNode;
 	models: ChatModel[];
 	settings: TurnSettings;
 	onChange: (next: TurnSettings) => void;
@@ -822,7 +834,7 @@ function ModelEffortPicker({
 				</OptionMenuTrigger>
 			<OptionMenuContent align="start" className={CHAT_MENU_CLASS} onCloseAutoFocus={restoreComposerFocus}>
 				<OptionMenuSub closeOnSelect>
-					<OptionMenuSubTrigger label="Model" value={modelLabel} />
+					<OptionMenuSubTrigger label="Model" value={modelLabel} detail={notice} />
 					{/* Scroll on an inner strip: the surface utility caps height but wheel
 					    events do not reliably reach an outer overflow on nested submenus. */}
 					<OptionMenuSubContent scrollable className={CHAT_MENU_CLASS} onFocus={focusModelSearch}>
@@ -887,7 +899,9 @@ function ClubbedConfigPicker({
 	disabled,
 	onChange,
 	groupClaude,
+	notice,
 }: {
+	notice?: ReactNode;
 	groupClaude?: boolean;
 	modelOptions: ChatConfigOption[];
 	effortOptions: ChatConfigOption[];
@@ -937,6 +951,7 @@ function ClubbedConfigPicker({
 				onChange={(value) => onChange(option.id, value)}
 				groupClaude={groupClaude}
 				align="start"
+				header={notice}
 			/>
 		);
 	}
@@ -954,6 +969,7 @@ function ClubbedConfigPicker({
 					<span className="min-w-0 max-w-[38ch] truncate">{groupLabel}</span>
 				</OptionMenuTrigger>
 			<OptionMenuContent align="start" className={CHAT_MENU_CLASS} onCloseAutoFocus={restoreComposerFocus}>
+				{notice ? <div className="px-2 py-1.5">{notice}</div> : null}
 				{modelOptions.map((option) => (
 					<OptionSubmenu key={option.id} option={option} onChange={onChange} scrollable groupClaude={groupClaude} />
 				))}
@@ -1209,6 +1225,7 @@ function ConfigOptionPicker({
 	title,
 	onChange,
 	disabled,
+	header,
 	footer,
 	leadIcon,
 	showCaret,
@@ -1216,6 +1233,8 @@ function ConfigOptionPicker({
 	align,
 }: {
 	option: ChatConfigOption;
+	/** A line above the choices, such as the usage warning. */
+	header?: ReactNode;
 	label?: string;
 	title?: string;
 	onChange: (value: ChatConfigOptionValue) => void;
@@ -1237,6 +1256,7 @@ function ConfigOptionPicker({
 			showCaret={showCaret}
 			onFocus={isModelOption(option) ? focusModelSearch : undefined}
 		>
+			{header ? <div className="px-2 py-1.5">{header}</div> : null}
 			{isModelOption(option) ? (
 				<ConfigModelChoices option={option} onChange={onChange} groupClaude={groupClaude} />
 			) : leadIcon && option.type === "select" ? (
