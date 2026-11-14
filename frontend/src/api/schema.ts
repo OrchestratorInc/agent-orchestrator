@@ -8283,7 +8283,7 @@ export interface components {
             checks: components["schemas"]["SessionPRCheck"][];
             failingChecks: components["schemas"]["SessionPRFailingCheck"][];
             /** @enum {string} */
-            state: "unknown" | "pending" | "passing" | "failing";
+            state: "unknown" | "none" | "pending" | "passing" | "failing";
         };
         SessionPRCheck: {
             name: string;
@@ -8313,7 +8313,7 @@ export interface components {
         };
         SessionPRFacts: {
             /** @enum {string} */
-            ci: "unknown" | "pending" | "passing" | "failing";
+            ci: "unknown" | "none" | "pending" | "passing" | "failing";
             /** @enum {string} */
             mergeability: "unknown" | "mergeable" | "conflicting" | "blocked" | "unstable";
             number: number;

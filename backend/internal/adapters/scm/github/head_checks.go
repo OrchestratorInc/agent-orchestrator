@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -20,7 +21,7 @@ func (p *Provider) HeadChecks(ctx context.Context, repo ports.SCMRepo, sha strin
 	if p == nil || p.client == nil {
 		return ports.SCMHeadChecks{}, fmt.Errorf("github scm: head checks provider is not configured")
 	}
-	var out ports.SCMHeadChecks
+	out := ports.SCMHeadChecks{Since: p.firstObservedHead(repo, sha)}
 	resp, err := p.client.doREST(ctx, http.MethodGet, repoPath(repo.Owner, repo.Name, "commits", sha, "check-suites"), url.Values{"per_page": {"100"}}, nil)
 	if err != nil {
 		return ports.SCMHeadChecks{}, fmt.Errorf("github scm: read check suites: %w", err)
@@ -28,10 +29,9 @@ func (p *Provider) HeadChecks(ctx context.Context, repo ports.SCMRepo, sha strin
 	var suites struct {
 		TotalCount  int `json:"total_count"`
 		CheckSuites []struct {
-			Status               string    `json:"status"`
-			Conclusion           string    `json:"conclusion"`
-			LatestCheckRunsCount int       `json:"latest_check_runs_count"`
-			CreatedAt            time.Time `json:"created_at"`
+			Status               string `json:"status"`
+			Conclusion           string `json:"conclusion"`
+			LatestCheckRunsCount int    `json:"latest_check_runs_count"`
 		} `json:"check_suites"`
 	}
 	if err := json.Unmarshal(resp.Body, &suites); err != nil {
@@ -41,9 +41,6 @@ func (p *Provider) HeadChecks(ctx context.Context, repo ports.SCMRepo, sha strin
 	for _, suite := range suites.CheckSuites {
 		if !idleSuite(suite.Status, suite.Conclusion, suite.LatestCheckRunsCount) {
 			out.Started++
-		}
-		if !suite.CreatedAt.IsZero() && (out.Since.IsZero() || suite.CreatedAt.Before(out.Since)) {
-			out.Since = suite.CreatedAt
 		}
 	}
 	// Suites past the first page went unread: count them as started.
@@ -61,23 +58,6 @@ func (p *Provider) HeadChecks(ctx context.Context, repo ports.SCMRepo, sha strin
 	}
 	out.Statuses = status.TotalCount
 
-	if out.Since.IsZero() {
-		resp, err = p.client.doREST(ctx, http.MethodGet, repoPath(repo.Owner, repo.Name, "commits", sha), nil, nil)
-		if err != nil {
-			return ports.SCMHeadChecks{}, fmt.Errorf("github scm: read commit: %w", err)
-		}
-		var commit struct {
-			Commit struct {
-				Committer struct {
-					Date time.Time `json:"date"`
-				} `json:"committer"`
-			} `json:"commit"`
-		}
-		if err := json.Unmarshal(resp.Body, &commit); err != nil {
-			return ports.SCMHeadChecks{}, fmt.Errorf("github scm: decode commit: %w", err)
-		}
-		out.Since = commit.Commit.Committer.Date
-	}
 	return out, nil
 }
 
@@ -96,4 +76,34 @@ func idleSuite(status, conclusion string, runs int) bool {
 		return conclusion == "skipped" || conclusion == "stale"
 	}
 	return false
+}
+
+// Commit and suite dates can predate a push or lie in the future. Only our
+// observation of this repository/head starts the no-checks grace period.
+func (p *Provider) firstObservedHead(repo ports.SCMRepo, sha string) time.Time {
+	p.headObservedMu.Lock()
+	defer p.headObservedMu.Unlock()
+	key := strings.ToLower(repo.Owner+"/"+repo.Name) + "/" + sha
+	if since, ok := p.headObserved[key]; ok {
+		return since
+	}
+	if p.headObserved == nil {
+		p.headObserved = make(map[string]time.Time)
+	}
+	// Bound history in a daemon that can observe new heads for weeks.
+	if len(p.headObserved) >= 1024 {
+		var oldest string
+		for k, t := range p.headObserved {
+			if oldest == "" || t.Before(p.headObserved[oldest]) {
+				oldest = k
+			}
+		}
+		delete(p.headObserved, oldest)
+	}
+	now := time.Now()
+	if p.now != nil {
+		now = p.now()
+	}
+	p.headObserved[key] = now
+	return now
 }
