@@ -894,6 +894,8 @@ export class Executor {
 			return {
 				target: { ...(described.facts ?? {}), ...pageFacts },
 				...(ref ? { resolvedRef: ref } : {}),
+				// The element could not be read, so its form facts are unknown.
+				...(!described.facts ? { partial: true } : {}),
 				...(image ? { image } : {}),
 				untrustedExternalContent: true,
 			};

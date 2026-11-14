@@ -334,3 +334,27 @@ func TestApprovedActIsBoundToTheApprovedElement(t *testing.T) {
 		t.Fatalf("dispatched args = %v", rt.lastArgs)
 	}
 }
+
+func TestPartialDescriptionAsks(t *testing.T) {
+	// The panel could name the control but not read its form (duplicate
+	// labels): "Save changes" alone reads as benign, so the gap must ask.
+	rt := &scriptedRuntime{describe: map[string]interface{}{
+		"target":  map[string]interface{}{"role": "button", "name": "Save changes", "pageUrl": "https://app.example/profile"},
+		"partial": true,
+	}}
+	svc, gate, token := approvalService(t, rt)
+	asked := answer(t, gate, approval.DecisionDeny)
+	_, _, err := svc.Execute(context.Background(), "s1", token, "click", map[string]interface{}{"ref": "e5"})
+	if apiErrorCode(err) != "BROWSER_ACTION_DENIED" || slices.Contains(rt.received(), "click") {
+		t.Fatalf("err=%v received=%v", err, rt.received())
+	}
+	if p := <-asked; p.Category != approval.CategoryScript {
+		t.Fatalf("prompt = %+v", p)
+	}
+	// A complete description of the same plain control still passes.
+	full := &scriptedRuntime{describe: map[string]interface{}{"target": map[string]interface{}{"role": "button", "name": "Save changes"}}}
+	svc2, gate2, token2 := approvalService(t, full)
+	if _, _, err := svc2.Execute(context.Background(), "s1", token2, "click", map[string]interface{}{"ref": "e5"}); err != nil || len(gate2.Pending()) != 0 {
+		t.Fatalf("complete description asked: err=%v", err)
+	}
+}

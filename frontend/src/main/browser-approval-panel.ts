@@ -35,6 +35,11 @@ export type PanelApprovalDescription = {
 	target: Partial<ApprovalElementFacts> & { pageUrl: string; pageTitle: string; instruction?: string };
 	/** The ref act matched, so an approved act can be bound to it. */
 	resolvedRef?: string;
+	/**
+	 * The element was named but its form could not be read; the daemon asks
+	 * rather than trust a benign verdict.
+	 */
+	partial?: true;
 	image?: string;
 	untrustedExternalContent: true;
 };
@@ -66,6 +71,7 @@ export async function describePanelApprovalTarget(input: PanelApprovalInput): Pr
 			return {
 				target: { role, name, ...page, ...(input.instruction ? { instruction: input.instruction } : {}) },
 				...(resolvedRef ? { resolvedRef } : {}),
+				partial: true,
 				untrustedExternalContent: true,
 			};
 		}
@@ -100,5 +106,12 @@ export async function describePanelApprovalTarget(input: PanelApprovalInput): Pr
 			image = undefined;
 		}
 	}
-	return { target, ...(resolvedRef ? { resolvedRef } : {}), ...(image ? { image } : {}), untrustedExternalContent: true };
+	return {
+		target,
+		...(resolvedRef ? { resolvedRef } : {}),
+		// A named element whose DOM could not be read has no form facts.
+		...(!facts && (role || name) ? { partial: true as const } : {}),
+		...(image ? { image } : {}),
+		untrustedExternalContent: true,
+	};
 }

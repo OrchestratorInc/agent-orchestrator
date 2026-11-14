@@ -76,8 +76,8 @@ func (s *Service) preflight(ctx context.Context, sessionID domain.SessionID, rt 
 	described := s.describe(ctx, sessionID, rt, action, args)
 	target, image := described.target, described.image
 	verdict := approval.Classify(target, mode)
-	if !verdict.NeedsApproval && !described.identified {
-		// Nothing about the element could be read: ask rather than guess.
+	if !verdict.NeedsApproval && (!described.identified || described.partial) {
+		// The element (or its form) could not be read: ask rather than guess.
 		verdict = approval.Verdict{NeedsApproval: true, Category: approval.CategoryScript,
 			Summary: unidentifiedSummary(action, args, target.PageURL),
 			Reason:  "Orchestrator could not read what this acts on, so it asks first."}
@@ -170,6 +170,10 @@ type describedTarget struct {
 	ref string
 	// identified is false when nothing about the element could be read.
 	identified bool
+	// partial means the runtime named the element but could not read its form
+	// (duplicate labels, a page that blocks scripts), so a benign verdict is
+	// not trustworthy.
+	partial bool
 }
 
 // describe asks the runtime about the target. When it cannot answer (an older
@@ -197,6 +201,7 @@ func (s *Service) describe(ctx context.Context, sessionID domain.SessionID, rt r
 		Target      approval.Target `json:"target"`
 		Image       string          `json:"image"`
 		ResolvedRef string          `json:"resolvedRef"`
+		Partial     bool            `json:"partial"`
 	}
 	raw, err := json.Marshal(result.Value)
 	if err != nil || json.Unmarshal(raw, &described) != nil {
@@ -211,7 +216,7 @@ func (s *Service) describe(ctx context.Context, sessionID domain.SessionID, rt r
 		target.Key = fallback.Key
 	}
 	identified := target.Role != "" || target.Name != "" || target.IsSubmit
-	return describedTarget{target: target, image: described.Image, ref: described.ResolvedRef, identified: identified}
+	return describedTarget{target: target, image: described.Image, ref: described.ResolvedRef, identified: identified, partial: described.Partial}
 }
 
 func approvalRefusal(decision approval.Decision, summary string, timeout time.Duration) *ApprovalError {
