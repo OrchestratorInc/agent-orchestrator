@@ -183,6 +183,42 @@ test.beforeEach(async ({ page }) => {
 });
 
 test.describe("Add to chat from highlighted code", () => {
+	for (const mode of ["file", "diff", "chat"] as const) test(mode + ": remapped selection shortcut replaces Ctrl+L @P0", async ({ page }) => {
+		const { inspector } = await openChatSession(page, after, filePath, "Highlight this chat sentence to add its text to the draft.");
+		if (mode === "chat") {
+			const body = page.getByRole("log", { name: "Conversation" }).locator("[data-chat-message-body]");
+			const box = (await body.boundingBox())!;
+			await page.mouse.move(box.x + 4, box.y + 10);
+			await page.mouse.down();
+			await page.mouse.move(box.x + 180, box.y + 10, { steps: 12 });
+			await page.mouse.up();
+		} else {
+			await inspector.getByRole("button", { name: mode === "file" ? "Open full file" : "Open diff in center" }).click();
+			await selectText(page, row(page, CENTER, 3), row(page, CENTER, 6));
+			await page.getByTestId("session-file-scroll").focus();
+		}
+		const toolbar = page.locator(mode === "chat" ? "[data-chat-selection-actions]" : "[data-selection-ask]");
+		await expect(toolbar).toBeVisible();
+		await page.evaluate(async () => {
+			const modulePath = "/src/renderer/stores/keybindings-store.ts";
+			const { useKeybindingsStore } = await import(/* @vite-ignore */ modulePath);
+			await useKeybindingsStore.getState().setBindings("add-selection-to-chat", [{ key: "j", ctrl: true, meta: false, shift: true, alt: true }]);
+		});
+		const mac = await page.evaluate(() => /Mac/i.test(navigator.platform));
+		const hint = mac ? "Add to chat (⌃⌥⇧J)" : "Add to chat (Ctrl+Alt+Shift+J)";
+		const add = toolbar.getByRole("button", { name: "Add to chat", exact: true });
+		if (mode === "chat") {
+			await add.hover();
+			await expect(page.getByRole("tooltip")).toHaveText(hint);
+		} else await expect(add).toHaveAttribute("title", hint);
+		await page.keyboard.press("ControlOrMeta+L");
+		await expect(page.getByRole("button", { name: "1 annotation" })).toHaveCount(0);
+		await expect(toolbar).toBeVisible();
+		await page.keyboard.press("Control+Alt+Shift+J");
+		await expect(page.getByRole("button", { name: "1 annotation" })).toBeVisible();
+		await expect(toolbar).toBeHidden();
+	});
+
 	test("unsupported filename is refused before changing the draft or selection", async ({ page }) => {
 		const {composer,sentToChat}=await openChatSession(page,after,"src/notes:v2.ts");
 		await composer.fill("keep my question");
@@ -406,6 +442,52 @@ test.describe("Add to chat from highlighted code", () => {
 		await selectText(page, row(page, CENTER, 4), row(page, CENTER, 7, "change-addition"));
 		await askButton(page).getByRole("button", { name: "Add to chat" }).click();
 		await expect(page.getByRole("button", { name: "1 annotation" })).toBeVisible();
+	});
+
+	for (const mode of ["file", "diff"] as const) test(mode + ": Ctrl+L adds the highlighted code from the focused center viewport", async ({ page }) => {
+		const { inspector, composer, sentToChat } = await openChatSession(page);
+		await inspector.getByRole("button", { name: mode === "file" ? "Open full file" : "Open diff in center" }).click();
+		const viewport = page.getByTestId("session-file-scroll");
+		await expect(viewport).toBeFocused();
+		await selectText(page, row(page, CENTER, 3), row(page, CENTER, 6));
+		await expect(askButton(page)).toBeVisible();
+		await viewport.focus();
+		await page.keyboard.press("ControlOrMeta+L");
+		await expect(page.getByRole("button", { name: "1 annotation" })).toBeVisible();
+		await expect(composer).toBeFocused();
+		await expect(askButton(page)).toBeHidden();
+		await composer.fill("Explain the selected code");
+		await composer.press("Enter");
+		await expect.poll(() => sentToChat.length).toBe(1);
+		expect(sentToChat[0].fileReferences).toHaveLength(1);
+		expect(sentToChat[0].fileReferences[0]).toMatchObject({ path: filePath, line: 3, endLine: 6, side: mode === "file" ? "file" : "new" });
+		expect(sentToChat[0].fileReferences[0].lines.map(row => row.text)).toEqual([
+			"  step(3);", "const value4 = 4;", ...(mode === "diff" ? ["  step(5);"] : []), "  step(5, { retry: true });", "  step(6);",
+		]);
+	});
+
+	test("Ctrl+L adds a live file preview while workspace metadata is pending", async ({ page }) => {
+		const { inspector, composer } = await openChatSession(page);
+		let releaseMetadata!: () => void;
+		const metadata = new Promise<void>(resolve => { releaseMetadata = resolve; });
+		await page.route(/\/workspace\/file(?:\?|$)/, async route => {
+			await metadata;
+			await route.fallback();
+		});
+		try {
+			await inspector.getByRole("button", { name: "Open full file" }).click();
+			const viewport = page.getByTestId("session-file-scroll");
+			await expect(viewport.locator("[data-selection-toolbar-scope]")).toHaveCSS("overflow-y", "auto");
+			await selectText(page, row(page, CENTER, 3), row(page, CENTER, 6));
+			await expect(askButton(page)).toBeVisible();
+			await viewport.focus();
+			await page.keyboard.press("ControlOrMeta+L");
+			await expect(page.getByRole("button", { name: "1 annotation" })).toBeVisible();
+			await expect(composer).toBeFocused();
+			await expect(askButton(page)).toBeHidden();
+		} finally {
+			releaseMetadata();
+		}
 	});
 
 	for (const mode of ["file", "diff"] as const) test(mode + ": selection survives idle, focus and background cache completion", async ({ page }) => {

@@ -41,6 +41,9 @@ export type SessionInterfaceTransition = {
 	sourceMode: "chat" | "tui";
 	targetMode: "chat" | "tui";
 	policy: "drain" | "interrupt";
+	/** Set when the transition moves the session to another subscription account. */
+	sourceAccountId?: string;
+	targetAccountId?: string;
 	phase:
 		| "requested"
 		| "preflighting"
@@ -180,6 +183,40 @@ export async function sendConversationMessage(
 		body: JSON.stringify(input),
 	}, input.attachments?.length ? ATTACHMENT_REQUEST_TIMEOUT_MS : undefined);
 	return (await res.json()) as SendMessageResult;
+}
+
+/** Which agent the next message switches to, and on which model. */
+export type ProviderSwitchInput = { targetHarness: string; model?: string };
+
+/**
+ * Switch the chat's agent and send the message to the new one, in one request
+ * (desktop's send with a pending switch). The send's own id is the switch's
+ * idempotency key, so a retried send cannot switch twice.
+ */
+export async function switchProviderAndSend(
+	cfg: ServerConfig,
+	sessionId: string,
+	providerSwitch: ProviderSwitchInput,
+	message: SendMessageInput,
+): Promise<SendMessageResult> {
+	if (message.excerpts?.length) await requireConversationExcerptSupport(cfg, sessionId);
+	const res = await apiRequest(cfg, `${API}/sessions/${encodeURIComponent(sessionId)}/provider-switch`, {
+		method: "POST",
+		headers: message.attachments?.length ? { "X-AO-Attachment-Upload": "1" } : undefined,
+		body: JSON.stringify({
+			targetHarness: providerSwitch.targetHarness,
+			...(providerSwitch.model ? { model: providerSwitch.model } : {}),
+			idempotencyKey: message.clientMessageId,
+			message,
+		}),
+	}, message.attachments?.length ? ATTACHMENT_REQUEST_TIMEOUT_MS : undefined);
+	const data = (await res.json()) as { message?: SendMessageResult };
+	return data.message ?? { duplicate: true };
+}
+
+/** Starts the agent's first-run chat check early, so a switch's send does not wait on it. */
+export async function prewarmChatAgent(cfg: ServerConfig, agent: string): Promise<void> {
+	await apiRequest(cfg, `${API}/agents/${encodeURIComponent(agent)}/chat/prewarm`, { method: "POST" });
 }
 
 export async function sendReviewerConversationMessage(
@@ -562,4 +599,39 @@ async function streamError(res: Response): Promise<ApiError> {
 		// A proxy may answer HTML; the status remains enough to classify it.
 	}
 	return new ApiError(res.status, message, code, requestId, detail || undefined);
+}
+
+/** What the daemon reports about forking a session. */
+export type ForkOptions = {
+	allowed: boolean;
+	anyTurn?: boolean;
+	refusal?: { code: string; message: string };
+};
+
+/**
+ * Whether a session can be forked. Null when the daemon has session forks off
+ * (it answers 404), so the app shows no Fork action at all.
+ */
+export async function getForkOptions(cfg: ServerConfig, sessionId: string): Promise<ForkOptions | null> {
+	try {
+		const res = await apiRequest(cfg, `${API}/sessions/${encodeURIComponent(sessionId)}/fork-options`);
+		return (await res.json()) as ForkOptions;
+	} catch (cause) {
+		if ((cause as { status?: number })?.status === 404) return null;
+		throw cause;
+	}
+}
+
+/** Forks a session as it was at turnId into a new session, and returns it. */
+export async function forkSession(
+	cfg: ServerConfig,
+	sessionId: string,
+	turnId: string,
+	clientRequestId: string,
+): Promise<{ sessionId: string; displayName: string }> {
+	const res = await apiRequest(cfg, `${API}/sessions/${encodeURIComponent(sessionId)}/fork`, {
+		method: "POST",
+		body: JSON.stringify({ clientRequestId, turnId }),
+	});
+	return (await res.json()) as { sessionId: string; displayName: string };
 }

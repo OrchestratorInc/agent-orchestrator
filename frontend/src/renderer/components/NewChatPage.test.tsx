@@ -2,11 +2,13 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import userEvent from "@testing-library/user-event";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { prepareChatComposerDelivery, writeChatComposerText } from "../lib/chat-drafts";
+import { prepareChatComposerDelivery, readChatSessionDraft, writeChatComposerText } from "../lib/chat-drafts";
+import { REPORT_PROBLEM_PROMPT } from "../lib/report-problem";
 import type { ApprovalMode } from "../types/conversation";
 import { rememberChatSettingsTemplate } from "../lib/chat-settings-template";
 import type { ChatWorkspaceProps } from "./chat/ChatWorkspace";
 import { NewChatPage } from "./NewChatPage";
+import { useUiStore } from "../stores/ui-store";
 import { rememberStandaloneAgent } from "../lib/cloud-standalone-agents";
 import { CLOUD_STANDALONE_WORKSPACE_ID, STANDALONE_WORKSPACE_ID } from "../types/workspace";
 
@@ -284,6 +286,32 @@ describe("NewChatPage", () => {
 		expect(h.launch).toHaveBeenCalledWith("What is this?", expect.objectContaining({ clientRequestId: "cid-1", attachments: files }));
 	});
 
+	it("takes the session's top bar from the send until the page returns the brief or closes", async () => {
+		useUiStore.setState({ newChatSending: false });
+		let refuse!: (error: unknown) => void;
+		h.launch.mockReturnValueOnce(new Promise<string>((_, fail) => { refuse = fail; }));
+		renderPage();
+		expect(useUiStore.getState().newChatSending).toBe(false);
+
+		let sent!: Promise<unknown>;
+		act(() => { sent = Promise.resolve(h.workspace?.onSend?.("Fix the build", undefined, "cid-1")).catch(() => undefined); });
+		// Set before the first message paints, so it lands where the session shows it.
+		expect(useUiStore.getState().newChatSending).toBe(true);
+		await waitFor(() => expect(h.launch).toHaveBeenCalled());
+		await act(async () => {
+			refuse(Object.assign(new Error("Agent is not installed"), { name: "TaskCreateError", code: "AGENT_NOT_INSTALLED" }));
+			await sent;
+		});
+		expect(useUiStore.getState().newChatSending).toBe(false);
+
+		// Leaving mid-send gives the bar back too.
+		h.launch.mockReturnValueOnce(new Promise<string>(() => undefined));
+		act(() => { void Promise.resolve(h.workspace?.onSend?.("Fix the build", undefined, "cid-2")).catch(() => undefined); });
+		expect(useUiStore.getState().newChatSending).toBe(true);
+		cleanup();
+		expect(useUiStore.getState().newChatSending).toBe(false);
+	});
+
 	it("returns a refused brief to the composer and restores the selectors", async () => {
 		h.launch.mockRejectedValue(Object.assign(new Error("Agent is not installed"), { name: "TaskCreateError", code: "AGENT_NOT_INSTALLED" }));
 		renderPage();
@@ -479,6 +507,72 @@ describe("NewChatPage", () => {
 		expect(outcome).toMatchObject({ code: "AGENT_AUTH_REQUIRED" });
 		expect(JSON.parse(window.localStorage.getItem("ao.newTask.pendingLaunch.v1") ?? "{}").local).toMatchObject({ clientMessageId: "cid-1", projectId: "proj-1" });
 		expect(screen.getByRole("alert")).toHaveTextContent("Claude Code needs you to sign in again.");
+	});
+});
+
+describe("New chat opened from Report a problem", () => {
+	const saveSend = (projectId: string) => window.localStorage.setItem("ao.newTask.pendingLaunch.v1", JSON.stringify({
+		local: { clientMessageId: "cid-1", projectId, replay: {}, settings: {} },
+	}));
+	const renderReport = (projectId: string, report: boolean) => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const page = (id: string) => <QueryClientProvider client={queryClient}><NewChatPage projectId={id} report={report} /></QueryClientProvider>;
+		const { rerender } = render(page(projectId));
+		return { queryClient, refresh: () => rerender(page(projectId)) };
+	};
+	const picker = (queryClient: QueryClient) => {
+		render(<QueryClientProvider client={queryClient}>{h.workspace?.composerTray}</QueryClientProvider>);
+		return screen.getByRole("button", { name: /^Project: / });
+	};
+	beforeEach(() => prepareChatComposerDelivery(draftScope, { kind: "send", clientMessageId: "cid-1", requestText: "Fix the build", composerText: "Fix the build", attachments: [] }));
+
+	it.each([
+		{ report: true, heading: "What went wrong?" },
+		{ report: false, heading: undefined },
+	])("overrides the welcome heading only for report mode (report: $report)", ({ report, heading }) => {
+		renderReport(STANDALONE_WORKSPACE_ID, report);
+		expect(h.workspace?.welcomeHeading).toBe(heading);
+	});
+
+	it("stays on Scratchpad with the project picker locked", () => {
+		const { queryClient } = renderReport(STANDALONE_WORKSPACE_ID, true);
+		expect(picker(queryClient)).toBeDisabled();
+		expect(h.navigate).not.toHaveBeenCalled();
+	});
+
+	it("leaves the project picker open on a normal new chat", () => {
+		const { queryClient } = renderReport(STANDALONE_WORKSPACE_ID, false);
+		expect(picker(queryClient)).toBeEnabled();
+	});
+
+	it("follows a saved send to its project, still as a report", () => {
+		saveSend("proj-1");
+		renderReport(STANDALONE_WORKSPACE_ID, true);
+		expect(h.navigate).toHaveBeenCalledWith({ to: "/new", search: { project: "proj-1", host: undefined, report: true }, replace: true });
+	});
+
+	it("waits for a saved send on its project, then returns to Scratchpad", () => {
+		saveSend("proj-1");
+		const { refresh } = renderReport("proj-1", true);
+		expect(h.navigate).not.toHaveBeenCalled();
+		window.localStorage.removeItem("ao.newTask.pendingLaunch.v1");
+		refresh();
+		expect(h.navigate).toHaveBeenCalledWith({ to: "/new", search: { host: undefined, report: true }, replace: true });
+	});
+
+	it("leaves a normal new chat on its project", () => {
+		renderReport("proj-1", false);
+		expect(h.navigate).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		{ report: false, left: "keep this" },
+		{ report: true, left: `${REPORT_PROBLEM_PROMPT}\n\nkeep this` },
+	])("takes the report prompt out only for a normal new chat (report: $report)", ({ report, left }) => {
+		window.localStorage.clear();
+		writeChatComposerText(draftScope, `${REPORT_PROBLEM_PROMPT}\n\nkeep this`);
+		renderReport(STANDALONE_WORKSPACE_ID, report);
+		expect(readChatSessionDraft(draftScope).composer.text).toBe(left);
 	});
 });
 

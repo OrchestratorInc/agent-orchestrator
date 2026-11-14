@@ -20,6 +20,7 @@ ao spawn [flags]
 | `--issue string` | Issue id to associate with the session | - |
 | `--model string` | Agent model override for this session only; overrides project/role config | - |
 | `--effort string` | Reasoning effort override for this session only (for example `low`, `medium`, `high`); overrides project/role config | - |
+| `--account string` | Claude Code or Codex account id to start on (from `ao account ls`); the account must be signed in | The agent's default account |
 | `--name string` | Display name shown in the sidebar (max 100 characters) | Required |
 | `--mode chat\|tui` | Initial session interface; Chat requires harness support (including Grok Build via native ACP) | Daemon default, otherwise Terminal UI |
 | `--output artifact` | Ask the worker for a file in its artifact directory instead of a PR | Ordinary task |

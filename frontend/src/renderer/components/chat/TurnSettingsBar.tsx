@@ -248,6 +248,9 @@ export function TurnSettingsBar({
 	const approvalNote = approvalModeLimits?.requested
 		? `${approvalCopy[approvalModeLimits.requested].label} isn't available for ${approvalModeLimits.model}; using ${approvalLabel}.`
 		: undefined;
+	// Every row of the approval menu reports its pick as one: a Cloud chat keeps
+	// its approval mode unless the change says it came from this menu.
+	const pickApprovalMode = (mode: ApprovalMode) => onChange?.({ ...settings, approvalMode: mode }, "approvalMode");
 	const modelGroupLabel = effortLabel
 		? `${modelLabel} ${formatEffortLabel(effortLabel, t)}`
 		: modelLabel;
@@ -607,7 +610,7 @@ export function TurnSettingsBar({
 											description={approvalUnavailable(mode) ?? approvalCopy[mode].description}
 											active={mode === (settings.approvalMode ?? "default")}
 											disabled={Boolean(approvalUnavailable(mode))}
-											onSelect={() => onChange({ ...settings, approvalMode: mode })}
+											onSelect={() => pickApprovalMode(mode)}
 										/>
 									) : (
 									<OptionMenuItem
@@ -615,7 +618,7 @@ export function TurnSettingsBar({
 										active={mode === (settings.approvalMode ?? "default")}
 										radio
 										disabled={Boolean(approvalUnavailable(mode))}
-										onSelect={() => onChange({ ...settings, approvalMode: mode }, "approvalMode")}
+										onSelect={() => pickApprovalMode(mode)}
 										className={cn("text-xs")}
 									>
 										<span

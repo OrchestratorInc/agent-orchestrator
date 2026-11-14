@@ -634,6 +634,9 @@ type SessionArtifactView struct {
 	// unlike PreviewURL the page cannot call the daemon. HTML only.
 	InlineURL string `json:"inlineUrl,omitempty"`
 	ShareURL  string `json:"shareUrl,omitempty"`
+	// ShareAccess is who ShareURL opens for, as last recorded: restricted or
+	// anyone. Empty when not recorded; the link list then says.
+	ShareAccess string `json:"shareAccess,omitempty" enum:"restricted,anyone"`
 }
 
 // RegisterArtifactsRequest is the body of POST
@@ -702,6 +705,9 @@ type SpawnSessionRequest struct {
 	Model string `json:"model,omitempty" maxLength:"256"`
 	// Effort is the optional reasoning level for the selected model.
 	Effort string `json:"effort,omitempty" maxLength:"32"`
+	// AccountID is the subscription account the agent starts on. Empty uses the
+	// provider's default account.
+	AccountID string `json:"accountId,omitempty" maxLength:"128"`
 
 	// RequestedOutput asks for a specific deliverable. artifact tells the worker to
 	// write a file in its artifact directory instead of opening a PR. Omitted is
@@ -1488,6 +1494,9 @@ type DelegateTaskRequest struct {
 	// Mode is omitted for the daemon-owned default. The UI sends tui only when
 	// the user explicitly accepts the fallback after Chat preflight fails.
 	Mode domain.SessionMode `json:"mode,omitempty" enum:"tui,chat"`
+	// AccountID is the subscription account the worker starts on. Empty uses
+	// the provider's default account.
+	AccountID string `json:"accountId,omitempty" maxLength:"128"`
 	// Attachments are files pasted, dropped, or picked into the delegated task
 	// brief. Each carries bytes as standard base64 (no data: URL prefix). The
 	// daemon writes them into the spawned worker worktree and appends path
@@ -3163,6 +3172,8 @@ type LinkPreviewResponse struct {
 	ImageURL    string `json:"imageUrl,omitempty"`
 	SiteName    string `json:"siteName,omitempty"`
 	FaviconURL  string `json:"faviconUrl,omitempty"`
+	// FaviconDarkURL is the page's icon for a dark color scheme, when it names one.
+	FaviconDarkURL string `json:"faviconDarkUrl,omitempty"`
 }
 
 // MobileStatusResponse is the body of the Connect Mobile status/enable/disable/
@@ -3401,6 +3412,7 @@ type ConversationExcerptReferenceRequest struct {
 	MessageID      string                      `json:"messageId"`
 	Revision       int64                       `json:"revision"`
 	Text           string                      `json:"text"`
+	Comment        string                      `json:"comment,omitempty" maxLength:"4096"`
 }
 
 // ProviderSwitchRequest switches an idle session to another provider. See
@@ -3543,7 +3555,8 @@ type ConversationContentSummaryResponse struct {
 	URI             string                            `json:"uri,omitempty"`
 	Name            string                            `json:"name,omitempty"`
 	// Text is the readable chat excerpt, separate from captured raw source.
-	Text string `json:"text,omitempty"`
+	Text    string `json:"text,omitempty"`
+	Comment string `json:"comment,omitempty"`
 	// SourceMessageID and SourceRevision let the renderer navigate back to the
 	// original transcript message without exposing the internal excerpt URI.
 	SourceConversationID string `json:"sourceConversationId,omitempty"`
@@ -4192,6 +4205,45 @@ type ConversationBranchIDParam struct {
 	BranchID string `path:"branchId" description:"Conversation branch identifier, from a snapshot branch navigation point."`
 }
 
+// RollbackConversationRequest is the optional body of a conversation rollback.
+// RestoreFiles also puts the worktree back to how it was before the turn; a
+// client sets it only after showing the user which files will change, and sends
+// that preview's PlanID with it. Without it only the conversation is rolled
+// back, which is all an older client promises.
+type RollbackConversationRequest struct {
+	RestoreFiles bool `json:"restoreFiles,omitempty"`
+	// PlanID is the planId of the preview the user confirmed, required with
+	// RestoreFiles. If the files changed since, the rollback is refused with
+	// CHAT_ROLLBACK_FILES_CHANGED and nothing changes.
+	PlanID string `json:"planId,omitempty"`
+}
+
+// RollbackPreviewResponse says what rolling back to a turn would do to the
+// worktree.
+type RollbackPreviewResponse struct {
+	// FilesRestorable is false when AO cannot put the files back; Reason says why,
+	// and a rollback then changes only the conversation.
+	FilesRestorable bool   `json:"filesRestorable"`
+	Reason          string `json:"reason,omitempty"`
+	// Files lists every path a restore changes; TotalFiles counts them.
+	Files      []RollbackFileChange `json:"files"`
+	TotalFiles int                  `json:"totalFiles"`
+	// CommitsSince counts commits made on the branch after the turn. A restore
+	// leaves them in place, so their changes come back as uncommitted edits.
+	CommitsSince int `json:"commitsSince"`
+	// PlanID identifies this list of files; a rollback that restores them sends it
+	// back. Empty when the files cannot be restored.
+	PlanID string `json:"planId,omitempty"`
+}
+
+// RollbackFileChange is one file a rollback would restore.
+type RollbackFileChange struct {
+	Path string `json:"path"`
+	// Change is restored (deleted since, comes back), reverted (edited since, its
+	// earlier contents come back) or removed (created since, deleted).
+	Change string `json:"change" enum:"restored,reverted,removed"`
+}
+
 // RollbackConversationResponse reports what an undo discarded.
 type RollbackConversationResponse struct {
 	// TurnsDiscarded counts the turns the agent no longer remembers, including the
@@ -4235,7 +4287,8 @@ type SettingsResponse struct {
 	// VersionRefresh moves idle open sessions to a harness release installed while they ran.
 	VersionRefresh bool `json:"versionRefresh" description:"After a harness update, idle open sessions restart on the new release instead of running the old one until they happen to restart."`
 	// ComputerUse gives new chat sessions the computer-use tools.
-	ComputerUse bool `json:"computerUse" description:"New chat sessions get tools to drive desktop apps through Cua Driver (Settings, Computer use agents)."`
+	ComputerUse    bool `json:"computerUse" description:"New chat sessions get tools to drive desktop apps through Cua Driver (Settings, Computer use agents)."`
+	AccountHandoff bool `json:"accountHandoff" description:"A Chat turn refused for a usage limit moves its session to another signed-in account of the same agent with room, and the prompt is retried there once (Settings, Agent accounts)."`
 	// SessionRetentionDays is how long an archived session is kept.
 	SessionRetentionDays int `json:"sessionRetentionDays" description:"Days an archived session whose worktree is released is kept before the daemon deletes it permanently; 0 keeps it."`
 	// CloudEnabled reports whether the cloud offering is available: on for
@@ -4279,6 +4332,11 @@ type UpdateSessionRetentionRequest struct {
 
 // UpdateComputerUseRequest flips whether new chat sessions get the computer-use tools.
 type UpdateComputerUseRequest struct {
+	Enabled *bool `json:"enabled"`
+}
+
+// UpdateAccountHandoffRequest turns the usage-limit account handoff on or off.
+type UpdateAccountHandoffRequest struct {
 	Enabled *bool `json:"enabled"`
 }
 
@@ -4495,12 +4553,14 @@ type AgentAccountResponse struct {
 	SignedIn  bool       `json:"signedIn"`
 	LoggedIn  bool       `json:"loggedIn"`
 	CreatedAt *time.Time `json:"createdAt,omitempty"`
-	// Problem says why identity or limits could not be read.
-	Problem     string                     `json:"problem,omitempty"`
-	Limits      *domain.AgentAccountLimits `json:"limits,omitempty"`
-	SameLoginAs string                     `json:"sameLoginAs,omitempty"`
-	OrgID       string                     `json:"orgId,omitempty"`
-	OrgName     string                     `json:"orgName,omitempty"`
+	// Problem is the error text of a failed identity or limits check, kept as
+	// detail; ProblemKind says what failed, for the app's own wording.
+	Problem     string                         `json:"problem,omitempty"`
+	ProblemKind domain.AgentAccountProblemKind `json:"problemKind,omitempty" enum:"slow,rate_limited,unavailable,cli_missing,other_login,other_org"`
+	Limits      *domain.AgentAccountLimits     `json:"limits,omitempty"`
+	SameLoginAs string                         `json:"sameLoginAs,omitempty"`
+	OrgID       string                         `json:"orgId,omitempty"`
+	OrgName     string                         `json:"orgName,omitempty"`
 }
 
 // AgentAccountsResponse is the body of GET /agents/accounts.
@@ -4589,4 +4649,66 @@ type SessionImportRequest struct {
 // SessionImportResponse retains an outcome for every selected history.
 type SessionImportResponse struct {
 	Results []sessionimport.Result `json:"results"`
+}
+
+// SessionForkOptionsResponse is the body of GET /sessions/{sessionId}/fork-options.
+type SessionForkOptionsResponse struct {
+	Allowed       bool                `json:"allowed"`
+	Refusal       *SessionForkRefusal `json:"refusal,omitempty"`
+	SuggestedName string              `json:"suggestedName,omitempty"`
+	// AnyTurn is true when every finished turn can be forked.
+	AnyTurn bool `json:"anyTurn,omitempty"`
+	// ForkedFrom is set when this session is itself a fork.
+	ForkedFrom *SessionForkOrigin `json:"forkedFrom,omitempty"`
+	// Forks are the sessions forked from this one.
+	Forks []SessionForkSummary `json:"forks,omitempty"`
+	// SourcePRs are a fork's original's pull requests, shown read-only.
+	SourcePRs []SessionForkSourcePR `json:"sourcePRs,omitempty"`
+}
+
+// SessionForkSummary is one session forked from another.
+type SessionForkSummary struct {
+	SessionID domain.SessionID `json:"sessionId"`
+	Title     string           `json:"title"`
+	Exists    bool             `json:"exists"`
+}
+
+// SessionForkSourcePR is one of a fork's original's pull requests.
+type SessionForkSourcePR struct {
+	URL    string `json:"url"`
+	Number int    `json:"number"`
+	Merged bool   `json:"merged"`
+	Closed bool   `json:"closed"`
+}
+
+// SessionForkRefusal says why a session can't be forked right now.
+type SessionForkRefusal struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+// SessionForkOrigin is the session a fork was copied from.
+type SessionForkOrigin struct {
+	SessionID    domain.SessionID `json:"sessionId"`
+	Title        string           `json:"title"`
+	TurnID       string           `json:"turnId,omitempty"`
+	SourceExists bool             `json:"sourceExists"`
+	// TextHandoff is true when the fork's agent couldn't copy the original's
+	// conversation and was given it as text instead.
+	TextHandoff bool `json:"textHandoff,omitempty"`
+}
+
+// ForkSessionRequest is the body of POST /sessions/{sessionId}/fork.
+type ForkSessionRequest struct {
+	// ClientRequestID makes a retried click return the same fork.
+	ClientRequestID string `json:"clientRequestId" minLength:"1"`
+	// TurnID forks the session as it was at that turn. Empty forks the
+	// latest finished turn.
+	TurnID string `json:"turnId,omitempty"`
+}
+
+// ForkSessionResponse is the body of POST /sessions/{sessionId}/fork.
+type ForkSessionResponse struct {
+	SessionID   domain.SessionID `json:"sessionId"`
+	DisplayName string           `json:"displayName"`
 }
