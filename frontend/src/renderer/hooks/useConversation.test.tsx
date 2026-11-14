@@ -1255,6 +1255,17 @@ describe("steering refusals", () => {
 		});
 	});
 
+	// Daemon messages usually end without a full stop, so the advice would run on.
+	it("ends the daemon's sentence before the advice", async () => {
+		apiErrorMessageMock.mockReturnValueOnce("the agent did not collect the guidance within 5s");
+		const result = await steerFailingWith("CHAT_TURN_NOT_STEERABLE");
+		await waitFor(() => {
+			expect(result.current.steerRefusal).toBe(
+				"the agent did not collect the guidance within 5s. Try again once it finishes.",
+			);
+		});
+	});
+
 	// The control is withdrawn instead, so there is nothing to say.
 	it("says nothing when the harness cannot steer at all", async () => {
 		const result = await steerFailingWith("CHAT_STEER_UNSUPPORTED");
