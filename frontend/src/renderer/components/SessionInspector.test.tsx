@@ -6073,6 +6073,23 @@ describe("SessionInspector branch summary", () => {
     expect(await screen.findByRole("button", { name: "Updating from main…" })).toBeDisabled();
   });
 
+  it("leads with merge when the PR can merge, and keeps the update in the menu", async () => {
+    const ready = prSummary(7, "open", { sourceBranch: "feat/ns", review: { decision: "approved", hasUnresolvedHumanComments: false, unresolvedBy: [] } });
+    mockGitState({ committed: [changedFile("src/a.ts", 5, 0)], prs: [ready] });
+    renderWithQuery(
+      <SessionInspector session={session([pr(7, "open")], { branchState: { ...pushed(2), base: "main", behind: 3 } })} />,
+      undefined,
+      (client) => seedPRSummaries(client, [ready]),
+    );
+
+    // Being behind main doesn't hold up a merge GitHub allows.
+    expect(await screen.findByText("3 commits behind main")).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Squash and merge: PR #7" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Update from main" })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "More actions for PR #7" }));
+    expect(await screen.findByRole("menuitem", { name: "Update from main" })).toBeInTheDocument();
+  });
+
   it("asks the agent to resolve conflicts with the base, naming the conflicting files", async () => {
     const conflicting = prSummary(7, "open", {
       sourceBranch: "feat/ns",
@@ -6374,6 +6391,19 @@ describe("SessionInspector branch summary", () => {
     expect(conflicts).toHaveTextContent("ConflictsNone");
     expect(conflicts.querySelector("[data-state='passed'] svg")).not.toBeNull();
     expect(conflicts.parentElement?.querySelector("span[aria-hidden='true'].rounded-full")).toBeNull();
+    // The label leads in full colour; a state that is in the way takes its colour
+    // on the words, one that is fine stays plain.
+    expect(screen.getByText("Conflicts")).toHaveClass("text-foreground");
+    expect(conflicts.querySelector("[data-state='passed']")).not.toHaveClass("text-error");
+    const tally = screen.getByTestId("pr-checks-tally");
+    expect(within(tally).getByText("Checks")).toHaveClass("text-foreground");
+    expect(tally.querySelector("[data-state='failed']")).toHaveClass("text-error");
+    // What opens under a row sits in from it.
+    expect(screen.getByTestId("pr-checks").parentElement).toHaveClass("pl-4");
+    // The label keeps the row's size and its state sits two sizes below it.
+    expect(screen.getByText("Conflicts")).not.toHaveClass("text-micro");
+    expect(conflicts.querySelector("[data-state='passed']")).toHaveClass("text-micro");
+    expect(tally.querySelector("[data-state='failed']")).toHaveClass("text-micro");
   });
 
   it("says the PR row opens a tab, until that tab is showing", async () => {
