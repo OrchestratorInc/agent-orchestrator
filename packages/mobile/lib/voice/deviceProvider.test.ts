@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // A fake of the native module that lets a test drive the recogniser's event
 // stream by hand. The provider's whole job is turning that ragged stream — several
@@ -12,6 +12,8 @@ let permissionGranted = true;
 // Counts native permission round-trips, which sit in front of the microphone start.
 let permissionChecks = 0;
 let supportedLocales = ["en-US", "en-GB", "en-IN"];
+// Swappable so a test can hold the locale lookup open, or make it fail.
+let localeLookup = async () => ({ locales: supportedLocales, installedLocales: [] as string[] });
 // iOS and Android segment differently, so the provider branches on platform.
 let platformOS = "android";
 
@@ -53,7 +55,7 @@ vi.mock("expo-speech-recognition", () => ({
 			calls.abort++;
 		},
 		isRecognitionAvailable: () => recognitionAvailable,
-		getSupportedLocales: async () => ({ locales: supportedLocales, installedLocales: [] }),
+		getSupportedLocales: () => localeLookup(),
 		getPermissionsAsync: async () => {
 			permissionChecks++;
 			return { granted: permissionGranted };
@@ -80,6 +82,32 @@ const result = (transcript: string, isFinal: boolean) => ({
 	results: [{ transcript, confidence: 1, segments: [] }],
 });
 
+// A result carrying native audio timings, as iOS reports them per segment.
+const timed = (transcript: string, isFinal: boolean, startTimeMillis: number, endTimeMillis: number) => ({
+	isFinal,
+	results: [
+		{ transcript, confidence: 1, segments: [{ startTimeMillis, endTimeMillis, segment: transcript.trim(), confidence: 1 }] },
+	],
+});
+
+// A result with native per-word segments, as iOS reports them: each word's own
+// text and audio timing, alongside the formatted transcript.
+const words = (transcript: string, isFinal: boolean, segments: [string, number, number][]) => ({
+	isFinal,
+	results: [
+		{
+			transcript,
+			confidence: 1,
+			segments: segments.map(([segment, startTimeMillis, endTimeMillis]) => ({
+				segment,
+				startTimeMillis,
+				endTimeMillis,
+				confidence: 1,
+			})),
+		},
+	],
+});
+
 beforeEach(() => {
 	listeners.clear();
 	started.length = 0;
@@ -90,6 +118,7 @@ beforeEach(() => {
 	permissionGranted = true;
 	permissionChecks = 0;
 	supportedLocales = ["en-US", "en-GB", "en-IN"];
+	localeLookup = async () => ({ locales: supportedLocales, installedLocales: [] });
 	platformOS = "android";
 });
 
@@ -330,23 +359,406 @@ describe("transcript delivery", () => {
 		expect(h.onPartial).toHaveBeenLastCalledWith("ship the release");
 	});
 
-	// iOS caps how long one recognition task may run. When it restarts, the new
-	// task's results begin from scratch — that IS a real boundary, and dropping
-	// it would lose everything said before the restart.
-	it("preserves earlier speech across an iOS recognition-task restart", async () => {
-		platformOS = "ios";
+	describe("iOS: revisions of an utterance replace, later utterances append", () => {
+		beforeEach(() => {
+			platformOS = "ios";
+		});
+
+		// Regression (#8159): the recogniser re-spells its opening word as context
+		// arrives. Treating a changed first word as a new segment banked each
+		// revision, producing "How the How's the system system turning How is ...".
+		it("replaces when the opening word is revised", async () => {
+			const p = createDeviceVoiceProvider();
+			const h = harness();
+			await p.start(h.cb);
+
+			emit("result", result("How the", false));
+			emit("result", result("How's the system", false));
+			emit("result", result("How's the system turning", false));
+			emit("result", result("How is the system turning?", true));
+			emit("end");
+
+			expect(h.onPartial.mock.calls.map(([t]) => t)).toEqual([
+				"How the",
+				"How's the system",
+				"How's the system turning",
+				"How is the system turning?",
+			]);
+			expect(h.onFinal).toHaveBeenCalledExactlyOnceWith("How is the system turning?");
+		});
+
+		it("replaces overlapping partials rather than appending them", async () => {
+			const p = createDeviceVoiceProvider();
+			const h = harness();
+			await p.start(h.cb);
+
+			emit("result", result("run the", false));
+			emit("result", result("run the tests in", false));
+			emit("result", result("run the tests in the mobile package", false));
+			emit("end");
+
+			expect(h.onFinal).toHaveBeenCalledExactlyOnceWith("run the tests in the mobile package");
+		});
+
+		it("replaces with a shorter revision, even one that starts differently", async () => {
+			const p = createDeviceVoiceProvider();
+			const h = harness();
+			await p.start(h.cb);
+
+			emit("result", result("add a test for the pairing", false));
+			emit("result", result("attest", false));
+			expect(h.onPartial).toHaveBeenLastCalledWith("attest");
+			emit("result", result("add attest for pairing", false));
+			emit("end");
+
+			expect(h.onFinal).toHaveBeenCalledExactlyOnceWith("add attest for pairing");
+		});
+
+		it("replaces when punctuation and capitalisation are revised", async () => {
+			const p = createDeviceVoiceProvider();
+			const h = harness();
+			await p.start(h.cb);
+
+			emit("result", result("ok ship it", false));
+			emit("result", result("OK, ship it.", false));
+			emit("result", result("Okay. Ship it!", true));
+			emit("end");
+
+			expect(h.onFinal).toHaveBeenCalledExactlyOnceWith("Okay. Ship it!");
+		});
+
+		it("does not repeat text across repeated finals of the same task", async () => {
+			const p = createDeviceVoiceProvider();
+			const h = harness();
+			await p.start(h.cb);
+
+			emit("result", result("merge the branch", true));
+			// The library prefixes later iOS 18 transcripts with a space.
+			emit("result", result(" merge the branch", true));
+			emit("result", result(" merge the branch.", true));
+			emit("end");
+
+			expect(h.onFinal).toHaveBeenCalledExactlyOnceWith("merge the branch.");
+		});
+
+		it("does not let a trailing empty final wipe the transcript", async () => {
+			const p = createDeviceVoiceProvider();
+			const h = harness();
+			await p.start(h.cb);
+
+			emit("result", result("deploy to staging", true));
+			emit("result", { isFinal: true, results: [] });
+			emit("end");
+
+			expect(h.onFinal).toHaveBeenCalledExactlyOnceWith("deploy to staging");
+		});
+
+		// Deduplicating text would eat this; replacing keeps exactly what was said.
+		it("keeps intentional repetition", async () => {
+			const p = createDeviceVoiceProvider();
+			const h = harness();
+			await p.start(h.cb);
+
+			emit("result", result("go", false));
+			emit("result", result("go go", false));
+			emit("result", result("go go go", false));
+			emit("result", result("go go go. Test it, test it again.", true));
+			emit("end");
+
+			expect(h.onFinal).toHaveBeenCalledExactlyOnceWith("go go go. Test it, test it again.");
+		});
+
+		// A genuine new native task only exists across start() calls. The next
+		// recording starts clean and nothing leaks from the previous one.
+		it("starts fresh on a genuine new recognition task", async () => {
+			const p = createDeviceVoiceProvider();
+			const first = harness();
+			await p.start(first.cb);
+			emit("result", result("first recording", true));
+			emit("end");
+
+			const second = harness();
+			await p.start(second.cb);
+			emit("result", result("second", false));
+			expect(second.onPartial).toHaveBeenLastCalledWith("second");
+			emit("result", result("second recording", true));
+			emit("end");
+
+			expect(first.onFinal).toHaveBeenCalledExactlyOnceWith("first recording");
+			expect(second.onFinal).toHaveBeenCalledExactlyOnceWith("second recording");
+			expect(calls.start).toBe(2);
+		});
+
+		// Reproduced by review: two iOS 18 final-like results covering disjoint audio
+		// are two utterances. Replacing would drop the first.
+		it("appends a final whose audio starts after the previous final's", async () => {
+			const p = createDeviceVoiceProvider();
+			const h = harness();
+			await p.start(h.cb);
+
+			emit("result", timed("first phrase", true, 0, 1000));
+			emit("result", timed("second phrase", true, 2000, 3000));
+			emit("end");
+
+			expect(h.onFinal).toHaveBeenCalledExactlyOnceWith("first phrase second phrase");
+		});
+
+		it("streams a new utterance after the closed one, with the library's leading space", async () => {
+			const p = createDeviceVoiceProvider();
+			const h = harness();
+			await p.start(h.cb);
+
+			emit("result", timed("How the", false, 0, 600));
+			emit("result", timed("How is the build?", true, 0, 1200));
+			emit("result", timed(" Ship", false, 2000, 2300));
+			expect(h.onPartial).toHaveBeenLastCalledWith("How is the build? Ship");
+			emit("result", timed(" Ship it", false, 2000, 2600));
+			emit("result", timed(" Ship it now.", true, 2000, 3000));
+			emit("end");
+
+			expect(h.onFinal).toHaveBeenCalledExactlyOnceWith("How is the build? Ship it now.");
+		});
+
+		it("replaces revisions and repeated finals that overlap the same audio", async () => {
+			const p = createDeviceVoiceProvider();
+			const h = harness();
+			await p.start(h.cb);
+
+			emit("result", timed("How the", true, 0, 600));
+			emit("result", timed("How's the system", true, 0, 1100));
+			emit("result", timed("How is the system turning", false, 0, 1500));
+			emit("result", timed("How is the system turning?", true, 0, 1600));
+			emit("result", timed(" How is the system turning?", true, 0, 1600));
+			emit("end");
+
+			expect(h.onFinal).toHaveBeenCalledExactlyOnceWith("How is the system turning?");
+		});
+
+		// Reproduced by review: a cumulative final restating audio already banked
+		// must supersede it, not sit beside it.
+		it("replaces banked utterances that a cumulative revision covers", async () => {
+			const p = createDeviceVoiceProvider();
+			const h = harness();
+			await p.start(h.cb);
+
+			emit("result", timed("first phrase", true, 0, 1000));
+			emit("result", timed("second phrase", true, 2000, 3000));
+			emit("result", timed("first phrase second phrase", true, 0, 3000));
+			emit("end");
+
+			expect(h.onFinal).toHaveBeenCalledExactlyOnceWith("first phrase second phrase");
+		});
+
+		it("keeps earlier speech that a revision does not cover", async () => {
+			const p = createDeviceVoiceProvider();
+			const h = harness();
+			await p.start(h.cb);
+
+			emit("result", timed("open the PR", true, 0, 1000));
+			emit("result", timed("run the tests", true, 2000, 3000));
+			emit("result", timed("then merge", true, 4000, 5000));
+			// Restates the last two utterances only.
+			emit("result", timed("run the tests, then merge it", true, 2000, 5200));
+			emit("end");
+
+			expect(h.onFinal).toHaveBeenCalledExactlyOnceWith("open the PR run the tests, then merge it");
+		});
+
+		// Review: a revision covering only part of a banked utterance must keep the
+		// words whose audio it does not cover.
+		it("keeps the uncovered words of a banked utterance a revision only partly covers", async () => {
+			const p = createDeviceVoiceProvider();
+			const h = harness();
+			await p.start(h.cb);
+
+			emit(
+				"result",
+				words("First phrase second phrase.", true, [
+					["First", 0, 400],
+					["phrase", 400, 1000],
+					["second", 2000, 2500],
+					["phrase", 2500, 3000],
+				]),
+			);
+			emit("result", words(" Ship it.", true, [["Ship", 4000, 4400], ["it", 4400, 5000]]));
+			// Revises only the opening words of the banked utterance.
+			emit("result", words("Fresh phrase", true, [["Fresh", 0, 400], ["phrase", 400, 1000]]));
+			emit("end");
+
+			expect(h.onFinal).toHaveBeenCalledExactlyOnceWith("Fresh phrase second phrase. Ship it.");
+		});
+
+		// The kept words come from the formatted transcript, not from re-joining
+		// segment substrings, so punctuation the recogniser added survives.
+		it("keeps the uncovered words' punctuation from the formatted transcript", async () => {
+			const p = createDeviceVoiceProvider();
+			const h = harness();
+			await p.start(h.cb);
+
+			emit("result", words("first second.", true, [["first", 0, 500], ["second", 1000, 1500]]));
+			emit("result", words(" Later.", true, [["Later", 3000, 3500]]));
+			emit("result", words("First", true, [["First", 0, 500]]));
+			emit("end");
+
+			expect(h.onFinal).toHaveBeenCalledExactlyOnceWith("First second. Later.");
+		});
+
+		it("does not insert spaces into the kept words of a no-space language", async () => {
+			const p = createDeviceVoiceProvider();
+			const h = harness();
+			await p.start(h.cb);
+
+			emit("result", words("今日は晴れ。", true, [["今日", 0, 400], ["は", 400, 600], ["晴れ", 600, 1200]]));
+			emit("result", words(" 行こう。", true, [["行こう", 3000, 3600]]));
+			emit("result", words("明日", true, [["明日", 0, 400]]));
+			emit("end");
+
+			// The revision keeps the original (empty) separator inside its utterance;
+			// separate utterances are still joined with a space, as before.
+			expect(h.onFinal).toHaveBeenCalledExactlyOnceWith("明日は晴れ。 行こう。");
+		});
+
+		// Conservative fallback: when the native words cannot be located in the
+		// formatted transcript, a partly covered utterance is kept exactly as it
+		// was rather than rebuilt with guessed formatting.
+		it("leaves a partly covered utterance intact when its words cannot be mapped", async () => {
+			const p = createDeviceVoiceProvider();
+			const h = harness();
+			await p.start(h.cb);
+
+			emit("result", words("first second.", true, [["1st", 0, 500], ["second", 1000, 1500]]));
+			emit("result", words(" Later.", true, [["Later", 3000, 3500]]));
+			emit("result", words("First", true, [["First", 0, 500]]));
+			emit("end");
+
+			expect(h.onFinal).toHaveBeenCalledExactlyOnceWith("First first second. Later.");
+		});
+
+		// Review: an untimed result left the provisional earlier text in place of the
+		// closed later utterance once a timed revision put the earlier one back.
+		it("restores the later utterance after a timed revision of earlier speech", async () => {
+			const p = createDeviceVoiceProvider();
+			const h = harness();
+			await p.start(h.cb);
+
+			emit("result", timed("A", true, 0, 1000));
+			emit("result", timed("B", true, 2000, 3000));
+			emit("result", result("revised A", false));
+			emit("result", timed("revised A", true, 0, 1000));
+			expect(h.onPartial).toHaveBeenLastCalledWith("revised A B");
+			emit("end");
+
+			expect(h.onFinal).toHaveBeenCalledExactlyOnceWith("revised A B");
+		});
+
+		it("revises earlier banked speech in place without touching later speech", async () => {
+			const p = createDeviceVoiceProvider();
+			const h = harness();
+			await p.start(h.cb);
+
+			emit("result", timed("open the bee are", true, 0, 1000));
+			emit("result", timed("run the tests", true, 2000, 3000));
+			emit("result", timed("open the PR", true, 0, 1000));
+			emit("end");
+
+			expect(h.onFinal).toHaveBeenCalledExactlyOnceWith("open the PR run the tests");
+		});
+
+		it("keeps identical words spoken at different times", async () => {
+			const p = createDeviceVoiceProvider();
+			const h = harness();
+			await p.start(h.cb);
+
+			emit("result", timed("test it", true, 0, 800));
+			emit("result", timed(" test it", true, 1500, 2300));
+			emit("result", timed(" test it", true, 1500, 2300));
+			emit("end");
+
+			expect(h.onFinal).toHaveBeenCalledExactlyOnceWith("test it test it");
+		});
+
+		it("needs a final to close an utterance, not just a gap in the audio", async () => {
+			const p = createDeviceVoiceProvider();
+			const h = harness();
+			await p.start(h.cb);
+
+			emit("result", timed("deploy", false, 0, 500));
+			emit("result", timed("deploy it", false, 900, 1400));
+			emit("end");
+
+			expect(h.onFinal).toHaveBeenCalledExactlyOnceWith("deploy it");
+		});
+
+		// Interim results can arrive with zeroed timings. That is no evidence of a
+		// new utterance, so the closed one is held until a timed result decides.
+		it("banks a closed utterance once timing proves a gap, across untimed results", async () => {
+			const p = createDeviceVoiceProvider();
+			const h = harness();
+			await p.start(h.cb);
+
+			emit("result", timed("first phrase", true, 0, 1000));
+			emit("result", timed(" second", false, 0, 0));
+			emit("result", timed(" second phrase", true, 2000, 3000));
+			emit("end");
+
+			expect(h.onFinal).toHaveBeenCalledExactlyOnceWith("first phrase second phrase");
+		});
+
+		it("drops the closed utterance when a timed result shows it was revised", async () => {
+			const p = createDeviceVoiceProvider();
+			const h = harness();
+			await p.start(h.cb);
+
+			emit("result", timed("first face", true, 0, 1000));
+			emit("result", result(" first phase", false));
+			emit("result", timed("first phrase, then", true, 0, 1500));
+			emit("result", timed(" more", true, 2000, 2400));
+			emit("end");
+
+			expect(h.onFinal).toHaveBeenCalledExactlyOnceWith("first phrase, then more");
+		});
+
+		// Conservative fallback: with no timings at all there is no native evidence
+		// of a boundary, so nothing is guessed from the text.
+		it("replaces when no result carries timings", async () => {
+			const p = createDeviceVoiceProvider();
+			const h = harness();
+			await p.start(h.cb);
+
+			emit("result", result("first phrase", true));
+			emit("result", result(" second phrase", true));
+			emit("end");
+
+			expect(h.onFinal).toHaveBeenCalledExactlyOnceWith("second phrase");
+		});
+
+		it("delivers the latest result when stopped mid-revision", async () => {
+			const p = createDeviceVoiceProvider();
+			const h = harness();
+			await p.start(h.cb);
+
+			emit("result", result("How the", false));
+			emit("result", result("How's the build", false));
+			p.stop();
+			emit("end");
+
+			expect(calls.stop).toBe(1);
+			expect(h.onFinal).toHaveBeenCalledExactlyOnceWith("How's the build");
+		});
+	});
+
+	// Android is untouched: a segment that repeats the previous one's words is
+	// still kept, because a final result really does close a segment there.
+	it("keeps an Android segment that repeats the previous one", async () => {
 		const p = createDeviceVoiceProvider();
 		const h = harness();
 		await p.start(h.cb);
 
-		emit("result", result("first half of the sentence", false));
-		emit("result", result("first half of the sentence complete", true));
-		// New task: unrelated opening, starts short.
-		emit("result", result("second", false));
-		emit("result", result("second half now", false));
+		emit("result", result("test it", true));
+		emit("result", result("test it", true));
 		emit("end");
 
-		expect(h.onFinal).toHaveBeenCalledExactlyOnceWith("first half of the sentence complete second half now");
+		expect(h.onFinal).toHaveBeenCalledExactlyOnceWith("test it test it");
 	});
 
 	it("does not treat an in-place revision as a new segment", async () => {
@@ -565,5 +977,230 @@ describe("lifecycle", () => {
 		const opts = started[0] as { iosCategory?: Record<string, unknown> };
 		expect(opts.iosCategory?.category).toBe("playAndRecord");
 		expect(opts.iosCategory?.categoryOptions).toContain("allowBluetooth");
+	});
+});
+
+describe("locale resolution before start", () => {
+	// The resolved locale is cached for the process, so each test needs a module
+	// that has never resolved one.
+	async function freshProvider() {
+		vi.resetModules();
+		const mod = await import("./deviceProvider");
+		return mod.createDeviceVoiceProvider();
+	}
+
+	function deferred<T>() {
+		let resolve!: (v: T) => void;
+		let reject!: (e: unknown) => void;
+		const promise = new Promise<T>((res, rej) => {
+			resolve = res;
+			reject = rej;
+		});
+		return { promise, resolve, reject };
+	}
+
+	const listenerCount = () => [...listeners.values()].reduce((n, l) => n + l.length, 0);
+
+	function deviceLocale(locale: string) {
+		vi.spyOn(Intl.DateTimeFormat.prototype, "resolvedOptions").mockReturnValue({
+			locale,
+		} as Intl.ResolvedDateTimeFormatOptions);
+	}
+
+	afterEach(() => {
+		vi.restoreAllMocks();
+		vi.useRealTimers();
+	});
+
+	it("waits for the device's locale instead of starting the first phrase in en-US", async () => {
+		deviceLocale("en-IN");
+		const lookup = deferred<{ locales: string[]; installedLocales: string[] }>();
+		localeLookup = () => lookup.promise;
+		const p = await freshProvider();
+
+		const starting = p.start(harness().cb);
+		await Promise.resolve();
+		expect(calls.start).toBe(0);
+
+		lookup.resolve({ locales: ["en-US", "en-IN"], installedLocales: [] });
+		await starting;
+
+		expect(calls.start).toBe(1);
+		expect(started[0]).toMatchObject({ lang: "en-IN" });
+		expect(p.language()).toBe("en-IN");
+	});
+
+	it("falls back to the same language in another region before en-US", async () => {
+		deviceLocale("en-AU");
+		supportedLocales = ["de-DE", "en-GB", "fr-FR"];
+		const p = await freshProvider();
+		await p.start(harness().cb);
+		expect(started[0]).toMatchObject({ lang: "en-GB" });
+
+		// Underscore device locales match too.
+		deviceLocale("fr_CA");
+		const q = await freshProvider();
+		await q.start(harness().cb);
+		expect(started[1]).toMatchObject({ lang: "fr-FR" });
+	});
+
+	it("uses en-US when the lookup fails, and retries on the next press", async () => {
+		deviceLocale("en-GB");
+		localeLookup = async () => {
+			throw new Error("recognition service unavailable");
+		};
+		const p = await freshProvider();
+		const h = harness();
+		await p.start(h.cb);
+
+		expect(started[0]).toMatchObject({ lang: "en-US" });
+		expect(h.onError).not.toHaveBeenCalled();
+		// A failure is not a resolution; it must not pin en-US for the process.
+		expect(p.language()).toBeNull();
+		emit("end");
+
+		localeLookup = async () => ({ locales: ["en-US", "en-GB"], installedLocales: [] });
+		await p.start(harness().cb);
+		expect(started[1]).toMatchObject({ lang: "en-GB" });
+	});
+
+	it("uses en-US for this phrase when the lookup never answers", async () => {
+		// Only timers: faking Intl as well would bypass the device-locale stub.
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+		deviceLocale("en-GB");
+		localeLookup = () => new Promise(() => {});
+		const p = await freshProvider();
+
+		const starting = p.start(harness().cb);
+		await vi.advanceTimersByTimeAsync(1999);
+		expect(calls.start).toBe(0);
+		await vi.advanceTimersByTimeAsync(1);
+		await starting;
+
+		expect(started[0]).toMatchObject({ lang: "en-US" });
+	});
+
+	it("retries after a timed-out lookup, and ignores that lookup's late answer", async () => {
+		// Only timers: faking Intl as well would bypass the device-locale stub.
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+		deviceLocale("en-GB");
+		const hung = deferred<{ locales: string[]; installedLocales: string[] }>();
+		localeLookup = () => hung.promise;
+		const p = await freshProvider();
+
+		const first = p.start(harness().cb);
+		await vi.advanceTimersByTimeAsync(2000);
+		await first;
+		expect(started[0]).toMatchObject({ lang: "en-US" });
+		emit("end");
+
+		// The next press asks again instead of waiting on the hung lookup.
+		localeLookup = async () => ({ locales: ["en-US", "en-GB"], installedLocales: [] });
+		await p.start(harness().cb);
+		expect(started[1]).toMatchObject({ lang: "en-GB" });
+		emit("end");
+
+		// The abandoned lookup finally answers; it must not overwrite the newer one.
+		hung.resolve({ locales: ["en-US"], installedLocales: [] });
+		await vi.advanceTimersByTimeAsync(0);
+		expect(p.language()).toBe("en-GB");
+		await p.start(harness().cb);
+		expect(started[2]).toMatchObject({ lang: "en-GB" });
+	});
+
+	it("retries after the native lookup throws synchronously", async () => {
+		deviceLocale("en-GB");
+		localeLookup = () => {
+			throw new Error("module not ready");
+		};
+		const p = await freshProvider();
+		await p.start(harness().cb);
+		expect(started[0]).toMatchObject({ lang: "en-US" });
+		emit("end");
+
+		localeLookup = async () => ({ locales: ["en-GB"], installedLocales: [] });
+		await p.start(harness().cb);
+		expect(started[1]).toMatchObject({ lang: "en-GB" });
+	});
+
+	// Review: the replaced start's own deadline must not abandon a lookup the
+	// replacing start is still waiting on.
+	it("lets a replacing start use a lookup that answers after the replaced start's deadline", async () => {
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+		deviceLocale("en-GB");
+		const lookup = deferred<{ locales: string[]; installedLocales: string[] }>();
+		localeLookup = () => lookup.promise;
+		const p = await freshProvider();
+
+		const first = p.start(harness().cb);
+		await vi.advanceTimersByTimeAsync(1000);
+		const second = p.start(harness().cb);
+		// The first start's deadline passes; the second's has a second to go.
+		await vi.advanceTimersByTimeAsync(1500);
+		lookup.resolve({ locales: ["en-US", "en-GB"], installedLocales: [] });
+		await vi.advanceTimersByTimeAsync(0);
+		await Promise.all([first, second]);
+
+		expect(calls.start).toBe(1);
+		expect(started[0]).toMatchObject({ lang: "en-GB" });
+	});
+
+	it("starts nothing and attaches nothing when aborted during the lookup", async () => {
+		const lookup = deferred<{ locales: string[]; installedLocales: string[] }>();
+		localeLookup = () => lookup.promise;
+		const p = await freshProvider();
+		const h = harness();
+
+		const starting = p.start(h.cb);
+		p.abort();
+		lookup.resolve({ locales: ["en-US"], installedLocales: [] });
+		await starting;
+
+		expect(calls.start).toBe(0);
+		// The recogniser was never started, so there is nothing to abort either.
+		expect(calls.abort).toBe(0);
+		expect(listenerCount()).toBe(0);
+		emit("result", result("ghost", true));
+		emit("end");
+		expect(h.onFinal).not.toHaveBeenCalled();
+		expect(h.onError).not.toHaveBeenCalled();
+	});
+
+	it("finishes empty without starting when stopped during the lookup", async () => {
+		const lookup = deferred<{ locales: string[]; installedLocales: string[] }>();
+		localeLookup = () => lookup.promise;
+		const p = await freshProvider();
+		const h = harness();
+
+		const starting = p.start(h.cb);
+		p.stop();
+		expect(h.onFinal).toHaveBeenCalledExactlyOnceWith("");
+
+		lookup.resolve({ locales: ["en-US"], installedLocales: [] });
+		await starting;
+		expect(calls.start).toBe(0);
+		expect(calls.stop).toBe(0);
+		expect(listenerCount()).toBe(0);
+	});
+
+	it("starts only the replacing session when start() is called again during the lookup", async () => {
+		const lookup = deferred<{ locales: string[]; installedLocales: string[] }>();
+		localeLookup = () => lookup.promise;
+		const p = await freshProvider();
+		const first = harness();
+		const second = harness();
+
+		const firstStart = p.start(first.cb);
+		const secondStart = p.start(second.cb);
+		lookup.resolve({ locales: ["en-US"], installedLocales: [] });
+		await Promise.all([firstStart, secondStart]);
+
+		expect(calls.start).toBe(1);
+		expect(calls.abort).toBe(0);
+		emit("result", result("second phrase", true));
+		emit("end");
+		expect(first.onFinal).not.toHaveBeenCalled();
+		expect(second.onFinal).toHaveBeenCalledExactlyOnceWith("second phrase");
+		expect(listenerCount()).toBe(0);
 	});
 });
