@@ -99,10 +99,14 @@ const LOOSE_SEPARATORS = /[-_\s]+/g;
 function looseScore(value: string, query: string, base: number): number | null {
 	const needle = query.replace(LOOSE_SEPARATORS, "");
 	if (needle === "") return base;
+	const lower = value.toLowerCase();
+	// Most candidates do not match at all; rule them out natively before walking
+	// a long description character by character on every keystroke.
+	if (!lower.replace(LOOSE_SEPARATORS, "").includes(needle)) return null;
 	let joined = "";
 	const wordStarts: number[] = [];
 	let atWordStart = true;
-	for (const char of value.toLowerCase()) {
+	for (const char of lower) {
 		if (char === "-" || char === "_" || /\s/.test(char)) {
 			atWordStart = true;
 			continue;
@@ -194,7 +198,8 @@ function titleFromSlug(slug: string): string {
 function skillLabel(skill: ChatSkill): string {
 	if (skill.displayName && skill.displayName !== skill.name) return skillCommandName(skill.displayName) ?? skill.displayName;
 	const bare = skillCommandName(skill.name) ?? skill.name;
-	return titleFromSlug(bare.slice(bare.lastIndexOf(":") + 1));
+	// A malformed name such as `plugin:` has nothing after its namespace; show it whole.
+	return titleFromSlug(bare.slice(bare.lastIndexOf(":") + 1)) || bare;
 }
 
 /**

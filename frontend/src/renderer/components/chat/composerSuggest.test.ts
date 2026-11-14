@@ -180,6 +180,11 @@ describe("rankSkills", () => {
 		});
 	});
 
+	it("shows a name with nothing after its namespace whole rather than blank", () => {
+		const [row] = rankSkills([skill("plugin:", "", "agent")], "");
+		expect(row?.label).toBe("plugin:");
+	});
+
 	it("names a plugin skill without its namespace, which shows when two read the same", () => {
 		const listed = [skill("ce-plan", "", "agent"), skill("compound-engineering:ce-plan", "", "agent")];
 		expect(rankSkills(listed, "")).toEqual([
