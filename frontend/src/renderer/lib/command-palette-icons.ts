@@ -55,6 +55,7 @@ const COMMAND_ICONS: Record<string, AppIcon> = {
 	"global-go-to-session": MessageSquare,
 	"global-automations": CalendarClock,
 	"global-artifacts": Package,
+	"global-archived-sessions": Archive,
 	"global-new-project": FolderPlus,
 	"global-import-sessions": Download,
 	"global-usage": Gauge,

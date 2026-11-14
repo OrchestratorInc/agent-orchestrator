@@ -991,7 +991,7 @@ export const CommandPalette = memo(function CommandPalette() {
 						// was opened from (a composer, a terminal) when it closes.
 						const returnFocus = returnFocusRef.current;
 						useUiStore.getState().openArchive({
-							projectId: action.projectId,
+							...(action.projectId ? { projectId: action.projectId } : {}),
 							hostId: params.hostId,
 							returnFocus: returnFocus instanceof HTMLElement ? returnFocus : null,
 						});

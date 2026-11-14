@@ -67,7 +67,8 @@ export type CommandAction =
 	| { kind: "open-new-project" }
 	| { kind: "open-session-import"; projectId?: string }
 	| { kind: "open-orchestrator"; projectId: string }
-	| { kind: "open-archive"; projectId: string }
+	/** No project: every project's archived sessions. */
+	| { kind: "open-archive"; projectId?: string }
 	| { kind: "open-session-actions"; sessionId: string }
 	| { kind: "open-file-search"; projectId: string; target?: WorkspaceFileSearchTarget }
 	| { kind: "open-workspace-file"; target: WorkspaceFileSearchTarget; path: string; line?: number }
@@ -752,6 +753,17 @@ export function buildCommands(ctx: CommandPaletteContext, t: TFunction = appI18n
 		keywords: ["deliverables", "outputs", "documents"],
 		action: { kind: "navigate", target: { to: "/artifacts" } },
 	});
+	const archivedTotal = workspaces.reduce((sum, workspace) => sum + workerSessions(workspace.sessions).filter(isArchivedSession).length, 0);
+	if (archivedTotal > 0) {
+		items.push({
+			id: "global-archived-sessions",
+			group: "global",
+			title: t("command.archivedSessions"),
+			subtitle: t("command.archivedCount", { count: archivedTotal }),
+			keywords: ["archive", "archived", "ended", "terminated", "restore", "history"],
+			action: { kind: "open-archive" },
+		});
+	}
 	items.push({
 		id: "global-new-project",
 		group: "global",

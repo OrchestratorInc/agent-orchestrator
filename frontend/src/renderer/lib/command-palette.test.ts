@@ -970,6 +970,12 @@ describe("the blank palette", () => {
 		expect(new Set(sessions.map((item) => item.id.split(":")[1])).size).toBe(sessions.length);
 	});
 
+	it("opens every project's archived sessions, once there are some", () => {
+		expect(byId(buildCommands({ workspaces: workspaces() })).has("global-archived-sessions")).toBe(false);
+		const withArchived = [{ ...workspaces()[0]!, sessions: [session({ id: "old", isTerminated: true })] }];
+		expect(byId(buildCommands({ workspaces: withArchived })).get("global-archived-sessions")?.action).toEqual({ kind: "open-archive" });
+	});
+
 	it("reaches the sidebar's Automations and Artifacts pages", () => {
 		const items = byId(buildCommands({ workspaces: workspaces() }));
 		expect(items.get("global-automations")?.action).toEqual({ kind: "navigate", target: { to: "/automations" } });
