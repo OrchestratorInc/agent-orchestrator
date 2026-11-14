@@ -1,9 +1,9 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Linking from "expo-linking";
-import * as Notifications from "expo-notifications";
-import { useGlobalSearchParams, usePathname, useRootNavigationState, useRouter, type Href } from "expo-router";
+import { useGlobalSearchParams, usePathname, useRootNavigationState, useRouter, useSegments, type Href } from "expo-router";
 import { useEffect, useRef } from "react";
 import { AppState } from "react-native";
+import { launchNotificationResponse } from "./launchNotification";
 import { LAST_ROUTE_KEY, parseLastRoute, restorableHref, routeHref, routeToRestore, type LastRoute } from "./lastRoute";
 
 /**
@@ -13,11 +13,20 @@ import { LAST_ROUTE_KEY, parseLastRoute, restorableHref, routeHref, routeToResto
 export function RouteRestorer() {
 	const pathname = usePathname();
 	const params = useGlobalSearchParams();
+	const segments = useSegments();
 	const navState = useRootNavigationState();
 	const router = useRouter();
-	const href = routeHref(pathname, params as Record<string, string | string[] | undefined>);
+	const href = routeHref(pathname, params as Record<string, string | string[] | undefined>, segments);
 	const current = useRef<LastRoute>({ href: null, leftAt: null });
 	const decided = useRef(false);
+	// Where the app is now, read when the launch's reads come back: a screen
+	// opened meanwhile (by the person, a link or a notification) is not
+	// replaced by the one saved.
+	const latest = useRef({ pathname, href });
+	latest.current = { pathname, href };
+	const launchPath = useRef(pathname);
+	const navigated = useRef(false);
+	if (pathname !== launchPath.current) navigated.current = true;
 
 	// Remembered as it changes: a screen worth reopening, or none (the board).
 	useEffect(() => {
@@ -38,7 +47,8 @@ export function RouteRestorer() {
 	}, []);
 
 	// Once, when navigation is ready: reopen the last screen if the app started
-	// on the board by itself, not from a link or a notification.
+	// on the board by itself and stayed there, not from a link or a
+	// notification tap (the one PushManager routes, see launchNotification).
 	useEffect(() => {
 		if (decided.current || !navState?.key) return;
 		let active = true;
@@ -47,14 +57,15 @@ export function RouteRestorer() {
 				const [raw, url, response] = await Promise.all([
 					AsyncStorage.getItem(LAST_ROUTE_KEY),
 					Linking.getInitialURL().catch(() => null),
-					Notifications.getLastNotificationResponseAsync().catch(() => null),
+					launchNotificationResponse(),
 				]);
 				if (!active) return;
-				const target = url ? null : routeToRestore(parseLastRoute(raw), Date.now(), { notificationAt: response?.notification.date ?? null });
-				const reopen = target && pathname === "/" ? target : null;
+				const launchedElsewhere = Boolean(url || response) || navigated.current || latest.current.pathname !== "/";
+				const reopen = launchedElsewhere ? null : routeToRestore(parseLastRoute(raw), Date.now());
 				if (reopen) router.push(reopen as Href);
 				// What is open now replaces what was saved, so an old screen is never reopened twice.
-				current.current = { href: reopen ?? (restorableHref(href) ? href : null), leftAt: null };
+				const now = latest.current.href;
+				current.current = { href: reopen ?? (restorableHref(now) ? now : null), leftAt: null };
 				void AsyncStorage.setItem(LAST_ROUTE_KEY, JSON.stringify(current.current)).catch(() => {});
 			} finally {
 				if (active) decided.current = true;

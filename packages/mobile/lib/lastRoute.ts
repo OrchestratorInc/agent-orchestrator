@@ -17,13 +17,22 @@ export type LastRoute = { href: string | null; leftAt: number | null };
 
 const RESTORABLE = /^\/(session|files|artifact|artifacts|preview|shell|review|reviewer)\/[^/]|^\/spawn(\?|$)/;
 
-/** The screen's address: its path, with the parameters the path does not already carry as a query. */
-export function routeHref(pathname: string, params: Record<string, string | string[] | undefined>): string {
-	const segments = new Set(pathname.split("/").filter(Boolean).map(decodeURIComponent));
+/**
+ * The screen's address: its path, with the parameters the path does not
+ * already carry as a query. Which those are comes from the route's segments
+ * (`["files", "[sessionId]", "file"]`): a parameter named by a dynamic segment
+ * is in the path; any other stays, even one whose value happens to match a
+ * segment (`path=file` on `/files/web-1/file`).
+ */
+export function routeHref(pathname: string, params: Record<string, string | string[] | undefined>, segments: readonly string[] = []): string {
+	const inPath = new Set(segments.flatMap((segment) => {
+		const name = /^\[(?:\.\.\.)?([^\]]+)\]$/.exec(segment)?.[1];
+		return name ? [name] : [];
+	}));
 	const query = new URLSearchParams();
 	for (const [key, value] of Object.entries(params)) {
 		const one = Array.isArray(value) ? value[0] : value;
-		if (one === undefined || one === "" || segments.has(one)) continue;
+		if (one === undefined || one === "" || inPath.has(key)) continue;
 		query.set(key, one);
 	}
 	const text = query.toString();
@@ -36,13 +45,12 @@ export function restorableHref(href: string | null | undefined): href is string 
 
 /**
  * Where to reopen at launch, or null for the board: the screen open when the
- * app was left, if that was recently and nothing else (a notification tap)
- * launched the app since.
+ * app was left, if that was recently. The caller decides whether something
+ * else (a link, a notification tap, the person) launched it somewhere first.
  */
-export function routeToRestore(saved: LastRoute | null, now: number, launchedBy?: { notificationAt?: number | null }): string | null {
+export function routeToRestore(saved: LastRoute | null, now: number): string | null {
 	if (!saved || !restorableHref(saved.href) || saved.leftAt === null) return null;
 	if (now - saved.leftAt > RESTORE_WITHIN_MS || now < saved.leftAt) return null;
-	if (launchedBy?.notificationAt && launchedBy.notificationAt >= saved.leftAt) return null;
 	return saved.href;
 }
 

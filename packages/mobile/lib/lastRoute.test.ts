@@ -3,8 +3,16 @@ import { parseLastRoute, RESTORE_WITHIN_MS, restorableHref, routeHref, routeToRe
 
 describe("the last screen", () => {
 	it("is remembered as its path with the parameters the path does not carry", () => {
-		expect(routeHref("/session/web-1", { id: "web-1", hostId: "demo-machine", projectId: "web-app" })).toBe("/session/web-1?hostId=demo-machine&projectId=web-app");
-		expect(routeHref("/spawn", {})).toBe("/spawn");
+		expect(routeHref("/session/web-1", { id: "web-1", hostId: "demo-machine", projectId: "web-app" }, ["session", "[id]"])).toBe("/session/web-1?hostId=demo-machine&projectId=web-app");
+		expect(routeHref("/spawn", {}, ["spawn"])).toBe("/spawn");
+	});
+
+	// Only a parameter the route's path names is left out: a query value that
+	// happens to equal a segment is still the screen's.
+	it("keeps a query parameter whose value matches a path segment", () => {
+		expect(routeHref("/files/web-1/file", { sessionId: "web-1", path: "file", hostId: "a" }, ["files", "[sessionId]", "file"])).toBe("/files/web-1/file?path=file&hostId=a");
+		expect(routeHref("/session/web-1", { id: "web-1", projectId: "session" }, ["(tabs)", "session", "[id]"])).toBe("/session/web-1?projectId=session");
+		expect(routeHref("/docs/a/b", { rest: ["a", "b"], tab: "b" }, ["docs", "[...rest]"])).toBe("/docs/a/b?tab=b");
 	});
 
 	it("is a reading screen, never a sheet, pairing or onboarding", () => {
@@ -23,13 +31,6 @@ describe("the last screen", () => {
 		// Still open (never left), or on the board when left: nothing to reopen.
 		expect(routeToRestore({ href: saved.href, leftAt: null }, 2_000)).toBeNull();
 		expect(routeToRestore({ href: null, leftAt: 1_000 }, 2_000)).toBeNull();
-	});
-
-	it("gives way to a notification tap that launched the app", () => {
-		const saved = { href: "/session/web-1", leftAt: 1_000 };
-		expect(routeToRestore(saved, 5_000, { notificationAt: 4_000 })).toBeNull();
-		// An old notification from before the app was left does not count.
-		expect(routeToRestore(saved, 5_000, { notificationAt: 500 })).toBe("/session/web-1");
 	});
 
 	it("reads back what was saved, and nothing from garbage", () => {
