@@ -36,6 +36,12 @@ const minimumNodeMajor = 22
 // claudeTodoToolsEnv switches on Claude Code's to-do tools in SDK sessions.
 const claudeTodoToolsEnv = "CLAUDE_CODE_ENABLE_TODO_TOOLS"
 
+const (
+	claudeEntrypointEnv = "CLAUDE_CODE_ENTRYPOINT"
+	claudeEntrypoint    = "agent-orchestrator"
+	claudeArtifactEnv   = "CLAUDE_CODE_ARTIFACT"
+)
+
 // claudePlanGuidance asks Claude to plan multi-step work with its to-do tools.
 // Claude Code defers TaskCreate and TaskUpdate until ToolSearch loads them and
 // does not look for them on an ordinary request, so without this line the chat's
@@ -389,6 +395,16 @@ func claudeACPLaunchEnv(
 	// value the user already chose, in the project env or the daemon's own, wins.
 	if _, chosen := claudeTodoToolsChoice(input); !chosen {
 		env[claudeTodoToolsEnv] = "1"
+	}
+	if strings.TrimSpace(input[claudeEntrypointEnv]) == "" {
+		env[claudeEntrypointEnv] = claudeEntrypoint
+	}
+	if strings.TrimSpace(input[claudeArtifactEnv]) == "" {
+		if strings.TrimSpace(os.Getenv(claudeArtifactEnv)) == "" {
+			env[claudeArtifactEnv] = "0"
+		} else {
+			delete(env, claudeArtifactEnv)
+		}
 	}
 	selected := strings.TrimSpace(selectedModel)
 	if _, configured := input["ANTHROPIC_CUSTOM_MODEL_OPTION"]; selected != "" &&

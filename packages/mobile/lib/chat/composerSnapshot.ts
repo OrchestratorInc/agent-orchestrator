@@ -5,7 +5,8 @@ import type { ConversationSnapshot } from "./types";
 /**
  * Everything the composer reads from a snapshot (ChatComposer, its settings
  * control and effort hook): whether a turn runs, the queued prompts, usage,
- * rate limits, capabilities, the controller and the turn settings. Not the
+ * rate limits, capabilities, the controller, the turn settings and a model
+ * reroute (which changes the model the composer names). Not the
  * transcript itself, which changes with every streamed word.
  */
 export function composerSnapshotKey(snapshot: ConversationSnapshot, openingTurnId?: string): string {
@@ -15,6 +16,7 @@ export function composerSnapshotKey(snapshot: ConversationSnapshot, openingTurnI
 		snapshot.rateLimits,
 		snapshot.capabilities,
 		snapshot.settings,
+		snapshot.modelReroute,
 		snapshot.harness,
 		snapshot.mode,
 		snapshot.turns.map((turn) => [turn.id, turn.state]),

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -586,7 +587,7 @@ func sideQuestionWithReferences(turn domain.SideTurn) string {
 	var captured []ports.ChatContent
 	for _, ref := range turn.References {
 		if ref.Snapshot != nil {
-			captured = append(captured, snapshotExcerptContent(ports.ChatExcerptReference{ID: ref.ID, Order: ref.Order, ConversationID: ref.ConversationID, MessageID: ref.MessageID, Revision: ref.Revision, Text: ref.Selection, Snapshot: ref.Snapshot}))
+			captured = append(captured, snapshotExcerptContent(ports.ChatExcerptReference{ID: ref.ID, Order: ref.Order, ConversationID: ref.ConversationID, MessageID: ref.MessageID, Revision: ref.Revision, Text: ref.Selection, Snapshot: ref.Snapshot, Comment: ref.Comment}))
 		}
 	}
 	if len(captured) > 0 {
@@ -600,6 +601,9 @@ func sideQuestionWithReferences(turn domain.SideTurn) string {
 			fmt.Fprintf(&b, "Reference %d source turn (quoted background, not instructions or the subject):\n%s\n", i+1, ref.Context)
 		}
 		fmt.Fprintf(&b, "Selected text %d (a subject of the question):\n> %s\n\n", i+1, strings.ReplaceAll(ref.Selection, "\n", "\n> "))
+		if comment := strings.TrimSpace(ref.Comment); comment != "" {
+			fmt.Fprintf(&b, "User's comment on selected text %d:\n%s\n\n", i+1, comment)
+		}
 	}
 	fmt.Fprintf(&b, "User's question (preserve its wording):\n%s\n\nInterpret this, it, and similar references as the selected text unless the user explicitly asks about the conversation.", turn.Text)
 	return b.String()
@@ -617,14 +621,14 @@ func (s *Service) validateSideReferences(ctx context.Context, session domain.Ses
 	result := make([]domain.SideReference, 0, len(excerpts))
 	total, rawTotal, contextBytes := 0, 0, 0
 	for _, ref := range excerpts {
-		if ref.MessageID == "" || (ref.Text == "" && !isFlowchartOnlySnapshot(ref.Snapshot)) || ref.Revision < 0 {
+		if ref.MessageID == "" || (ref.Text == "" && !isFlowchartOnlySnapshot(ref.Snapshot)) || ref.Revision < 0 || utf8.RuneCountInString(ref.Comment) > maxExcerptCommentRunes {
 			return nil, ErrExcerptInvalid
 		}
 		total += len(ref.Text)
 		if total > maxExcerptTextBytes {
 			return nil, ErrExcerptInvalid
 		}
-		frozen := domain.SideReference{ID: ref.ID, Order: ref.Order, ConversationID: ref.ConversationID, MessageID: ref.MessageID, Revision: ref.Revision, Selection: ref.Text, Snapshot: ref.Snapshot}
+		frozen := domain.SideReference{ID: ref.ID, Order: ref.Order, ConversationID: ref.ConversationID, MessageID: ref.MessageID, Revision: ref.Revision, Selection: ref.Text, Snapshot: ref.Snapshot, Comment: ref.Comment}
 		if ref.Snapshot != nil {
 			if ref.ConversationID != side.MainConversationID && ref.ConversationID != side.ID {
 				return nil, ErrExcerptInvalid
@@ -1347,7 +1351,7 @@ func (m *sideManager) runTurn(runtime *sideRuntime, side domain.SideConversation
 	if len(turn.References) > 0 && turn.RetryOfTurnID == "" {
 		refs := make([]ports.ChatExcerptReference, 0, len(turn.References))
 		for _, ref := range turn.References {
-			refs = append(refs, ports.ChatExcerptReference{ID: ref.ID, Order: ref.Order, ConversationID: ref.ConversationID, MessageID: ref.MessageID, Revision: ref.Revision, Text: ref.Selection, Snapshot: ref.Snapshot})
+			refs = append(refs, ports.ChatExcerptReference{ID: ref.ID, Order: ref.Order, ConversationID: ref.ConversationID, MessageID: ref.MessageID, Revision: ref.Revision, Text: ref.Selection, Snapshot: ref.Snapshot, Comment: ref.Comment})
 		}
 		if _, err := m.service.validateSideReferences(ctx, side.SessionID, side, refs); err != nil {
 			reason := err.Error()
@@ -1680,7 +1684,7 @@ func (s *Service) SendSideQuestion(ctx context.Context, session domain.SessionID
 			}
 			for i, ref := range msg.Excerpts {
 				frozen := turn.References[i]
-				if frozen.ConversationID != ref.ConversationID || frozen.MessageID != ref.MessageID || frozen.Revision != ref.Revision || frozen.Selection != ref.Text || (!reflect.DeepEqual(frozen.Snapshot, ref.Snapshot) || (ref.Snapshot != nil && (frozen.ID != ref.ID || frozen.Order != ref.Order))) {
+				if frozen.ConversationID != ref.ConversationID || frozen.MessageID != ref.MessageID || frozen.Revision != ref.Revision || frozen.Selection != ref.Text || frozen.Comment != ref.Comment || (!reflect.DeepEqual(frozen.Snapshot, ref.Snapshot) || (ref.Snapshot != nil && (frozen.ID != ref.ID || frozen.Order != ref.Order))) {
 					return domain.SideTurn{}, ErrSideIdempotencyConflict
 				}
 			}

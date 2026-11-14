@@ -71,7 +71,7 @@ vi.mock("expo-router", async () => {
 });
 vi.mock("expo-router/react-navigation", () => ({ useHeaderHeight: () => 0 }));
 vi.mock("react-native-keyboard-controller", async () => ({ KeyboardAvoidingView: await host("KeyboardAvoidingView") }));
-vi.mock("../api", () => ({ mobileReachablePreviewURL: () => undefined, restoreSession: vi.fn(), resumeSessionAgent: vi.fn() }));
+vi.mock("../api", () => ({ ApiError: class ApiError extends Error {}, apiRequest: vi.fn(() => new Promise(() => {})), mobileReachablePreviewURL: () => undefined, restoreSession: vi.fn(), resumeSessionAgent: vi.fn() }));
 vi.mock("../haptics", () => ({ haptics: { tap: vi.fn(), success: vi.fn(), warning: vi.fn(), error: vi.fn() } }));
 vi.mock("../openGitHub", () => ({ openGitHub: vi.fn() }));
 vi.mock("../InlineBanner", async () => ({ InlineBanner: await host("InlineBanner") }));
@@ -101,7 +101,14 @@ vi.mock("../ThemeProvider", () => {
 	const theme = new Proxy({}, { get: (_target, key) => `#${String(key)}` });
 	return { useTheme: () => theme, useThemedStyles: (factory: (value: unknown) => unknown) => factory(theme) };
 });
-vi.mock("./api", () => ({ getWorkspacePaths: vi.fn(), openSessionShell: vi.fn(), prewarmChatAgent: vi.fn() }));
+vi.mock("./api", () => ({
+	getWorkspacePaths: vi.fn(),
+	openSessionShell: vi.fn(),
+	prewarmChatAgent: vi.fn(),
+	// The screen asks whether its turns can be forked.
+	getForkOptions: () => Promise.resolve({ allowed: false }),
+	forkSession: () => Promise.resolve(undefined),
+}));
 vi.mock("./requestDockModel", () => ({ requestDockModel: () => undefined }));
 vi.mock("./ChatComposer", async () => ({ ChatComposer: await host("ChatComposer") }));
 vi.mock("./KeyboardFollower", async () => ({ KeyboardFollower: await host("KeyboardFollower") }));

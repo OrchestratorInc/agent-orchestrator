@@ -844,7 +844,7 @@ it("retries reviewer Chat on Box B with the same delivery ID", async () => {
 	expect(localPost).not.toHaveBeenCalled();
 });
 
-it("opens the returned reviewer Chat when a remote review is triggered", async () => {
+it("adds the remote reviewer Chat tab without switching to it when a review is triggered", async () => {
 	HTMLElement.prototype.scrollTo = vi.fn();
 	remoteConnect.mockResolvedValue({ hostId: "box-b", label: "Box B", url: "http://box-b:3001", base: "http://127.0.0.1:4001" });
 	const prUrl = "https://github.com/acme/todo/pull/7";
@@ -876,8 +876,11 @@ it("opens the returned reviewer Chat when a remote review is triggered", async (
 	await userEvent.click(await screen.findByRole("button", { name: "Open inspector panel" }));
 	await userEvent.click(await screen.findByRole("tab", { name: "Reviews" }));
 	await userEvent.click(await screen.findByRole("button", { name: "Review latest commit" }));
-	expect(await screen.findByText("Reviewer is on Box B")).toBeInTheDocument();
+	const reviewerTab = await screen.findByRole("tab", { name: "Reviewer" });
 	expect(mutations).toEqual(["http://127.0.0.1:4001/api/v1/sessions/session-1/reviews/trigger"]);
+	expect(reviewerTab).toHaveAttribute("aria-selected", "false");
+	await userEvent.click(reviewerTab);
+	expect(await screen.findByText("Reviewer is on Box B")).toBeInTheDocument();
 	expect(screen.getByRole("tab", { name: "Reviewer" })).toHaveAttribute("aria-selected", "true");
 });
 

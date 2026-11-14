@@ -1738,6 +1738,14 @@ func TestMemcodeIgnoresInheritedModelFromPreviousHarness(t *testing.T) {
 	}
 }
 
+func TestSpawn_RefusesAnAccountWithoutAccountService(t *testing.T) {
+	m, _, _, _ := newManager()
+	_, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, AgentAccountID: "acct-1"})
+	if !errors.Is(err, ports.ErrAgentAccountUnknown) || !errors.Is(err, ErrSpawnAgentAccount) {
+		t.Fatalf("spawn err = %v, want an unknown agent account", err)
+	}
+}
+
 func TestSpawn_ResolvesProjectConfig(t *testing.T) {
 	st := newFakeStore()
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: domain.ProjectConfig{
