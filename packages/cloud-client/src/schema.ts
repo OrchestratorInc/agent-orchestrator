@@ -1018,7 +1018,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Starts a live session's terminal agent again in its worker after it exited (Ctrl+C, /exit, a crash), resuming its conversation where the agent keeps one, and reads the session as idle rather than exited. requested is false when the agent is still running or starting. A session in Chat starts its agent with its next message instead; a session viewer cannot restart it. */
+        /** @description Starts a live session's terminal agent again in its worker after it exited (Ctrl+C, /exit, a crash), resuming its conversation where the agent keeps one, and reads the session as idle rather than exited. A worker that applies instructions while it runs starts the agent with the project's current instructions; an older worker with the ones it started with (Session.outdatedInstructions next_start). requested is false when the agent is still running or starting, unless applyInstructions is set. A session in Chat starts its agent with its next message instead; a session viewer cannot restart it. */
         post: operations["restartSessionAgent"];
         delete?: never;
         options?: never;
@@ -4554,6 +4554,11 @@ export interface components {
              * @enum {string}
              */
             currentReasoningEffort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+            /**
+             * @description Set while the project's instructions for the session's role (its orchestrator or worker instructions) changed after its agent started and the agent does not run with them yet. restart: restarting the agent (restartSessionAgent with applyInstructions) applies them and keeps its conversation. next_start: the session's worker predates applying them while it runs. It starts its agent, in Chat too, with the instructions it got when it started, so they reach the agent only once it starts after the session's worker restarts, such as when the session is paused and resumed. Absent when the agent runs with the current instructions, for a session in Chat whose worker applies them (its next message starts with them), when it is not known which instructions the agent runs with, and on older control planes.
+             * @enum {string}
+             */
+            outdatedInstructions?: "restart" | "next_start";
             deniedCommands: string[];
             interfaceMode: components["schemas"]["SessionInterfaceMode"];
             activityState: components["schemas"]["SessionActivityState"];
@@ -7732,7 +7737,14 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /** @description Restart the agent even while it runs, so it starts with the project's current instructions and keeps its conversation (Session.outdatedInstructions restart). Its turn in progress, if any, ends, as does a request it is waiting on (an approval or a question), so a client offers it only while the agent is idle. The response waits for the whole restart, which can take tens of seconds; on a timeout (504) the worker may still finish it, so read the session again. An older control plane, or a worker that cannot apply instructions while it runs, leaves a running agent alone (requested false). */
+                    applyInstructions?: boolean;
+                };
+            };
+        };
         responses: {
             /** @description Whether a start was requested. */
             200: {

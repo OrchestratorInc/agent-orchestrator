@@ -297,6 +297,14 @@ export type WorkspaceSession = {
 		startupError?: { code: string; message: string; at: string; detail?: string };
 		/** Bring-your-own Coder workspace page; absent for managed compute. */
 		coderWorkspaceUrl?: string;
+		/**
+		 * Set while the project's instructions for the session's role changed
+		 * after its agent started: "restart" when restarting the agent applies
+		 * them (keeping the conversation), "next_start" when its worker cannot
+		 * apply them while it runs (they reach the agent only after the
+		 * session's worker restarts, such as a pause and resume).
+		 */
+		outdatedInstructions?: "restart" | "next_start";
 	};
 };
 
@@ -599,7 +607,11 @@ export type OrchestratorHealth =
 	| { state: "restarting"; message: string }
 	| { state: "restart_needed"; message: string }
 	| { state: "missing"; message: string }
-	| { state: "duplicates"; message: string };
+	| { state: "duplicates"; message: string }
+	// A Cloud orchestrator whose project instructions changed after its agent
+	// started. "restart": restarting its agent in place applies them and keeps
+	// the conversation (unlike restart_needed, which replaces the session).
+	| { state: "instructions_changed"; apply: "restart" | "next_start"; orchestrator: WorkspaceSession };
 
 export function orchestratorHealth(workspace: WorkspaceSummary, restarting = false): OrchestratorHealth {
 	if (restarting) {
@@ -625,6 +637,10 @@ export function orchestratorHealth(workspace: WorkspaceSummary, restarting = fal
 			state: "restart_needed",
 			message: `Configured orchestrator agent is ${workspace.orchestratorAgent}; running agent is ${orchestrator.provider}.`,
 		};
+	}
+	const outdated = orchestrator.cloud?.outdatedInstructions;
+	if (outdated === "restart" || outdated === "next_start") {
+		return { state: "instructions_changed", apply: outdated, orchestrator };
 	}
 	return { state: "ok" };
 }

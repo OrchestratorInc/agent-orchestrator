@@ -19,6 +19,7 @@ import type { TFunction } from "i18next";
 import { terminalTargetBelongsToSession, type TerminalTarget } from "../types/terminal";
 import { sessionAgentExited, sessionIsActive, type WorkspaceSession } from "../types/workspace";
 import { ResumeAgentControl } from "./ResumeAgentControl";
+import { OutdatedInstructionsNotice } from "./OutdatedInstructionsNotice";
 import type { Theme } from "../stores/ui-store";
 import {
 	useTerminalSession,
@@ -1435,8 +1436,15 @@ function AttachedTerminal({
 	const cloudEnded = Boolean(session?.cloud) && terminalTarget?.kind !== "reviewer" && terminalTarget?.kind !== "shell" && sessionAgentExited(session);
 	const showEndedState = showEndedStatePreview && (!session?.cloud || cloudEnded) && !isBoxComingUp && !booting && !coverLabel;
 
+	// The agent terminal of a Cloud session whose project instructions changed
+	// after its agent started offers the in-place restart that applies them. An
+	// exited agent's resume starts with the current ones already.
+	const showOutdatedInstructions = Boolean(session?.cloud?.outdatedInstructions) && !showEndedState &&
+		terminalTarget?.kind !== "reviewer" && terminalTarget?.kind !== "shell";
+
 	return (
 		<div className="terminal-surface flex h-full min-h-0 flex-col" data-testid="session-terminal">
+			{showOutdatedInstructions && session ? <OutdatedInstructionsNotice session={session} variant="terminal" /> : null}
 			{showEndedState && (
 				<TerminalEndedStrip
 					canRestore={canRestoreSession && !session?.cloud}

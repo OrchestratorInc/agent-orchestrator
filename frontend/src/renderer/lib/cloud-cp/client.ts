@@ -270,8 +270,12 @@ export interface CloudCpClient {
 	getSessionArtifactVersion(orgId: string, sessionId: string, path: string, version: number, options?: CloudCpRequestOptions): Promise<CloudCpArtifactVersion>;
 	/** Makes a kept version the committed file again, as a new version. */
 	restoreSessionArtifactVersion(orgId: string, sessionId: string, path: string, version: number, options?: CloudCpRequestOptions): Promise<{ artifact: CloudCpSessionArtifact }>;
-	/** Starts the agent again in a live session whose terminal agent exited. */
-	restartSessionAgent(orgId: string, sessionId: string, options?: CloudCpRequestOptions): Promise<{ requested: boolean }>;
+	/**
+	 * Starts the agent again in a live session whose terminal agent exited.
+	 * With applyInstructions it restarts a running one too, so it starts with
+	 * the project's current instructions and keeps its conversation.
+	 */
+	restartSessionAgent(orgId: string, sessionId: string, options?: CloudCpRequestOptions & { applyInstructions?: boolean }): Promise<{ requested: boolean }>;
 	/** Chat messages across the organization's sessions the caller can see that contain query. */
 	searchChats(orgId: string, query: { query: string; limit?: number }, options?: CloudCpRequestOptions): Promise<CloudCpChatSearchResponse>;
 	/** Deletes one artifact file from cloud storage and the session's worker. */
@@ -974,7 +978,10 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 		restoreSessionArtifactVersion: (orgId, sessionId, path, version, o) =>
 			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/artifacts/versions/restore`, { body: { path, version }, signal: o?.signal }),
 		restartSessionAgent: (orgId, sessionId, o) =>
-			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/agent/restart`, { signal: o?.signal }),
+			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/agent/restart`, {
+				...(o?.applyInstructions ? { body: { applyInstructions: true } } : {}),
+				signal: o?.signal,
+			}),
 		searchChats: (orgId, query, o) =>
 			requestJson("GET", `/orgs/${seg(orgId)}/chat-search`, { query: { q: query.query, limit: query.limit }, signal: o?.signal }),
 		deleteSessionArtifact: (orgId, sessionId, path, o) =>
