@@ -4,6 +4,7 @@ import { ArtifactThumbnail, hasContentThumbnail } from "./ArtifactThumbnail";
 import { artifactExtensionLabel, artifactViewKind, type SessionArtifact } from "./artifacts";
 import type { ArtifactsBackend } from "./artifactsBackend";
 import { artifactVisual } from "./artifactVisual";
+import { useVerifiedOnMount } from "./heldBackend";
 import { Feather } from "./icons";
 import { imageSourceForPlatform } from "./imageSource";
 import type { Theme } from "./theme";
@@ -38,13 +39,17 @@ export function ArtifactPoster({ artifact, backend, sessionId, visible, versionO
 	// scrolled past and back does not blank and reload.
 	const [reached, setReached] = useState(visible);
 	if (visible && !reached) setReached(true);
-	const picture = reached && thumbnail && failedUri !== thumbnail.uri ? thumbnail : undefined;
+	// A card that comes on screen while the app reconnects shows its icon tile
+	// until the machine has answered as itself: the picture loads with the
+	// credential (see heldBackend). One already showing stays.
+	const verified = useVerifiedOnMount(backend);
+	const picture = verified && reached && thumbnail && failedUri !== thumbnail.uri ? thumbnail : undefined;
 	// A card that previews its contents shows a plain tile while the preview
 	// loads, and its icon only if the preview cannot load: until the file
 	// changes or the preview is retried.
 	const attempt = `${artifact.updatedAt}#${retries}`;
 	const [previewFailedAt, setPreviewFailedAt] = useState<string>();
-	const preview = Boolean(backend && hasContentThumbnail(artifact)) && previewFailedAt !== attempt;
+	const preview = verified && Boolean(backend && hasContentThumbnail(artifact)) && previewFailedAt !== attempt;
 	const onPreviewFailed = useCallback(() => setPreviewFailedAt(attempt), [attempt]);
 	const visual = artifactVisual(artifact, t);
 	// Cropped from the top, as the desktop's object-cover object-top: a phone

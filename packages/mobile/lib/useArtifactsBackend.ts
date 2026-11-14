@@ -3,6 +3,7 @@ import { daemonArtifactsBackend, type ArtifactsBackend } from "./artifactsBacken
 import { cloudArtifactsBackend, useCloudArtifactAccess } from "./cloud/artifacts";
 import { useCloud } from "./cloud/CloudProvider";
 import { isCloudHost } from "./cloud/mapping";
+import { holdArtifactsBackend, useHeldBackend } from "./heldBackend";
 import { useApp } from "./store";
 
 /**
@@ -11,7 +12,7 @@ import { useApp } from "./store";
  * reached; `unavailable` says why, for Cloud, when waiting will not help.
  */
 export function useArtifactsBackend(sessionId: string): { backend: ArtifactsBackend | null; cloud: boolean; unavailable?: string } {
-	const { config, currentHostId } = useApp();
+	const { config, currentHostId, machine } = useApp();
 	const { client, org, me, status, sessions, error: cloudError } = useCloud();
 	const cloud = isCloudHost(currentHostId);
 	const orgId = org?.id;
@@ -20,7 +21,9 @@ export function useArtifactsBackend(sessionId: string): { backend: ArtifactsBack
 	// The control plane lets only a session's creator delete or restore its files.
 	const creator = sessions.find((session) => session.id === sessionId)?.createdByUserId;
 	const canChange = !creator || creator === me?.user.id;
-	const daemon = useMemo(() => !cloud && config ? daemonArtifactsBackend(config) : null, [cloud, config]);
+	const live = useMemo(() => !cloud && config ? daemonArtifactsBackend(config) : null, [cloud, config]);
+	// Held for the machine, not its connection, so the viewer keeps its page through an app switch (see heldBackend).
+	const daemon = useHeldBackend(live, cloud ? "" : machine, holdArtifactsBackend);
 	const { root, renew } = access;
 	const remote = useMemo(
 		() => cloud && orgId && root ? cloudArtifactsBackend({ client, orgId, sessionId, root, canChange, renew }) : null,

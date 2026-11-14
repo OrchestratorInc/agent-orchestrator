@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { ServerConfig } from "./config";
 import {
 	connectedSpawnHosts,
+	heldPreview,
 	hostRouteMatches,
 	initialSpawnHostId,
 	previewForConfig,
@@ -115,5 +116,23 @@ describe("host-qualified mobile routes", () => {
 		expect(previewForConfig(loaded, b, "host-a")).toBeNull();
 		expect(previewForConfig(loaded, b, "host-b")).toBeNull();
 		expect(previewForConfig(loaded, { ...a, host: "new-address" }, "host-a")).toBeNull();
+	});
+
+	it("keeps the page showing through an app switch, with the credential that loaded it", () => {
+		const a = { hostId: "host-a", host: "alice", httpPort: "3011", password: "a" } as ServerConfig;
+		const loaded = { config: a, value: { url: "http://alice:3011/preview", authenticated: true } };
+		// The connection is away: the page stays, still paired with A's own connection.
+		expect(heldPreview(loaded, null, "host-a")).toEqual({ value: loaded.value, config: a });
+		// Back on the same endpoint as a new object: the same page, not a reload.
+		expect(heldPreview(loaded, { ...a }, "host-a")).toEqual({ value: loaded.value, config: a });
+	});
+
+	it("never keeps a preview across a changed endpoint, credential or machine", () => {
+		const a = { hostId: "host-a", host: "alice", httpPort: "3011", password: "a" } as ServerConfig;
+		const loaded = { config: a, value: { url: "http://alice:3011/preview", authenticated: true } };
+		expect(heldPreview(loaded, { ...a, host: "tunnel.example" }, "host-a")).toBeNull();
+		expect(heldPreview(loaded, { ...a, password: "rotated" }, "host-a")).toBeNull();
+		expect(heldPreview(loaded, null, "host-b")).toBeNull();
+		expect(heldPreview(null, a, "host-a")).toBeNull();
 	});
 });
