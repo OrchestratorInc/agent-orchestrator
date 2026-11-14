@@ -913,7 +913,7 @@ export interface paths {
         get: operations["getSessionInterfaceTransition"];
         put?: never;
         post: operations["startSessionInterfaceTransition"];
-        /** @description An agent switch can be cancelled only by the session's creator (403 forbidden otherwise); an interface-only switch by any member who may switch it. */
+        /** @description An agent switch or a move to another account can be cancelled only by the session's creator (403 forbidden otherwise); an interface-only switch by any member who may switch it. */
         delete: operations["cancelSessionInterfaceTransition"];
         options?: never;
         head?: never;
