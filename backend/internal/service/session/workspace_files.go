@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 	"unicode/utf8"
 
@@ -2873,10 +2874,14 @@ func classifyWorkspaceGitError(ctx context.Context, root, operation string, err 
 		"could not lock",
 		"resource temporarily unavailable",
 		"another git process",
+		"too many open files",
 	} {
 		if strings.Contains(lower, marker) {
 			return apierr.Unavailable("WORKSPACE_GIT_BUSY", "Workspace Git state is temporarily unavailable")
 		}
+	}
+	if errors.Is(err, syscall.EMFILE) || errors.Is(err, syscall.ENFILE) {
+		return apierr.Unavailable("WORKSPACE_GIT_BUSY", "Workspace Git state is temporarily unavailable")
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return context.DeadlineExceeded
@@ -2957,8 +2962,8 @@ func workspaceRepoUnavailable(root string) bool {
 		_, err = os.Stat(commonDir)
 		return os.IsNotExist(err)
 	}
-	info, err := os.Stat(gitPath)
-	return os.IsNotExist(err) || err == nil && !info.IsDir()
+	_, err := os.Stat(gitPath)
+	return os.IsNotExist(err)
 }
 
 // parseGitDirFile extracts the path from a git worktree `.git` file's

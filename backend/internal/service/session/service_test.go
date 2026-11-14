@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -1032,6 +1033,28 @@ func TestWorkspaceGitErrorClassificationPreservesUnknownFailure(t *testing.T) {
 	unknown := classifyWorkspaceGitError(context.Background(), "/repo-unknown", "status", errors.New("git exit"), "fatal: bad object")
 	if !errors.As(unknown, &apiErr) || apiErr.Code != "WORKSPACE_GIT_READ_FAILED" {
 		t.Fatalf("unknown Git error = %v, want WORKSPACE_GIT_READ_FAILED", unknown)
+	}
+}
+
+func TestWorkspaceGitDescriptorExhaustionIsBusy(t *testing.T) {
+	var apiErr *apierr.Error
+	for _, err := range []error{
+		classifyWorkspaceGitError(context.Background(), "/repo-emfile", "status", errors.New("git exit"), "fatal: unable to open index: Too many open files"),
+		classifyWorkspaceGitError(context.Background(), "/repo-emfile", "status", &os.PathError{Op: "pipe", Err: syscall.EMFILE}, ""),
+	} {
+		if !errors.As(err, &apiErr) || apiErr.Code != "WORKSPACE_GIT_BUSY" {
+			t.Fatalf("descriptor exhaustion = %v, want retryable WORKSPACE_GIT_BUSY", err)
+		}
+	}
+}
+
+func TestUnreadableGitFileIsNotAMissingRepository(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, ".git"), []byte("gitdir: "+t.TempDir()+"\n"), 0o000); err != nil {
+		t.Fatal(err)
+	}
+	if workspaceRepoUnavailable(root) {
+		t.Fatal("an unreadable .git file was classified as a missing repository")
 	}
 }
 

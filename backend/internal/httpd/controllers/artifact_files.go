@@ -30,7 +30,6 @@ import (
 	previewutil "github.com/aoagents/agent-orchestrator/backend/internal/preview"
 	"github.com/aoagents/agent-orchestrator/backend/internal/renderpage"
 	"github.com/aoagents/agent-orchestrator/backend/internal/sessionartifacts"
-	"github.com/aoagents/agent-orchestrator/backend/internal/workspacewatch"
 )
 
 const (
@@ -157,7 +156,7 @@ func (c *SessionsController) streamArtifactChanges(w http.ResponseWriter, r *htt
 		envelope.WriteAPIError(w, r, http.StatusNotFound, "not_found", "ARTIFACT_DIR_NOT_FOUND", "artifact directory not found", nil)
 		return
 	}
-	changes, err := workspacewatch.WatchSkipping(r.Context(), dir, sessionartifacts.Skips)
+	changes, partial, err := watchArtifacts(r.Context(), dir, sessionartifacts.Skips)
 	if err != nil {
 		envelope.WriteError(w, r, fmt.Errorf("watch artifact directory: %w", err))
 		return
@@ -178,6 +177,8 @@ func (c *SessionsController) streamArtifactChanges(w http.ResponseWriter, r *htt
 
 	keepAlive := time.NewTicker(15 * time.Second)
 	defer keepAlive.Stop()
+	recheck := time.NewTicker(partialWatchRecheck)
+	defer recheck.Stop()
 	for {
 		select {
 		case <-r.Context().Done():
@@ -185,6 +186,14 @@ func (c *SessionsController) streamArtifactChanges(w http.ResponseWriter, r *htt
 		case _, ok := <-changes:
 			if !ok {
 				return
+			}
+			if _, err := fmt.Fprint(w, "event: artifacts_changed\ndata: {}\n\n"); err != nil {
+				return
+			}
+			flusher.Flush()
+		case <-recheck.C:
+			if !partial() {
+				continue
 			}
 			if _, err := fmt.Fprint(w, "event: artifacts_changed\ndata: {}\n\n"); err != nil {
 				return
