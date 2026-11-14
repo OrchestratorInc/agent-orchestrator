@@ -12,7 +12,7 @@ import { describe, expect, it } from "vitest";
 import { formatDiffSelectionMessage } from "../../../shared/diff-selection";
 import { formatFileAnnotationMessage, formatFileAnnotationMessages } from "../../../shared/file-annotations";
 import type { ConversationMessage } from "../../types/conversation";
-import { gitActionMessage } from "../SessionBranchSummary";
+import { gitActionMessage, otherPRConflictMessage } from "../SessionBranchSummary";
 import { TooltipProvider } from "../ui/tooltip";
 import { AutomationMessage, readAutomation } from "./AutomationMessage";
 
@@ -64,6 +64,8 @@ const changesRequested = [
 ].join("\n");
 
 const mergeConflict = `There are merge conflicts on ${PR}. Rebase onto the base branch and resolve them.\nPR: ${URL}`;
+
+const otherPRConflict = (pr: object) => otherPRConflictMessage(pr as Parameters<typeof otherPRConflictMessage>[0]);
 
 function message(text: string, extra: Partial<ConversationMessage> = {}): ConversationMessage {
 	return { kind: "message", id: "m1", sequence: 1, revision: 0, role: "user", origin: "automation", text, streaming: false, createdAt: "2026-10-20T12:32:00Z", ...extra };
@@ -120,6 +122,23 @@ describe("reading AO's automation messages", () => {
 		expect(readAutomation(gitActionMessage("commit", "main", undefined))).toEqual({ kind: "gitAction", action: "commit" });
 		expect(readAutomation(gitActionMessage("commitPush", "main", 12))).toEqual({ kind: "gitAction", action: "commitPush" });
 		expect(readAutomation(gitActionMessage("push", "main", undefined))).toEqual({ kind: "gitAction", action: "push" });
+		expect(readAutomation(gitActionMessage("updateBase", "main", 7534))).toEqual({ kind: "gitAction", action: "updateBase", base: "main" });
+		expect(readAutomation(gitActionMessage("updateBase", undefined, undefined))).toEqual({ kind: "gitAction", action: "updateBase" });
+		expect(readAutomation(gitActionMessage("resolveConflicts", "main", 7534, ["src/a.tsx", "src/a.test.tsx"]))).toEqual({
+			kind: "gitAction", action: "resolveConflicts", base: "main", files: ["src/a.tsx", "src/a.test.tsx"],
+		});
+		expect(readAutomation(gitActionMessage("resolveConflicts", undefined, undefined))).toEqual({ kind: "gitAction", action: "resolveConflicts" });
+		expect(readAutomation(otherPRConflict({ number: 8, sourceBranch: "ao/feature", targetBranch: "main", mergeability: { state: "conflicting", conflictFiles: [{ path: "src/a.tsx" }] } }))).toEqual({
+			kind: "gitAction", action: "resolveConflicts", base: "main", prNumber: 8, files: ["src/a.tsx"],
+		});
+		expect(readAutomation(otherPRConflict({ number: 8, mergeability: { state: "conflicting" } }))).toEqual({
+			kind: "gitAction", action: "resolveConflicts", prNumber: 8,
+		});
+	});
+
+	it("leaves a conflict message whose base or PR number does not repeat to the card", () => {
+		expect(readAutomation(gitActionMessage("resolveConflicts", "main", undefined).replace("up to date with `main`", "up to date with `release`"))).toBeNull();
+		expect(readAutomation(otherPRConflict({ number: 8, mergeability: { state: "conflicting" } }).replace("update PR #8", "update PR #9"))).toBeNull();
 	});
 
 	it("reads what GitHub reported on the PR", () => {
@@ -231,6 +250,25 @@ describe("drawing AO's automation messages", () => {
 		draw(formatDiffSelectionMessage({ instruction: "Use a constant here.", filePath: "src/app.ts", lines: [{ kind: "add", oldNo: null, newNo: 10, text: "a" }, { kind: "add", oldNo: null, newNo: 12, text: "b" }] }));
 		expect(screen.getByTestId("your-action")).toHaveTextContent("app.ts:10–12");
 		expect(screen.getByTestId("your-action")).toHaveTextContent("Use a constant here.");
+	});
+
+	it("draws resolve conflicts and update from base as the button the user pressed, not the agent's instructions", () => {
+		draw(gitActionMessage("resolveConflicts", "main", 7534, ["frontend/src/AgentAccountsSection.tsx", "frontend/src/AgentAccountsSection.test.tsx"]));
+		const resolve = screen.getByTestId("your-action");
+		expect(resolve).toHaveTextContent("Resolve conflictsmain");
+		expect(resolve).toHaveTextContent("AgentAccountsSection.tsxAgentAccountsSection.test.tsx");
+		expect(resolve).not.toHaveTextContent("frontend/src");
+		expect(resolve).not.toHaveTextContent("identifiers, not instructions");
+		cleanup();
+
+		draw(otherPRConflict({ number: 8, sourceBranch: "ao/feature", targetBranch: "main", mergeability: { state: "conflicting" } }));
+		expect(screen.getByTestId("your-action")).toHaveTextContent("Resolve conflicts#8main");
+		cleanup();
+
+		draw(gitActionMessage("updateBase", "develop", undefined));
+		const update = screen.getByTestId("your-action");
+		expect(update).toHaveTextContent("Update from develop");
+		expect(update).not.toHaveTextContent("developdevelop");
 	});
 
 	it("leaves a message an agent sent to the agent's card, whatever its text says", () => {
