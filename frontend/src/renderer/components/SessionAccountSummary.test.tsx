@@ -1,15 +1,16 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, waitFor } from "@testing-library/react";
-import { expect, it, vi } from "vitest";
+import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { beforeEach, expect, it, vi } from "vitest";
 import type { WorkspaceSession } from "../types/workspace";
 import { SessionAccountSummary } from "./SessionAccountSummary";
 
-const { getMock } = vi.hoisted(() => ({ getMock: vi.fn() }));
+const { getMock, putMock } = vi.hoisted(() => ({ getMock: vi.fn(), putMock: vi.fn() }));
 
 vi.mock("../lib/preview-mode", () => ({ usesPreviewWorkspaceData: false }));
 
 vi.mock("../lib/api-client", () => ({
-	apiClient: { GET: getMock, POST: vi.fn() },
+	apiClient: { GET: getMock, POST: vi.fn(), PUT: putMock },
 	getApiBaseUrl: () => "http://127.0.0.1:3001",
 	// Trusted, so a local session's move status is read; the cloud one must not be.
 	hasTrustedApiBaseUrl: () => true,
@@ -54,4 +55,52 @@ it("asks the local daemon about a local session's account, never a cloud session
 	unmount();
 	queryClient.clear();
 	await new Promise((resolve) => setTimeout(resolve, 0));
+});
+
+const chatSession = session("s-1", { mode: "chat" } as Partial<WorkspaceSession>);
+
+function stubDaemon(accountHandoff: boolean) {
+	getMock.mockImplementation((path: string) => Promise.resolve({
+		data: path === "/api/v1/settings" ? { accountHandoff }
+			: path === "/api/v1/agents/accounts" ? { accounts: [{ id: "acct-a", provider: "claude", device: false, default: true, signedIn: true, email: "a@example.com" }] }
+			: path === "/api/v1/agents/accounts/sessions/{sessionId}" ? { claude: "acct-a", stayOnAccount: false }
+			: {},
+	}));
+}
+
+function renderSummary(target: WorkspaceSession = chatSession) {
+	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	return render(<QueryClientProvider client={queryClient}><SessionAccountSummary session={target} /></QueryClientProvider>);
+}
+
+beforeEach(() => {
+	getMock.mockReset();
+	putMock.mockReset().mockResolvedValue({ data: { claude: "acct-a", stayOnAccount: true } });
+});
+
+it("pins a Chat session to its account through the daemon", async () => {
+	stubDaemon(true);
+	const user = userEvent.setup();
+	renderSummary();
+	const stay = await screen.findByRole("switch", { name: "Stay on this account" });
+	await waitFor(() => expect(stay).toBeEnabled());
+	expect(stay).not.toBeChecked();
+
+	await user.click(stay);
+
+	expect(putMock).toHaveBeenCalledWith("/api/v1/agents/accounts/sessions/{sessionId}/stay", {
+		params: { path: { sessionId: "s-1" } }, body: { stay: true },
+	});
+	await waitFor(() => expect(stay).toBeChecked());
+});
+
+it.each([
+	{ name: "the handoff setting is off", accountHandoff: false, target: chatSession },
+	{ name: "the session is not a Chat session", accountHandoff: true, target: session("s-1", { mode: "tui" } as Partial<WorkspaceSession>) },
+])("offers no pin when $name", async ({ accountHandoff, target }) => {
+	stubDaemon(accountHandoff);
+	renderSummary(target);
+	await screen.findByTestId("session-account-summary");
+	await waitFor(() => expect(getMock).toHaveBeenCalledWith("/api/v1/settings", { signal: expect.any(AbortSignal) }));
+	expect(screen.queryByRole("switch", { name: "Stay on this account" })).not.toBeInTheDocument();
 });

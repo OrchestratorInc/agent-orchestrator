@@ -69,7 +69,6 @@ import { useUiStore } from "../../stores/ui-store";
 import { apiErrorCode, apiErrorMessage, getApiBaseUrl } from "../../lib/api-client";
 import { ComposerSuggestMenu } from "./ComposerSuggestMenu";
 import {
-	COMPOSER_SEND_INSET,
 	ComposerEditor,
 	type ComposerEditorHandle,
 	type ComposerImage,
@@ -253,9 +252,11 @@ export const ChatComposer = memo(function ChatComposer({
 	queuePlaceholder,
 	disabled,
 	disabledPlaceholder,
+	sendBlockedReason,
 	starting,
 	holdAttachments,
 	onHeldAttachmentsChange,
+	attachmentsRefusal,
 	settings,
 	addMenuItems,
 	approval,
@@ -347,6 +348,7 @@ export const ChatComposer = memo(function ChatComposer({
 	disabled?: boolean;
 	/** Explains why message entry is temporarily blocked. */
 	disabledPlaceholder?: string;
+	sendBlockedReason?: string;
 	starting?: boolean;
 	/**
 	 * Files that cannot be staged yet (no workspace to write into) stay in the
@@ -355,6 +357,12 @@ export const ChatComposer = memo(function ChatComposer({
 	 */
 	holdAttachments?: boolean;
 	onHeldAttachmentsChange?: (attachments: FileAttachmentPayload[], preparing: boolean) => void;
+	/**
+	 * Why this chat cannot take files, for a draft that brought some along
+	 * (a new task moved to a target that takes none). They stay as chips with
+	 * this reason, and nothing is sent until they are removed.
+	 */
+	attachmentsRefusal?: string;
 	/** A contextual prompt shown before an otherwise empty conversation begins. */
 	emptyPlaceholder?: string;
 	/** A proposed next message, kept out of the draft until accepted with Tab. */
@@ -831,6 +839,7 @@ export const ChatComposer = memo(function ChatComposer({
 		durableDelivery &&
 			(!busy || durableDelivery.state === "accepted") &&
 			!disabled &&
+			!sendBlockedReason &&
 			!steerPending &&
 		!savingQueuedEditPending &&
 			!submitting &&
@@ -847,6 +856,7 @@ export const ChatComposer = memo(function ChatComposer({
 		hasDraft &&
 		(savingQueuedEdit || !busy) &&
 		!disabled &&
+		!sendBlockedReason &&
 		!steerPending &&
 		!savingQueuedEditPending &&
 		!draftMutationPending &&
@@ -1526,6 +1536,7 @@ export const ChatComposer = memo(function ChatComposer({
 
 	function submit(event?: FormEvent, forceSteer?: boolean): Promise<void> {
 		event?.preventDefault();
+		if (sendBlockedReason) return Promise.resolve();
 		if (submitInFlight.current) {
 			// React cannot publish the next busy prop until after this event returns. A
 			// repeat Enter on the message being sent joins that submission instead of
@@ -1678,6 +1689,11 @@ export const ChatComposer = memo(function ChatComposer({
 			}
 		}
 		const hasAttachments = settledAttachments.length > 0 || visibleRetainedAttachments.length > 0;
+		// Files this chat cannot take stay with their reason (attachmentError);
+		// nothing new goes until they are removed. A send already under way
+		// keeps its identity and its files until its outcome is known, so its
+		// retry goes as it was and the chat settles it.
+		if (attachmentsRefusal && settledAttachments.length > 0 && !recoveringDelivery) return;
 		const canSubmitNow =
 			(body.length > 0 || hasAttachments || contextReferences.length > 0 || Boolean(recoveringDelivery)) &&
 			(!busy || savingQueuedEdit || recoveringDelivery?.state === "accepted") &&
@@ -2213,6 +2229,7 @@ export const ChatComposer = memo(function ChatComposer({
 		fileAttachments.error ??
 		draftPersistenceError ??
 		(optimisticSend ? null : deliveryRecoveryNotice) ??
+		(attachmentsRefusal && fileAttachments.attachments.length > 0 && !durableDelivery ? attachmentsRefusal : null) ??
 		sendError ??
 		(fileAttachments.attachments.some((file) => !file.data && !file.stagedPath)
 			? "chat.draft.filesUnavailable" : null) ??
@@ -2225,7 +2242,7 @@ export const ChatComposer = memo(function ChatComposer({
 			text={stripDelivery.draft.text}
 			attachmentCount={stripDelivery.draft.attachments.length}
 			sending={!unsent}
-			retryDisabled={Boolean(busy || disabled || durableDelivery || submitting || composerMutation.pending)}
+			retryDisabled={Boolean(busy || disabled || sendBlockedReason || durableDelivery || submitting || composerMutation.pending)}
 			onRetry={retryUnsent}
 			onDiscard={discardUnsent}
 		/>
@@ -2597,7 +2614,7 @@ export const ChatComposer = memo(function ChatComposer({
 						{settings}
 					</div>
 
-					<div role="group" aria-label="Send message controls" className={cn("flex h-7 shrink-0 items-center", COMPOSER_SEND_INSET)}>
+					<div role="group" aria-label="Send message controls" className="flex h-7 shrink-0 items-center">
 						{showSteerButton && canSteerDraft && (hasText || staged) ? (
 							<Button type="button" variant="ghost" size="sm" disabled={!sendActionEnabled} onClick={() => void submit(undefined, true)} aria-label="Steer into running turn">
 								Steer
@@ -2664,7 +2681,7 @@ export const ChatComposer = memo(function ChatComposer({
 									</Button>
 								</span>
 							</TooltipTrigger>
-							<TooltipContent side="bottom">{canStopTurn ? "Stop turn" : canContinueTurn ? "Continue from where it stopped" : durableDelivery ? sendActionLabel : sendHint}</TooltipContent>
+							<TooltipContent side="bottom">{canStopTurn ? "Stop turn" : canContinueTurn ? "Continue from where it stopped" : sendBlockedReason ?? (durableDelivery ? sendActionLabel : sendHint)}</TooltipContent>
 						</Tooltip>
 					</div>
 				</div>

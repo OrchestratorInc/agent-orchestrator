@@ -42,7 +42,7 @@ const footerLinkClass = "ml-auto inline-flex items-center gap-1 font-medium tran
 
 /**
  * The PR body inside the PR card: three lines of its text, a line counting
- * its images and tables (the images open in a gallery), and Read full
+ * its images (they open in a gallery), and Read full
  * description, which opens the whole body in the PR's tab (a local PR; a
  * Cloud one has no tab). It reads the body the daemon already stored, so none
  * of this calls the provider.
@@ -82,7 +82,7 @@ export function PRDescriptionPreview({ cloud, detailsFailed, pr, sessionKey }: {
 	}
 	// The full view is worth opening when the card shows only part of the body;
 	// only a local PR has a tab to open it in.
-	const hasMedia = !empty && (images.length > 0 || tables > 0);
+	const hasMedia = !empty && images.length > 0;
 	const hasMore = !cloud && Boolean(pr.url) && !empty && (overflows || images.length > 0 || tables > 0 || pr.descriptionTruncated === true);
 
 	return (
@@ -113,8 +113,6 @@ export function PRDescriptionPreview({ cloud, detailsFailed, pr, sessionKey }: {
 									{t("pr.description.images", { count: images.length })}
 								</button>
 							) : null}
-							{images.length > 0 && tables > 0 ? <span aria-hidden="true">·</span> : null}
-							{tables > 0 ? <span>{t("pr.description.tables", { count: tables })}</span> : null}
 						</p>
 					) : null}
 					{hasMore ? (

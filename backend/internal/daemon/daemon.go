@@ -59,6 +59,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/presence"
 	"github.com/aoagents/agent-orchestrator/backend/internal/preview"
 	"github.com/aoagents/agent-orchestrator/backend/internal/previewserver"
+	"github.com/aoagents/agent-orchestrator/backend/internal/providerkeys"
 	"github.com/aoagents/agent-orchestrator/backend/internal/push"
 	"github.com/aoagents/agent-orchestrator/backend/internal/runfile"
 	agentsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/agent"
@@ -142,6 +143,7 @@ var _ interface {
 	sessionmanager.TerminalInputGate
 	sessionmanager.TerminalInputObserver
 	sessionmanager.TerminalInputFencer
+	sessionmanager.TerminalInputForgetter
 } = (*terminal.Manager)(nil)
 
 // daemonShutdownContext separates worker cancellation from signal cleanup.
@@ -206,7 +208,7 @@ func Run(buildVersion string) (retErr error) {
 		lifecycle.Record("daemon_exit", fields)
 	}()
 
-	log := newLogger()
+	log, openLogFile := newDaemonLogger()
 	var browserRuntimeToken string
 	if os.Getenv(browserruntime.RuntimeTokenStdinEnv) == "1" {
 		browserRuntimeToken, err = browserruntime.ReadRuntimeToken(os.Stdin)
@@ -270,6 +272,7 @@ func Run(buildVersion string) (retErr error) {
 	if err != nil {
 		return err
 	}
+	openLogFile(cfg.DataDir)
 	defer func() { _ = dataDirLock.Release() }()
 
 	// Open the durable store and bring up the CDC substrate: DB triggers capture
@@ -287,7 +290,7 @@ func Run(buildVersion string) (retErr error) {
 	// in any project can read the ao CLI catalog from a stable absolute path.
 	// Non-fatal: the skill is an enhancement over `ao --help`, not required.
 	if err := skillassets.Install(cfg.DataDir); err != nil {
-		log.Warn("install using-ao skill", "err", err)
+		log.Warn("install AO skills", "err", err)
 	}
 	// Before any session starts: an AppImage remounts under a new path on every
 	// launch, so sessions get a link under the data dir that follows it.
@@ -694,7 +697,12 @@ func Run(buildVersion string) (retErr error) {
 	agentAccountSvc = newAgentAccounts(cfg, store, codexHome, agentDeps.CodexAccounts, log)
 	agentAccountSvc.SetLimitLog(store)
 	go agentAccountSvc.KeepReadingLimits(ctx, time.Minute)
+	// The mode-aware messenger, so a Chat original is told as a chat message.
+	sessionForkSvc := wireSessionFork(store, sessionSvc, wiredSessMgr, chatSvc, chatDrivers, agentAccountSvc, lcStack.ArtifactVersions, lifecycleMessenger, log)
 	chatSvc.SetUsageLimitAccounts(agentAccountSvc)
+	if mover, ok := wiredSessMgr.(chatsvc.AccountHandoffMover); ok {
+		chatSvc.SetAccountHandoff(settingsSvc.AccountHandoffEnabled, agentAccountSvc, mover)
+	}
 	if wired, ok := sessMgr.(interface {
 		SetAgentAccounts(ports.AgentAccountLaunchEnv)
 	}); ok {
@@ -924,7 +932,7 @@ func Run(buildVersion string) (retErr error) {
 	// behind them. They reuse the same runtime adapter (and therefore the same
 	// terminal mux) as session panes, but keep their own ids, storage, and
 	// lifetime — see internal/service/shellterm.
-	shellTermSvc := startShellTerminals(ctx, cfg, runtimeAdapter, store, projectSvc, sessionSvc, log)
+	shellTermSvc := startShellTerminals(ctx, cfg, runtimeAdapter, store, projectSvc, sessionSvc, termMgr, log)
 	var shellTrackers []shelltermsvc.TerminalTracker
 	// Agents started by hand in a shell give its tab their logo and status.
 	if rt, ok := runtimeAdapter.(shellagent.Runtime); ok {
@@ -1223,6 +1231,7 @@ func Run(buildVersion string) (retErr error) {
 	// the session's own must not replace its activity or transcript.
 	hookActivity := hookprocess.New(lcStack.LCM, store, runtimeAdapter, nil, log)
 	srv, err := httpd.NewWithDeps(cfg, log, termMgr, httpd.APIDeps{
+		SessionForks:       sessionForkSvc,
 		Awake:              awakeSvc,
 		Projects:           projectSvc,
 		ArtifactVersions:   lcStack.ArtifactVersions,
@@ -1468,6 +1477,7 @@ func Run(buildVersion string) (retErr error) {
 				if err := sessMgr.ReconcileWorkspaceCleanup(ctx); err != nil && ctx.Err() == nil {
 					log.Warn("workspace cleanup reconcile failed", "err", err)
 				}
+				reapForkSeeds(ctx, store, log)
 				if settings, err := settingsSvc.Get(ctx); err != nil {
 					log.Warn("read session retention", "err", err)
 				} else if err := sessionSvc.DeleteExpired(ctx, settings.SessionRetentionDays); err != nil && ctx.Err() == nil {
@@ -1506,6 +1516,12 @@ func Run(buildVersion string) (retErr error) {
 					defer sentryobs.RecoverBackground()
 					if err := chatSvc.ResumeUsageLimitedTurns(ctx); err != nil && ctx.Err() == nil {
 						log.Warn("usage-limit auto-resume failed", "err", err)
+					}
+				})
+				sweeps.Go(func() {
+					defer sentryobs.RecoverBackground()
+					if err := chatSvc.HandoffUsageLimitedTurns(ctx); err != nil && ctx.Err() == nil {
+						log.Warn("usage-limit account handoff failed", "err", err)
 					}
 				})
 				select {
@@ -1758,10 +1774,22 @@ func usagePipelineWatchRoots(roots usagesvc.SourceRoots) []string {
 	}
 }
 
-// newLogger returns the daemon's slog logger. It writes to stderr so supervisors
-// can capture it separately from any structured stdout protocol added later.
-func newLogger() *slog.Logger {
-	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
+// newDaemonLogger returns the daemon's slog logger. It writes to stderr so
+// supervisors can capture it separately from any structured stdout protocol
+// added later, and, from when openFile is called, to $AO_DATA_DIR/daemon.log so
+// the log outlives the process that read it. Run opens the file only after it
+// holds the data-dir lock (see deferredLogFile).
+func newDaemonLogger() (*slog.Logger, func(dataDir string)) {
+	file := &deferredLogFile{}
+	log := slog.New(slog.NewTextHandler(teeLogWriter{stderr: os.Stderr, file: file}, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	return log, func(dataDir string) {
+		rotating, err := openRotatingLogFile(filepath.Join(dataDir, daemonLogName), maxDaemonLogBytes)
+		if err != nil {
+			log.Warn("daemon log file unavailable; logging to stderr only", "error", err)
+			return
+		}
+		file.attach(rotating)
+	}
 }
 
 // dataDirTakeoverWait covers the capped shutdown stages plus one ordinary
@@ -1825,7 +1853,11 @@ func newAgentAccounts(cfg config.Config, store *sqlite.Store, codexHome string, 
 	providers := []ports.AgentAccountProviderCLI{
 		&agentaccount.Claude{
 			Binary: claudePlugin.ResolveBinary, DeviceHome: claudeHome, DeviceConfig: claudeConfig,
-			DeviceEnv: func() map[string]string { return claudePlugin.RuntimeCredentialEnv(cfg.DataDir) },
+			// The daemon exports AO's saved keys to itself; the account check
+			// must not see one Claude Code's sessions never get.
+			DeviceEnv: func(ctx context.Context) map[string]string {
+				return claudePlugin.RuntimeCredentialEnv(cfg.DataDir, providerkeys.HoldBack(ctx, nil, cfg.DataDir, "claude-code"))
+			},
 		},
 		&agentaccount.Codex{Binary: codexagent.New().ResolveBinary, Accounts: codexAccounts, DeviceHome: codexHome},
 	}
