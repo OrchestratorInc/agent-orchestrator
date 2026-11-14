@@ -173,7 +173,7 @@ const lastRemoteHealthRecheck = new Map<string, number>();
 
 function recheckRemoteHost(hostId: string, status?: number): void {
 	// 530: Cloudflare answers for a fixed address whose machine is offline.
-	if (status !== undefined && ![401, 403, 426, 502, 503, 530].includes(status)) return;
+	if (status !== undefined && ![401, 403, 426, 502, 503, 504, 530].includes(status)) return;
 	const now = Date.now();
 	const last = lastRemoteHealthRecheck.get(hostId);
 	if (last !== undefined && now >= last && now - last < 2_000) return;
