@@ -34,6 +34,10 @@ func newAccountServer(t *testing.T, final string) (*httptest.Server, *accountSer
 		`{"id":"work","provider":"claude","device":false,"email":"work@example.com","plan":"team","default":false,"signedIn":true,"loggedIn":true},` +
 		`{"id":"device-codex","provider":"codex","device":true,"default":true,"signedIn":false,"loggedIn":false}]}`
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/internal/telemetry/cli-invoked" {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 		state.log(r)
 		w.Header().Set("Content-Type", "application/json")
 		switch {
