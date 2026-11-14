@@ -1245,6 +1245,8 @@ function setupTabHost(
 			close: ReturnType<typeof vi.fn>;
 			emitConsoleMessage: (level: number, message: string, line?: number, sourceId?: string) => void;
 			executeJavaScript: ReturnType<typeof vi.fn>;
+			setBackgroundThrottling: ReturnType<typeof vi.fn>;
+			setAudible: (audible: boolean) => void;
 				session: {
 					fetch: ReturnType<typeof vi.fn>;
 					setPermissionCheckHandler: ReturnType<typeof vi.fn>;
@@ -1284,8 +1286,15 @@ function setupTabHost(
 		let windowOpenHandler: ((details: Electron.HandlerDetails) => Electron.WindowOpenHandlerResponse) | undefined;
 		const listeners = new Map<string, (...args: never[]) => void>();
 		let debuggerAttached = false;
+		let audible = false;
 		const webContents = {
 			id: nextID++,
+			setBackgroundThrottling: vi.fn(),
+			isCurrentlyAudible: () => audible,
+			setAudible: (value: boolean) => {
+				audible = value;
+				listeners.get("audio-state-changed")?.();
+			},
 			mainFrame: {},
 			canGoBack: () => false,
 			canGoForward: () => false,
@@ -6655,5 +6664,129 @@ describe("browser human pointer and annotated screenshots", () => {
 		expect(runtime.screenshot).toHaveBeenNthCalledWith(2, "sess-1", expect.anything(), undefined, { annotate: true });
 		expect(plain).toMatchObject({ width: 1, height: 1 });
 		expect(annotated).toMatchObject({ annotations: [{ number: 1, ref: "e1", role: "button", name: "Save" }] });
+	});
+});
+
+describe("hidden browser background throttling", () => {
+	const panelRect = { x: 300, y: 40, width: 480, height: 520 };
+	const hiddenRect = { x: 0, y: 0, width: 0, height: 0 };
+	const throttled = (view: { webContents: { setBackgroundThrottling: ReturnType<typeof vi.fn> } }) =>
+		view.webContents.setBackgroundThrottling.mock.calls.at(-1)?.[0] as boolean | undefined;
+
+	it("lets Chromium throttle a hidden session's pages, never while its panel is shown", async () => {
+		const { emit, invoke, views } = setupTabHost();
+		const { viewId } = (await invoke("browser:ensure", "sess-1")) as BrowserNavState;
+		await invoke("browser:openTab", { viewId });
+		expect(views).toHaveLength(2);
+		// Nobody has shown the panel yet and nothing is using it.
+		expect(views.map(throttled)).toEqual([true, true]);
+
+		emit("browser:setBounds", { viewId, revision: 101, rect: panelRect, visible: true });
+		expect(views.map(throttled)).toEqual([false, false]);
+
+		emit("browser:setBounds", { viewId, revision: 102, rect: hiddenRect, visible: false });
+		expect(views.map(throttled)).toEqual([true, true]);
+		// Unchanged state sends nothing more to Chromium.
+		const calls = views[0]!.webContents.setBackgroundThrottling.mock.calls.length;
+		emit("browser:setBounds", { viewId, revision: 103, rect: hiddenRect, visible: false });
+		expect(views[0]!.webContents.setBackgroundThrottling.mock.calls).toHaveLength(calls);
+	});
+
+	it("keeps a hidden session's pages at full speed while an agent command runs", async () => {
+		const { emit, host, invoke, runtime, views } = setupTabHost();
+		const { viewId } = (await invoke("browser:ensure", "sess-1")) as BrowserNavState;
+		emit("browser:setBounds", { viewId, revision: 101, rect: hiddenRect, visible: false });
+		expect(throttled(views[0]!)).toBe(true);
+
+		let release!: () => void;
+		const gate = new Promise<void>((resolve) => { release = resolve; });
+		let duringCommand: boolean | undefined;
+		vi.mocked(runtime.runAction).mockImplementationOnce(async () => {
+			duringCommand = throttled(views[0]!);
+			await gate;
+			return { snapshot: '- button "Open" [ref=e1]', refs: {} };
+		});
+		const command = host.execute("sess-1", "snapshot", {});
+		await vi.waitFor(() => expect(duringCommand).toBe(false));
+		release();
+		await command;
+		expect(throttled(views[0]!)).toBe(true);
+	});
+
+	it("keeps an un-awaited native command's page unthrottled until the command settles", async () => {
+		const { emit, host, invoke, runtime, views } = setupTabHost();
+		const { viewId } = (await invoke("browser:ensure", "sess-1")) as BrowserNavState;
+		emit("browser:setBounds", { viewId, revision: 101, rect: hiddenRect, visible: false });
+		let release!: () => void;
+		const gate = new Promise<void>((resolve) => { release = resolve; });
+		let started = false;
+		vi.mocked(runtime.runAction).mockImplementationOnce(async () => {
+			started = true;
+			await gate;
+			return {};
+		});
+		const command = host.execute("sess-1", "click", { ref: "e2" });
+		await vi.waitFor(() => expect(started).toBe(true));
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(throttled(views[0]!)).toBe(false);
+		release();
+		await command;
+		expect(throttled(views[0]!)).toBe(true);
+	});
+
+	it("keeps a page unthrottled for as long as network capture runs", async () => {
+		const { emit, host, invoke, views } = setupTabHost();
+		const { viewId } = (await invoke("browser:ensure", "sess-1")) as BrowserNavState;
+		await invoke("browser:navigate", { viewId, url: "http://localhost:3000/" });
+		emit("browser:setBounds", { viewId, revision: 101, rect: hiddenRect, visible: false });
+		expect(throttled(views[0]!)).toBe(true);
+		expect(await host.execute("sess-1", "network-start", { durationSeconds: 30 })).toMatchObject({ active: true });
+		expect(throttled(views[0]!)).toBe(false);
+		await host.execute("sess-1", "network-stop", {});
+		expect(throttled(views[0]!)).toBe(true);
+	});
+
+	it("throttles a hidden idle session again when its network capture expires", async () => {
+		const { emit, host, invoke, views } = setupTabHost();
+		const { viewId } = (await invoke("browser:ensure", "sess-1")) as BrowserNavState;
+		await invoke("browser:navigate", { viewId, url: "http://localhost:3000/" });
+		emit("browser:setBounds", { viewId, revision: 101, rect: hiddenRect, visible: false });
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"], shouldAdvanceTime: true });
+		try {
+			await host.execute("sess-1", "network-start", { durationSeconds: 5 });
+			expect(throttled(views[0]!)).toBe(false);
+			// No further command or bounds change: only the expiry timer runs.
+			await vi.advanceTimersByTimeAsync(5_000);
+			expect(throttled(views[0]!)).toBe(true);
+			// (Checked last: a status command would itself re-sync throttling.)
+			expect(await host.execute("sess-1", "network-status", {})).toMatchObject({ active: false });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("never throttles a tab that is playing audio", async () => {
+		const { emit, invoke, views } = setupTabHost();
+		const { viewId } = (await invoke("browser:ensure", "sess-1")) as BrowserNavState;
+		emit("browser:setBounds", { viewId, revision: 101, rect: panelRect, visible: true });
+		views[0]!.webContents.setAudible(true);
+		emit("browser:setBounds", { viewId, revision: 102, rect: hiddenRect, visible: false });
+		expect(throttled(views[0]!)).toBe(false);
+
+		views[0]!.webContents.setAudible(false);
+		expect(throttled(views[0]!)).toBe(true);
+	});
+
+	it("keeps pages unthrottled while DevTools inspects them", async () => {
+		const { emit, invoke, views } = setupTabHost();
+		const { viewId } = (await invoke("browser:ensure", "sess-1")) as BrowserNavState;
+		await invoke("browser:navigate", { viewId, url: "http://localhost:3000/" });
+		emit("browser:setBounds", { viewId, revision: 101, rect: panelRect, visible: true });
+		expect(await invoke("browser:devtools", { viewId, operation: "open" })).toMatchObject({ open: true });
+		emit("browser:setBounds", { viewId, revision: 102, rect: hiddenRect, visible: false });
+		expect(throttled(views[0]!)).toBe(false);
+
+		await invoke("browser:devtools", { viewId, operation: "close" });
+		expect(throttled(views[0]!)).toBe(true);
 	});
 });
