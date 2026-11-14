@@ -57,7 +57,7 @@ func TestWatchReleasesDescriptorsOnCancel(t *testing.T) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	changes, err := Watch(ctx, root)
+	changes, _, err := Watch(ctx, root)
 	if err != nil {
 		t.Fatalf("watch: %v", err)
 	}
@@ -163,5 +163,39 @@ func TestWatchSkippingLeavesOutATreeCreatedWhileWatching(t *testing.T) {
 	case <-changes:
 	case <-time.After(3 * time.Second):
 		t.Fatal("timed out waiting for the change outside the skipped tree")
+	}
+}
+
+func TestWatchStaysWithinTheDescriptorBudget(t *testing.T) {
+	baseline, ok := openDescriptors(t)
+	if !ok {
+		t.Skip("descriptor counting is unavailable on this platform")
+	}
+	root := t.TempDir()
+	writeGeneratedTree(t, root)
+	if directoryWatchCost(root, false) == 0 {
+		t.Skip("this platform's watcher holds no descriptor per entry")
+	}
+	previous := watchDescriptors
+	watchDescriptors = &descriptorPool{free: 200}
+	t.Cleanup(func() { watchDescriptors = previous })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	changes, partial, err := Watch(ctx, root)
+	if err != nil {
+		t.Fatalf("watch: %v", err)
+	}
+	if !partial() {
+		t.Fatal("a watch over its descriptor budget reported full coverage")
+	}
+	if count, _ := openDescriptors(t); count-baseline > 210 {
+		t.Fatalf("open descriptors grew by %d against a budget of 200", count-baseline)
+	}
+
+	cancel()
+	for range changes { //nolint:revive // drain until the watcher closes the channel
+	}
+	if watchDescriptors.free != 200 {
+		t.Fatalf("budget after cancel = %d, want all 200 returned", watchDescriptors.free)
 	}
 }

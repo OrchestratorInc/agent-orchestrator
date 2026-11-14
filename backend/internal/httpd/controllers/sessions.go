@@ -1509,6 +1509,8 @@ type branchStateReconciler interface {
 	ReconcileSessionBranchState(ctx context.Context, id domain.SessionID) error
 }
 
+const workspacePartialWatchRecheck = 30 * time.Second
+
 func (c *SessionsController) streamWorkspaceChanges(w http.ResponseWriter, r *http.Request) {
 	if c.Svc == nil {
 		apispec.NotImplemented(w, r, "GET", "/api/v1/sessions/{sessionId}/workspace/events")
@@ -1524,7 +1526,7 @@ func (c *SessionsController) streamWorkspaceChanges(w http.ResponseWriter, r *ht
 		envelope.WriteError(w, r, err)
 		return
 	}
-	changes, err := workspacewatch.Watch(r.Context(), paths...)
+	changes, partial, err := workspacewatch.Watch(r.Context(), paths...)
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
@@ -1532,10 +1534,12 @@ func (c *SessionsController) streamWorkspaceChanges(w http.ResponseWriter, r *ht
 	// The watcher cannot report edits made before it existed. Reconcile both
 	// workspace caches after the watch is installed and before telling the client
 	// it can stop fallback polling.
-	if _, err := c.Svc.ReconcileWorkspaceManifest(r.Context(), sessionID(r)); err != nil {
+	manifest, err := c.Svc.ReconcileWorkspaceManifest(r.Context(), sessionID(r))
+	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
 	}
+	version := manifest.WorkspaceVersion
 
 	h := w.Header()
 	h.Set("Content-Type", "text/event-stream; charset=utf-8")
@@ -1548,8 +1552,16 @@ func (c *SessionsController) streamWorkspaceChanges(w http.ResponseWriter, r *ht
 	}
 	flusher.Flush()
 
+	type workspaceChange struct {
+		Kind             string `json:"kind"`
+		WorkspaceVersion string `json:"workspaceVersion,omitempty"`
+		Refreshing       bool   `json:"refreshing"`
+		Overflow         bool   `json:"overflow"`
+	}
 	keepAlive := time.NewTicker(15 * time.Second)
 	defer keepAlive.Stop()
+	recheck := time.NewTicker(workspacePartialWatchRecheck)
+	defer recheck.Stop()
 	for {
 		select {
 		case <-r.Context().Done():
@@ -1559,18 +1571,14 @@ func (c *SessionsController) streamWorkspaceChanges(w http.ResponseWriter, r *ht
 				return
 			}
 			c.Svc.InvalidateWorkspaceCache(sessionID(r))
-			payload := struct {
-				Kind             string `json:"kind"`
-				WorkspaceVersion string `json:"workspaceVersion,omitempty"`
-				Refreshing       bool   `json:"refreshing"`
-				Overflow         bool   `json:"overflow"`
-			}{Kind: "dirty", Refreshing: true, Overflow: true}
+			payload := workspaceChange{Kind: "dirty", Refreshing: true, Overflow: true}
 			data, _ := json.Marshal(payload)
 			if _, err := fmt.Fprintf(w, "event: workspace_changed\ndata: %s\n\n", data); err != nil {
 				return
 			}
 			flusher.Flush()
 			if manifest, refreshErr := c.Svc.RefreshWorkspaceManifest(r.Context(), sessionID(r)); refreshErr == nil {
+				version = manifest.WorkspaceVersion
 				payload.Kind = "version"
 				payload.WorkspaceVersion = manifest.WorkspaceVersion
 				payload.Refreshing = false
@@ -1583,6 +1591,23 @@ func (c *SessionsController) streamWorkspaceChanges(w http.ResponseWriter, r *ht
 			// The same watch sees commits and pushes. Branch facts refresh after
 			// the file list so a commit never delays it, and their change
 			// streams to every client as session_updated.
+			if reconciler, ok := c.Svc.(branchStateReconciler); ok {
+				_ = reconciler.ReconcileSessionBranchState(r.Context(), sessionID(r))
+			}
+		case <-recheck.C:
+			if !partial() {
+				continue
+			}
+			manifest, err := c.Svc.ReconcileWorkspaceManifest(r.Context(), sessionID(r))
+			if err != nil || manifest.WorkspaceVersion == version {
+				continue
+			}
+			version = manifest.WorkspaceVersion
+			data, _ := json.Marshal(workspaceChange{Kind: "version", WorkspaceVersion: version, Overflow: true})
+			if _, err := fmt.Fprintf(w, "event: workspace_changed\ndata: %s\n\n", data); err != nil {
+				return
+			}
+			flusher.Flush()
 			if reconciler, ok := c.Svc.(branchStateReconciler); ok {
 				_ = reconciler.ReconcileSessionBranchState(r.Context(), sessionID(r))
 			}

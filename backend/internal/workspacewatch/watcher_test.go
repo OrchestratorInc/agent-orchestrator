@@ -33,7 +33,7 @@ func TestWatchReportsExistingAndNewDirectoryChanges(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	changes, err := Watch(ctx, root)
+	changes, _, err := Watch(ctx, root)
 	if err != nil {
 		t.Fatalf("Watch: %v", err)
 	}
@@ -60,7 +60,7 @@ func TestWatchReportsChangesAcrossWorkspaceRoots(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	changes, err := Watch(ctx, first, second)
+	changes, _, err := Watch(ctx, first, second)
 	if err != nil {
 		t.Fatalf("Watch: %v", err)
 	}
@@ -73,7 +73,7 @@ func TestWatchReportsChangesAcrossWorkspaceRoots(t *testing.T) {
 
 func TestWatchClosesWhenContextIsCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	changes, err := Watch(ctx, t.TempDir())
+	changes, _, err := Watch(ctx, t.TempDir())
 	if err != nil {
 		t.Fatalf("Watch: %v", err)
 	}
@@ -103,7 +103,7 @@ func TestWatchDoesNotTurnGitStatusIndexRefreshIntoAChange(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	changes, err := Watch(ctx, root)
+	changes, _, err := Watch(ctx, root)
 	if err != nil {
 		t.Fatalf("Watch: %v", err)
 	}
@@ -138,7 +138,7 @@ func TestWatchStillReportsChangesWhenWorkspaceIsNestedInAnotherRepository(t *tes
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	changes, err := Watch(ctx, root)
+	changes, _, err := Watch(ctx, root)
 	if err != nil {
 		t.Fatalf("Watch: %v", err)
 	}
@@ -177,7 +177,7 @@ func TestWatchReportsChangesWhenWorkspaceRootIsASymlink(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	changes, err := Watch(ctx, link)
+	changes, _, err := Watch(ctx, link)
 	if err != nil {
 		t.Fatalf("Watch: %v", err)
 	}
@@ -378,7 +378,7 @@ func TestChangeInUnwatchedDirectoryStillNotifies(t *testing.T) {
 	maxWatchedDirectories = 1
 	defer func() { maxWatchedDirectories = previous }()
 
-	changes, err := Watch(ctx, root)
+	changes, _, err := Watch(ctx, root)
 	if err != nil {
 		t.Fatalf("Watch: %v", err)
 	}

@@ -7,6 +7,7 @@ package workspacewatch
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
@@ -32,6 +33,31 @@ import (
 // SSE subscription failing.
 var maxWatchedDirectories = 4096
 
+var errDescriptorBudget = errors.New("workspace watch descriptor budget exhausted")
+
+type descriptorPool struct {
+	mu   sync.Mutex
+	free int
+}
+
+var watchDescriptors = &descriptorPool{free: watchDescriptorCapacity()}
+
+func (p *descriptorPool) take(n int) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if n > p.free {
+		return false
+	}
+	p.free -= n
+	return true
+}
+
+func (p *descriptorPool) give(n int) {
+	p.mu.Lock()
+	p.free += n
+	p.mu.Unlock()
+}
+
 // dirWatchLimiter keeps the number of concurrently registered directory
 // watches at or below maxWatchedDirectories for the lifetime of one workspace
 // stream: both the initial walk and directories created later go through add,
@@ -42,16 +68,17 @@ var maxWatchedDirectories = 4096
 // instead of one WARN per directory.
 type dirWatchLimiter struct {
 	watcher   *fsnotify.Watcher
+	pool      *descriptorPool
 	limit     int
 	mu        sync.Mutex
-	watched   map[string]struct{}
+	watched   map[string]int
 	used      int
 	skipped   int
 	lastError error
 }
 
 func newDirWatchLimiter(watcher *fsnotify.Watcher, limit int) *dirWatchLimiter {
-	return &dirWatchLimiter{watcher: watcher, limit: limit, watched: make(map[string]struct{})}
+	return &dirWatchLimiter{watcher: watcher, pool: watchDescriptors, limit: limit, watched: make(map[string]int)}
 }
 
 // add registers dir if budget remains. It returns ctx.Err() when the context
@@ -69,7 +96,15 @@ func (l *dirWatchLimiter) add(ctx context.Context, dir string) error {
 		l.skipped++
 		return nil
 	}
+	_, parentWatched := l.watched[filepath.Dir(dir)]
+	cost := directoryWatchCost(dir, parentWatched)
+	if !l.pool.take(cost) {
+		l.skipped++
+		l.lastError = errDescriptorBudget
+		return nil
+	}
 	if err := l.watcher.Add(dir); err != nil {
+		l.pool.give(cost)
 		l.skipped++
 		l.lastError = err
 		if ctx.Err() != nil {
@@ -77,7 +112,7 @@ func (l *dirWatchLimiter) add(ctx context.Context, dir string) error {
 		}
 		return nil
 	}
-	l.watched[dir] = struct{}{}
+	l.watched[dir] = cost
 	l.used++
 	return nil
 }
@@ -93,12 +128,30 @@ func (l *dirWatchLimiter) release(dir string) {
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if _, ok := l.watched[dir]; !ok {
+	cost, ok := l.watched[dir]
+	if !ok {
 		return
 	}
 	delete(l.watched, dir)
 	_ = l.watcher.Remove(dir)
+	l.pool.give(cost)
 	l.used--
+}
+
+func (l *dirWatchLimiter) releaseAll() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for dir, cost := range l.watched {
+		l.pool.give(cost)
+		delete(l.watched, dir)
+	}
+	l.used = 0
+}
+
+func (l *dirWatchLimiter) partial() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.skipped > 0
 }
 
 // warn emits at most one aggregated WARN per call describing how many
@@ -117,9 +170,9 @@ func (l *dirWatchLimiter) warn(ctx context.Context, stage string) {
 // returned channel is intentionally edge-triggered and buffered by one: a burst
 // of editor writes only needs to tell the caller that its Git read model is
 // stale, not reproduce every low-level filesystem operation.
-func Watch(ctx context.Context, roots ...string) (<-chan struct{}, error) {
+func Watch(ctx context.Context, roots ...string) (<-chan struct{}, func() bool, error) {
 	if len(roots) == 0 {
-		return nil, fmt.Errorf("at least one workspace path is required")
+		return nil, nil, fmt.Errorf("at least one workspace path is required")
 	}
 
 	unique := make(map[string]struct{}, len(roots))
@@ -127,7 +180,7 @@ func Watch(ctx context.Context, roots ...string) (<-chan struct{}, error) {
 	for _, root := range roots {
 		cleanRoot, err := filepath.Abs(root)
 		if err != nil {
-			return nil, fmt.Errorf("resolve workspace path: %w", err)
+			return nil, nil, fmt.Errorf("resolve workspace path: %w", err)
 		}
 		if _, seen := unique[cleanRoot]; seen {
 			continue
@@ -141,13 +194,15 @@ func Watch(ctx context.Context, roots ...string) (<-chan struct{}, error) {
 
 	watchCtx, cancel := context.WithCancel(ctx)
 	sources := make([]<-chan struct{}, 0, len(uniqueRoots))
+	partials := make([]func() bool, 0, len(uniqueRoots))
 	for _, cleanRoot := range uniqueRoots {
-		source, err := watchRoot(watchCtx, cleanRoot, nil)
+		source, partial, err := watchRoot(watchCtx, cleanRoot, nil)
 		if err != nil {
 			cancel()
-			return nil, err
+			return nil, nil, err
 		}
 		sources = append(sources, source)
+		partials = append(partials, partial)
 	}
 	changes := make(chan struct{}, 1)
 	var group sync.WaitGroup
@@ -168,7 +223,14 @@ func Watch(ctx context.Context, roots ...string) (<-chan struct{}, error) {
 		cancel()
 		close(changes)
 	}()
-	return changes, nil
+	return changes, func() bool {
+		for _, partial := range partials {
+			if partial() {
+				return true
+			}
+		}
+		return false
+	}, nil
 }
 
 // WatchSkipping is Watch for one root, leaving out the entries skip names:
@@ -178,25 +240,26 @@ func Watch(ctx context.Context, roots ...string) (<-chan struct{}, error) {
 // file in a watched directory and maxWatchedDirectories counts directories, so
 // a directory of generated files must be skipped, not merely ignored.
 func WatchSkipping(ctx context.Context, root string, skip func(rel string) bool) (<-chan struct{}, error) {
-	return watchRoot(ctx, root, skip)
+	changes, _, err := watchRoot(ctx, root, skip)
+	return changes, err
 }
 
-func watchRoot(ctx context.Context, root string, skip func(rel string) bool) (<-chan struct{}, error) {
+func watchRoot(ctx context.Context, root string, skip func(rel string) bool) (<-chan struct{}, func() bool, error) {
 	root, err := filepath.Abs(root)
 	if err != nil {
-		return nil, fmt.Errorf("resolve workspace path: %w", err)
+		return nil, nil, fmt.Errorf("resolve workspace path: %w", err)
 	}
 	info, err := os.Stat(root)
 	if err != nil {
-		return nil, fmt.Errorf("stat workspace path: %w", err)
+		return nil, nil, fmt.Errorf("stat workspace path: %w", err)
 	}
 	if !info.IsDir() {
-		return nil, fmt.Errorf("workspace path is not a directory")
+		return nil, nil, fmt.Errorf("workspace path is not a directory")
 	}
 
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
-		return nil, fmt.Errorf("create workspace watcher: %w", err)
+		return nil, nil, fmt.Errorf("create workspace watcher: %w", err)
 	}
 
 	git := discoverGitWorkspace(ctx, root)
@@ -204,13 +267,14 @@ func watchRoot(ctx context.Context, root string, skip func(rel string) bool) (<-
 	limiter := newDirWatchLimiter(watcher, maxWatchedDirectories)
 	if err := addInitialDirectories(ctx, limiter, root, git); err != nil {
 		_ = watcher.Close()
-		return nil, err
+		limiter.releaseAll()
+		return nil, nil, err
 	}
 	limiter.warn(ctx, "initial")
 
 	changes := make(chan struct{}, 1)
 	go run(ctx, watcher, root, git, limiter, changes)
-	return changes, nil
+	return changes, limiter.partial, nil
 }
 
 type gitWorkspace struct {
@@ -353,9 +417,6 @@ func addInitialDirectories(ctx context.Context, limiter *dirWatchLimiter, root s
 		}
 		return ordered[i] < ordered[j]
 	})
-	if len(ordered) > maxWatchedDirectories {
-		ordered = ordered[:maxWatchedDirectories]
-	}
 
 	for _, dir := range ordered {
 		if err := limiter.add(ctx, dir); err != nil {
@@ -375,6 +436,7 @@ func directoryDepth(root, dir string) int {
 
 func run(ctx context.Context, watcher *fsnotify.Watcher, root string, git gitWorkspace, limiter *dirWatchLimiter, changes chan struct{}) {
 	defer close(changes)
+	defer limiter.releaseAll()
 	defer func() { _ = watcher.Close() }()
 	defer limiter.warn(ctx, "runtime")
 	notify := func() {
