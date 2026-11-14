@@ -1436,6 +1436,61 @@ func TestHooks_EventWithoutToolIdentityOmitsIt(t *testing.T) {
 	assertActivityRequest(t, req, want)
 }
 
+func TestHooks_OpenCodeToolUseReportsIdentity(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "ao-7")
+	cfg := setConfigEnv(t)
+	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+	writeRunFileFor(t, cfg, srv)
+
+	// The plugin forwards only the correlation identity; arguments never reach
+	// the CLI, and the event name is what gates AO's flight/step tracking.
+	_, _, err := executeCLI(t, Deps{
+		In:           strings.NewReader(`{"session_id":"ses-1","tool_name":"Bash","tool_use_id":"call_1","args":{"command":"rm -rf /"}}`),
+		ProcessAlive: func(int) bool { return true },
+	}, "hooks", "opencode", "pre-tool-use")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := capturedState(t, capture); got != "active" {
+		t.Errorf("state = %q, want active", got)
+	}
+	var req setActivityAPIRequest
+	if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
+		t.Fatalf("decode body: %v\nbody=%s", err, capture.body)
+	}
+	if req.Event != "pre-tool-use" || req.ToolName != "Bash" || req.ToolUseID != "call_1" {
+		t.Fatalf("request = %+v, want pre-tool-use with Bash/call_1", req)
+	}
+}
+
+func TestHooks_OpenCodePermissionBlockedReportsBlockedToolIdentity(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "ao-7")
+	cfg := setConfigEnv(t)
+	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+	writeRunFileFor(t, cfg, srv)
+
+	// opencode 1 sends the blocked call in the ask payload. Forwarding it is what
+	// lets the lifecycle clear the block when that exact tool finishes instead of
+	// waiting for the turn boundary.
+	_, _, err := executeCLI(t, Deps{
+		In:           strings.NewReader(`{"session_id":"ses-1","tool_use_id":"call_1"}`),
+		ProcessAlive: func(int) bool { return true },
+	}, "hooks", "opencode", "permission-blocked")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := capturedState(t, capture); got != "blocked" {
+		t.Errorf("state = %q, want blocked", got)
+	}
+	var req setActivityAPIRequest
+	if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
+		t.Fatalf("decode body: %v\nbody=%s", err, capture.body)
+	}
+	if req.Event != "permission-blocked" || req.ToolUseID != "call_1" {
+		t.Fatalf("request = %+v, want permission-blocked with call_1", req)
+	}
+}
+
 func TestHooks_OpenCodeUserPromptReportsActive(t *testing.T) {
 	t.Setenv("AO_SESSION_ID", "ao-7")
 	cfg := setConfigEnv(t)

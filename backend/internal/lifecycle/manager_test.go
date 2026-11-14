@@ -997,7 +997,7 @@ func TestActivity_ExitedPreservesLiveSessionAndRejectsDelayedHooks(t *testing.T)
 	rec := working("mer-1")
 	rec.FirstSignalAt = time.Now().Add(-time.Minute)
 	st.sessions["mer-1"] = rec
-	m.flights["mer-1"] = &toolFlight{inflight: map[string]string{"tool-1": "Bash"}, blockedCandidate: "tool-1"}
+	m.flights["mer-1"] = &toolFlight{inflight: map[string]string{"tool-1": "Bash"}, blockedCandidates: map[string]struct{}{"tool-1": {}}}
 
 	if err := m.ApplyActivitySignal(ctx, "mer-1", ports.ActivitySignal{Valid: true, State: domain.ActivityExited}); err != nil {
 		t.Fatal(err)
