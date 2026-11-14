@@ -19919,6 +19919,8 @@ components:
           items:
             $ref: '#/components/schemas/DictationModel'
           type: array
+        preparing:
+          type: boolean
         progressDone:
           format: int64
           type: integer
@@ -19940,6 +19942,7 @@ components:
       - progressTotal
       - error
       - recording
+      - preparing
       type: object
     DomainActivity:
       properties:

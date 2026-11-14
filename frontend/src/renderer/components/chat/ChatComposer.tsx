@@ -573,6 +573,8 @@ export const ChatComposer = memo(function ChatComposer({
 		if (canDictate) void refreshDictationStatus();
 	}, [canDictate]);
 	const downloadingModel = canDictate && dictationInstall.model !== "" && !dictating;
+	// After the download the model still loads for a few seconds; dictating then works, its first result just waits.
+	const loadingModel = canDictate && !downloadingModel && dictationInstall.preparing && !dictating;
 	const downloadPercent = Math.round(dictationInstall.fraction * 100);
 	const filePicker = useRef<HTMLInputElement>(null);
 	const addMenuTrigger = useRef<HTMLButtonElement>(null);
@@ -2670,7 +2672,9 @@ export const ChatComposer = memo(function ChatComposer({
 													? "Finish dictation"
 													: downloadingModel
 														? `Downloading dictation model, ${downloadPercent}%. Open Dictation settings`
-														: "Dictate"
+														: loadingModel
+															? "Dictate, the model is still loading"
+															: "Dictate"
 											}
 											aria-pressed={dictating}
 											className={cn(
@@ -2684,16 +2688,16 @@ export const ChatComposer = memo(function ChatComposer({
 												<Mic aria-hidden="true" className="size-3.5" />
 											)}
 											{/* The download's progress, drawn along the button's own border. */}
-											{downloadingModel ? (
+											{downloadingModel || loadingModel ? (
 												<ProgressRing
 													className="pointer-events-none absolute inset-0 size-full text-logo-accent"
-													percent={dictationInstall.fraction * 100}
+													percent={loadingModel ? 100 : dictationInstall.fraction * 100}
 												/>
 											) : null}
 										</Button>
 									</span>
 								</TooltipTrigger>
-								<TooltipContent side="bottom">{dictation.phase === "starting" ? "Starting local dictation…" : dictation.phase === "finishing" ? "Finishing dictation…" : dictating ? "Finish dictation" : downloadingModel ? `Downloading dictation model… ${downloadPercent}%. Click for details.` : "Dictate"}</TooltipContent>
+								<TooltipContent side="bottom">{dictation.phase === "starting" ? "Starting local dictation…" : dictation.phase === "finishing" ? "Finishing dictation…" : dictating ? "Finish dictation" : downloadingModel ? `Downloading dictation model… ${downloadPercent}%. Click for details.` : loadingModel ? "Getting the model ready. You can dictate now; the first result may take a few seconds." : "Dictate"}</TooltipContent>
 							</Tooltip>
 						) : null}
 						<Tooltip>
