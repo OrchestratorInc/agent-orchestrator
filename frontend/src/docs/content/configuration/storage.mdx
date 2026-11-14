@@ -13,7 +13,7 @@ Open **Settings → Storage** to see the space by category, what can be freed, a
 | --- | --- | --- |
 | Source, uncommitted work, `.env` files and history of open sessions | Never touched | Never |
 | Dependencies and build output of quiet sessions (`node_modules`, `dist`, `build`, `.next`, `target` and similar) | Offloaded, then restored when the session resumes | 48 hours quiet with an open pull request, 2 hours with none, 30 minutes after its pull requests merge or close |
-| Worktrees of ended sessions | Removed through the normal cleanup; one with uncommitted changes is kept | 7 days after the session ends |
+| Worktrees of ended sessions | Removed through the normal cleanup; one with uncommitted changes is kept, and one holding git-ignored files that cannot be rebuilt (a `.env`, a local database) is only offered, with those files listed | 7 days after the session ends |
 | Old database backups, unused logs, unused dependency templates | Removed; the newest backup is always kept | 14, 14 and 30 days |
 | Free space inside the database | Returned to the disk | When there is enough to matter |
 | Dev-build data (`~/.ao/dev`) | Removed only if you turn it on | 7 days unused |

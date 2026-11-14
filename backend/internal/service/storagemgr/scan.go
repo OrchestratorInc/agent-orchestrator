@@ -39,6 +39,11 @@ type WorktreeUsage struct {
 	GitWorktree bool
 	// Clean reports an orphan git worktree with no uncommitted changes.
 	Clean bool
+	// KeptIgnored lists, for an ended or orphan worktree, the git-ignored
+	// files removing it would lose for good (a .env, a local database).
+	// IgnoredUnknown reports that git could not list them.
+	KeptIgnored    []string
+	IgnoredUnknown bool
 	// LastUsed is the session's last activity, or the folder's mtime for an
 	// orphan.
 	LastUsed time.Time
@@ -323,6 +328,10 @@ func (s *Service) measureWorktree(ctx context.Context, dir string, byPath map[st
 				usage.DependencyBytes += t.Bytes
 			}
 		}
+	}
+	if usage.GitWorktree && (usage.State == WorktreeEnded || usage.State == WorktreeOrphan) {
+		kept, err := keptIgnored(ctx, dir)
+		usage.KeptIgnored, usage.IgnoredUnknown = kept, err != nil
 	}
 	if usage.State == WorktreeOrphan && usage.GitWorktree {
 		if out, err := gitCommand(ctx, dir, "status", "--porcelain=v1", "--untracked-files=normal"); err == nil {

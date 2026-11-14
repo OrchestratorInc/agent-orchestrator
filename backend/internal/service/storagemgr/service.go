@@ -547,6 +547,15 @@ func (s *Service) execute(ctx context.Context, job *cleanJob, actions []PlannedA
 		}
 		switch action.Kind {
 		case domain.StorageCleanEndedWorktrees:
+			if action.Automatic {
+				// The plan came from an earlier scan; a file only the
+				// worktree holds may have appeared since.
+				kept, err := keptIgnored(ctx, action.Target)
+				if why := describeKept(kept, err != nil); why != "" {
+					s.finish(ctx, job, s.record(action, domain.StorageActionSkipped, errors.New(why)))
+					continue
+				}
+			}
 			ended = append(ended, action)
 			continue
 		case domain.StorageCleanTrash:

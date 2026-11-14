@@ -18,7 +18,7 @@ ao storage settings [flags]
 | Kind | What it frees |
 |---|---|
 | `offload` | Git-ignored dependency and build folders of quiet open sessions; restored on resume |
-| `ended_worktrees` | Worktrees of terminated sessions (never forced; dirty ones are kept) |
+| `ended_worktrees` | Worktrees of terminated sessions (never forced; dirty ones are kept; one holding git-ignored files that cannot be rebuilt, such as a `.env`, is never removed automatically and its plan reason lists them) |
 | `orphan_worktrees` | Clean git worktrees no session owns (manual only) |
 | `db_backups` | Old database backups (the newest is kept) |
 | `logs` | Log files not written for a while |
