@@ -2,10 +2,10 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "
 import { useTranslation } from "react-i18next";
 import type { components } from "../../api/schema";
 import { ConfirmDialog } from "../components/ConfirmDialog";
+import { Button } from "../components/ui/button";
 import {
 	SessionInterfaceSwitchButton,
 	SessionInterfaceSwitchDialog,
-	SessionInterfaceSwitchMenuItem,
 	SessionInterfaceTransitionNotice,
 	interfaceTransitionOffersHistoryRecovery,
 } from "../components/SessionInterfaceSwitch";
@@ -32,6 +32,7 @@ import {
 } from "../lib/chat-draft-boundary";
 import { sessionUiKey } from "../lib/hosts";
 import type { WorkspaceSession } from "../types/workspace";
+import { ComposerErrorNotice } from "../components/chat/AgentSwitchPicker";
 import { readCloudTurnSettings } from "../components/chat/CloudSessionChatSurface";
 import type { ConversationWorkState } from "../components/chat/SessionChatSurface";
 
@@ -274,6 +275,8 @@ export function useSessionInterfaceSwitch(sessionId: string, session: WorkspaceS
 	// An account move keeps the mode. It is not an arrival: the conversation or
 	// terminal on screen stays while the agent restarts under the new account.
 	const accountMoveTarget = activeTransition || settling ? interfaceSwitch.transition?.targetAccountId || undefined : undefined;
+	const accountMoveQueues = Boolean(accountMoveTarget) &&
+		["source_stopped", "target_starting", "activating", "completed"].includes(interfaceSwitch.transition?.phase ?? "");
 	const optimisticTarget = isCloud || localDrainWaiting || accountMoveTarget || interfaceTransitionNeedsRestart(interfaceSwitch.transition)
 		? undefined
 		: pendingTarget ?? (interfaceSwitch.starting
@@ -382,6 +385,10 @@ export function useSessionInterfaceSwitch(sessionId: string, session: WorkspaceS
 	}, [interfaceSwitch.transition?.phase, owner, session?.mode, switchIntent]);
 	const request = useCallback(() => {
 		interfaceSwitch.resetStartError();
+		if (session?.provider === "hermes") {
+			setDialogScope({ owner, targetMode: target });
+			return;
+		}
 		if (cloudTerminalToChat && !busy && session?.cloud) {
 			// The Cloud list can lag terminal input. Confirm the current activity
 			// before stopping a controller without asking the user first.
@@ -435,40 +442,41 @@ export function useSessionInterfaceSwitch(sessionId: string, session: WorkspaceS
 			defaultValue: "This agent can't switch a running terminal session to chat. Start a new chat session instead.",
 		})
 		: undefined;
+	// Switching a cloud session's interface is its workspace's: a guest of a
+	// shared session is always refused, so it isn't offered.
 	const showAction = Boolean(!unsupported && (isCloud
-		? cloudEnabled && sessionId
+		? cloudEnabled && sessionId && session?.cloud?.shared !== true
 		: interfaceSwitch.status || interfaceSwitch.isLoading || interfaceSwitch.statusError));
 	const disabledReason = interfaceSwitch.isLoading
 		? "Checking whether this agent can switch interfaces…"
 		: blockedReason || interfaceSwitch.status?.reason || interfaceSwitch.statusError;
-	const inlineStatus = session && showAction && (cloudDrainWaiting || (!isCloud && activeTransition)) ? <SessionInterfaceSwitchButton
+	// While a switch runs, the control is its status, with cancel on hover.
+	const showStatus = cloudDrainWaiting || (!isCloud && activeTransition);
+	const switchControl = session && showAction ? <span className="group inline-flex shrink-0"><SessionInterfaceSwitchButton
 		target={target}
-		supported
+		mayStartFresh={session.provider === "hermes"}
+		supported={showStatus || (Boolean(interfaceSwitch.status?.supported) && (isCloud || !chatLeaveLocked))}
 		disabledReason={disabledReason}
-		pending={interfaceSwitch.starting || activeTransition}
-		transition={interfaceSwitch.transition}
+		pending={interfaceSwitch.starting || activeTransition || chatLeaveLocked}
+		transition={showStatus ? interfaceSwitch.transition : undefined}
 		cancelling={interfaceSwitch.cancelling}
 		cancelError={interfaceSwitch.cancelError}
 		onClick={request}
 		onCancel={() => { void interfaceSwitch.cancel().catch(() => {}); }}
-	/> : null;
-	const menuItem = session && showAction && !activeTransition ? <SessionInterfaceSwitchMenuItem
-		target={target}
-		supported={Boolean(interfaceSwitch.status?.supported) && (isCloud || !chatLeaveLocked)}
-		disabledReason={disabledReason}
-		pending={interfaceSwitch.starting || chatLeaveLocked}
-		onClick={request}
-	/> : null;
+	/></span> : null;
+	const startError = dialogOpen || historyRecoveryNotice || restartRequiredNotice ? undefined : interfaceSwitch.startError;
+	// A local chat shows this above its message box instead.
+	const startErrorInComposer = session?.mode === "chat" && !isCloud;
 	const notice = <>
-		{interfaceSwitch.startError && !dialogOpen && !historyRecoveryNotice && !restartRequiredNotice ? <div
+		{startError && !startErrorInComposer ? <div
 			role="alert"
 			className="absolute left-1/2 top-3 z-20 flex w-[min(34rem,calc(100%-1.5rem))] -translate-x-1/2 items-start gap-3 rounded-lg border border-destructive/40 bg-popover px-3 py-2.5 text-xs shadow-md"
 		>
 			<div className="min-w-0 flex-1">
 				<p className="font-medium">{t("session.interfaceSwitchFailed")}</p>
-				<p className="mt-1 break-words text-muted-foreground">{interfaceSwitch.startError}</p>
+				<p className="mt-1 break-words text-muted-foreground">{startError}</p>
 			</div>
-			<button type="button" aria-label={t("session.dismissInterfaceSwitchError")} className="shrink-0 rounded px-1 text-muted-foreground hover:text-foreground" onClick={interfaceSwitch.resetStartError}>{t("session.dismissInterfaceSwitchNotice")}</button>
+			<Button type="button" aria-label={t("session.dismissInterfaceSwitchError")} className="px-1" onClick={interfaceSwitch.resetStartError} size="xs" variant="quiet">{t("session.dismissInterfaceSwitchNotice")}</Button>
 		</div> : null}
 		{cloudDrainUnconfirmed && !hasNotice && !interfaceSwitch.startError ? <div
 			role="alert"
@@ -478,16 +486,18 @@ export function useSessionInterfaceSwitch(sessionId: string, session: WorkspaceS
 				<p className="font-medium">{t("session.interfaceSwitchDrainUnconfirmedTitle")}</p>
 				<p className="mt-1 break-words text-muted-foreground">{t("session.interfaceSwitchDrainUnconfirmed")}</p>
 			</div>
-			<button
+			<Button
 				type="button"
 				aria-label={t("session.dismissInterfaceSwitchError")}
-				className="shrink-0 rounded px-1 text-muted-foreground hover:text-foreground"
+				className="px-1"
+				size="xs"
+				variant="quiet"
 				disabled={interfaceSwitch.acknowledgingNotice}
 				onClick={() => {
 					const transitionId = interfaceSwitch.transition?.id;
 					if (transitionId) void interfaceSwitch.acknowledgeNotice(transitionId).catch(() => {});
 				}}
-			>{t("session.dismissInterfaceSwitchNotice")}</button>
+			>{t("session.dismissInterfaceSwitchNotice")}</Button>
 		</div> : null}
 		{(!interfaceSwitch.startError || historyRecoveryNotice || restartRequiredNotice) && hasNotice ? <SessionInterfaceTransitionNotice
 			transition={interfaceSwitch.transition}
@@ -513,6 +523,7 @@ export function useSessionInterfaceSwitch(sessionId: string, session: WorkspaceS
 		<SessionInterfaceSwitchDialog
 			open={dialogOpen}
 			target={dialogScope?.targetMode ?? target}
+			mayStartFresh={session?.provider === "hermes"}
 			requireExplicitTerminalStop={cloudTerminalToChat && !(busy || dialogScope?.sourceBusy)}
 			waitingForInput={waitingForInput || dialogScope?.sourceWaitingForInput}
 			busy={interfaceSwitch.starting}
@@ -532,6 +543,7 @@ export function useSessionInterfaceSwitch(sessionId: string, session: WorkspaceS
 	</>;
 
 	return {
+		accountMoveQueues,
 		accountMoveTarget,
 		activeTransition,
 		agentInputDisabled: Boolean((interfaceSwitch.starting || activeTransition) && !cloudDrainWaiting && session?.mode === "tui"),
@@ -540,11 +552,24 @@ export function useSessionInterfaceSwitch(sessionId: string, session: WorkspaceS
 		controllerTransitioning,
 		dialogs,
 		draftBoundaries,
-		inlineStatus,
-		menuItem,
 		newWorkDisabled,
 		notice,
 		onConversationWorkChange,
+		switchControl,
+		// A switch is being requested, reconciled or running, so its control shows its progress.
+		switchPending: Boolean(switchControl && (interfaceSwitch.starting || showStatus || chatLeaveLocked)),
+		// For a menu: the same switch as a plain action, absent while one is running.
+		switchAction: session && showAction && !showStatus ? {
+			disabled: !(Boolean(interfaceSwitch.status?.supported) && (isCloud || !chatLeaveLocked)) || interfaceSwitch.starting || activeTransition || chatLeaveLocked,
+			reason: disabledReason,
+			run: request,
+		} : undefined,
+		switchErrorNotice: startErrorInComposer && startError ? <ComposerErrorNotice
+			title={t("session.interfaceSwitchFailed")}
+			message={startError}
+			dismissLabel={t("session.dismissInterfaceSwitchError")}
+			onDismiss={interfaceSwitch.resetStartError}
+		/> : undefined,
 		optimisticTarget,
 		renderedMode: optimisticTarget ?? (interfaceSwitch.transition?.phase === "failed" ? interfaceSwitch.transition.sourceMode : session?.mode),
 		target,

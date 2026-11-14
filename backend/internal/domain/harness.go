@@ -43,6 +43,7 @@ const (
 	HarnessOpenHands   AgentHarness = "openhands"
 	HarnessCommandCode AgentHarness = "command-code"
 	HarnessDockerAgent AgentHarness = "docker-agent"
+	HarnessHermes      AgentHarness = "hermes"
 	// HarnessFake is retained for existing test fixtures and historical session
 	// rows, but is not user-selectable.
 	HarnessFake AgentHarness = "fake"
@@ -57,7 +58,7 @@ var AllHarnesses = []AgentHarness{
 	HarnessCline, HarnessKimi, HarnessMuse, HarnessKiro, HarnessKilocode, HarnessVibe, HarnessPi,
 	HarnessKimchi, HarnessPrimeAgent, HarnessAutohand,
 	HarnessOMP, HarnessFX, HarnessUnreal, HarnessCodewhale, HarnessMiMoCode, HarnessDeepSeek, HarnessOpenHands,
-	HarnessCommandCode, HarnessDockerAgent, HarnessMemcode,
+	HarnessCommandCode, HarnessDockerAgent, HarnessMemcode, HarnessHermes,
 }
 
 // ChatOnly reports whether h has no terminal interface, so every session on it

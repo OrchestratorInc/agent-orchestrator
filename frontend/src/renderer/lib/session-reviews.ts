@@ -1,8 +1,8 @@
+import { apiErrorException } from "./api-error-exception";
 import { queryOptions } from "@tanstack/react-query";
 import type { components } from "../../api/schema";
 import { appI18n } from "../i18n";
 import { sortedPRs, type WorkspaceSession } from "../types/workspace";
-import { apiErrorMessage } from "./api-client";
 import { clientForSessionHost } from "./host-clients";
 import { usesPreviewWorkspaceData as usePreviewData } from "./preview-mode";
 
@@ -35,7 +35,7 @@ export function sessionReviewsQueryOptions(session: WorkspaceSession, enabled: b
 			const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/reviews", {
 				params: { path: { sessionId: session.id } },
 			});
-			if (error) throw new Error(apiErrorMessage(error, "Unable to load reviews"));
+			if (error) throw apiErrorException(error, "Unable to load reviews");
 			return data ?? ({ reviewerHandleId: "", reviews: [], runs: [], activeReviewers: [] } satisfies ReviewsResponse);
 		},
 	});

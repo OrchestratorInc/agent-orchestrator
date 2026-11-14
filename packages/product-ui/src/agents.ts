@@ -39,6 +39,7 @@ export const AGENT_OPTIONS = [
 	"command-code",
 	"docker-agent",
 	"memcode",
+	"hermes",
 ] as const;
 
 export type AgentId = (typeof AGENT_OPTIONS)[number];
@@ -88,6 +89,7 @@ export const AGENT_LABELS: Record<AgentId, string> = {
 	"command-code": "Command Code",
 	"docker-agent": "Docker Agent",
 	memcode: "memcode",
+	"hermes": "Hermes Agent",
 };
 
 export const AGENT_IDENTITIES: ReadonlyMap<AgentId, AgentIdentity> = new Map(

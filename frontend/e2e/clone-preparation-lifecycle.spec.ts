@@ -1,13 +1,14 @@
 import { expect, test } from "@playwright/test";
 import type { AoBridge } from "../src/preload";
 import { agentReadiness } from "../src/renderer/test/agent-readiness-fixtures";
+import { cloneStream } from "./support/clone-stream";
 import { installFakeAgent } from "./support/fake-bridge";
 
 for (const destinationMode of ["picker", "typed"] as const) {
-	test(`renderer: clone cancel and retry use the matching preparation ID with ${destinationMode} destination @T0`, async ({ page }) => {
+	test(`renderer: leaving clone setup preserves its checkout for reuse with ${destinationMode} destination @T0`, async ({ page }) => {
 		await installFakeAgent(page);
 		let preparation = 0;
-		const cleanupRequests: Array<{ path: string; preparationId: string }> = [];
+		const cleanupRequests: Array<{ path: string; preparationId: string; keepCheckout: boolean }> = [];
 		let addRequest: Record<string, unknown> | null = null;
 
 		await page.route("http://127.0.0.1:8080/api/v1/**", async (route) => {
@@ -16,15 +17,22 @@ for (const destinationMode of ["picker", "typed"] as const) {
 				await route.fulfill({ json: { agents: [agentReadiness("codex", "Codex")] } });
 				return;
 			}
-			if (pathname === "/api/v1/projects/clone/prepare") {
+			if (pathname === "/api/v1/projects/clone/check") {
+				await route.fulfill({ json: {
+					remoteUrl: "https://example.com/example.git", path: "/repos/example",
+					exists: preparation > 0, canUseExisting: preparation > 0,
+				} });
+				return;
+			}
+			if (pathname === "/api/v1/projects/clone/prepare/stream") {
 				expect(route.request().postDataJSON()).toEqual({
 					remoteUrl: "https://example.com/example.git", destinationParent: "/repos",
 				});
 				preparation += 1;
-				await route.fulfill({ json: {
+				await route.fulfill(cloneStream({ result: {
 					path: "/repos/example", remoteUrl: "https://example.com/example.git",
 					preparationId: `prep-${preparation}`,
-				} });
+				} }));
 				return;
 			}
 			if (pathname === "/api/v1/projects/clone/cleanup") {
@@ -79,17 +87,18 @@ for (const destinationMode of ["picker", "typed"] as const) {
 
 		await openClone();
 		await page.getByRole("button", { name: "Back to clone details" }).click();
-		await expect.poll(() => cleanupRequests).toEqual([{ path: "/repos/example", preparationId: "prep-1" }]);
+		await expect.poll(() => cleanupRequests).toEqual([{ path: "/repos/example", preparationId: "prep-1", keepCheckout: true }]);
 
 		await page.getByRole("textbox", { name: "Repository URL" }).fill("https://example.com/example.git");
 		await selectDestination();
-		await page.getByRole("button", { name: "Continue", exact: true }).click();
-		await page.getByRole("button", { name: "Clone", exact: true }).click();
+		await page.getByRole("button", { name: "Use existing checkout", exact: true }).click();
+		await page.getByRole("button", { name: "Create and start", exact: true }).click();
 
 		await expect.poll(() => addRequest).toMatchObject({
 			path: "/repos/example",
-			clonePreparationId: "prep-2",
 		});
-		expect(cleanupRequests).toEqual([{ path: "/repos/example", preparationId: "prep-1" }]);
+		expect(addRequest).not.toHaveProperty("clonePreparationId");
+		expect(preparation).toBe(1);
+		expect(cleanupRequests).toEqual([{ path: "/repos/example", preparationId: "prep-1", keepCheckout: true }]);
 	});
 }

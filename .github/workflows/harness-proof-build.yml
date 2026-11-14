@@ -1,7 +1,5 @@
-name: Harness proof build
+name: Harness artifact build
 
-# Manual only: builds a source-pinned daemon for isolated harness proofs, so
-# ordinary backend PRs do not pay for it.
 on:
   workflow_dispatch:
 
@@ -9,7 +7,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: harness-proof-build-${{ github.ref }}
+  group: harness-artifact-build-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -39,7 +37,7 @@ jobs:
           sha256sum ao > SHA256SUMS
       - uses: actions/upload-artifact@v4
         with:
-          name: harness-proof-linux-${{ github.sha }}
+          name: harness-artifact-linux-${{ github.sha }}
           path: harness-proof/
           retention-days: 7
           if-no-files-found: error

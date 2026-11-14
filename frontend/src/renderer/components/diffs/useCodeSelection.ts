@@ -1,21 +1,45 @@
+import { normalizeCodeRowText } from "../../../shared/file-annotations";
 import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 import type { FileCodeReference } from "../../../shared/file-annotations";
 import type { SelectedLineRange } from "@pierre/diffs";
 import type { DiffRow } from "../../lib/diff-parser";
+import { selectionRangesEqual } from "../../lib/selection-toolbar";
 
 /** Code highlighted with the mouse, read back as the rows it covers. */
 export type CodeSelection = {
 	/** The Pierre surface (one per file) the selection is in. */
 	host: HTMLElement;
 	/** Every selected row, top to bottom, in diff-row form. */
-	rows: DiffRow[];
+	rows: Array<DiffRow & { side?: "old" | "new" }>;
 	/** The selection as a Pierre range, for surfaces that resolve their own rows. */
 	range: SelectedLineRange;
 	/** Just past the end of the selected text on its last line, for the Ask button. */
 	point: { x: number; y: number };
 	/** True while the mouse button is still down: the selection is still being made. */
 	dragging: boolean;
+	/** Retained geometry only; scrolling never rebuilds captured rows. */
+	textRange?: Range;
+	viewport?: Element;
+	toolbarHeader?: Element;
+	/** Where the selection's ends sit, so a row rebuild can put it back. */
+	snapshot: SelectionSnapshot;
 };
+
+/**
+ * One end of a selection: the row it sits on (by index in its column), how
+ * many characters of that row's text are behind it, and the row text and
+ * column row count a rebuild must still match for the end to resolve there.
+ */
+export type SelectionEnd = { column: Element; row: Element; rowIndex: number; offset: number; text: string; rowCount: number };
+
+/**
+ * Both ends of a selection, in row-relative coordinates a rebuild can resolve,
+ * plus the content and identity of every row between them. Matching text
+ * alone cannot distinguish repeated code at a different line or diff side.
+ */
+export type SelectionSnapshot = { anchor: SelectionEnd; focus: SelectionEnd; rows: SelectionRow[] };
+
+type SelectionRow = { text: string; line: string | null; altLine: string | null; type: string | null; side: "deletions" | "additions" };
 
 type ShadowRootWithSelection = ShadowRoot & { getSelection?: () => Selection | null };
 
@@ -34,7 +58,7 @@ function inDeletionsColumn(element: Element): boolean {
 function diffRow(element: Element): DiffRow {
 	const line = Number(element.getAttribute("data-line"));
 	const type = element.getAttribute("data-line-type") ?? "";
-	const text = element.textContent ?? "";
+	const text = normalizeCodeRowText(element.textContent ?? "");
 	if (type === "change-addition") return { kind: "add", oldNo: null, newNo: line, text };
 	if (type === "change-deletion") return { kind: "del", oldNo: line, newNo: null, text };
 	// Context rows carry their column's number, and the other side's as data-alt-line.
@@ -47,6 +71,16 @@ function diffRow(element: Element): DiffRow {
 
 function rowSide(element: Element): "deletions" | "additions" {
 	return element.getAttribute("data-line-type") === "change-deletion" || inDeletionsColumn(element) ? "deletions" : "additions";
+}
+
+function snapshotRow(element: Element): SelectionRow {
+	return {
+		text: normalizeCodeRowText(element.textContent ?? ""),
+		line: element.getAttribute("data-line"),
+		altLine: element.getAttribute("data-alt-line"),
+		type: element.getAttribute("data-line-type"),
+		side: rowSide(element),
+	};
 }
 
 // The selection as a range between its anchor and focus, in document order.
@@ -65,6 +99,88 @@ function selectionRange(selection: Selection): Range | null {
 	return range;
 }
 
+// Character offset of node:offset within its row's text, across the token
+// spans syntax highlighting splits a line into.
+function textOffsetIn(row: Element, node: Node, offset: number): number {
+	// Element offsets count children, not characters. A Range also handles
+	// those boundaries when syntax highlighting splits the text into spans.
+	const preceding = document.createRange();
+	preceding.setStart(row, 0);
+	preceding.setEnd(node, offset);
+	return preceding.toString().length;
+}
+
+// The inverse: the text node carrying the offset-th character of a row. A line
+// whose text changed under the selection clamps to its end.
+function locateText(row: Element, offset: number): { node: Text; offset: number } | null {
+	const walker = document.createTreeWalker(row, NodeFilter.SHOW_TEXT);
+	let last: Text | null = null;
+	let remaining = offset;
+	for (let current = walker.nextNode(); current; current = walker.nextNode()) {
+		const text = current as Text;
+		if (remaining <= text.length) return { node: text, offset: remaining };
+		remaining -= text.length;
+		last = text;
+	}
+	return last ? { node: last, offset: last.length } : null;
+}
+
+function selectionEnd(node: Node, offset: number): SelectionEnd | null {
+	const row = rowElement(node);
+	const column = row?.parentElement;
+	if (!row || !column) return null;
+	const rows = [...column.children].filter((child): child is Element => child instanceof Element && child.matches(ROW_SELECTOR));
+	return { column, row, rowIndex: rows.indexOf(row), offset: textOffsetIn(row, node, offset), text: normalizeCodeRowText(row.textContent ?? ""), rowCount: rows.length };
+}
+
+/**
+ * Puts a selection back after the viewer rebuilt its rows (a loaded highlighter
+ * re-tokenizing, a workspace snapshot refreshing), which drops the browser's
+ * selection and with it the drag or shift+click anchor. Only a rebuild
+ * restores: ends whose rows are still connected mean the selection was cleared
+ * on purpose (Escape, a click elsewhere) and must stay cleared.
+ *
+ * A rebuild is only trusted while the column still has the captured rows: row
+ * counts, identity and text of every row in the captured span must match, so a
+ * refresh that inserted, removed, or changed rows refuses to resolve the
+ * snapshot onto other code and the selection stays cleared instead.
+ */
+export function restoreCodeSelection(host: HTMLElement, snapshot: SelectionSnapshot): boolean {
+	if (snapshot.anchor.row.isConnected || snapshot.focus.row.isConnected) return false;
+	// Both ends were captured in one column (readCodeSelection keeps the drag
+	// to the column it started in); anything else cannot be validated as a span.
+	if (snapshot.anchor.column !== snapshot.focus.column) return false;
+	const root = host.shadowRoot as ShadowRootWithSelection | null;
+	if (!root) return false;
+	const place = (end: SelectionEnd) => {
+		if (!end.column.isConnected) return null;
+		const rows = [...end.column.children].filter((child): child is Element => child instanceof Element && child.matches(ROW_SELECTOR));
+		if (rows.length !== end.rowCount) return null;
+		const row = rows[end.rowIndex];
+		if (!row || normalizeCodeRowText(row.textContent ?? "") !== end.text) return null;
+		return locateText(row, end.offset);
+	};
+	const anchor = place(snapshot.anchor);
+	const focus = place(snapshot.focus);
+	if (!anchor || !focus) return false;
+	// The endpoints matching is not enough: a refresh can rewrite a row between
+	// them, leaving the ends on the captured code and the span on other code.
+	const rows = [...snapshot.anchor.column.children].filter((child): child is Element => child instanceof Element && child.matches(ROW_SELECTOR));
+	const first = Math.min(snapshot.anchor.rowIndex, snapshot.focus.rowIndex);
+	const last = Math.max(snapshot.anchor.rowIndex, snapshot.focus.rowIndex);
+	if (last - first + 1 !== snapshot.rows.length) return false;
+	for (let index = first; index <= last; index++) {
+		const row = rows[index];
+		if (!row) return false;
+		const next = snapshotRow(row);
+		const captured = snapshot.rows[index - first];
+		if (next.text !== captured.text || next.line !== captured.line || next.altLine !== captured.altLine
+			|| next.type !== captured.type || next.side !== captured.side) return false;
+	}
+	root.getSelection?.()?.setBaseAndExtent(anchor.node, anchor.offset, focus.node, focus.offset);
+	return true;
+}
+
 /** The highlighted lines as a chat reference: old-side diff lines keep old numbers. */
 export function codeReference(path: string, selection: CodeSelection, diff: boolean): FileCodeReference {
 	return {
@@ -72,8 +188,16 @@ export function codeReference(path: string, selection: CodeSelection, diff: bool
 		side: diff ? (selection.range.side === "deletions" ? "old" : "new") : "file",
 		line: selection.range.start,
 		endLine: selection.range.end,
-		lines: selection.rows.map(({ kind, oldNo, newNo, text }) => ({ kind: kind as "context" | "add" | "del", oldNo, newNo, text })),
+		endSide: diff ? (selection.range.endSide === "deletions" ? "old" : "new") : "file",
+		lines: selection.rows.map(({ kind, oldNo, newNo, text, side }) => ({ kind: kind as "context" | "add" | "del", oldNo, newNo, text, side: diff ? side : "file" })),
 	};
+}
+
+/** Read native shadow selection without traversing or copying code rows. */
+export function codeSelectionRange(host: HTMLElement): Range | null {
+	const selection = (host.shadowRoot as ShadowRootWithSelection | null)?.getSelection?.();
+	const range = selection ? selectionRange(selection) : null;
+	return range && !range.collapsed && host.shadowRoot?.contains(range.startContainer) && host.shadowRoot.contains(range.endContainer) ? range : null;
 }
 
 /** Reads the rows a selection covers inside one Pierre surface, or null. */
@@ -94,6 +218,9 @@ export function readCodeSelection(host: HTMLElement, dragging = false): CodeSele
 	const to = candidates.indexOf(focus);
 	if (from < 0 || to < 0) return null;
 	const elements = candidates.slice(Math.min(from, to), Math.max(from, to) + 1);
+	// Restoration needs both native endpoints, including a final row whose
+	// start bounds the selection but whose code is not part of the attachment.
+	const snapshotRows = elements.map(snapshotRow);
 	// A drag that ends at the very start of a line selects none of it, as in an
 	// editor: leave that line out.
 	const end = elements[elements.length - 1];
@@ -109,12 +236,22 @@ export function readCodeSelection(host: HTMLElement, dragging = false): CodeSele
 	const lastBox = last.getBoundingClientRect();
 	const onLastLine = [...range.getClientRects()].filter((rect) => rect.width > 0 && rect.bottom > lastBox.top + 1 && rect.top < lastBox.bottom - 1);
 	const edge = onLastLine.length ? Math.max(...onLastLine.map((rect) => rect.right)) : lastBox.left;
+	const viewport = scrollParent(host);
 	return {
 		host,
-		rows: elements.map(diffRow),
+		rows: elements.map(element => ({ ...diffRow(element), side: rowSide(element) === "deletions" ? "old" : "new" })),
 		range: { start: Number(first.getAttribute("data-line")), side: rowSide(first), end: Number(last.getAttribute("data-line")), endSide: rowSide(last) },
 		point: { x: edge, y: lastBox.top + lastBox.height / 2 },
 		dragging,
+		textRange: range,
+		viewport,
+		toolbarHeader: host.querySelector("[data-selection-toolbar-header]") ?? host.closest("[data-selection-toolbar-scope]")?.querySelector("[data-selection-toolbar-header]") ?? undefined,
+		snapshot: {
+			// The anchor/focus rows were validated above, so their ends resolve.
+			anchor: selectionEnd(selection.anchorNode!, selection.anchorOffset)!,
+			focus: selectionEnd(selection.focusNode!, selection.focusOffset)!,
+			rows: snapshotRows,
+		},
 	};
 }
 
@@ -125,11 +262,22 @@ function scrollParent(element: Element): Element {
 	return document.documentElement;
 }
 
+// One selection can sit at two DOM ranges across a rebuild: the restored
+// native selection lands on the replacement rows while the captured object
+// still holds the Range from the removed rows. The store must swap to the
+// fresh object so the toolbar's live-range check and geometry see the new
+// nodes, even though line numbers and geometry are unchanged.
+function sameRange(a?: Range, b?: Range): boolean {
+	if (!a || !b) return a === b;
+	return a.startContainer === b.startContainer && a.startOffset === b.startOffset
+		&& a.endContainer === b.endContainer && a.endOffset === b.endOffset;
+}
+
 function sameSelection(a: CodeSelection | null, b: CodeSelection | null): boolean {
 	if (!a || !b) return a === b;
 	return a.host === b.host && a.range.start === b.range.start && a.range.end === b.range.end && a.range.side === b.range.side
 		&& a.range.endSide === b.range.endSide && Math.round(a.point.x) === Math.round(b.point.x) && Math.round(a.point.y) === Math.round(b.point.y)
-		&& a.dragging === b.dragging;
+		&& a.dragging === b.dragging && sameRange(a.textRange, b.textRange);
 }
 
 /** What the Ask button needs from a code selection; useCodeSelection provides it. */
@@ -149,7 +297,7 @@ export type CodeSelectionSource = {
  * re-rendering the surface would redraw Pierre's rows and drop the very
  * selection it shows.
  */
-export function useCodeSelection(containerRef: RefObject<HTMLElement | null>, onAsk: (selection: CodeSelection) => void, enabled = true) {
+export function useCodeSelection(containerRef: RefObject<HTMLElement | null>, onAsk: (selection: CodeSelection) => boolean | void, enabled = true) {
 	const [store] = useState(createSelectionStore);
 	const selectionRef = useRef<CodeSelection | null>(null);
 	const onAskRef = useRef(onAsk);
@@ -159,10 +307,25 @@ export function useCodeSelection(containerRef: RefObject<HTMLElement | null>, on
 	const ask = useCallback((): boolean => {
 		const current = selectionRef.current;
 		if (!current) return false;
-		onAskRef.current(current);
+		if (current.textRange && (!current.host.isConnected || !current.textRange.startContainer.isConnected || !current.textRange.endContainer.isConnected)) return false;
+		if (current.textRange) {
+			const liveSelection = (current.host.shadowRoot as ShadowRootWithSelection | null)?.getSelection?.();
+			const liveRange = liveSelection ? selectionRange(liveSelection) : null;
+			const toolbarFocused = document.activeElement?.closest("[data-selection-ask]");
+			if (!selectionRangesEqual(liveRange ?? undefined, current.textRange) && !(toolbarFocused && (!liveRange || liveRange.collapsed))) return false;
+		}
+		if (onAskRef.current(current) === false) return false;
 		clearSelection(current.host);
+		selectionRef.current = null;
+		store.set(null);
 		return true;
-	}, []);
+	}, [store]);
+	const dismiss = useCallback(() => {
+		const current = selectionRef.current;
+		if (current) clearSelection(current.host);
+		selectionRef.current = null;
+		store.set(null);
+	}, [store]);
 	useEffect(() => {
 		const publish = (next: CodeSelection | null) => {
 			selectionRef.current = next;
@@ -179,70 +342,68 @@ export function useCodeSelection(containerRef: RefObject<HTMLElement | null>, on
 		// The button follows the selection while it is being dragged out, and
 		// becomes clickable once the mouse button is released.
 		let pressed = false;
+		// One restore attempt per snapshot: if the engine refuses to apply it,
+		// retrying every frame would spin; the next real selection resets it.
+		let restoredFor: SelectionSnapshot | null = null;
 		const redraws = new MutationObserver(() => schedule());
 		const update = () => {
 			frame = null;
+			// Dismissal and successful attachment clear this ref immediately, even
+			// if the viewer replaces its rows before the next selectionchange frame.
+			const current = selectionRef.current;
 			let next: CodeSelection | null = null;
 			for (const host of hosts()) {
 				next = readCodeSelection(host, pressed);
 				if (next) break;
 			}
 			// A redraw that replaces the selected rows does not always announce a
-			// selection change, so watch the surfaces' rows while one is shown.
+			// selection change, so watch the surfaces' rows while one is shown or
+			// held by a selection that a rebuild is about to drop.
 			redraws.disconnect();
-			if (next) for (const host of hosts()) if (host.shadowRoot) redraws.observe(host.shadowRoot, { childList: true, subtree: true });
-			// Off screen (scrolled away), the button hides; the selection stays.
-			if (next) {
-				const view = scrollParent(next.host).getBoundingClientRect();
-				if (next.point.y < Math.max(view.top, 0) || next.point.y > Math.min(view.bottom, window.innerHeight)) next = null;
+			if (next || current) for (const host of hosts()) if (host.shadowRoot) redraws.observe(host.shadowRoot, { childList: true, subtree: true });
+			// A rebuild that replaced the selected rows drops the browser's
+			// selection (and the drag or shift+click anchor with it); put it
+			// back and read it again next frame.
+			if (!next && current && restoredFor !== current.snapshot && restoreCodeSelection(current.host, current.snapshot)) {
+				restoredFor = current.snapshot;
+				schedule();
+				return;
 			}
+			restoredFor = null;
 			publish(next);
 		};
 		const schedule = () => {
 			if (frame === null) frame = requestAnimationFrame(update);
 		};
 		const onPointerDown = (event: PointerEvent) => {
-			if (event.button === 0) pressed = true;
+			if (event.button !== 0) return;
+			pressed = true;
+			const current = selectionRef.current;
+			// Clicking away ends retention before a same-frame redraw can detach
+			// the old rows. The portal toolbar still needs the captured selection.
+			if (current && !event.composedPath().includes(current.host)
+				&& !(event.target instanceof Element && event.target.closest("[data-selection-ask]"))) dismiss();
 		};
 		const onPointerUp = () => {
 			pressed = false;
 			schedule();
 		};
-		const onKeyDown = (event: KeyboardEvent) => {
-			const current = selectionRef.current;
-			if (!current) return;
-			if (event.key === "Escape") {
-				clearSelection(current.host);
-				return;
-			}
-			// Cmd/Ctrl+L adds the selection to chat, as in Cursor.
-			if ((event.metaKey || event.ctrlKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "l" && ask()) {
-				event.preventDefault();
-				event.stopPropagation();
-			}
-		};
 		document.addEventListener("selectionchange", schedule);
 		document.addEventListener("pointerdown", onPointerDown, true);
 		document.addEventListener("pointerup", onPointerUp, true);
 		document.addEventListener("pointercancel", onPointerUp, true);
-		document.addEventListener("scroll", schedule, true);
-		document.addEventListener("keydown", onKeyDown, true);
-		window.addEventListener("resize", schedule);
 		schedule();
 		return () => {
 			document.removeEventListener("selectionchange", schedule);
 			document.removeEventListener("pointerdown", onPointerDown, true);
 			document.removeEventListener("pointerup", onPointerUp, true);
 			document.removeEventListener("pointercancel", onPointerUp, true);
-			document.removeEventListener("scroll", schedule, true);
-			document.removeEventListener("keydown", onKeyDown, true);
-			window.removeEventListener("resize", schedule);
 			if (frame !== null) cancelAnimationFrame(frame);
 			redraws.disconnect();
 			publish(null);
 		};
-	}, [ask, containerRef, enabled, store]);
-	return { source: store, ask };
+	}, [ask, dismiss, containerRef, enabled, store]);
+	return { source: store, ask, dismiss };
 }
 
 function clearSelection(host: HTMLElement) {

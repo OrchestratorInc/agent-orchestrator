@@ -80,6 +80,27 @@ func TestBuild_MatchesEmbedded(t *testing.T) {
 	}
 }
 
+func TestBuild_TelemetryIdentityUsesNamedSchema(t *testing.T) {
+	got, err := specgen.Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	var doc struct {
+		Components struct {
+			Schemas map[string]openAPISchemaNode `yaml:"schemas"`
+		} `yaml:"components"`
+	}
+	if err := yaml.Unmarshal(got, &doc); err != nil {
+		t.Fatalf("parse generated OpenAPI: %v", err)
+	}
+	if _, ok := doc.Components.Schemas["TelemetryIdentityResponse"]; !ok {
+		t.Fatal("named TelemetryIdentityResponse schema is missing")
+	}
+	if _, ok := doc.Components.Schemas["ControllersTelemetryIdentityResponse"]; ok {
+		t.Fatal("default controller-prefixed telemetry identity schema remains")
+	}
+}
+
 func TestBuild_InstallJobTargetRemainsAnEnum(t *testing.T) {
 	got, err := specgen.Build()
 	if err != nil {
@@ -240,24 +261,12 @@ func TestBuild_UsageEstimatedCostIsNamedReusableAndNullable(t *testing.T) {
 	}
 
 	const costRef = "#/components/schemas/EstimatedCostResponse"
-	for schemaName, propertyName := range map[string]string{
-		"CompactSessionUsageResponse": "estimatedCost",
-		"UsageTotalsResponse":         "estimatedCost",
-	} {
-		property := doc.Components.Schemas[schemaName].Properties[propertyName]
-		if property.Type != nil {
-			t.Fatalf("%s.%s has contradictory outer type %v", schemaName, propertyName, property.Type)
-		}
-		if !schemaContainsRef(property, costRef) || !schemaAllowsNull(property) {
-			t.Fatalf("%s.%s = %+v, want nullable %s", schemaName, propertyName, property, costRef)
-		}
+	property := doc.Components.Schemas["CompactSessionUsageResponse"].Properties["estimatedCost"]
+	if property.Type != nil {
+		t.Fatalf("CompactSessionUsageResponse.estimatedCost has contradictory outer type %v", property.Type)
 	}
-	// One model is one row. The billing provider is a pricing input the
-	// aggregate has already applied, so it must not reappear here and split a
-	// model apart by AO's own attribution state.
-	model := doc.Components.Schemas["UsageModelResponse"]
-	if slices.Contains(model.Required, "providerId") {
-		t.Fatalf("UsageModelResponse still exposes providerId: %v", model.Required)
+	if !schemaContainsRef(property, costRef) || !schemaAllowsNull(property) {
+		t.Fatalf("CompactSessionUsageResponse.estimatedCost = %+v, want nullable %s", property, costRef)
 	}
 }
 

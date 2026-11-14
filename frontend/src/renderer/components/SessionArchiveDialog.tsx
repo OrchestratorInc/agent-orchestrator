@@ -12,7 +12,11 @@ export type SessionArchiveChoice = { deleteArtifacts: boolean };
 // delete prompt. Callers keep driving `open` themselves: the trigger is rendered
 // as-is so repeated taps re-open the confirm instead of toggling it shut.
 //
-// A local session with artifact files also offers an unchecked "Delete N
+// Put a tooltip inside `trigger`, never around this component: a portal stays a
+// React child, so the confirm's focus would open the tooltip above it, and the
+// tooltip would take Escape.
+//
+// A session with artifact files also offers an unchecked "Delete N
 // artifacts" box. Checking it turns Confirm destructive, since the delete
 // cannot be undone and a restored session comes back without the files.
 export function SessionArchiveDialog({
@@ -26,7 +30,8 @@ export function SessionArchiveDialog({
 	onOpenChange: (open: boolean) => void;
 	open: boolean;
 	session?: WorkspaceSession;
-	trigger: ReactElement;
+	/** Omitted when a shortcut, not a visible control, opens the confirm. */
+	trigger?: ReactElement;
 }) {
 	const { t } = useTranslation();
 	const checkboxId = useId();
@@ -39,7 +44,7 @@ export function SessionArchiveDialog({
 	// conversation and work so it can be re-provisioned later.
 	const isCloud = session?.cloud !== undefined;
 	const body = isCloud ? t("archive.bodyCloud") : t("archive.body");
-	const artifactCount = session && !isCloud ? sessionArtifacts(session).length : 0;
+	const artifactCount = session ? sessionArtifacts(session).length : 0;
 	const deleting = artifactCount > 0 && deleteArtifacts;
 	return (
 		<>

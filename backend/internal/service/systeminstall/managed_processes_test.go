@@ -140,6 +140,27 @@ func TestWindowsManagedProcessReferencesKeepOpaqueScriptRuntimes(t *testing.T) {
 	}
 }
 
+func TestWindowsManagedProcessReferencesKeepOpaqueNativeChildren(t *testing.T) {
+	s := newTestService("windows")
+	s.managedRoot = t.TempDir()
+	record := managedRecord{CLI: "copilot", Method: "npm"}
+	for _, tt := range []struct {
+		process string
+		want    bool
+	}{
+		{"copilot-win32-x64.exe", true},
+		{"copilot.exe", true},
+		{"codex.exe", false},
+	} {
+		t.Run(tt.process, func(t *testing.T) {
+			snapshot := managedProcessSnapshot{opaque: []string{tt.process}}
+			if got := s.managedReleaseHasProcess(snapshot, TargetCopilot, record, "v1"); got != tt.want {
+				t.Fatalf("referenced=%v want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestManagedCleanupRetainsRealDetachedProcess(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX process fixture")

@@ -1,0 +1,144 @@
+---
+title: Move from Conductor
+description: Bring Conductor repositories, settings, chats, and Cloud work to Orchestrator.
+---
+
+Conductor Cloud goes read-only on Friday, 13 November 2026, and Conductor starts deleting Cloud data on Friday, 20 November. The local Conductor app keeps working until early 2027, and its files stay on your Mac. This guide moves both to Orchestrator. Orchestrator only reads Conductor's files; it never changes them.
+
+## Save your Conductor Cloud work before 13 November
+
+Do these steps in Conductor. Orchestrator cannot read Conductor Cloud, so anything you do not move out is deleted on 20 November.
+
+<Steps>
+<Step>
+
+### Push every branch
+
+Push each branch you want to keep, including unfinished work. In the workspace terminal:
+
+```sh
+git add -A && git commit -m "WIP: move from Conductor" && git push -u origin HEAD
+```
+
+Git does not push ignored files such as `.env`. Copy those separately.
+
+</Step>
+<Step>
+
+### Transfer the workspaces you want to continue
+
+Right-click each Cloud workspace and choose **Transfer to local**. Conductor moves the workspace and its chats to your Mac, and Orchestrator can then import those chats.
+
+</Step>
+<Step>
+
+### Export your account
+
+Choose **Settings → Account → Export data** and keep the archive.
+
+</Step>
+<Step>
+
+### Write down your Cloud settings
+
+Copy your Cloud Computer install script, Cloud environment variables, run actions, and routines somewhere safe. Conductor hides secret values after you save them, so get each secret from where you keep it. You set them up again in Orchestrator.
+
+</Step>
+</Steps>
+
+## Move a local repository
+
+<Steps>
+<Step>
+
+### Add the repository
+
+Choose **New project → Open a local folder** and pick the repository Conductor uses as the root, not a folder under `~/conductor/workspaces`. Orchestrator creates its own worktree and branch for each session, so your Conductor workspaces stay where they are.
+
+</Step>
+<Step>
+
+### Ask your agent to set up the Conductor settings
+
+Start a session in the project and send:
+
+```text
+Set up this project's Conductor settings in Orchestrator.
+```
+
+The agent reads `.conductor/settings.toml`, `.conductor/settings.local.toml`, `conductor.json`, your `~/.conductor/settings.toml`, and the scripts you saved in the Conductor app. It shows you what it plans to add and what it skips, and makes the changes after you agree:
+
+| Conductor | Orchestrator |
+| --- | --- |
+| `scripts.setup` | a **Setup** step |
+| `scripts.archive` | a **Cleanup** step |
+| `scripts.run` actions | one command **Cue** each |
+| `environment_variables` and `environment_variables.local` | project **Environment** variables |
+| `prompts.general` | agent rules |
+| `.worktreeinclude`, `file_include_globs`, or the default `.env*` | a **Setup** step that copies those files into each new worktree |
+
+Orchestrator does not set the `CONDUCTOR_*` variables, so the agent rewrites each command that uses one. For example, `$CONDUCTOR_WORKSPACE_PATH` becomes `$AO_WORKTREE_PATH` in a Setup step. Check the result in **Project settings → Scripts**, **Environment**, and **Cues**.
+
+</Step>
+<Step>
+
+### Import your chats
+
+Open **Project settings → General → Earlier chats** and choose **Import chats…**. Conductor runs Claude Code and Codex on your Mac, so the chats from your Conductor workspaces are listed here. Orchestrator also reads Conductor's own chat history, so a Claude chat that Claude Code has no history for on this Mac, such as one from a workspace you transferred from Conductor Cloud, is listed too. Importing such a chat writes it into Claude Code's history on this Mac, so Claude Code can continue it. Each one becomes an Orchestrator session you can continue. Conductor chats are listed however old they are, including chats from archived workspaces and from workspace folders that no longer exist. Chats you deleted in Conductor are not listed, and neither is a Codex chat whose history Codex no longer has on this Mac.
+
+Import a workspace's chats and open each one once before you archive the workspace in Conductor. The first open copies the workspace's uncommitted changes into the session.
+
+</Step>
+</Steps>
+
+## Move Conductor Cloud work
+
+<Steps>
+<Step>
+
+### Create a Cloud project
+
+Follow [Cloud sessions](/guides/cloud) to create a project from the same GitHub repository. Each session gets its own remote workspace, as in Conductor Cloud.
+
+</Step>
+<Step>
+
+### Copy your scripts
+
+Open the Cloud project's **Project settings** and copy each Conductor Cloud setting by hand:
+
+- **Scripts → Setup:** your Cloud Computer install script first, then the repository's setup script.
+- **Scripts → Cleanup:** the archive script.
+- **Environment:** your Cloud environment variables and secrets.
+- **Cues:** each run action.
+- **Instructions:** the general prompt.
+
+Orchestrator Cloud does not set the `CONDUCTOR_*` variables. Use `$AO_WORKTREE_PATH` for `$CONDUCTOR_ROOT_PATH` and `$CONDUCTOR_WORKSPACE_PATH`, and `$AO_SESSION_ID` for `$CONDUCTOR_WORKSPACE_NAME`. Conductor Cloud ran Amazon Linux; check package commands such as `dnf install` in the new workspace.
+
+</Step>
+<Step>
+
+### Continue the work
+
+Start a session on each branch you pushed. For a workspace you transferred to your Mac, import its chats as in [Import your chats](#import-your-chats). A chat that stays in Conductor Cloud cannot be continued; keep the export for reference.
+
+</Step>
+</Steps>
+
+## Teams and your phone
+
+| Conductor | Orchestrator |
+| --- | --- |
+| Shared chats and presence | **Share session** with **Can watch** or **Can write**, or share the whole project. People find it under **Shared with you**. |
+| Reassign to | **Request turn** and **Take over** in a shared Chat |
+| iOS app | **Settings → Connect mobile** |
+| Routines | **Automations** |
+
+Sharing needs everyone signed in to Orchestrator.
+
+<details>
+<summary>Verification scope</summary>
+
+Checked against the Orchestrator source and Conductor's public documentation on 11 November 2026. The chat import was tested with a database in Conductor 0.94's format, filled with real Claude Code and Codex chats, and both agents continued the imported chats. It was not tested with a database written by Conductor itself, and Conductor Cloud could not be tested.
+
+</details>

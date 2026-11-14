@@ -1,13 +1,11 @@
 name: CLI E2E
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-    paths:
-      - "backend/**"
-      - "test/cli/**"
-      - ".github/workflows/cli-e2e.yml"
+  workflow_call:
+    inputs:
+      native:
+        type: boolean
+        required: true
 
 permissions:
   contents: read
@@ -22,8 +20,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: ${{ fromJSON(inputs.native && '["ubuntu-latest","macos-latest","windows-latest"]' || '["ubuntu-latest"]') }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: backend
@@ -32,7 +31,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.27.1"
+          go-version: "1.27.4"
           cache: false
 
       - name: CLI E2E (native)
@@ -45,13 +44,14 @@ jobs:
   # after `stop` instead of lingering as a zombie.
   container:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
       - name: Build fresh-install image
         run: |
           docker build -f test/cli/Dockerfile -t ao-cli-smoke \
-            --build-arg GO_IMAGE=mirror.gcr.io/library/golang:1.27.1-bookworm \
+            --build-arg GO_IMAGE=mirror.gcr.io/library/golang:1.27.4-bookworm \
             --build-arg RUNTIME_IMAGE=mirror.gcr.io/library/debian:bookworm-slim .
 
       - name: Fresh-install check (container)

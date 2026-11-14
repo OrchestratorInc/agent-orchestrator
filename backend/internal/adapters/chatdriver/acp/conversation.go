@@ -7,10 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	acpsdk "github.com/coder/acp-go-sdk"
@@ -24,6 +26,10 @@ import (
 const (
 	eventBuffer  = 4096
 	approvalWait = 30 * time.Minute
+	// sessionCloseWait bounds the session/close sent before a provider is
+	// terminated (quickSessionCloseWait for a QuickStop provider).
+	sessionCloseWait      = 2 * time.Second
+	quickSessionCloseWait = 500 * time.Millisecond
 )
 
 var (
@@ -82,6 +88,8 @@ type nestedMessageState struct {
 }
 
 type conversation struct {
+	harness              domain.AgentHarness
+	suppressSessionModes bool
 	conn                 *acpsdk.ClientSideConnection
 	legacyWire           *legacyACPTransport
 	proc                 *process
@@ -89,7 +97,10 @@ type conversation struct {
 	providerScopeID      string
 	decodeConversationID func(string) (string, error)
 	canDeleteFork        bool
-	unadoptedForkID      string
+	// handshake is the agent's initialize answer, for steering details that
+	// vary by agent version.
+	handshake       acpsdk.InitializeResponse
+	unadoptedForkID string
 
 	mu                sync.Mutex
 	sessionID         string
@@ -114,18 +125,77 @@ type conversation struct {
 	skills            []ports.ChatSkill
 	skillsKnown       bool
 	closed            bool
-	modeFor           func(ports.PermissionMode) string
-	optionsFor        func(ports.ChatTurnSettings) []SessionOption
+	// sessionLost records that the agent stopped holding this conversation's
+	// session and the provider was stopped for it. See providerSessionLost.
+	sessionLost bool
+	modeFor     func(ports.PermissionMode) string
+	optionsFor  func(ports.ChatTurnSettings) []SessionOption
 	// requireAdvertised refuses a config option the session did not advertise
 	// instead of sending it. See Config.RequireAdvertisedOptions.
-	requireAdvertised  bool
-	permissionMode     ports.PermissionMode
-	permissionFor      PermissionPolicy
-	initialPermission  ports.PermissionMode
-	validateSettings   TurnSettingsValidator
-	extensionFor       ClientExtensionHandler
-	extensionMethods   map[string]string
-	legacyModel        bool
+	requireAdvertised bool
+	permissionMode    ports.PermissionMode
+	permissionFor     PermissionPolicy
+	initialPermission ports.PermissionMode
+	validateSettings  TurnSettingsValidator
+	extensionFor      ClientExtensionHandler
+	extensionMethods  map[string]string
+	// steering is how this agent takes mid-turn guidance. pendingSteers holds
+	// guidance a drain agent has not collected yet; see SteerDrain.
+	steering      steering
+	pendingSteers []*pendingSteer
+	// stoppingTurn is the turn Stop has begun to stop. Steers for it are
+	// refused, so one that arrives while Stop waits for the dispatch lock
+	// cannot join, or hold up, a turn the user is stopping.
+	stoppingTurn string
+	// stopAttempts counts the Stops of stoppingTurn that have withdrawn its
+	// steers and not given them back. Steering returns only when the last
+	// one that fails gives it back; see WithdrawPendingSteers.
+	stopAttempts int
+	// nudging is set while a drain nudge is in flight; see steerByDrain.
+	nudging atomic.Bool
+	// steerSegment counts steers the running turn has taken. Text the agent
+	// streams without a message id after one goes to a new message, so it
+	// renders after the steer instead of growing the reply above it.
+	steerSegment int
+	// turnCtx is the running turn's context. A SteerPrompt steer runs its prompt
+	// under it, so cancelling the turn reaches every prompt in it.
+	turnCtx context.Context
+	// promptSeq numbers the running turn's prompts: 0 started it and each
+	// SteerPrompt steer adds one. outstanding holds those still running; the
+	// turn settles once every one of them has returned.
+	promptSeq   int
+	outstanding map[int]bool
+	// adoptedPrompt means the running turn's prompt was sent by an earlier
+	// daemon attachment (live reconnect). The host passes its answers on as
+	// private notifications, and only the host's result ends the turn.
+	adoptedPrompt bool
+	// turnResult is the host's result for the running turn, the answer that
+	// carries its receipt, once one of the turn's prompts has returned it.
+	turnResult *promptAnswer
+	// lastAnswer is the latest answer any of the running turn's prompts gave.
+	// Without a host receipt the turn ends with it.
+	lastAnswer *promptAnswer
+	// promptSteers are SteerPrompt steers waiting to learn whether they took.
+	promptSteers []*promptSteer
+	// steerSettledTurn is the last turn a steer prompt settled. An earlier
+	// prompt of that turn answering late is dropped, not a second completion.
+	steerSettledTurn string
+	// stragglers counts, per turn that finishAfterStragglers ended, the
+	// prompts whose answers have not arrived. Each is dropped when it does,
+	// however many turns have settled since.
+	stragglers map[string]int
+	// stragglerWait, when set by a test, replaces promptStragglerWait.
+	stragglerWait time.Duration
+	// promptReturned, when set by a test, runs as each of the turn's prompts
+	// returns and before its answer is routed, to fix the order in which
+	// overlapping answers are handled.
+	promptReturned func(seq int)
+	// promptSending, when set by a test, runs before a steer prompt checks
+	// whether it may still be written, to let Stop overtake it.
+	promptSending func(seq int)
+	legacyModel   bool
+	// The agent lists model among its own config options, as well as the older model list.
+	modelConfigOption  bool
 	legacyMode         bool
 	liveState          *persistenthost.ACPState
 	hasDurableTurns    bool
@@ -135,9 +205,20 @@ type conversation struct {
 	// onAuthRejected corrects cached auth state when the provider rejects the
 	// credential mid-turn. Nil when the binding does not supply one.
 	onAuthRejected        func()
-	promptResponseFailure func(acpsdk.PromptResponse) error
-	hibernationCheck      func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId) (bool, error)
-	historyNotice         func(string) bool
+	promptResponseFailure func(acpsdk.PromptResponse, string) error
+	promptFailureCode     func(error) domain.ConversationFailureCode
+	// sessionPromptResponseFailure is promptResponseFailure given the session.
+	sessionPromptResponseFailure func(string, acpsdk.PromptResponse, bool) error
+	hibernationCheck             func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId) (bool, error)
+	historyNotice                func(string) bool
+	// promptErrorFailure: see Config.PromptErrorFailure.
+	promptErrorFailure func(error, bool) error
+	// historyUserChunkIsMessage: see Config.HistoryUserChunkIsMessage.
+	historyUserChunkIsMessage bool
+	// historyReconciler: see Config.HistoryReconciler.
+	historyReconciler func([]ports.ChatEvent) []ports.ChatEvent
+	// plansSpanTurns: see Config.PlansSpanTurns.
+	plansSpanTurns bool
 	// preamble is standing context attached to the first prompt that actually
 	// reaches the provider. It is the delivery channel for agents that accept no
 	// system-prompt launch flag and ignore session/new _meta but do execute
@@ -145,13 +226,36 @@ type conversation struct {
 	// so a rejected or discarded turn leaves it armed for the next one.
 	preamble      []acpsdk.ContentBlock
 	preambleSpent bool
+	// standingPreamble is the launch's preamble before setSessionPreamble drops
+	// it for a conversation with prior turns. A completed reset turn re-arms it:
+	// the provider has just discarded whichever turn carried it.
+	standingPreamble []acpsdk.ContentBlock
+	// resetsConversation: see Config.ResetsConversation.
+	resetsConversation func([]acpsdk.ContentBlock) bool
+	// resetTurn is the provider turn id of the reset prompt in flight, if any.
+	resetTurn string
+	// servedModel reports the model that answered a completed turn; nil when the
+	// binding cannot tell. lastServedModel suppresses repeating the same report.
+	servedModel     func(ctx context.Context, sessionID, selectedModel string) (string, string)
+	lastServedModel string
+	// validateModel rejects a model the binding knows the agent cannot use;
+	// nil when the binding has no such knowledge.
+	validateModel func(ctx context.Context, model string) error
+	// turnModel is the model selected when turn turnModelID started. The
+	// selection can change while a turn runs, so turn-scoped facts (a version
+	// rejection, the model that answered) are attributed to this value instead.
+	turnModel   string
+	turnModelID string
 
 	contextTokens     int64
 	contextWindow     int64
 	compactingTurnID  string
 	compactionBefore  int64
 	compactionSummary string
+	compactionFailure string
 	compactedTurn     string
+
+	claudeRejectedLimits map[string]time.Time
 
 	eventMu      sync.RWMutex
 	events       chan ports.ChatEvent
@@ -322,6 +426,9 @@ func (c *conversation) start(
 	c.permissionMode = c.initialPermission
 	c.validateSettings = validateSettings
 	c.legacyModel = models != nil
+	c.modelConfigOption = slices.ContainsFunc(configOptions, func(option acpsdk.SessionConfigOption) bool {
+		return option.Select != nil && option.Select.Id == "model"
+	})
 	c.legacyMode = modes != nil
 	c.mu.Unlock()
 	c.emit(ports.ChatEvent{Kind: ports.ChatEventControllerState, ControllerState: ports.ChatControllerReady})
@@ -350,10 +457,12 @@ func (c *conversation) setSessionPreamble(blocks []acpsdk.ContentBlock) {
 	// mid-conversation would read as a new user message. AO's durable history
 	// covers a live reconnect, which replays nothing; session/load replay covers
 	// turns made in the terminal.
+	standing := blocks
 	if c.hasPriorTurns() {
 		blocks = nil
 	}
 	c.mu.Lock()
+	c.standingPreamble = standing
 	c.preamble = blocks
 	c.preambleSpent = len(blocks) == 0
 	c.mu.Unlock()
@@ -425,11 +534,23 @@ func (c *conversation) ActivateLiveReconnect(ctx context.Context, providerTurnID
 	c.mu.Lock()
 	if durableBusy {
 		c.activeTurn = providerTurnID
+		if c.liveState.ActivePrompt && c.liveState.PendingResultEventID == "" && !c.liveState.ActiveCompaction {
+			// The host still runs the turn's prompt, so a steer prompt can join
+			// it. Its answers reach this attachment as the host's notifications.
+			// A compaction takes no steers, as a local Compact does not.
+			turnCtx, cancel := context.WithCancel(context.Background())
+			c.turnCtx, c.turnCancel = turnCtx, cancel
+			c.settlingTurn = ""
+			c.resetPromptSteeringLocked()
+			c.outstanding = map[int]bool{}
+			c.adoptedPrompt = true
+		}
 		if c.liveState.ActiveCompaction {
 			c.compactingTurnID = providerTurnID
 			c.compactionBefore = c.contextTokens
 		}
 		c.messages = make(map[string]string)
+		c.steerSegment = 0
 		c.thoughts = make(map[string]string)
 		c.nestedMessages = make(map[string]nestedMessageState)
 		c.tools = make(map[string]*toolState)
@@ -455,8 +576,11 @@ func (c *conversation) SendTurn(ctx context.Context, msg ports.ChatUserMessage) 
 	if busy {
 		return ports.ChatTurnRef{}, errors.New("ACP conversation already has a turn in flight")
 	}
+	if err := c.checkModelSwitch(ctx, msg.Settings.Model); err != nil {
+		return ports.ChatTurnRef{}, c.providerSessionLost(err)
+	}
 	if err := c.applyTurnSettings(ctx, msg.Settings); err != nil {
-		return ports.ChatTurnRef{}, err
+		return ports.ChatTurnRef{}, c.providerSessionLost(err)
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -479,6 +603,19 @@ func (c *conversation) DiscardDeferredTurn(providerTurnID string) {
 	c.mu.Unlock()
 }
 
+// checkModelSwitch refuses a switch to a model the binding knows the agent
+// cannot use. Only a change is checked: a session already on such a model must
+// still open, so the user can pick another one.
+func (c *conversation) checkModelSwitch(ctx context.Context, model string) error {
+	if c.validateModel == nil || model == "" || model == c.configOptionCurrent("model") {
+		return nil
+	}
+	if err := c.validateModel(ctx, model); err != nil {
+		return fmt.Errorf("%w: %w", ports.ErrChatConfigOptionInvalid, err)
+	}
+	return nil
+}
+
 func (c *conversation) applyTurnSettings(ctx context.Context, settings ports.ChatTurnSettings) error {
 	c.mu.Lock()
 	sessionID := c.sessionID
@@ -486,7 +623,9 @@ func (c *conversation) applyTurnSettings(ctx context.Context, settings ports.Cha
 	optionsFor := c.optionsFor
 	initialPermission := c.initialPermission
 	validateSettings := c.validateSettings
-	legacyModel := c.legacyModel
+	// Prefer the modern selector when an agent (such as Grok) also advertises
+	// legacy models, matching SetConfigOption and preserving rebuilt catalogs.
+	legacyModel := c.legacyModel && !c.modelConfigOption
 	legacyMode := c.legacyMode
 	configOptions := cloneConfigOptions(c.configOptions)
 	c.mu.Unlock()
@@ -498,15 +637,28 @@ func (c *conversation) applyTurnSettings(ctx context.Context, settings ports.Cha
 			return err
 		}
 	}
+	var options []SessionOption
+	if optionsFor != nil {
+		options = optionsFor(settings)
+	}
+	// A setting the session already has is skipped (some agents take seconds
+	// per change) unless session/set_model made the list stale.
+	catalogStale := false
 	if legacyModel && settings.Model != "" {
+		// A binding may name the model differently from the turn settings.
 		model := settings.Model
+		for _, option := range options {
+			if option.ID == "model" && option.Value != "" {
+				model = option.Value
+			}
+		}
 		modelOptionFound := false
 		for _, option := range configOptions {
 			if option.ID != "model" {
 				continue
 			}
 			modelOptionFound = true
-			resolved, ok := resolveLegacyModelChoice(option.Choices, model)
+			resolved, ok := resolveModelChoice(c.harness, option.Choices, model)
 			if !ok {
 				return fmt.Errorf("%w: ACP session model does not offer %q", ports.ErrChatConfigOptionInvalid, model)
 			}
@@ -516,20 +668,34 @@ func (c *conversation) applyTurnSettings(ctx context.Context, settings ports.Cha
 		if !modelOptionFound {
 			return fmt.Errorf("%w: ACP session does not advertise a model option", ports.ErrChatConfigOptionInvalid)
 		}
-		if err := c.legacyWire.setModel(ctx, sessionID, model); err != nil {
-			if isACPMethodNotFound(err) {
-				return fmt.Errorf("%w: session/set_model %q", ErrACPSetterUnsupported, model)
+		if c.configOptionCurrent("model") != model {
+			if err := c.legacyWire.setModel(ctx, sessionID, model); err != nil {
+				if isACPMethodNotFound(err) {
+					return fmt.Errorf("%w: session/set_model %q", ErrACPSetterUnsupported, model)
+				}
+				return fmt.Errorf("set ACP session model %q: %w", model, err)
 			}
-			return fmt.Errorf("set ACP session model %q: %w", model, err)
+			catalogStale = true
 		}
 		c.applyAcceptedConfigOption("model", ports.ChatConfigOptionValue{Select: model})
 	}
-	var options []SessionOption
-	if optionsFor != nil {
-		options = optionsFor(settings)
-	}
 	applyOption := func(option SessionOption) error {
+		if option.ID == "" || option.Value == "" {
+			return nil
+		}
 		if (option.ID == "model" && legacyModel) || (option.ID == "mode" && legacyMode) {
+			return nil
+		}
+		if offered, known := c.configOptionOffers(option.ID, option.Value); known && !offered && option.Name != "" {
+			if value := c.configOptionValueNamed(option.ID, option.Name); value != "" {
+				option.Value = value
+			}
+		}
+		if !catalogStale && c.configOptionCurrent(option.ID) == option.Value {
+			return nil
+		}
+		// The models offered do not depend on the model chosen, so this is final.
+		if offered, known := c.configOptionOffers(option.ID, option.Value); option.Optional && option.ID == "model" && known && !offered {
 			return nil
 		}
 		return c.setSessionOption(ctx, sessionID, option)
@@ -630,6 +796,11 @@ func (c *conversation) setSessionOption(ctx context.Context, sessionID string, o
 		},
 	})
 	if err != nil {
+		// An optional setting the chosen model lacks is skipped; session/set_model
+		// does not return the new model's options to check in advance.
+		if option.Optional && isACPInvalidParams(err) {
+			return nil
+		}
 		if isACPMethodNotFound(err) {
 			return fmt.Errorf("%w: session/set_config_option %q", ErrACPSetterUnsupported, option.ID)
 		}
@@ -661,17 +832,27 @@ func (c *conversation) StartDeferredTurn(providerTurnID string) error {
 	// guaranteed to reach the provider: settings validation, a busy conversation
 	// and a discarded prepared turn all fail in SendTurn, and spending the
 	// preamble on any of them would silently drop AO's instructions from the
-	// session's first real turn.
-	if !c.preambleSpent && len(c.preamble) > 0 {
+	// session's first real turn. A reset prompt never carries it: the agent
+	// recognizes the command only when the prompt is the command alone, and the
+	// preamble is re-armed for the prompt after it (see finishPrompt).
+	if c.resetsConversation != nil && c.resetsConversation(turn.prompt) {
+		c.resetTurn = turn.id
+	} else if !c.preambleSpent && len(c.preamble) > 0 {
 		turn.prompt = append(append([]acpsdk.ContentBlock(nil), c.preamble...), turn.prompt...)
 		c.preambleSpent = true
 	}
 	c.activeTurn = turn.id
+	c.turnModelID = turn.id
+	c.turnModel = c.configOptionCurrentLocked("model")
 	c.settlingTurn = ""
 	turnCtx, cancel := context.WithCancel(context.Background())
 	c.turnCancel = cancel
+	c.turnCtx = turnCtx
+	c.resetPromptSteeringLocked()
+	c.outstanding = map[int]bool{0: true}
 	sessionID := c.sessionID
 	c.messages = make(map[string]string)
+	c.steerSegment = 0
 	c.thoughts = make(map[string]string)
 	c.nestedMessages = make(map[string]nestedMessageState)
 	c.tools = make(map[string]*toolState)
@@ -702,7 +883,45 @@ func (c *conversation) runTurn(ctx context.Context, sessionID string, turn prepa
 		Prompt:    turn.prompt,
 	})
 
-	c.finishPrompt(turn.id, resp, err)
+	if c.promptReturned != nil {
+		c.promptReturned(0)
+	}
+	c.finishTurnPrompt(turn.id, 0, resp, err)
+}
+
+// reportServedModel tells the client which model actually answered when the
+// binding can see it and it differs from the selection, such as an alias that
+// the installed CLI resolves to an older concrete model. Each distinct
+// (selection, served) pair is reported once rather than on every turn.
+// selected is the model the turn started with, not the current selection.
+func (c *conversation) reportServedModel(turnID, selected string) {
+	if c.servedModel == nil {
+		return
+	}
+	c.mu.Lock()
+	sessionID := c.sessionID
+	c.mu.Unlock()
+	if selected == "" || sessionID == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	served, reason := c.servedModel(ctx, sessionID, selected)
+	if served == "" || served == selected {
+		return
+	}
+	key := selected + "\x00" + served
+	c.mu.Lock()
+	if c.lastServedModel == key {
+		c.mu.Unlock()
+		return
+	}
+	c.lastServedModel = key
+	c.mu.Unlock()
+	c.emit(ports.ChatEvent{
+		Kind: ports.ChatEventModelRerouted, ProviderTurnID: turnID,
+		Reroute: &ports.ChatModelReroute{FromModel: selected, ToModel: served, Reason: reason},
+	})
 }
 
 func (c *conversation) finishPrompt(
@@ -710,13 +929,7 @@ func (c *conversation) finishPrompt(
 	resp acpsdk.PromptResponse,
 	err error,
 ) {
-	eventID, _ := resp.Meta[persistenthost.ACPEventIDMetaKey].(string)
-	var requestErr *acpsdk.RequestError
-	if eventID == "" && errors.As(err, &requestErr) {
-		if data, ok := requestErr.Data.(map[string]any); ok {
-			eventID, _ = data[persistenthost.ACPEventIDMetaKey].(string)
-		}
-	}
+	eventID := hostResultEventID(resp, err)
 	// A transport error may win the race with watchConnection. The host still
 	// owns this prompt; its journal, not an SDK disconnect, supplies the outcome.
 	if err != nil && eventID == "" && c.providerDetaching() {
@@ -730,6 +943,14 @@ func (c *conversation) finishPrompt(
 	c.settlingTurn = turnID
 	interrupt := c.interrupt
 	isCompaction := c.compactingTurnID != "" && c.compactingTurnID == turnID
+	compactionFailure := c.compactionFailure
+	answered := len(c.messages) > 0 || len(c.tools) > 0
+	// "" when the turn started before this controller (a reattached durable
+	// turn): its model is unknown, and the current selection may not be it.
+	turnModel := ""
+	if c.turnModelID == turnID {
+		turnModel = c.turnModel
+	}
 	c.mu.Unlock()
 	c.settleOpenItems(turnID)
 	interruptedLocally := false
@@ -742,20 +963,52 @@ func (c *conversation) finishPrompt(
 	}
 	var state domain.TurnState
 	var turnErr error
+	var failureCode domain.ConversationFailureCode
+	sessionLost := false
 	if err != nil {
-		if interruptedLocally || errors.Is(err, context.Canceled) {
+		if isACPSessionMissing(err) {
+			// The prompt never reached a session. Fail this turn with the cause,
+			// then stop the provider below instead of announcing readiness. This
+			// is checked before interruption: an accepted session/cancel does not
+			// bring the session back, and reading the turn as interrupted would
+			// leave the dead provider attached.
+			state = domain.TurnStateFailed
+			turnErr = c.markSessionLost(fmt.Errorf("ACP session/prompt: %w", err))
+			sessionLost = true
+		} else if interruptedLocally || errors.Is(err, context.Canceled) {
 			state = domain.TurnStateInterrupted
 		} else {
 			state = domain.TurnStateFailed
 			turnErr = normalizeACPError("ACP session/prompt", err)
+			if c.promptErrorFailure != nil && !errors.Is(turnErr, ports.ErrChatAuthRequired) && !errors.Is(turnErr, ports.ErrChatPromptStalled) {
+				if failure := c.promptErrorFailure(err, answered); failure != nil {
+					turnErr = failure
+				}
+			}
+			if c.promptFailureCode != nil {
+				failureCode = c.promptFailureCode(err)
+			}
 		}
 	} else {
 		state = turnState(resp.StopReason)
 		if c.promptResponseFailure != nil && state != domain.TurnStateInterrupted && !interruptedLocally {
-			if failure := c.promptResponseFailure(resp); failure != nil {
+			if failure := c.promptResponseFailure(resp, turnModel); failure != nil {
 				state = domain.TurnStateFailed
 				turnErr = failure
 			}
+		}
+		if c.sessionPromptResponseFailure != nil && turnErr == nil && state != domain.TurnStateInterrupted && !interruptedLocally {
+			c.mu.Lock()
+			sessionID := c.sessionID
+			c.mu.Unlock()
+			if failure := c.sessionPromptResponseFailure(sessionID, resp, answered); failure != nil {
+				state = domain.TurnStateFailed
+				turnErr = failure
+			}
+		}
+		if isCompaction && compactionFailure != "" && turnErr == nil && state == domain.TurnStateCompleted && !interruptedLocally {
+			state = domain.TurnStateFailed
+			turnErr = errors.New(compactionFailure)
 		}
 		if resp.Usage != nil {
 			cached := 0
@@ -772,6 +1025,10 @@ func (c *conversation) finishPrompt(
 			}})
 		}
 	}
+	var usageLimitResetsAt time.Time
+	if turnErr != nil && domain.ParseConversationUsageLimit(turnErr.Error(), nil) != nil {
+		usageLimitResetsAt, _ = c.claudeUsageLimitReset(time.Now())
+	}
 	if errors.Is(turnErr, ports.ErrChatAuthRequired) {
 		// The provider has just contradicted whatever the readiness cache holds.
 		// Correct it for both request errors and structured prompt failures.
@@ -784,7 +1041,19 @@ func (c *conversation) finishPrompt(
 		// of the earlier rejection. The projector ignores this when no durable
 		// reauthentication demand exists.
 		c.emit(ports.ChatEvent{Kind: ports.ChatEventAccountChanged, Account: &ports.ChatAccount{ReauthRecovered: true}})
+		c.reportServedModel(turnID, turnModel)
 	}
+	c.mu.Lock()
+	if c.resetTurn == turnID {
+		c.resetTurn = ""
+		// Only a completed reset cleared the provider's history. A failed or
+		// interrupted one left the turn that carried the preamble in place.
+		if turnErr == nil && state == domain.TurnStateCompleted && len(c.standingPreamble) > 0 {
+			c.preamble = c.standingPreamble
+			c.preambleSpent = false
+		}
+	}
+	c.mu.Unlock()
 	if isCompaction {
 		if state == domain.TurnStateCompleted {
 			c.settleCompaction(turnID)
@@ -793,7 +1062,13 @@ func (c *conversation) finishPrompt(
 			c.compactingTurnID = ""
 			c.compactionBefore = 0
 			c.compactionSummary = ""
+			c.compactionFailure = ""
 			c.mu.Unlock()
+			if turnErr != nil {
+				// A compaction turn has no prompt or reply. Without this row the
+				// timeline leaves the turn out and the failure is never shown.
+				c.emit(ports.ChatEvent{Kind: ports.ChatEventError, ProviderTurnID: turnID, Err: turnErr})
+			}
 		}
 	}
 	// Only a durable host receipt replaces the outstanding one. A host-local
@@ -807,7 +1082,8 @@ func (c *conversation) finishPrompt(
 	}
 	c.emit(ports.ChatEvent{
 		Kind: ports.ChatEventTurnCompleted, ProviderEventID: eventID,
-		ProviderTurnID: turnID, TurnState: state, Err: turnErr,
+		ProviderTurnID: turnID, TurnState: state, FailureCode: failureCode, Err: turnErr,
+		UsageLimitResetsAt: usageLimitResetsAt,
 	})
 	// Release the turn before announcing readiness, not after. A consumer that
 	// reacts to ChatControllerReady by sending the next turn — AO's own queue
@@ -819,12 +1095,26 @@ func (c *conversation) finishPrompt(
 		c.activeTurn = ""
 		c.settlingTurn = ""
 		c.turnCancel = nil
+		c.turnCtx = nil
+		c.resetPromptSteeringLocked()
 		c.providerFailure = nil
 		if c.interrupt == interrupt {
 			c.interrupt = nil
 		}
+		c.releasePendingSteersLocked()
 	}
 	c.mu.Unlock()
+	if sessionLost {
+		// Ready would let the queue drain into a provider that cannot serve it.
+		// Stopping ends the stream after the failed turn above, so the controller
+		// settles it and reports the session exited. The failed turn is already
+		// on the stream, so a failed stop can only be logged.
+		if stopErr := c.stopLostProvider(); stopErr != nil {
+			c.log.Error("chat: failed to stop ACP provider after its session was lost",
+				"turn", turnID, "error", stopErr)
+		}
+		return
+	}
 	c.emit(ports.ChatEvent{Kind: ports.ChatEventControllerState, ControllerState: ports.ChatControllerReady})
 }
 
@@ -853,13 +1143,17 @@ func (c *conversation) Compact(ctx context.Context) (ports.ChatCompactionResult,
 	before := c.contextTokens
 	id := uuid.NewString()
 	c.activeTurn = id
+	c.turnModelID = id
+	c.turnModel = c.configOptionCurrentLocked("model")
 	c.compactingTurnID = id
 	c.compactionBefore = before
 	c.compactionSummary = ""
+	c.compactionFailure = ""
 	c.settlingTurn = ""
 	turnCtx, cancel := context.WithCancel(context.Background())
 	c.turnCancel = cancel
 	c.messages = make(map[string]string)
+	c.steerSegment = 0
 	c.thoughts = make(map[string]string)
 	c.nestedMessages = make(map[string]nestedMessageState)
 	c.tools = make(map[string]*toolState)
@@ -898,6 +1192,7 @@ func (c *conversation) settleCompaction(turnID string) {
 	c.compactingTurnID = ""
 	c.compactionBefore = 0
 	c.compactionSummary = ""
+	c.compactionFailure = ""
 	c.compactedTurn = turnID
 	c.mu.Unlock()
 
@@ -1094,12 +1389,67 @@ func (c *conversation) Hibernate() error {
 	return c.closeProvider(true, false)
 }
 
+// providerSessionLost classifies err from a session-scoped request. When the
+// agent reports that it no longer holds this conversation's session, the
+// provider can never serve it again, and a persistent host would otherwise keep
+// it reattachable across daemon restarts: every send fails while resume-agent
+// refuses because the host is still alive. Stop the provider without
+// session/close, as hibernation does, so the controller's stream ends, the
+// session reads as exited, and resuming reloads the saved transcript in a fresh
+// process. Any other error is returned unchanged.
+func (c *conversation) providerSessionLost(err error) error {
+	if !isACPSessionMissing(err) {
+		return err
+	}
+	lost := c.markSessionLost(err)
+	if stopErr := c.stopLostProvider(); stopErr != nil {
+		return fmt.Errorf("%w; stopping the provider failed: %w", lost, stopErr)
+	}
+	return lost
+}
+
+// markSessionLost records a lost session and wraps err without stopping the
+// provider yet, so a caller can still emit the turn's outcome on the stream
+// that stopping would close. Callers check isACPSessionMissing first.
+func (c *conversation) markSessionLost(err error) error {
+	c.mu.Lock()
+	sessionID := c.sessionID
+	c.sessionLost = true
+	c.mu.Unlock()
+	c.log.Warn("chat: ACP provider no longer holds the session; stopping it so the session can be resumed",
+		"providerSession", sessionID, "reconnected", c.proc.reconnected, "error", err)
+	return fmt.Errorf("%w: %w", ports.ErrChatProviderSessionLost, err)
+}
+
+// stopLostProvider stops the provider without session/close: the agent has no
+// session to close, and the saved transcript must survive for resume.
+//
+// A concurrent Close may already have used closeOnce to detach, which only
+// releases the transport and keeps a persistent host alive for the next
+// daemon. A detach assumes the host can still serve the conversation, which a
+// lost session rules out, so escalate it to termination. The host's terminate
+// is idempotent and reaches the host through its own shutdown channel, not the
+// detached transport.
+func (c *conversation) stopLostProvider() error {
+	if err := c.closeProvider(true, false); err != nil {
+		return err
+	}
+	c.mu.Lock()
+	detached := c.detaching
+	c.mu.Unlock()
+	if detached && c.proc.terminate != nil {
+		return c.proc.terminate()
+	}
+	return nil
+}
+
 func (c *conversation) closeProvider(terminate, closeSession bool) error {
 	var closeErr error
 	c.closeOnce.Do(func() {
 		c.mu.Lock()
 		c.closed = true
 		close(c.closing)
+		c.releasePendingSteersLocked()
 		persistent := c.proc.terminate != nil
 		c.detaching = persistent && !terminate
 		cancel := c.turnCancel
@@ -1115,8 +1465,16 @@ func (c *conversation) closeProvider(terminate, closeSession bool) error {
 		c.failPendingPermissions()
 		c.failPendingInputs()
 		if closeSession && sessionID != "" {
-			closeCtx, cancelClose := context.WithTimeout(context.Background(), 2*time.Second)
-			_, _ = c.conn.CloseSession(closeCtx, acpsdk.CloseSessionRequest{SessionId: acpsdk.SessionId(sessionID)})
+			// The provider may save its session while answering; an answered close
+			// lets the host stop it sooner.
+			wait := sessionCloseWait
+			if c.proc != nil && c.proc.quickStop.Load() {
+				wait = quickSessionCloseWait
+			}
+			closeCtx, cancelClose := context.WithTimeout(context.Background(), wait)
+			if _, err := c.conn.CloseSession(closeCtx, acpsdk.CloseSessionRequest{SessionId: acpsdk.SessionId(sessionID)}); err == nil && c.proc != nil {
+				c.proc.quickStop.Store(true)
+			}
 			cancelClose()
 		}
 		if persistent {
@@ -1133,8 +1491,12 @@ func (c *conversation) closeProvider(terminate, closeSession bool) error {
 func (c *conversation) AcknowledgeProviderEvent(ctx context.Context, providerEventID string) error {
 	c.mu.Lock()
 	terminal := c.terminalEventID
+	lost := c.sessionLost
 	c.mu.Unlock()
-	if providerEventID == "" || providerEventID != terminal || c.proc.terminate == nil {
+	// A provider stopped for a lost session took its host and prompt journal
+	// with it, so there is nothing left to release. Failing this ACK would make
+	// the controller preserve a provider that is already gone.
+	if lost || providerEventID == "" || providerEventID != terminal || c.proc.terminate == nil {
 		return nil
 	}
 	return c.conn.NotifyExtension(ctx, persistenthost.ACPPromptAckMethod, map[string]string{

@@ -10,7 +10,7 @@ import {
 } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import path from "node:path";
-import type { CloudAccount } from "../shared/cloud-account";
+import { isWebDistinctId, type CloudAccount, type CloudSignInContext } from "../shared/cloud-account";
 // Static import (not dynamic): the dynamic import created a static+dynamic
 // import cycle with cloud-auth-local that made the bundler split chunks
 // incorrectly and panic. Both modules only use each other's exports inside
@@ -21,7 +21,9 @@ import { providerAuthFlow } from "./provider-auth-flow";
 // persistLocalClaudeOAuthToken writes a captured Claude setup-token under the AO
 // data dir so local claude sessions can authenticate with the SAME credential
 // pushed to the cloud (read back by the daemon's claudecode adapter). Scoped to
-// ~/.ao, never the user's ~/.claude; 0600 file in a 0700 dir.
+// ~/.ao, never the user's ~/.claude; 0600 file in a 0700 dir. This is not the
+// token chosen in AO's Claude login menu (harnesses/claude-code/setup-token):
+// that one outranks a native login, this one never does.
 async function persistLocalClaudeOAuthToken(dataDir: string, token: string): Promise<void> {
   const dir = path.join(dataDir, "harnesses", "claude-code");
   await mkdir(dir, { recursive: true, mode: 0o700 });
@@ -53,26 +55,50 @@ function isLoopbackRedirect(redirectUri: string): boolean {
   }
 }
 
-// The packaged app returns from WorkOS via an HTTPS bounce page on our own domain
-// (served by the control plane at /app/auth/return), which re-emits the result to
-// the ao-app:// deep link the installed app handles. Routing through that page —
-// rather than setting ao-app:// as the WorkOS redirect_uri directly — matters for
-// two reasons: the browser lands on a real HTTPS page instead of hanging forever
-// on an unloadable custom-scheme navigation (no stuck "loading" tab), and the OS
-// "open Agent Orchestrator?" prompt is attributed to our own domain (aoagents.dev)
-// instead of the opaque WorkOS AuthKit subdomain.
+// The packaged app returns from WorkOS via an HTTPS bounce page on our own domain,
+// which re-emits the result to the ao-app:// deep link the installed app handles.
+// Routing through that page (rather than setting ao-app:// as the WorkOS
+// redirect_uri directly) matters for two reasons: the browser lands on a real
+// HTTPS page instead of hanging forever on an unloadable custom-scheme navigation
+// (no stuck "loading" tab), and the OS "open Agent Orchestrator?" prompt is
+// attributed to our own domain instead of the opaque WorkOS AuthKit subdomain.
 //
-// A development build can't use the ao-app:// deep link (macOS routes it to the
-// installed app, not the unpackaged Electron binary), so it falls back to a
-// loopback callback server — the standard desktop-OAuth pattern — for zero-setup
-// sign-in. AO_CLOUD_AUTH_REDIRECT overrides either default (e.g. to point a
-// packaged build at a staging bounce page).
-const DEFAULT_PACKAGED_REDIRECT_URI = "https://api.aoagents.dev/app/auth/return";
-const REDIRECT_URI =
-  process.env.AO_CLOUD_AUTH_REDIRECT?.trim() ||
-  (app.isPackaged
+// A build signing in with the production AuthKit client returns through the
+// website's page, orchestrator.inc/app/auth/return/ (the trailing slash is part
+// of the URL WorkOS has registered). Only the production WorkOS environment lists
+// that page, so any other client, such as the baked default, which belongs to
+// the staging environment, keeps the control plane's page at api.aoagents.dev.
+//
+// A development build doesn't claim ao-app:// by default (see
+// registerCloudProtocol): owning it would take the scheme away from the
+// installed app. It signs in through a loopback callback server instead, the
+// standard desktop-OAuth pattern, with zero setup. AO_CLOUD_AUTH_REDIRECT
+// overrides every default (e.g. to point a packaged build at a staging bounce
+// page).
+//
+// The production AuthKit client (auth.orchestrator.inc). Release builds (stable,
+// nightly and preview, all made by build-artifacts.yml) get it from the
+// VITE_WORKOS_CLIENT_ID repository variable.
+const PRODUCTION_WORKOS_CLIENT_ID = "client_01KZ3VRKTDKBZ3JA8AMKTF6W2X";
+const DEFAULT_PACKAGED_REDIRECT_URI = "https://orchestrator.inc/app/auth/return/";
+const CONTROL_PLANE_PACKAGED_REDIRECT_URI = "https://api.aoagents.dev/app/auth/return";
+const LOOPBACK_REDIRECT_URI = "http://127.0.0.1:3000/callback";
+
+/** The redirect_uri a build sends to WorkOS when it starts a sign-in. */
+export function resolveCloudAuthRedirect(
+  env: Record<string, string | undefined>,
+  isPackaged: boolean,
+  clientId: string,
+): string {
+  const override = env.AO_CLOUD_AUTH_REDIRECT?.trim();
+  if (override) return override;
+  if (!isPackaged) return LOOPBACK_REDIRECT_URI;
+  return clientId === PRODUCTION_WORKOS_CLIENT_ID
     ? DEFAULT_PACKAGED_REDIRECT_URI
-    : "http://127.0.0.1:3000/callback");
+    : CONTROL_PLANE_PACKAGED_REDIRECT_URI;
+}
+
+const REDIRECT_URI = resolveCloudAuthRedirect(process.env, app.isPackaged, CLIENT_ID);
 const useLoopbackRedirect = isLoopbackRedirect(REDIRECT_URI);
 const AUTH_STORE_FILE = "cloud-auth.bin";
 const LEGACY_SESSION_FILE = "cloud-session.json";
@@ -152,11 +178,29 @@ export async function withAuthMutation<T>(
   }
 }
 
+/**
+ * Where the Cloud sign-in is kept. An AO_DATA_DIR override gives that data
+ * dir its own sign-in, as it gives it its own daemon data, so two instances
+ * with different data dirs never share an account. Otherwise ~/.ao, or
+ * ~/.ao/dev for a development build.
+ */
+export function resolveCloudAuthDir(
+  env: Record<string, string | undefined>,
+  homeDir: string,
+  launchWorkingDirectory: string,
+  isPackaged: boolean,
+): string {
+  const configured = env.AO_DATA_DIR?.trim();
+  if (configured) return path.resolve(launchWorkingDirectory, configured);
+  return isPackaged ? path.join(homeDir, ".ao") : path.join(homeDir, ".ao", "dev");
+}
+
 function storePath(dataDir: string): string {
   return path.join(dataDir, AUTH_STORE_FILE);
 }
 
-function protectedStorageAvailable(): boolean {
+/** Whether safeStorage protects what it encrypts (not Linux's basic_text backend). */
+export function protectedStorageAvailable(): boolean {
   if (!safeStorage.isEncryptionAvailable()) return false;
   if (process.platform !== "linux") return true;
   const backend = safeStorage.getSelectedStorageBackend();
@@ -458,13 +502,21 @@ export async function beginCloudSignIn(dataDir: string): Promise<void> {
   await shell.openExternal(url);
 }
 
+// What a verified callback produced: the signed-in account, and whether this
+// callback exchanged its code (a new sign-in) rather than returning the account
+// an earlier callback had already signed in.
+interface CompletedCloudSignIn {
+  account: CloudAccount;
+  exchanged: boolean;
+}
+
 // completeCloudSignIn validates the pending PKCE state and exchanges the code
 // for a session. Shared by the deep-link path and the loopback callback server.
 async function completeCloudSignIn(
   code: string | null,
   callbackState: string | null,
   dataDir: string,
-): Promise<CloudAccount> {
+): Promise<CompletedCloudSignIn> {
   if (!workos) throw new Error("WorkOS is not configured.");
   if (!code || !callbackState) throw new Error("WorkOS callback is incomplete.");
 
@@ -480,7 +532,7 @@ async function completeCloudSignIn(
     ) {
       // With no login pending, returning to an already signed-in app cannot
       // change its account. This also covers sessions saved before deduping.
-      return publicAccount(store.session);
+      return { account: publicAccount(store.session), exchanged: false };
     }
     if (!store.pkce) throw new Error("No WorkOS sign-in is pending.");
     if (store.pkce.expiresAt < Date.now()) {
@@ -506,14 +558,24 @@ async function completeCloudSignIn(
       pkce: null,
       completedCallback: callbackDigest,
     });
-    return publicAccount(session);
+    return { account: publicAccount(session), exchanged: true };
   });
+}
+
+export interface CloudDeepLinkSignIn {
+  account: CloudAccount;
+  // What the orchestrator.inc return page adds to the sign-in: the website
+  // visitor id (web_distinct_id) for visitors who accepted analytics there.
+  // Present only when it is well formed and this link completed a new sign-in,
+  // so a repeated return link never hands it over twice. Analytics only: it
+  // plays no part in signing in, and nothing stores or logs it.
+  signIn?: CloudSignInContext;
 }
 
 export async function handleCloudDeepLink(
   rawURL: string,
   dataDir: string,
-): Promise<CloudAccount | null> {
+): Promise<CloudDeepLinkSignIn | null> {
   if (!workos) throw new Error("WorkOS is not configured.");
   const url = new URL(rawURL);
   if (url.protocol !== "ao-app:" || url.hostname !== "callback") return null;
@@ -523,11 +585,16 @@ export async function handleCloudDeepLink(
       url.searchParams.get("error_description") || `WorkOS sign-in failed: ${error}`,
     );
   }
-  return completeCloudSignIn(
+  const { account, exchanged } = await completeCloudSignIn(
     url.searchParams.get("code"),
     url.searchParams.get("state"),
     dataDir,
   );
+  // Read only once signing in has finished, so it cannot change how that went.
+  const webDistinctId = url.searchParams.get("web_distinct_id");
+  return exchanged && isWebDistinctId(webDistinctId)
+    ? { account, signIn: { webDistinctId } }
+    : { account };
 }
 
 const CALLBACK_HTML = (title: string, body: string): string =>
@@ -565,7 +632,7 @@ function startLoopbackCallbackServer(dataDir: string): void {
               `WorkOS sign-in failed: ${error}`,
           );
         }
-        const account = await completeCloudSignIn(
+        const { account } = await completeCloudSignIn(
           requestURL.searchParams.get("code"),
           requestURL.searchParams.get("state"),
           dataDir,
@@ -574,8 +641,8 @@ function startLoopbackCallbackServer(dataDir: string): void {
         res.writeHead(200, { "Content-Type": "text/html" });
         res.end(
           CALLBACK_HTML(
-            "Signed in to AO Cloud",
-            "You can close this tab and return to Agent Orchestrator.",
+            "Signed in to Orchestrator Cloud",
+            "You can close this tab and return to Orchestrator.",
           ),
         );
       } catch (callbackError) {
@@ -584,7 +651,7 @@ function startLoopbackCallbackServer(dataDir: string): void {
         res.end(
           CALLBACK_HTML(
             "Sign-in failed",
-            "Return to Agent Orchestrator and try signing in again.",
+            "Return to Orchestrator and try signing in again.",
           ),
         );
       } finally {
@@ -623,33 +690,66 @@ function signInFailureDetail(error: unknown): string {
     return "The WorkOS response could not be verified. Start sign-in again to continue.";
   }
   if (message.includes("network") || message.includes("fetch")) {
-    return "Agent Orchestrator could not reach WorkOS. Check your connection and try again.";
+    return "Orchestrator could not reach WorkOS. Check your connection and try again.";
   }
-  return "Agent Orchestrator could not complete WorkOS sign-in. Please try again.";
+  return "Orchestrator could not complete WorkOS sign-in. Please try again.";
 }
 
 export async function showCloudSignInFailure(error: unknown): Promise<void> {
   await dialog.showMessageBox({
     type: "error",
-    title: "AO Cloud sign-in failed",
-    message: "Unable to sign in to AO Cloud",
+    title: "Orchestrator Cloud sign-in failed",
+    message: "Unable to sign in to Orchestrator Cloud",
     detail: signInFailureDetail(error),
   });
 }
 
+// registerCloudProtocol makes this build the ao-app:// handler, or gives the
+// scheme up when it shouldn't hold it. Call it once this process is the app's
+// single instance, before app.whenReady().
+//
+// A development build signing in through the loopback redirect never needs
+// ao-app://, and claiming it takes the scheme from the installed app: macOS
+// ignores the path/args below and binds it to the stock node_modules
+// Electron.app, Windows points it at a worktree script, and the installed app's
+// sign-in callbacks and billing return links then land in the wrong process. So
+// such a build only releases a claim an earlier dev run left behind. On macOS
+// that hands the scheme back to the installed app at once; on Windows it
+// deletes the stale entry, and the installed app takes the scheme again the
+// next time it starts. Linux has no release (Electron's is a no-op there), and
+// a Linux dev build registers the installed app's own .desktop entry anyway.
+//
+// A development build pointed at a deep-link redirect (AO_CLOUD_AUTH_REDIRECT
+// set to a bounce page or ao-app://callback) does need the scheme. It claims it
+// for as long as it runs and gives it back when it quits.
 export function registerCloudProtocol(): void {
-  if (process.defaultApp && process.argv.length >= 2) {
-    app.setAsDefaultProtocolClient("ao-app", process.execPath, [
-      path.resolve(process.argv[1]),
-    ]);
+  // A dev build is launched as `electron <app dir>`; Windows ties the scheme to
+  // that exact command, so every call below names it.
+  const devApp: [path?: string, args?: string[]] =
+    process.defaultApp && process.argv.length >= 2
+      ? [process.execPath, [path.resolve(process.argv[1])]]
+      : [];
+  const canRelease = process.platform !== "linux";
+  if (!app.isPackaged && useLoopbackRedirect) {
+    if (canRelease && app.isDefaultProtocolClient("ao-app", ...devApp)) {
+      app.removeAsDefaultProtocolClient("ao-app", ...devApp);
+    }
     return;
   }
-  app.setAsDefaultProtocolClient("ao-app");
+  app.setAsDefaultProtocolClient("ao-app", ...devApp);
+  if (!app.isPackaged && canRelease) {
+    app.once("will-quit", () => {
+      app.removeAsDefaultProtocolClient("ao-app", ...devApp);
+    });
+  }
 }
 
 export function installCloudIPC(
   getDataDir: () => string,
   notifyRenderers: (session: CloudAccount | null) => void,
+  // Runs before an explicit sign-out completes, so its effects are durable even
+  // if the app quits right after.
+  onSignedOut: () => Promise<void> = async () => undefined,
 ): void {
   notifyRenderersFn = notifyRenderers;
   ipcMain.handle("cloud:getSession", () => getCloudSessionCached(getDataDir()));
@@ -660,7 +760,7 @@ export function installCloudIPC(
         title: "WorkOS not configured",
         message: "WorkOS sign-in is not configured.",
         detail:
-          "Set VITE_WORKOS_CLIENT_ID and restart Agent Orchestrator to enable sign-in.",
+          "Set VITE_WORKOS_CLIENT_ID and restart Orchestrator to enable sign-in.",
       });
       return;
     }
@@ -679,6 +779,7 @@ export function installCloudIPC(
       // Sign-out must never fail on a revoke round-trip; clear the store anyway.
     }
     await signOutCloud(dataDir);
+    await onSignedOut().catch(() => undefined);
     notifyRenderers(null);
   });
   ipcMain.handle("cloud:cancelProviderAuth", async () => {
@@ -701,7 +802,7 @@ export function installCloudIPC(
     if (base.username !== "" || base.password !== "" || base.search !== "" || base.hash !== "") throw new Error("Cloud control plane URL must not include credentials, a query string, or a fragment.");
     const dataDir = getDataDir();
     const token = await getCloudAccessToken(dataDir);
-    if (!token) throw new Error("Sign in to AO Cloud before connecting a provider.");
+    if (!token) throw new Error("Sign in to Orchestrator Cloud before connecting a provider.");
     
     if (activeProviderAuthAbort) activeProviderAuthAbort.abort();
     activeProviderAuthAbort = new AbortController();
@@ -737,7 +838,7 @@ export function installCloudIPC(
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
       body: JSON.stringify({ credentialType: credential.credentialType, secret: credential.secret }),
     });
-    if (!response.ok) throw new Error("AO Cloud could not save the provider credential.");
+    if (!response.ok) throw new Error("Orchestrator Cloud could not save the provider credential.");
 
     // Persist the captured Claude setup-token locally as a fallback for local
     // sessions, only once the cloud copy is saved: a failed cloud save must not

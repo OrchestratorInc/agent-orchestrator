@@ -1,7 +1,7 @@
 -- name: InsertShellTerminal :one
 INSERT INTO shell_terminals (
-    handle_id, project_id, session_id, working_dir, title, app_run_id, created_at, transient, preview_capability_verifier
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    handle_id, project_id, session_id, working_dir, title, app_run_id, created_at, transient, preview_capability_verifier, command_owner, title_explicit
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 RETURNING *;
 
 -- name: SelectShellTerminalByHandleID :one
@@ -29,9 +29,14 @@ ORDER BY created_at;
 
 -- name: UpdateShellTerminalTitle :one
 UPDATE shell_terminals
-SET title = ?
+SET title = ?, title_explicit = 1
 WHERE handle_id = ?
 RETURNING *;
+
+-- name: UpdateShellTerminalAppTitle :execrows
+UPDATE shell_terminals
+SET app_title = sqlc.arg(app_title)
+WHERE handle_id = sqlc.arg(handle_id) AND app_title <> sqlc.arg(app_title);
 
 -- name: DeleteShellTerminalByHandleID :execrows
 DELETE FROM shell_terminals

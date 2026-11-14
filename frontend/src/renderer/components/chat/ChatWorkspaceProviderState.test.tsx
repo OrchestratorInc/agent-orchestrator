@@ -1,6 +1,5 @@
 import userEvent from "@testing-library/user-event";
-import { fireEvent, render as rtlRender, screen } from "@testing-library/react";
-import type { ReactElement } from "react";
+import { fireEvent, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { ChatWorkspace } from "./ChatWorkspace";
 import {
@@ -11,15 +10,7 @@ import {
 	chatFixtureThreadError,
 } from "../../lib/chat-fixture";
 import type { ConversationSnapshot } from "../../types/conversation";
-import { TooltipProvider } from "../ui/tooltip";
-
-function render(ui: ReactElement) {
-	const result = rtlRender(<TooltipProvider>{ui}</TooltipProvider>);
-	return {
-		...result,
-		rerender: (nextUi: ReactElement) => result.rerender(<TooltipProvider>{nextUi}</TooltipProvider>),
-	};
-}
+import { renderChat as render } from "../../test/render-chat";
 
 // The surface-level wiring: which snapshot fields produce which chrome, and — the part
 // that is easy to get wrong — which combinations stay quiet.
@@ -113,6 +104,127 @@ describe("plan", () => {
 		expect(screen.getByLabelText("Run the backend tests — done")).toBeInTheDocument();
 	});
 
+	// Claude keeps one task list for the session and re-sends it into every later turn.
+	// Those are copies of one list. The daemon marks every copy but the newest
+	// superseded, so only the latest turn's copy shows.
+	it("shows a list that spans turns once, on the latest turn that carries it", () => {
+		const current = chatFixture.turns[1]!.plan!;
+		const spanning: ConversationSnapshot = {
+			...chatFixture,
+			turns: chatFixture.turns.map((turn) => ({
+				...turn,
+				plan:
+					turn.id === "turn-1"
+						? {
+								spansTurns: true,
+								superseded: true,
+								steps: current.steps.map((step) => ({ ...step, status: "pending" as const })),
+							}
+						: { ...current, spansTurns: true },
+			})),
+		};
+		render(<ChatWorkspace snapshot={spanning} />);
+		expect(screen.getAllByRole("region", { name: "Agent plan" })).toHaveLength(1);
+		expect(screen.getByLabelText("Run the backend tests — in progress")).toBeInTheDocument();
+	});
+
+	// Claude can keep working after its turn ends (a background job finishing). That
+	// work belongs to no turn, so its task list arrives as a row, one per run of such
+	// work. Only the newest copy is current: neither the turn's older copy nor an
+	// earlier run's may show.
+	it("shows a list revised after its turn ended once, at its newest state", () => {
+		const current = chatFixture.turns[1]!.plan!;
+		const planRow = (id: string, sequence: number, done: number, superseded: boolean) => ({
+			kind: "activity" as const,
+			id,
+			sequence,
+			revision: 0,
+			activityKind: "plan" as const,
+			status: "completed" as const,
+			summary: "",
+			detail: {
+				event: "plan" as const,
+				spansTurns: true,
+				superseded,
+				steps: current.steps.map((step, index) => ({
+					text: step.text,
+					status: index < done ? ("completed" as const) : ("pending" as const),
+				})),
+			},
+			createdAt: new Date().toISOString(),
+		});
+		const afterTurn: ConversationSnapshot = {
+			...chatFixture,
+			turns: chatFixture.turns.map((turn) =>
+				turn.id === "turn-2"
+					? { ...turn, state: "completed", plan: { ...current, spansTurns: true, superseded: true } }
+					: turn,
+			),
+			items: [...chatFixture.items, planRow("plan-late-1", 21, 3, true), planRow("plan-late-2", 22, 4, false)],
+			latestSequence: 22,
+		};
+		render(<ChatWorkspace snapshot={afterTurn} />);
+		expect(screen.getAllByRole("region", { name: "Agent plan" })).toHaveLength(1);
+		expect(screen.getByText("4/4")).toBeInTheDocument();
+	});
+
+	// Provider turns AO never correlated each carry their own plan row. Without the
+	// cross-turn flag those are separate plans, not revisions of one, so each shows.
+	it("keeps each plan row that is not a copy of a cross-turn list", () => {
+		const orphanRow = (id: string, sequence: number, text: string) => ({
+			kind: "activity" as const,
+			id,
+			sequence,
+			revision: 0,
+			activityKind: "plan" as const,
+			status: "completed" as const,
+			summary: "Updated plan",
+			detail: { event: "plan" as const, steps: [{ text, status: "completed" as const }] },
+			createdAt: new Date().toISOString(),
+		});
+		const separate: ConversationSnapshot = {
+			...chatFixture,
+			turns: chatFixture.turns.map((turn) => ({ ...turn, plan: undefined })),
+			items: [...chatFixture.items, orphanRow("orphan-1", 21, "Read the logs"), orphanRow("orphan-2", 22, "Fix the build")],
+			latestSequence: 22,
+		};
+		render(<ChatWorkspace snapshot={separate} />);
+		expect(screen.getAllByRole("region", { name: "Agent plan" })).toHaveLength(2);
+	});
+
+	// A turn that failed or was stopped is not working on anything, so the step it
+	// left unfinished must not look busy.
+	it.each(["failed", "interrupted", "completed"] as const)(
+		"stops the step spinner once the turn has %s",
+		(state) => {
+			const ended: ConversationSnapshot = {
+				...chatFixture,
+				turns: chatFixture.turns.map((turn) => (turn.id === "turn-2" ? { ...turn, state } : turn)),
+			};
+			const { container } = render(<ChatWorkspace snapshot={ended} />);
+			expect(screen.getByLabelText("Run the backend tests — in progress")).toBeInTheDocument();
+			expect(container.querySelector("[data-turn-plan] .animate-spin")).toHaveClass("opacity-0");
+		},
+	);
+
+	it("keeps the step spinner while the turn runs", () => {
+		const { container } = render(<ChatWorkspace snapshot={chatFixture} />);
+		expect(container.querySelector("[data-turn-plan] .animate-spin")).not.toHaveClass("opacity-0");
+	});
+
+	it("keeps a separate plan on each turn when the plans are per turn", () => {
+		const current = chatFixture.turns[1]!.plan!;
+		const perTurn: ConversationSnapshot = {
+			...chatFixture,
+			turns: chatFixture.turns.map((turn) => ({
+				...turn,
+				plan: turn.id === "turn-1" ? { steps: [{ text: "Read the store", status: "completed" }] } : current,
+			})),
+		};
+		render(<ChatWorkspace snapshot={perTurn} />);
+		expect(screen.getAllByRole("region", { name: "Agent plan" })).toHaveLength(2);
+	});
+
 	// A plan whose turn AO never correlated — one from before this controller started.
 	it("still renders a plan row whose turn carries none", () => {
 		const orphan: ConversationSnapshot = {
@@ -140,6 +252,9 @@ describe("plan", () => {
 });
 
 describe("provider state chrome", () => {
+	// The notice never repeats the provider's error; the timeline already shows it once.
+	const expiredNotice = "Your Codex login has expired. Log in again to keep using this chat.";
+
 	it.each(["completion", "notification", "both"])("keeps the %s failure in chat while preserving sign-in guidance", (source) => {
 		const reason = "Provider access denied.\n\nContact your administrator.";
 		const snapshot: ConversationSnapshot = {
@@ -191,17 +306,13 @@ describe("provider state chrome", () => {
 		for (const trigger of screen.getAllByRole("button", { name: /Worked for/ })) {
 			fireEvent.click(trigger);
 		}
-		expect(screen.getByRole("alert")).toHaveTextContent("Provider authentication needs attention");
-		expect(screen.getByRole("alert")).toHaveTextContent("login");
-		expect(screen.getByRole("alert")).not.toHaveTextContent("Provider access denied");
+		expect(screen.getByText(expiredNotice)).toBeInTheDocument();
 		expect(screen.getAllByText(/Provider access denied/)).toHaveLength(1);
 		expect(screen.getByText(/Contact your administrator/)).toBeInTheDocument();
 		expect(screen.getByText("Earlier recovered warning")).toBeInTheDocument();
 
 		rerender(<ChatWorkspace snapshot={structuredClone(snapshot)} />);
-		expect(screen.getByRole("alert")).toHaveTextContent("Provider authentication needs attention");
-		expect(screen.getByRole("alert")).toHaveTextContent("login");
-		expect(screen.getByRole("alert")).not.toHaveTextContent("Provider access denied");
+		expect(screen.getByText(expiredNotice)).toBeInTheDocument();
 		expect(screen.getAllByText(/Provider access denied/)).toHaveLength(1);
 
 		rerender(
@@ -210,12 +321,13 @@ describe("provider state chrome", () => {
 			/>,
 		);
 		expect(screen.getAllByText(/Provider access denied/)).toHaveLength(1);
-		expect(screen.getByRole("alert")).toHaveTextContent("Session expired.");
+		expect(screen.getByText(expiredNotice)).toBeInTheDocument();
 	});
 
 	it("keeps credential recovery available when the failure is not in loaded history", () => {
 		render(<ChatWorkspace snapshot={chatFixtureReauth} />);
-		expect(screen.getByRole("alert")).toHaveTextContent(/Provider authentication needs attention/);
+		expect(screen.getByText(expiredNotice)).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Log in again" })).toBeInTheDocument();
 	});
 
 	it("reports a provider-side thread fault while the controller is healthy", () => {
@@ -262,10 +374,10 @@ describe("model reroute", () => {
 		expect(trigger.getAttribute("title")).toMatch(
 			/answered with gpt-5\.6-terra-mini instead of gpt-5\.6-terra/,
 		);
-		expect(screen.getByLabelText(/Substituted for gpt-5\.6-terra$/)).toBeInTheDocument();
+		expect(screen.queryByLabelText(/Substituted for/)).not.toBeInTheDocument();
 	});
 
-	it("carries the provider's own reason", () => {
+	it("leaves the reroute out of the timeline", () => {
 		render(
 			<ChatWorkspace
 				snapshot={chatFixtureRerouted}
@@ -277,8 +389,9 @@ describe("model reroute", () => {
 			fireEvent.click(trigger);
 		}
 		expect(
-			screen.getByText(/The requested model is at capacity for this account tier/),
-		).toBeInTheDocument();
+			screen.queryByText(/The requested model is at capacity for this account tier/),
+		).not.toBeInTheDocument();
+		expect(screen.queryByText(/Answered by/)).not.toBeInTheDocument();
 	});
 
 	it("keeps naming the chosen model when nothing was substituted", () => {
@@ -305,7 +418,7 @@ describe("empty project session permissions", () => {
 		const picker = screen.getByRole("button", { name: "Approval policy for the next turn" });
 		expect(picker).toBeEnabled();
 		await user.click(picker);
-		await user.click(screen.getByRole("menuitem", { name: "Remember for this project" }));
+		await user.click(screen.getByRole("menuitem", { name: /Remember for this project/ }));
 		expect(remember).toHaveBeenCalledWith("auto");
 	});
 });

@@ -11,7 +11,8 @@ inherits a stunted environment (minimal `PATH`, no shell-exported credentials).
 The daemon then cannot find `git`/the agent CLIs, and the agents it launches
 cannot see API keys. Packaged macOS/Linux builds carry their own tmux and do
 not depend on a machine installation; development and standalone daemon runs
-still resolve tmux from `PATH`. The same app launched from a terminal works,
+still resolve tmux from `PATH`, and on macOS then from the Homebrew and MacPorts
+install paths a minimal `PATH` omits. The same app launched from a terminal works,
 because a terminal-started process inherits the shell's fully-populated
 environment. The fix is to resolve the user's login-shell environment once at
 startup and use it as the base for the daemon's environment.
@@ -29,8 +30,22 @@ session (it execs `tmux`, which runs `claude`/`codex`, etc.), and the agent's
 AO keeps an AO-only directory first after adding agent and Node runtime
 directories, including Codex Chat provider launches, and applies the same pin
 to reviewer and shell-terminal launches.
-Interactive login shells can still reorder `PATH` through user startup files,
-so this is a launch invariant and a best-effort convenience inside a shell.
+Login shells run the user's startup files after that pin, and Codex runs every
+agent command through one, so the same launches also get wrappers under
+`<data dir>/runtime/login-shell`. `ZDOTDIR` points zsh at files that run the
+user's own `.zshenv`, `.zprofile`, `.zshrc`, `.zlogin` and `.zlogout` (from
+their `ZDOTDIR`, or `$HOME`) and then put the pinned directory back first.
+`BASH_ENV` does the same after a non-interactive bash reads its profile, after
+running the user's own `BASH_ENV`, and a one-shot `PROMPT_COMMAND` does it
+before an interactive bash's first prompt. A stale `ao` that a startup file
+prepends (a legacy npm or Homebrew install, or the `scripts/daemon-build.sh`
+link in `~/.local/bin`) therefore no longer wins in zsh or bash. sh, dash, ksh
+and fish offer no such hook: `ao doctor`'s `ao-login-shell` check starts the
+user's login shell exactly as a session does and names whichever `ao` wins.
+An AppImage mounts under a new `/tmp/.mount_*` path on every launch, so a
+daemon running from one pins, and gives Codex and Auggie hooks,
+`<data dir>/runtime/ao-current/ao` instead: a link it moves to its own mount at
+every start, so sessions that outlive an app restart still reach the app.
 When the install directory contains other executable tools, AO creates an
 `ao` shim under its resolved absolute data directory instead of promoting those
 sibling tools. Windows provides both command-shell and Git Bash compatible
@@ -207,8 +222,10 @@ it. We shell out once to the user's own shell and adopt its result.
 - `frontend/src/shared/bundled-tmux.ts` and `frontend/src/main.ts` - packaged
   resource resolution, durable versioned staging under the AO data directory,
   and `AO_TMUX_BINARY`/AO-owned socket injection.
-- `backend/internal/adapters/runtime/tmux/tmux.go` - honors
-  `AO_TMUX_BINARY`; standalone runs fall back to `exec.LookPath("tmux")`.
+- `backend/internal/tmuxbin/resolve.go` - shared tmux lookup for the runtime,
+  spawn gate, `ao doctor`, and system check: `AO_TMUX_BINARY` (fail-closed),
+  then the packaged `resources/tmux/bin/tmux`, then `PATH`, then on macOS
+  `/opt/homebrew/bin/tmux`, `/usr/local/bin/tmux`, and `/opt/local/bin/tmux`.
 - `backend/internal/observe/reaper/reaper.go`,
   `backend/internal/lifecycle/runtime.go` - liveness -> termination
   (`ProbeFailed` never terminates, so a daemon that cannot run `tmux` strands

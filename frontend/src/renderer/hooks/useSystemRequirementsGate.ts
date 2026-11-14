@@ -1,8 +1,9 @@
+import { apiErrorException } from "../lib/api-error-exception";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useSyncExternalStore } from "react";
 import { markTerminalHandleFresh } from "../lib/fresh-terminal-handles";
 import type { components } from "../../api/schema";
-import { apiClient, apiErrorMessage, getApiBaseUrl, subscribeApiBaseUrl } from "../lib/api-client";
+import { apiClient, getApiBaseUrl, subscribeApiBaseUrl } from "../lib/api-client";
 import { usesPreviewWorkspaceData } from "../lib/preview-mode";
 import { shellTerminalsQueryKey, shellTerminalsQueryOptions, type ShellTerminal } from "./useShellTerminals";
 
@@ -64,7 +65,7 @@ export function useStartGitHubAuthTerminal() {
 			const existing = terminals.find((terminal) => terminal.title === "Connect GitHub" && !terminal.sessionId && !terminal.projectId);
 			if (existing) return existing;
 			const { data, error } = await apiClient.POST("/api/v1/system/github-auth/terminal");
-			if (error || !data) throw new Error(apiErrorMessage(error, "Could not start GitHub sign-in."));
+			if (error || !data) throw apiErrorException(error, "Could not start GitHub sign-in.");
 			markTerminalHandleFresh(data.shellTerminal.handleId);
 			return data.shellTerminal;
 		},

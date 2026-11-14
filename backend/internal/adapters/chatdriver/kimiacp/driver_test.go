@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/kimi"
 	acpdriver "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -210,5 +211,18 @@ ready:
 		case <-ctx.Done():
 			t.Fatalf("wait for Kimi handshake: %v", ctx.Err())
 		}
+	}
+}
+
+func TestDriverReportsKimiRunsOnlyInItsDefaultMode(t *testing.T) {
+	checker, ok := New(kimi.New(), slog.New(slog.NewTextHandler(io.Discard, nil))).(ports.ChatPermissionModeChecker)
+	if !ok {
+		t.Fatal("the Kimi driver does not report which permission modes it runs in")
+	}
+	if !checker.SupportsPermissionMode(ports.PermissionModeDefault) {
+		t.Fatal("Kimi refuses its own default mode")
+	}
+	if checker.SupportsPermissionMode(ports.PermissionModeBypassPermissions) {
+		t.Fatal("Kimi accepts bypass permissions, which it cannot run in")
 	}
 }

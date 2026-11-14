@@ -27,23 +27,24 @@ vi.mock("@tanstack/react-router", async (importOriginal) => ({
 vi.mock("../hooks/useCloudCp", () => ({ useCloudCp: () => ({ ready: false, baseUrl: "", client: {} }) }));
 vi.mock("../hooks/useCloudOrg", () => ({ useCloudOrg: () => ({ org: undefined, ready: false }) }));
 vi.mock("../lib/shell-context", () => ({ useShell: () => ({ daemonStatus: { state: "ready" } }) }));
-vi.mock("./ShellTopbar", () => ({ ShellTopbar: () => <div data-testid="shared-shell-topbar" /> }));
+vi.mock("./SessionTopbarActions", () => ({ SessionTopbarActions: () => <div data-testid="shared-shell-topbar" /> }));
 vi.mock("./NotificationCenter", () => ({ NotificationCenter: () => <button aria-label="Notifications" type="button" /> }));
 vi.mock("./TerminalPane", () => ({ TerminalPane: ({ session, terminalTarget, inputDisabled, createMux }: { session?: { hostId?: string; terminalHandleId?: string }; terminalTarget?: { kind: string; handleId?: string }; inputDisabled?: boolean; createMux?: () => unknown }) => <div data-testid="remote-terminal-base" data-host-id={session?.hostId ?? ""} data-terminal-handle={terminalTarget?.handleId ?? session?.terminalHandleId ?? ""} data-input-disabled={inputDisabled ? "true" : "false"} data-remote-mux={createMux ? "true" : "false"}>{session?.hostId ? baseUrlForHost(session.hostId) : "local"}</div> }));
 
 import { baseUrlForHost, connectHost, disconnectHost } from "../lib/host-clients";
-import { conversationQueryKey } from "../hooks/useConversation";
+import { conversationConfigOptionsQueryKey, conversationQueryKey, refreshRemoteConversationOnce } from "../hooks/useConversation";
 import { reviewerConversationQueryKey } from "../hooks/useReviewerConversation";
 import { remoteWorkspaceQueryKey } from "../hooks/useWorkspaceQuery";
 import { shellTerminalsQueryKey, shellTerminalsQueryKeyForHost } from "../hooks/useShellTerminals";
 import { agentReadiness } from "../test/agent-readiness-fixtures";
 import { SessionView } from "./SessionView";
 import { SessionTopbarProvider } from "./SessionTopbarPortal";
+import { PageTopbarSurface } from "./PageTopbar";
 import { TooltipProvider } from "./ui/tooltip";
 
 function renderRemoteSession(queryClient: QueryClient, hostId = "box-a") {
 	return render(<QueryClientProvider client={queryClient}>
-		<TooltipProvider><SessionTopbarProvider><SessionView hostId={hostId} sessionId="session-1" /></SessionTopbarProvider></TooltipProvider>
+		<TooltipProvider><SessionTopbarProvider><PageTopbarSurface notifications><SessionView hostId={hostId} sessionId="session-1" /></PageTopbarSurface></SessionTopbarProvider></TooltipProvider>
 	</QueryClientProvider>);
 }
 
@@ -114,13 +115,20 @@ it("keeps equal local, Box A, and Box B session IDs isolated through chat sends"
 	])));
 });
 
-it("removes remote chat actions when its host disconnects, without falling back to local", async () => {
+const HOST_AWAY = "Host is offline. You can send when it connects.";
+
+it("keeps a remote chat readable and open for typing while its host is away, and sends only once it is back", async () => {
 	localGet.mockReset();
 	localPost.mockReset();
 	remoteConnect.mockResolvedValue({ hostId: "box-a", label: "Box A", url: "http://box-a:3001", base: "http://127.0.0.1:4000" });
+	const posts: string[] = [];
 	vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
 		const request = input instanceof Request ? input : new Request(input);
 		const path = new URL(request.url).pathname;
+		if (path.endsWith("/conversation/messages")) {
+			posts.push(request.url);
+			return Response.json({ state: "accepted", turnId: "turn-1" }, { status: 202 });
+		}
 		if (path.endsWith("/projects")) return Response.json({ projects: [{ id: "project-1", name: "Remote", path: "/remote" }] });
 		if (path.endsWith("/sessions")) return Response.json({ sessions: [{ id: "session-1", projectId: "project-1", harness: "codex", status: "working", mode: "chat", prs: [] }] });
 		if (path.endsWith("/conversation")) return Response.json(conversationBody());
@@ -132,13 +140,108 @@ it("removes remote chat actions when its host disconnects, without falling back 
 	await screen.findByRole("combobox", { name: "Message the agent" });
 	await act(async () => { await disconnectHost("box-a"); });
 	expect(queryClient.getQueryData(conversationQueryKey("session-1", "box-a"))).toBeDefined();
-	expect(screen.queryByRole("combobox", { name: "Message the agent" })).not.toBeInTheDocument();
-	expect(screen.getByRole("alert")).toHaveTextContent("Host is offline");
+	expect(screen.getByTestId("session-detail")).toBeInTheDocument();
+	expect(await screen.findByText(HOST_AWAY)).toBeInTheDocument();
+	const field = screen.getByRole("combobox", { name: "Message the agent" });
+	await typeInLexicalEditor(field, "typed while away");
+	expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
+	fireEvent.keyDown(field, { key: "Enter" });
+	expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+	// The refused read of the outage must not take the chat away while the first read after it runs.
+	await act(async () => { await queryClient.refetchQueries({ queryKey: remoteWorkspaceQueryKey("box-a") }); });
+	expect(queryClient.getQueryState(remoteWorkspaceQueryKey("box-a"))?.status).toBe("error");
+	await act(async () => { await connectHost("http://box-a:3001"); });
+	expect(screen.getByTestId("session-detail")).toBeInTheDocument();
+	expect(screen.queryByTestId("session-missing")).not.toBeInTheDocument();
+	await waitFor(() => expect(screen.getByRole("button", { name: "Send message" })).toBeEnabled());
+	expect(posts).toEqual([]);
+	await userEvent.click(screen.getByRole("button", { name: "Send message" }));
+	await waitFor(() => expect(posts).toEqual(["http://127.0.0.1:4000/api/v1/sessions/session-1/conversation/messages"]));
 	expect(localGet).not.toHaveBeenCalled();
 	expect(localPost).not.toHaveBeenCalled();
 });
 
-it("hides stale chat controls when the upstream daemon fails but its proxy remains connected", async () => {
+it.each(["disconnected", "upstream unavailable"])("pauses provider polling while the host is %s and resumes after reconnect", async (outage) => {
+	localGet.mockReset();
+	localPost.mockReset();
+	remoteConnect.mockResolvedValue({ hostId: "box-a", label: "Box A", url: "http://box-a:3001", base: "http://127.0.0.1:4000" });
+	let offline = false;
+	let catalogReads = 0;
+	vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+		const request = input instanceof Request ? input : new Request(input);
+		const path = new URL(request.url).pathname;
+		const unavailable = () => Response.json({ code: "UPSTREAM_UNAVAILABLE", message: "The host could not be reached" }, { status: 502 });
+		if (path.endsWith("/projects")) return Response.json({ projects: [{ id: "project-1", name: "Remote", path: "/remote" }] });
+		if (path.endsWith("/sessions")) return offline && outage === "upstream unavailable"
+			? unavailable()
+			: Response.json({ sessions: [{ id: "session-1", projectId: "project-1", harness: "codex", status: "idle", mode: "chat", prs: [] }] });
+		if (path.endsWith("/conversation")) return Response.json(conversationBody({
+			capabilities: ["config_options"], settings: { model: "model-1", approvalMode: "default" },
+			messages: [{ id: "saved", role: "assistant", text: "Saved answer", sequence: 1 }],
+		}));
+		if (path.endsWith("/config-options")) {
+			catalogReads++;
+			return offline ? unavailable() : Response.json({ options: [] });
+		}
+		return Response.json({});
+	}));
+	await connectHost("http://box-a:3001");
+	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	const catalogKey = conversationConfigOptionsQueryKey("session-1", "box-a");
+	renderRemoteSession(queryClient);
+	await screen.findByText("Saved answer");
+	await waitFor(() => expect(queryClient.getQueryState(catalogKey)?.status).toBe("success"));
+
+	offline = true;
+	await act(async () => {
+		if (outage === "disconnected") await disconnectHost("box-a");
+		else await queryClient.invalidateQueries({ queryKey: remoteWorkspaceQueryKey("box-a") });
+	});
+	expect(await screen.findByText(HOST_AWAY)).toBeInTheDocument();
+	expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
+	await waitFor(() => expect(queryClient.getQueryCache().find({ queryKey: catalogKey })?.isActive()).toBe(false));
+	const readsBeforePoll = catalogReads;
+	await act(async () => { await queryClient.refetchQueries({ queryKey: catalogKey, exact: true }); });
+	expect(catalogReads).toBe(readsBeforePoll);
+	expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+	offline = false;
+	await act(async () => {
+		if (outage === "disconnected") await connectHost("http://box-a:3001");
+		else await queryClient.invalidateQueries({ queryKey: remoteWorkspaceQueryKey("box-a") });
+	});
+	await waitFor(() => expect(screen.queryByText(HOST_AWAY)).not.toBeInTheDocument());
+	await waitFor(() => expect(catalogReads).toBeGreaterThan(readsBeforePoll));
+	expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+	expect(localGet).not.toHaveBeenCalled();
+	expect(localPost).not.toHaveBeenCalled();
+});
+
+it("hides the stale stopped-agent banner while the host is away and brings it back after", async () => {
+	localGet.mockReset();
+	localPost.mockReset();
+	remoteConnect.mockResolvedValue({ hostId: "box-a", label: "Box A", url: "http://box-a:3001", base: "http://127.0.0.1:4000" });
+	vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+		const request = input instanceof Request ? input : new Request(input);
+		const path = new URL(request.url).pathname;
+		if (path.endsWith("/projects")) return Response.json({ projects: [{ id: "project-1", name: "Remote", path: "/remote" }] });
+		if (path.endsWith("/sessions")) return Response.json({ sessions: [{ id: "session-1", projectId: "project-1", harness: "codex", status: "working", mode: "chat", prs: [] }] });
+		if (path.endsWith("/conversation")) return Response.json(conversationBody({ controller: "stopped" }));
+		return Response.json({});
+	}));
+	await connectHost("http://box-a:3001");
+	renderRemoteSession(new QueryClient({ defaultOptions: { queries: { retry: false } } }));
+	expect(await screen.findByRole("alert")).toHaveTextContent("The agent controller stopped");
+	expect(screen.getByRole("button", { name: "Open shell" })).toBeInTheDocument();
+	await act(async () => { await disconnectHost("box-a"); });
+	expect(await screen.findByText(HOST_AWAY)).toBeInTheDocument();
+	expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+	expect(screen.queryByRole("button", { name: "Open shell" })).not.toBeInTheDocument();
+	await act(async () => { await connectHost("http://box-a:3001"); });
+	expect(await screen.findByRole("button", { name: "Open shell" })).toBeInTheDocument();
+});
+
+it("locks the last saved chat when the upstream daemon fails but its proxy remains connected", async () => {
 	localGet.mockReset();
 	localPost.mockReset();
 	remoteConnect.mockResolvedValue({ hostId: "box-a", label: "Box A", url: "http://box-a:3001", base: "http://127.0.0.1:4000" });
@@ -162,17 +265,16 @@ it("hides stale chat controls when the upstream daemon fails but its proxy remai
 	upstreamFailed = true;
 	await act(async () => { await queryClient.invalidateQueries({ queryKey: remoteWorkspaceQueryKey("box-a") }); });
 	expect(queryClient.getQueryData(remoteWorkspaceQueryKey("box-a"))).toBeDefined();
-	await waitFor(() => expect(screen.queryByTestId("session-detail")).not.toBeInTheDocument());
-	expect(screen.getByRole("alert")).toHaveTextContent("Host is offline");
-	expect(screen.queryByRole("combobox", { name: "Message the agent" })).not.toBeInTheDocument();
-	expect(screen.queryByRole("complementary", { name: "Session inspector" })).not.toBeInTheDocument();
+	expect(await screen.findByText(HOST_AWAY)).toBeInTheDocument();
+	expect(screen.getByTestId("session-detail")).toBeInTheDocument();
+	expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
 	expect(localGet).not.toHaveBeenCalled();
 	expect(localPost).not.toHaveBeenCalled();
 });
 
 it.each([
-	[401, { error: "unauthorized", code: "BAD_PASSWORD" }, "Host rejected the password"],
-	[426, { error: "incompatible", code: "HOST_API_INCOMPATIBLE" }, "AO versions are incompatible"],
+	[401, { error: "unauthorized", code: "BAD_PASSWORD" }, "The host rejected this device"],
+	[426, { error: "incompatible", code: "HOST_API_INCOMPATIBLE" }, "Orchestrator versions are incompatible"],
 	[502, { error: "unavailable", code: "HOST_IDENTITY_UNVERIFIED", message: "Host identity changed" }, "Host is offline"],
 ])("explains remote session HTTP %i failures while its proxy is still connected", async (status, body, message) => {
 	remoteConnect.mockResolvedValue({ hostId: "box-a", label: "Box A", url: "http://box-a:3001", base: "http://127.0.0.1:4000" });
@@ -276,9 +378,9 @@ it("shows a normal inspector and reads its changed files from the remote host on
 	await userEvent.click(await screen.findByRole("button", { name: "Open full file" }));
 	expect(screen.getByRole("tab", { name: "page.tsx" })).toBeInTheDocument();
 	expect(screen.getByTestId("session-file-workspace")).toBeInTheDocument();
-	await userEvent.click(screen.getByRole("button", { name: "Maximize files" }));
+	await userEvent.click(screen.getByRole("button", { name: "Maximize" }));
 	expect(screen.getByTestId("files-popout-topbar")).toBeInTheDocument();
-	await userEvent.click(screen.getByRole("button", { name: "Minimize files" }));
+	await userEvent.click(screen.getByRole("button", { name: "Return to panel" }));
 	expect(requests).toContain("http://127.0.0.1:4000/api/v1/sessions/session-1/workspace/manifest");
 	expect(requests).toContain("http://127.0.0.1:4000/api/v1/sessions/session-1/workspace/diffs");
 	await waitFor(() => expect(requests.some((url) => url.startsWith("http://127.0.0.1:4000/api/v1/sessions/session-1/workspace/file?path="))).toBe(true));
@@ -389,7 +491,7 @@ it("baselines previews separately when the same session ID is viewed on another 
 	await screen.findByRole("combobox", { name: "Message the agent" });
 	expect(useUiStore.getState().inspectorSessions[sessionUiKey("session-1", "box-a")]?.view).toBe("summary");
 	view.rerender(<QueryClientProvider client={client}>
-		<TooltipProvider><SessionTopbarProvider><SessionView hostId="box-b" sessionId="session-1" /></SessionTopbarProvider></TooltipProvider>
+		<TooltipProvider><SessionTopbarProvider><PageTopbarSurface notifications><SessionView hostId="box-b" sessionId="session-1" /></PageTopbarSurface></SessionTopbarProvider></TooltipProvider>
 	</QueryClientProvider>);
 	await waitFor(() => expect(client.getQueryData(remoteWorkspaceQueryKey("box-b"))).toBeDefined());
 	expect(useUiStore.getState().inspectorSessions[sessionUiKey("session-1", "box-b")]?.view).toBe("summary");
@@ -416,7 +518,7 @@ it("automatically reveals a remote preview after session data finishes loading",
 	});
 	const navigate = vi.spyOn(window.ao!.browser, "navigate").mockImplementation(async ({ viewId, url }) => {
 		emitTabs?.({ viewId, activeTabId: "t1", tabs: [{ id: "t1", url, title: "QA preview", active: true }] });
-		return { viewId, url, title: "AO preview", canGoBack: false, canGoForward: false, isLoading: false };
+		return { viewId, url, title: "Orchestrator preview", canGoBack: false, canGoForward: false, isLoading: false };
 	});
 	vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
 		const path = new URL(input instanceof Request ? input.url : String(input)).pathname;
@@ -446,8 +548,7 @@ it("automatically reveals a remote preview after session data finishes loading",
 	await waitFor(() => expect(resolvePreview).toHaveBeenCalledWith("box-a", "session-1", "http://127.0.0.1:4600/"));
 	await waitFor(() => expect(screen.getByRole("textbox", { name: "Browser URL" })).toHaveValue("ao-preview.localhost"));
 	await waitFor(() => expect(within(screen.getByRole("tablist", { name: "Browser tabs" })).getByRole("tab", { name: "QA preview" })).toBeVisible());
-	await userEvent.click(screen.getByRole("button", { name: "Browser controls" }));
-	await userEvent.click(screen.getByRole("menuitem", { name: "Pop out" }));
+	await userEvent.click(screen.getByRole("button", { name: "Maximize" }));
 	expect(screen.getByTestId("browser-popout-topbar")).toBeInTheDocument();
 	await userEvent.click(within(document.querySelector(".browser-popout-overlay") as HTMLElement).getByRole("button", { name: "Return to panel" }));
 	expect(screen.queryByTestId("browser-popout-topbar")).not.toBeInTheDocument();
@@ -487,7 +588,7 @@ it("opens a TUI host file in a shared center tab and renames on that host", asyn
 	expect(screen.getByRole("tab", { name: "page.tsx" })).toHaveAttribute("aria-selected", "true");
 	expect(screen.getByTestId("session-file-workspace")).toBeInTheDocument();
 	await userEvent.click(screen.getByRole("tab", { name: /Worker · Codex/ }));
-	expect(screen.queryByTestId("session-file-workspace")).not.toBeInTheDocument();
+	expect(screen.getByTestId("session-file-workspace").closest("[inert]")).not.toBeNull();
 	expect(screen.getByTestId("remote-terminal-base")).toBeVisible();
 	await userEvent.dblClick(screen.getByRole("tab", { name: /Worker · Codex/ }));
 	const rename = screen.getByRole("textbox", { name: /Rename/ });
@@ -498,7 +599,7 @@ it("opens a TUI host file in a shared center tab and renames on that host", asyn
 	expect(localGet).not.toHaveBeenCalled();
 });
 
-it("loads older remote history once while polling only the latest page", async () => {
+it("loads older remote history once while refreshing only the latest page", async () => {
 	const conversationReads: URL[] = [];
 	let latestReads = 0;
 	localGet.mockReset();
@@ -532,7 +633,11 @@ it("loads older remote history once while polling only the latest page", async (
 	fireEvent.click(screen.getByRole("button", { name: "Load earlier messages" }));
 	await screen.findByText("Earlier work");
 	expect(conversationReads.map((url) => url.searchParams.get("beforeSequence"))).toContain("201");
-	expect(conversationReads.every((url) => url.searchParams.get("limit") === "200")).toBe(true);
+	// A remote chat reads a small live page, larger older pages, and cut tool output.
+	expect(conversationReads.map((url) => url.searchParams.get("limit"))).toEqual(["30", "100"]);
+	expect(conversationReads.every((url) => url.searchParams.get("outputLimit") === "512")).toBe(true);
+	// What the event stream does for each conversation event of an open chat.
+	act(() => refreshRemoteConversationOnce(queryClient, "session-1", "box-a"));
 	await screen.findByText("Latest update 2", {}, { timeout: 4_000 });
 	expect(screen.getByText("Sliding window edge")).toBeInTheDocument();
 	expect(screen.getByText("Earlier work")).toBeInTheDocument();
@@ -587,7 +692,10 @@ it("reattaches a terminal when the same host gets a new proxy connection", async
 	await waitFor(() => expect(screen.getByTestId("remote-terminal-base")).toHaveTextContent("http://127.0.0.1:4001/new"));
 });
 
-it("reuses a Chat delivery ID when a lost response is retried", async () => {
+it.each([
+	["its response is lost", () => Promise.reject(new TypeError("response lost after acceptance")), "response lost after acceptance"],
+	["the host is unreachable", async () => Response.json({ error: "unavailable", code: "UPSTREAM_UNAVAILABLE", message: "The host could not be reached" }, { status: 502 }), "The host could not be reached"],
+] as const)("keeps a Chat send as Not sent without the raw error when %s, and Retry reuses its delivery ID", async (_case, lose, raw) => {
 	const deliveryIds: string[] = [];
 	const posts: string[] = [];
 	localGet.mockReset();
@@ -606,7 +714,7 @@ it("reuses a Chat delivery ID when a lost response is retried", async () => {
 		else if (new URL(request.url).pathname.endsWith("/conversation/messages")) {
 			posts.push(request.url);
 			deliveryIds.push((await request.json() as { clientMessageId: string }).clientMessageId);
-			if (deliveryIds.length === 1) throw new TypeError("response lost after acceptance");
+			if (deliveryIds.length === 1) return lose();
 			status = 202;
 			body = { state: "accepted", turnId: "turn-1" };
 		} else throw new Error(`Unexpected request ${request.url}`);
@@ -619,12 +727,15 @@ it("reuses a Chat delivery ID when a lost response is retried", async () => {
 	const message = await screen.findByRole("combobox", { name: "Message the agent" });
 	await typeInLexicalEditor(message, "Continue the task");
 	await userEvent.click(screen.getByRole("button", { name: "Send message" }));
-	await screen.findByText(/delivery wasn’t confirmed/);
+	// The lost send waits beside the box with its delivery ID.
+	await screen.findByTestId("unsent-message-strip");
+	expect(screen.queryByText(raw)).not.toBeInTheDocument();
 	await act(async () => { await disconnectHost("box-a"); });
-	expect(screen.getByRole("alert")).toHaveTextContent("Host is offline");
+	expect(screen.getByRole("button", { name: "Retry" })).toBeDisabled();
+	expect(screen.queryByText(raw)).not.toBeInTheDocument();
 	await act(async () => { await connectHost("http://box-a:3001"); });
-	await screen.findByRole("button", { name: "Retry message safely" });
-	await userEvent.click(screen.getByRole("button", { name: "Retry message safely" }));
+	await waitFor(() => expect(screen.getByRole("button", { name: "Retry" })).toBeEnabled());
+	await userEvent.click(screen.getByRole("button", { name: "Retry" }));
 	await waitFor(() => expect(deliveryIds).toHaveLength(2));
 	expect(deliveryIds[1]).toBe(deliveryIds[0]);
 	expect(posts).toEqual([
@@ -713,12 +824,13 @@ it("retries reviewer Chat on Box B with the same delivery ID", async () => {
 	expect(await screen.findByText("Review on port 4001")).toBeInTheDocument();
 	await typeInLexicalEditor(screen.getByRole("combobox", { name: "Message the agent" }), "Review this change");
 	await userEvent.click(screen.getByRole("button", { name: "Send message" }));
-	await screen.findByText(/delivery wasn’t confirmed/);
+	// The lost send waits beside the box with its delivery ID.
+	await screen.findByTestId("unsent-message-strip");
 	await act(async () => { await disconnectHost("box-b"); });
-	expect(screen.getByRole("alert")).toHaveTextContent("Host is offline");
+	expect(screen.getByRole("button", { name: "Retry" })).toBeDisabled();
 	await act(async () => { await connectHost("http://box-b:3001"); });
-	await screen.findByRole("button", { name: "Retry message safely" });
-	await userEvent.click(screen.getByRole("button", { name: "Retry message safely" }));
+	await waitFor(() => expect(screen.getByRole("button", { name: "Retry" })).toBeEnabled());
+	await userEvent.click(screen.getByRole("button", { name: "Retry" }));
 	await waitFor(() => expect(deliveryIds).toHaveLength(2));
 	expect(deliveryIds[1]).toBe(deliveryIds[0]);
 	expect(posts).toEqual([
@@ -732,7 +844,7 @@ it("retries reviewer Chat on Box B with the same delivery ID", async () => {
 	expect(localPost).not.toHaveBeenCalled();
 });
 
-it("opens the returned reviewer Chat when a remote review is triggered", async () => {
+it("adds the remote reviewer Chat tab without switching to it when a review is triggered", async () => {
 	HTMLElement.prototype.scrollTo = vi.fn();
 	remoteConnect.mockResolvedValue({ hostId: "box-b", label: "Box B", url: "http://box-b:3001", base: "http://127.0.0.1:4001" });
 	const prUrl = "https://github.com/acme/todo/pull/7";
@@ -764,8 +876,11 @@ it("opens the returned reviewer Chat when a remote review is triggered", async (
 	await userEvent.click(await screen.findByRole("button", { name: "Open inspector panel" }));
 	await userEvent.click(await screen.findByRole("tab", { name: "Reviews" }));
 	await userEvent.click(await screen.findByRole("button", { name: "Review latest commit" }));
-	expect(await screen.findByText("Reviewer is on Box B")).toBeInTheDocument();
+	const reviewerTab = await screen.findByRole("tab", { name: "Reviewer" });
 	expect(mutations).toEqual(["http://127.0.0.1:4001/api/v1/sessions/session-1/reviews/trigger"]);
+	expect(reviewerTab).toHaveAttribute("aria-selected", "false");
+	await userEvent.click(reviewerTab);
+	expect(await screen.findByText("Reviewer is on Box B")).toBeInTheDocument();
 	expect(screen.getByRole("tab", { name: "Reviewer" })).toHaveAttribute("aria-selected", "true");
 });
 
@@ -908,5 +1023,5 @@ it("hides Chat switching for a remote harness outside that host's Chat list", as
 	renderRemoteSession(queryClient);
 	await screen.findByTestId("remote-terminal-base");
 	await waitFor(() => expect(queryClient.getQueryData(["settings", "box-a"])).toMatchObject({ chatHarnesses: ["claude-code", "codex"] }));
-	expect(screen.queryByRole("button", { name: "Session actions" })).not.toBeInTheDocument();
+	expect(screen.queryByRole("button", { name: "Switch to chat UI" })).not.toBeInTheDocument();
 });

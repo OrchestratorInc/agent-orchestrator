@@ -164,6 +164,7 @@ func (c *conversation) beginHistoryReplay(sessionID string) {
 	c.sessionID = sessionID
 	c.activeTurn = ""
 	c.messages = make(map[string]string)
+	c.steerSegment = 0
 	c.thoughts = make(map[string]string)
 	c.nestedMessages = make(map[string]nestedMessageState)
 	c.tools = make(map[string]*toolState)
@@ -214,7 +215,11 @@ func (c *conversation) finishHistoryReplay() {
 
 	c.historyMu.Lock()
 	if c.history != nil {
-		c.historyEvents = append([]ports.ChatEvent(nil), c.history.events...)
+		events := append([]ports.ChatEvent(nil), c.history.events...)
+		if c.historyReconciler != nil {
+			events = c.historyReconciler(events)
+		}
+		c.historyEvents = events
 		c.historyErr = nil
 		c.historyLoaded = true
 	}
@@ -293,7 +298,10 @@ func (c *conversation) captureHistoryUserChunk(chunk *acpsdk.SessionUpdateUserMe
 		return
 	}
 	if messageID == "" {
-		if c.history.pendingUserID != "" {
+		if c.historyUserChunkIsMessage {
+			c.history.fallbackID++
+			messageID = fmt.Sprintf("user-%d", c.history.fallbackID)
+		} else if c.history.pendingUserID != "" {
 			messageID = c.history.pendingUserID
 		} else if c.history.turnUserID != "" && c.history.pendingUserText == "" && !c.history.turnHasProvider {
 			// An absent message id cannot describe a reliable boundary. Keep
@@ -436,6 +444,7 @@ func (c *conversation) resetHistoryItems(turnID string) {
 	c.mu.Lock()
 	c.activeTurn = turnID
 	c.messages = make(map[string]string)
+	c.steerSegment = 0
 	c.thoughts = make(map[string]string)
 	c.nestedMessages = make(map[string]nestedMessageState)
 	c.tools = make(map[string]*toolState)
@@ -520,9 +529,23 @@ func optionalMessageID(id *string) string {
 	return strings.TrimSpace(*id)
 }
 
+const (
+	standingOpen  = "<ao-standing-instructions>"
+	standingClose = "</ao-standing-instructions>"
+)
+
+// StandingInstructionsBlock carries AO's standing instructions as prompt text;
+// history drops it again from a replayed first message.
+func StandingInstructionsBlock(text string) acpsdk.ContentBlock {
+	return acpsdk.TextBlock(standingOpen + "\n" + strings.ReplaceAll(text, standingClose, "") + "\n" + standingClose)
+}
+
 func historicalUserContent(content acpsdk.ContentBlock) string {
 	switch {
 	case content.Text != nil:
+		if _, rest, ok := strings.Cut(content.Text.Text, standingClose); ok && strings.HasPrefix(content.Text.Text, standingOpen) {
+			return strings.TrimLeft(rest, "\n")
+		}
 		return content.Text.Text
 	case content.Image != nil:
 		return "[Image]"

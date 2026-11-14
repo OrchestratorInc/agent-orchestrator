@@ -8,7 +8,14 @@ import { fileURLToPath, URL } from "node:url";
 import { TanStackRouterVite } from "@tanstack/router-plugin/vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
+import { ARTIFACT_SNAPSHOT_SCHEME } from "./src/shared/artifact-snapshot";
 import { DEFAULT_POSTHOG_HOST } from "./src/shared/posthog-config";
+import { parseTeamsFlag } from "./src/shared/teams-flag";
+import { sentrySourceMaps } from "./vite.sentry";
+
+// Read once, when the renderer is built or served: a value that is neither
+// "on" nor "off" stops here instead of shipping a build that guessed.
+const TEAMS_FLAG = parseTeamsFlag(process.env.VITE_AO_TEAMS);
 
 const POSTHOG_ORIGINS = (() => {
 	const configured = process.env.VITE_AO_POSTHOG_HOST?.trim() || DEFAULT_POSTHOG_HOST;
@@ -83,8 +90,9 @@ const DEV_BUILD_INFO = {
 // setting the build cannot read; list the baked defaults and fold in a
 // developer's AO_CLOUD_CONTROL_PLANE_URL override so a custom control plane
 // keeps a working terminal in packaged builds too.
-const CLOUD_CP_WS_ORIGINS = (() => {
-	const origins = ["wss://staging-api.aoagents.dev", "wss://api.aoagents.dev"];
+// The hosted cloud control planes, plus AO_CLOUD_CONTROL_PLANE_URL when set.
+const CLOUD_CP_ORIGINS = (() => {
+	const origins = ["https://staging-api.aoagents.dev", "https://api.aoagents.dev"];
 	const override = process.env.AO_CLOUD_CONTROL_PLANE_URL?.trim();
 	if (!override) return origins;
 	let url: URL;
@@ -93,35 +101,54 @@ const CLOUD_CP_WS_ORIGINS = (() => {
 	} catch {
 		return origins;
 	}
-	const origin = `${url.protocol === "http:" ? "ws:" : "wss:"}//${url.host}`;
+	const origin = `${url.protocol === "http:" ? "http:" : "https:"}//${url.host}`;
 	if (!origins.includes(origin)) origins.push(origin);
 	return origins;
 })();
 
+const CLOUD_CP_WS_ORIGINS = CLOUD_CP_ORIGINS.map((origin) => origin.replace(/^http/, "ws"));
+
 // CSP for the renderer. The daemon is loopback-only, so network access is
 // pinned to 127.0.0.1 (REST + SSE over http, terminal mux over ws), plus the
 // cloud control-plane websocket origins above. The policy is injected here
-// rather than written into index.html so the serve variant can differ: the
-// same directives apply in dev, relaxed only where the dev server itself
-// needs it. Enforcing CSP in dev keeps dev/packaged parity — a connect-src
-// gap then fails on the developer's screen, not weeks later in a packaged
-// build (that skew is exactly how the cloud-terminal block in #4666 shipped).
+// rather than written into index.html so the serve variant can differ,
+// relaxed only where the dev server itself needs it. Only the build injects
+// it (injectCspMeta below is build-only), so the dev app runs with no CSP at
+// all: a missing source works in dev and fails only in a packaged build, as
+// the cloud-terminal block in #4666 and the blob: attachment tiles did. Check
+// any new resource scheme against this list by hand.
 export function contentSecurityPolicy(mode: "build" | "serve"): string {
 	return [
 		"default-src 'self'",
-		// react-refresh injects its inline preamble in serve mode; a hash is
-		// impractical because the preamble changes with the plugin version.
-		mode === "serve" ? "script-src 'self' 'unsafe-inline'" : "script-src 'self'",
+		// 'wasm-unsafe-eval' lets @pierre/highlights compile its WebAssembly module;
+		// it does not permit JS eval. react-refresh injects its inline preamble in
+		// serve mode; a hash is impractical because the preamble changes with the
+		// plugin version.
+		mode === "serve" ? "script-src 'self' 'wasm-unsafe-eval' 'unsafe-inline'" : "script-src 'self' 'wasm-unsafe-eval'",
 		"style-src 'self' 'unsafe-inline'",
 		// Repository avatars can come from self-hosted SCM instances whose origins
 		// are only known at runtime. Keep the broad exception limited to images;
 		// scripts, connections, frames, and other resource classes remain scoped.
-		"img-src 'self' data: http://127.0.0.1:* http://*.localhost:* https:",
-		"media-src 'self' http://127.0.0.1:* http://*.localhost:*",
+		//
+		// blob: in img-src, media-src and connect-src is for object URLs the
+		// renderer makes from bytes it already holds: a file the user just sent
+		// draws its tile from the composer's copy (sent-attachment-previews.ts),
+		// and copying an image re-encodes it through one. Only the renderer's own
+		// scripts can mint a blob: URL, so it opens no network access.
+		//
+		// The snapshot scheme is where main serves the cached artifact previews that gallery cards
+		// show as plain images (main/artifact-snapshots.ts). 'self' is only the app:// origin, so
+		// without it every cached card is refused in a packaged build and falls back to live.
+		`img-src 'self' data: blob: http://127.0.0.1:* http://*.localhost:* https: ${ARTIFACT_SNAPSHOT_SCHEME}:`,
+		// A cloud session's audio and video artifacts stream from its control plane.
+		["media-src 'self' blob: http://127.0.0.1:* http://*.localhost:*", ...CLOUD_CP_ORIGINS].join(" "),
 		"font-src 'self' data:",
 		[
 			"connect-src",
 			"'self'",
+			"data:",
+			// A just-sent PDF or text file is read from its object URL (see img-src).
+			"blob:",
 			"http://127.0.0.1:*",
 			"ws://127.0.0.1:*",
 			// Session artifact files are read from the daemon's artifact preview
@@ -143,7 +170,9 @@ export function contentSecurityPolicy(mode: "build" | "serve"): string {
 		// 'self' lets dev:web, whose API base is relative, frame a page; the page
 		// keeps its own sandbox from the daemon's CSP header either way.
 		// *.localhost is the inline-artifact origin an HTML artifact is framed from.
-		"frame-src 'self' http://127.0.0.1:* http://*.localhost:*",
+		// A cloud session's HTML artifact is framed from its control plane, whose
+		// response CSP sandboxes it.
+		["frame-src 'self' http://127.0.0.1:* http://*.localhost:*", ...CLOUD_CP_ORIGINS].join(" "),
 	].join("; ");
 }
 
@@ -186,12 +215,15 @@ const productUiReactBoundary: Plugin = {
 	},
 };
 
+const sentry = sentrySourceMaps();
+
 export default defineConfig({
 	define: {
 		"import.meta.env.VITE_AO_GIT_BRANCH": JSON.stringify(DEV_BUILD_INFO.branch),
 		"import.meta.env.VITE_AO_GIT_COMMIT": JSON.stringify(DEV_BUILD_INFO.commit),
 		"import.meta.env.VITE_AO_GIT_WORKTREE": JSON.stringify(DEV_BUILD_INFO.worktree),
 		"import.meta.env.VITE_AO_GIT_DIRTY": JSON.stringify(String(DEV_BUILD_INFO.isDirty)),
+		"import.meta.env.VITE_AO_TEAMS": JSON.stringify(TEAMS_FLAG),
 	},
 	// "@/" → the renderer root (src/renderer), the shadcn/ui import convention.
 	resolve: {
@@ -212,6 +244,16 @@ export default defineConfig({
 			"tailwind-merge": fileURLToPath(
 				new URL("./node_modules/tailwind-merge", import.meta.url),
 			),
+		},
+	},
+	// The app, plus the hidden page main renders cached artifact previews in.
+	build: {
+		sourcemap: sentry.sourcemap,
+		rollupOptions: {
+			input: {
+				index: fileURLToPath(new URL("./index.html", import.meta.url)),
+				"artifact-snapshot": fileURLToPath(new URL("./artifact-snapshot.html", import.meta.url)),
+			},
 		},
 	},
 	// Dev proxy for VITE_NO_ELECTRON=1 browser preview — forwards /api and /mux
@@ -241,13 +283,17 @@ export default defineConfig({
 		react(),
 		tailwindcss(),
 		injectCspMeta,
+		...sentry.plugins,
 	],
 	test: {
 		environment: "jsdom",
+		silent: "passed-only",
 		testTimeout: 20_000,
 		// Anchor node_modules at any depth: a bare "node_modules/**" replaces
 		// vitest's default "**/node_modules/**" and only matches the root.
-		exclude: ["**/node_modules/**", "dist/**", "dist-electron/**", "e2e/**"],
+		// The docs site is its own package with its own Vitest config and
+		// dependencies; the docs CI step runs its tests.
+		exclude: ["**/node_modules/**", "dist/**", "dist-electron/**", "e2e/**", "src/docs/**"],
 		globals: true,
 		setupFiles: "./src/renderer/test/setup.ts",
 	},

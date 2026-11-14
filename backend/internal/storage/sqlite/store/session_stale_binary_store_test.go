@@ -127,6 +127,30 @@ func TestVersionRefreshChatCandidatesWaitForQuietAndSkipFailedSwitches(t *testin
 	}
 }
 
+// An orchestrator moves like any Chat session: the move starts it again right
+// away, so idle hibernation keeping orchestrators awake does not apply.
+func TestVersionRefreshChatCandidatesIncludeOrchestrators(t *testing.T) {
+	ctx := context.Background()
+	s := newTestStore(t)
+	seedProject(t, s, "mer")
+	now := time.Now().UTC().Truncate(time.Second)
+	rec := sampleRecord("mer")
+	rec.Kind = domain.KindOrchestrator
+	rec.Mode, rec.Metadata.ControllerGeneration, rec.Metadata.ProviderConversationID = domain.SessionModeChat, "gen-1", "native-id"
+	rec.Activity = domain.Activity{State: domain.ActivityIdle, LastActivityAt: now.Add(-20 * time.Minute)}
+	created, err := s.CreateSession(ctx, rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.MarkHarnessSessionsStale(ctx, domain.HarnessClaudeCode, "2.1.308", now); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.ListVersionRefreshChatCandidates(ctx, now.Add(-10*time.Minute))
+	if err != nil || !slices.Equal(got, []domain.SessionID{created.ID}) {
+		t.Fatalf("candidates = %v, %v; want the idle stale orchestrator %s", got, err, created.ID)
+	}
+}
+
 func TestVersionRefreshSettingDefaultsOn(t *testing.T) {
 	ctx := context.Background()
 	s := newTestStore(t)
