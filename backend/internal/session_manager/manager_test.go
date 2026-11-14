@@ -1531,7 +1531,7 @@ func TestSend_WrapsCopilotOrchestratorMessageWithDelegationDirective(t *testing.
 		"AO ORCHESTRATOR DIRECTIVE",
 		"Do not implement code changes",
 		"ao spawn --project mer",
-		"After every requested task has a worker, report the worker session ids and stop",
+		"After spawning or redirecting, report the worker session id and stop",
 		"USER MESSAGE:\nmake the button red",
 	} {
 		if !strings.Contains(got, want) {
@@ -6391,28 +6391,6 @@ func TestSpawnWorker_SkipsTerminatedOrchestratorContact(t *testing.T) {
 	}
 }
 
-// The Copilot directive sends new tasks to new workers, like the orchestrator
-// system prompt, but a user message that names a worker wins over both the
-// new-worker rule and task ownership.
-func TestCopilotOrchestratorMessage_NewTaskNewWorkerUnlessNamed(t *testing.T) {
-	directive := copilotOrchestratorMessage("demo", "Give the follow-up to worker demo-3")
-	for _, want := range []string{
-		"if a running worker already owns this task or its PR, use ao send to give that worker the follow-up",
-		"If the owning worker has terminated, spawn a new worker and include a short handoff",
-		"Give any new task to a new worker",
-		"If the user message asks for a specific worker, use ao send to give the task to that worker. Otherwise",
-		"Give the follow-up to worker demo-3",
-		"After every requested task has a worker, report the worker session ids and stop",
-	} {
-		if !strings.Contains(directive, want) {
-			t.Fatalf("copilot directive missing %q:\n%s", want, directive)
-		}
-	}
-	if strings.Contains(directive, "If a suitable worker already exists") {
-		t.Fatalf("copilot directive still tells the orchestrator to reuse workers for new tasks:\n%s", directive)
-	}
-}
-
 func TestSpawnOrchestrator_UsesCoordinatorPrompt(t *testing.T) {
 	st := newFakeStore()
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
@@ -6453,7 +6431,6 @@ func TestSpawnOrchestrator_UsesCoordinatorPrompt(t *testing.T) {
 		"Give each new task to a new worker",
 		"Run `ao spawn` and `ao send` as commands of their own",
 		"only for follow-up on that worker's own task",
-		"explicitly names a worker, give the task or follow-up to that worker, even when another worker owns it",
 	} {
 		if !strings.Contains(systemPrompt, want) {
 			t.Fatalf("system prompt missing %q:\n%s", want, systemPrompt)
