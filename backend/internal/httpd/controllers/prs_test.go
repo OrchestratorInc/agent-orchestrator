@@ -41,6 +41,13 @@ type fakePRService struct {
 	stackCalls    []string
 	detailsErr    error
 	detailsCalls  []string
+
+	editContent      prsvc.EditContentResult
+	editContentCalls []string
+	editResult       prsvc.EditResult
+	editRequest      prsvc.EditRequest
+	editCalls        int
+	editErr          error
 }
 
 func (f *fakePRService) AttachmentAccess(_ context.Context, prID, prURL string) (prsvc.AttachmentAccessResult, error) {

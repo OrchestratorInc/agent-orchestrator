@@ -31,6 +31,15 @@ var (
 	// ErrAttachmentTypeNotAllowed is an attachment whose declared type, file
 	// extension, or content is outside the allowlist or disagrees with the others.
 	ErrAttachmentTypeNotAllowed = errors.New("pr: attachment type not allowed")
+	// ErrInvalidEdit is an edit with no field, an empty or oversized title, or
+	// a field without the text the edit started from.
+	ErrInvalidEdit = errors.New("pr: invalid edit")
+	// ErrPREditConflict is an edit whose title or description changed on the
+	// provider after the editor read it.
+	ErrPREditConflict = errors.New("pr: edited elsewhere since it was read")
+	// ErrPREditForbidden is an edit by an account that is neither the PR's
+	// author nor allowed to write to its repository.
+	ErrPREditForbidden = errors.New("pr: no permission to edit")
 	// ErrAttachmentsForbidden is a comment with files on a PR whose repository
 	// the signed-in account cannot write to, where the files would be stored.
 	ErrAttachmentsForbidden = errors.New("pr: no write access for attachments")

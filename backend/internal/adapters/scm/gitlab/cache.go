@@ -104,6 +104,15 @@ func (c *cache) setMRDetail(host, repo string, iid int, mr *restMR) {
 	setCacheEntry(c.mrDetail, mrKey(host, repo, iid), mr, c.now())
 }
 
+// dropMRDetail forgets the cached merge request for (host, repo, iid), so the
+// next read asks GitLab. An edit calls it: the cached copy still holds the
+// title and description from before the edit.
+func (c *cache) dropMRDetail(host, repo string, iid int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.mrDetail, mrKey(host, repo, iid))
+}
+
 // --- Approvals ---
 
 // getApprovals returns a cached *restApprovals if a fresh entry exists for

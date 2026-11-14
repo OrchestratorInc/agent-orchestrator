@@ -18,3 +18,9 @@ SET pr_state = ?,
     state_changed_at = ?,
     updated_at = ?
 WHERE url = ? AND pr_state != 'merged';
+
+-- name: SetPRTitle :execrows
+UPDATE pr
+SET title = ?,
+    updated_at = ?
+WHERE url = ?;

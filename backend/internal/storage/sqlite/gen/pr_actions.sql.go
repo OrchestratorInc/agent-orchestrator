@@ -81,3 +81,24 @@ func (q *Queries) MarkPRState(ctx context.Context, arg MarkPRStateParams) (int64
 	}
 	return result.RowsAffected()
 }
+
+const setPRTitle = `-- name: SetPRTitle :execrows
+UPDATE pr
+SET title = ?,
+    updated_at = ?
+WHERE url = ?
+`
+
+type SetPRTitleParams struct {
+	Title     string
+	UpdatedAt time.Time
+	URL       string
+}
+
+func (q *Queries) SetPRTitle(ctx context.Context, arg SetPRTitleParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setPRTitle, arg.Title, arg.UpdatedAt, arg.URL)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}

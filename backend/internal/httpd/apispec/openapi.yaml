@@ -5877,6 +5877,121 @@ paths:
         stored
       tags:
       - prs
+  /api/v1/prs/{id}/edit:
+    get:
+      operationId: getPREditContent
+      parameters:
+      - description: PR number.
+        in: path
+        name: id
+        required: true
+        schema:
+          description: PR number.
+          type: string
+      - description: The pull request's URL.
+        in: query
+        name: prUrl
+        required: true
+        schema:
+          description: The pull request's URL.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PREditContentResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: A pull request's current title and description for an editor, and whether
+        they can be edited
+      tags:
+      - prs
+    post:
+      operationId: editPR
+      parameters:
+      - description: PR number.
+        in: path
+        name: id
+        required: true
+        schema:
+          description: PR number.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EditPRRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EditPRResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Unprocessable Entity
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Edit a pull request's title, description, or both
+      tags:
+      - prs
   /api/v1/prs/{id}/merge:
     post:
       operationId: mergePR
@@ -20546,6 +20661,50 @@ components:
       - sourceBranchId
       - activeBranchId
       type: object
+    EditPRRequest:
+      properties:
+        baseBody:
+          type:
+          - "null"
+          - string
+        baseTitle:
+          type:
+          - "null"
+          - string
+        body:
+          type:
+          - "null"
+          - string
+        prUrl:
+          minLength: 1
+          type: string
+        title:
+          type:
+          - "null"
+          - string
+      required:
+      - prUrl
+      type: object
+    EditPRResponse:
+      properties:
+        body:
+          type: string
+        ok:
+          type: boolean
+        prNumber:
+          type: integer
+        title:
+          type: string
+        updatedAt:
+          format: date-time
+          type: string
+      required:
+      - ok
+      - prNumber
+      - title
+      - body
+      - updatedAt
+      type: object
     EditQueuedConversationMessageRequest:
       properties:
         attachments:
@@ -22032,6 +22191,25 @@ components:
       - name
       - contentType
       - data
+      type: object
+    PREditContentResponse:
+      properties:
+        body:
+          type: string
+        canEdit:
+          type: boolean
+        reason:
+          enum:
+          - no_permission
+          - not_open
+          - unsupported
+          type: string
+        title:
+          type: string
+      required:
+      - title
+      - body
+      - canEdit
       type: object
     PRReviewState:
       properties:

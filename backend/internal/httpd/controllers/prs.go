@@ -33,6 +33,8 @@ func (c *PRsController) Register(r chi.Router) {
 	r.Post("/prs/{id}/stack", c.addToStack)
 	r.Post("/prs/{id}/stack/merge", c.mergeStack)
 	r.Post("/prs/{id}/details", c.loadDetails)
+	r.Get("/prs/{id}/edit", c.editContent)
+	r.Post("/prs/{id}/edit", c.edit)
 }
 
 func writeStackResult(w http.ResponseWriter, res prsvc.StackResult) {
@@ -369,6 +371,68 @@ func (c *PRsController) attachmentAccess(w http.ResponseWriter, r *http.Request)
 	envelope.WriteJSON(w, http.StatusOK, PRAttachmentAccessResponse{Allowed: res.Allowed, Location: res.Location, Reason: res.Reason})
 }
 
+// maxPREditBodyBytes bounds an edit's request: the description and the text
+// it started from, with headroom for the title, URL, and JSON envelope.
+const maxPREditBodyBytes = 4 << 20
+
+// editContent returns the PR's current title and description for an editor,
+// and whether the signed-in account can edit them.
+func (c *PRsController) editContent(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, "GET", "/api/v1/prs/{id}/edit")
+		return
+	}
+	prID := chi.URLParam(r, "id")
+	prURL := strings.TrimSpace(r.URL.Query().Get("prUrl"))
+	if !prIDPattern.MatchString(prID) || prURL == "" {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_PR", "PR number and URL are required", nil)
+		return
+	}
+	res, err := c.Svc.EditContent(r.Context(), prID, prURL)
+	if err != nil {
+		writePRError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, PREditContentResponse{Title: res.Title, Body: res.Body, CanEdit: res.CanEdit, Reason: res.Reason})
+}
+
+// edit changes the PR's title, description, or both.
+func (c *PRsController) edit(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, "POST", "/api/v1/prs/{id}/edit")
+		return
+	}
+	prID := chi.URLParam(r, "id")
+	if !prIDPattern.MatchString(prID) {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_PR", "Invalid PR number", nil)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxPREditBodyBytes)
+	var in EditPRRequest
+	if err := decodeJSON(r, &in); err != nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
+		return
+	}
+	if strings.TrimSpace(in.PRURL) == "" {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_PR", "PR URL is required", nil)
+		return
+	}
+	if in.Title == nil && in.Body == nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_EDIT", "A title or a body is required", nil)
+		return
+	}
+	if (in.Title != nil && in.BaseTitle == nil) || (in.Body != nil && in.BaseBody == nil) {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_EDIT", "The text an edit started from (baseTitle, baseBody) is required for each field it changes", nil)
+		return
+	}
+	res, err := c.Svc.Edit(r.Context(), prsvc.EditRequest{PRID: prID, PRURL: in.PRURL, Title: in.Title, Body: in.Body, BaseTitle: in.BaseTitle, BaseBody: in.BaseBody})
+	if err != nil {
+		writePRError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, EditPRResponse{OK: true, PRNumber: res.PRNumber, Title: res.Title, Body: res.Body, UpdatedAt: res.UpdatedAt})
+}
+
 func writeAttachmentTooLarge(w http.ResponseWriter, r *http.Request) {
 	envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "ATTACHMENT_TOO_LARGE", "An attachment exceeds 10 MiB, or a comment's attachments exceed 25 MiB together", nil)
 }
@@ -391,6 +455,12 @@ func writePRError(w http.ResponseWriter, r *http.Request, err error) {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "ATTACHMENT_TYPE_NOT_ALLOWED", "Attachment type is not allowed", nil)
 	case errors.Is(err, prsvc.ErrAttachmentsForbidden):
 		envelope.WriteAPIError(w, r, http.StatusForbidden, "forbidden", "ATTACHMENTS_FORBIDDEN", "No write access to the pull request's repository, where its comments' files are stored", nil)
+	case errors.Is(err, prsvc.ErrInvalidEdit):
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_EDIT", "Invalid title or description", nil)
+	case errors.Is(err, prsvc.ErrPREditForbidden):
+		envelope.WriteAPIError(w, r, http.StatusForbidden, "forbidden", "PR_EDIT_FORBIDDEN", "Only the pull request's author or someone who can write to its repository can edit it", nil)
+	case errors.Is(err, prsvc.ErrPREditConflict):
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "PR_EDIT_CONFLICT", "The pull request was edited elsewhere after you started; review the latest text before saving", nil)
 	case errors.Is(err, prsvc.ErrUnsupported):
 		envelope.WriteAPIError(w, r, http.StatusNotImplemented, "not_implemented", "SCM_UNSUPPORTED", "The PR's SCM provider does not support this action", nil)
 	case errors.Is(err, prsvc.ErrInvalidTransition):

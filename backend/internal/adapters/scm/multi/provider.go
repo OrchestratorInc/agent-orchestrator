@@ -344,6 +344,40 @@ func (m *Provider) PostComment(ctx context.Context, request ports.SCMCommentRequ
 	return commenter.PostComment(ctx, request)
 }
 
+// editor returns the sub-provider for name when it edits pull requests.
+func (m *Provider) editor(name string) (ports.SCMPREditor, error) {
+	if m == nil {
+		return nil, fmt.Errorf("%w: pull request edit provider is unavailable", ports.ErrSCMUnsupported)
+	}
+	p, err := m.resolve(name)
+	if err != nil {
+		return nil, err
+	}
+	editor, ok := p.(ports.SCMPREditor)
+	if !ok {
+		return nil, fmt.Errorf("%w: pull request edits for provider %q", ports.ErrSCMUnsupported, name)
+	}
+	return editor, nil
+}
+
+// PullRequestContent delegates to the sub-provider matching pr.Repo.Provider.
+func (m *Provider) PullRequestContent(ctx context.Context, pr ports.SCMPRRef) (ports.SCMPRContent, error) {
+	editor, err := m.editor(pr.Repo.Provider)
+	if err != nil {
+		return ports.SCMPRContent{}, err
+	}
+	return editor.PullRequestContent(ctx, pr)
+}
+
+// EditPullRequest delegates to the sub-provider matching request.PR.Repo.Provider.
+func (m *Provider) EditPullRequest(ctx context.Context, request ports.SCMPREditRequest) (ports.SCMPRContent, error) {
+	editor, err := m.editor(request.PR.Repo.Provider)
+	if err != nil {
+		return ports.SCMPRContent{}, err
+	}
+	return editor.EditPullRequest(ctx, request)
+}
+
 // attachmentStore returns the sub-provider for name when it stores comment
 // attachments.
 func (m *Provider) attachmentStore(name string) (ports.SCMAttachmentStore, error) {

@@ -655,6 +655,9 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersPostPRCommentResponse":      "PostPRCommentResponse",
 	"ControllersPRCommentAttachment":        "PRCommentAttachment",
 	"ControllersPRAttachmentAccessResponse": "PRAttachmentAccessResponse",
+	"ControllersPREditContentResponse":      "PREditContentResponse",
+	"ControllersEditPRRequest":              "EditPRRequest",
+	"ControllersEditPRResponse":             "EditPRResponse",
 	// httpd/controllers — review wire envelopes
 	"ControllersListReviewsResponse":   "ListReviewsResponse",
 	"ControllersReviewRunResponse":     "ReviewRunResponse",
@@ -4405,6 +4408,33 @@ func prOperations() []operation {
 				{http.StatusBadRequest, envelope.APIError{}},
 				{http.StatusOK, controllers.PRAttachmentAccessResponse{}},
 				{http.StatusNotFound, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/prs/{id}/edit", id: "getPREditContent", tag: "prs",
+			summary:    "A pull request's current title and description for an editor, and whether they can be edited",
+			pathParams: []any{controllers.PRIDParam{}, controllers.PREditContentQuery{}},
+			resps: []respUnit{
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusOK, controllers.PREditContentResponse{}},
+				{http.StatusForbidden, envelope.APIError{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/prs/{id}/edit", id: "editPR", tag: "prs",
+			summary:    "Edit a pull request's title, description, or both",
+			pathParams: []any{controllers.PRIDParam{}},
+			reqBody:    controllers.EditPRRequest{},
+			resps: []respUnit{
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusOK, controllers.EditPRResponse{}},
+				{http.StatusForbidden, envelope.APIError{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusConflict, envelope.APIError{}},
+				{http.StatusUnprocessableEntity, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
 			},
 		},
 		// GitHub PAT + repos (local daemon storage)

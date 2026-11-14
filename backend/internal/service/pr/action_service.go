@@ -106,6 +106,10 @@ type ActionDeps struct {
 	// HeadChecks confirms that nothing checks a PR's head, for a merge that
 	// asks to treat no checks as passing. Nil means it's never confirmed.
 	HeadChecks ports.SCMHeadChecksReader
+	// Editor reads and edits a PR's title and description; EditWriter stores a
+	// confirmed edit. Nil Editor means no provider supports edits.
+	Editor     ports.SCMPREditor
+	EditWriter EditWriter
 }
 
 // ActionService validates current pull request state before applying mutations.
@@ -131,6 +135,8 @@ type ActionService struct {
 	stacker       ports.SCMStacker
 	details       detailsStore
 	headChecks    ports.SCMHeadChecksReader
+	editor        ports.SCMPREditor
+	editWriter    EditWriter
 }
 
 var _ ActionManager = (*ActionService)(nil)
@@ -179,6 +185,8 @@ func NewActionService(deps ActionDeps) *ActionService {
 		stacker:       deps.Stacker,
 		headChecks:    deps.HeadChecks,
 		details:       details,
+		editor:        deps.Editor,
+		editWriter:    deps.EditWriter,
 	}
 }
 
