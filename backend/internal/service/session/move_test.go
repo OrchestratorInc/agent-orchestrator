@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -208,4 +209,105 @@ func mustOpen(t *testing.T, name string) *os.File {
 	}
 	t.Cleanup(func() { _ = f.Close() })
 	return f
+}
+
+func importManifest(tip string) MoveManifest {
+	return MoveManifest{RepoKey: "github.com/acme/app", Branch: "feat/move", Tip: tip, Harness: domain.HarnessClaudeCode, SourceLabel: "Orchestrator Cloud"}
+}
+
+func TestImportMoveRefusesAnotherRepository(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", RepoOriginURL: "https://github.com/acme/other"}
+	fc := &fakeCommander{}
+	_, err := NewWithDeps(Deps{Manager: fc, Store: moveStore{st}}).ImportMove(context.Background(), MoveImportInput{
+		ProjectID: "mer", MoveID: "m-1", Manifest: importManifest(strings.Repeat("a", 40)),
+	})
+	var got *apierr.Error
+	if !errors.As(err, &got) || got.Code != "MOVE_REPO_MISMATCH" || fc.spawnCalls != 0 {
+		t.Fatalf("err = %v, spawns = %d; want MOVE_REPO_MISMATCH and no spawn", err, fc.spawnCalls)
+	}
+}
+
+func TestImportMoveReplaysTheSameMove(t *testing.T) {
+	in := MoveImportInput{ProjectID: "mer", MoveID: "m-1", Manifest: importManifest(strings.Repeat("a", 40))}
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", RepoOriginURL: "https://github.com/acme/app"}
+	st.sessions["mer-1"] = domain.SessionRecord{
+		ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode,
+		ClientRequestID: "m-1", ClientRequestHash: moveRequestHash(in), ClientRequestCommitted: true,
+	}
+	fc := &fakeCommander{}
+	out, err := NewWithDeps(Deps{Manager: fc, Store: moveStore{st}}).ImportMove(context.Background(), in)
+	if err != nil || out.Session.ID != "mer-1" || fc.spawnCalls != 0 {
+		t.Fatalf("ImportMove = %q, %v, spawns = %d; want mer-1 without a spawn", out.Session.ID, err, fc.spawnCalls)
+	}
+}
+
+// pushedBranch makes an origin with feat/move one commit ahead of main and a
+// clone that has only main, and returns the clone and feat/move's tip.
+func pushedBranch(t *testing.T) (string, string) {
+	t.Helper()
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	root := t.TempDir()
+	git := func(dir string, args ...string) string {
+		t.Helper()
+		args = append([]string{"-c", "user.name=t", "-c", "user.email=t@example.com"}, args...)
+		out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	origin, src := root+"/origin.git", root+"/src"
+	git(root, "init", "-q", "--bare", "-b", "main", origin)
+	git(root, "init", "-q", "-b", "main", src)
+	git(src, "commit", "-q", "--allow-empty", "-m", "seed")
+	git(src, "push", "-q", origin, "main")
+	git(src, "switch", "-q", "-c", "feat/move")
+	git(src, "commit", "-q", "--allow-empty", "-m", "work")
+	git(src, "push", "-q", origin, "feat/move")
+	git(root, "clone", "-q", origin, root+"/repo")
+	return root + "/repo", git(src, "rev-parse", "HEAD")
+}
+
+func TestImportMoveStartsFromTheNoteWhenTheConversationCannotBeRead(t *testing.T) {
+	repo, tip := pushedBranch(t)
+	var gz bytes.Buffer
+	zw := gzip.NewWriter(&gz)
+	_, _ = zw.Write([]byte(`{"type":"user","cwd":"/workspace/repository","message":{"role":"user","content":"hi"}}` + "\n"))
+	_ = zw.Close()
+	const id = "0b5a6c1e-3f2d-4c8a-9e7b-1d2c3b4a5f60"
+	for _, tc := range []struct {
+		name       string
+		gzip       []byte
+		wantResume bool
+	}{
+		{"readable", gz.Bytes(), true},
+		{"not gzip", []byte("plain"), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := newFakeStore()
+			st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: repo, RepoOriginURL: "https://github.com/acme/app"}
+			fc := &fakeCommander{}
+			out, err := NewWithDeps(Deps{Manager: fc, Store: moveStore{st}}).ImportMove(context.Background(), MoveImportInput{
+				ProjectID: "mer", MoveID: "m-" + tc.name, Manifest: importManifest(tip), HandoffNote: "NOTE",
+				Transcript: &MoveImportTranscript{AgentSessionID: id, ProjectDir: "/home/agent/.claude/projects/-workspace-repository", Gzip: tc.gzip},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			cfg := fc.spawnedCfg
+			warned := strings.Contains(strings.Join(out.Warnings, "\n"), "conversation could not be read")
+			if tc.wantResume {
+				if cfg.Transfer == nil || cfg.Transfer.FallbackPrompt != "NOTE" || cfg.Prompt != "" || warned {
+					t.Fatalf("spawn = %+v, warnings %v; want a transfer with the note as fallback", cfg, out.Warnings)
+				}
+				return
+			}
+			if cfg.Transfer != nil || cfg.Prompt != "NOTE" || !warned {
+				t.Fatalf("spawn = %+v, warnings %v; want the note and a warning", cfg, out.Warnings)
+			}
+		})
+	}
 }

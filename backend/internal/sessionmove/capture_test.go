@@ -219,3 +219,23 @@ func TestCaptureInLinkedWorktree(t *testing.T) {
 		t.Fatalf("session blocked by the main checkout's merge: %v", err)
 	}
 }
+
+// A retry after a push origin took but this side could not confirm must push
+// the same commit, so the capture does not depend on the clock.
+func TestCaptureIsRepeatable(t *testing.T) {
+	f := newFixture(t)
+	writeFile(t, filepath.Join(f.src, "README.md"), "edited\n", 0o644)
+	var commits []string
+	for _, now := range []string{"1700000000 +0000", "1800000000 +0000"} {
+		t.Setenv("GIT_AUTHOR_DATE", now)
+		t.Setenv("GIT_COMMITTER_DATE", now)
+		c, err := CaptureWorktree(t.Context(), CaptureOptions{Worktree: f.src})
+		if err != nil {
+			t.Fatal(err)
+		}
+		commits = append(commits, c.Commit)
+	}
+	if commits[0] == "" || commits[0] != commits[1] {
+		t.Fatalf("captures = %v, want one commit twice", commits)
+	}
+}
