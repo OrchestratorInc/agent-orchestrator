@@ -79,6 +79,16 @@ function estimateRetainedBytes(value: unknown): number {
 	return bytes;
 }
 
+/**
+ * Remembers `next` for `key` when it differs from what was shown, or when the
+ * cache no longer holds its live page (another conversation evicted it while
+ * this one sat unchanged). A refresh that changed nothing then skips the write
+ * without leaving the cache short of this conversation.
+ */
+export function cacheConversationPages(cache: ConversationPageCache, key: string, previous: ConversationPage[], next: ConversationPage[]): void {
+	if (next !== previous || cache.get(key)?.[0] !== next[0]) cache.set(key, next);
+}
+
 export function cachedConversationState(cache: ConversationPageCache, key: string): {
 	pages: ConversationPage[];
 	loading: boolean;

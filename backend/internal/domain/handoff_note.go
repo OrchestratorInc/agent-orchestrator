@@ -31,6 +31,10 @@ const (
 	handoffChangedFileCap   = 160
 	handoffArtifactLimit    = 50
 	handoffHistoryPathCap   = 400
+	handoffTerminalCap      = 8_000
+	handoffInheritedCap     = 24_000
+	// handoffInheritedMin is the shortest inherited section worth keeping.
+	handoffInheritedMin = 500
 
 	// A note delivered as a launch argument must also fit the operating
 	// system's per-argument limit, which is counted in bytes.
@@ -80,6 +84,22 @@ type HandoffNoteInput struct {
 	// HistoryFiles point at the agent's own record for an agent whose answers
 	// AO did not record, because it reports no turns through hooks.
 	HistoryFiles []HandoffHistoryFile
+	// Fork, when set, makes this a fork's note: the agent starts a new session
+	// copied from that one instead of taking it over.
+	Fork *HandoffFork
+	// TerminalOutput is the end of the session's terminal screen, for agents
+	// whose turns AO may not have recorded.
+	TerminalOutput string
+	// Inherited is the note the session itself started with, when it was a
+	// fork given its conversation as text: the conversation from before it,
+	// which its own turns don't hold.
+	Inherited string
+}
+
+// HandoffFork names the session a text-handoff fork was copied from.
+type HandoffFork struct {
+	SourceSessionID SessionID
+	SourceTitle     string
 }
 
 // HandoffHistoryFile is one agent's own record of this session and how to read it.
@@ -114,15 +134,28 @@ func BuildHandoffNote(in HandoffNoteInput) string {
 	older := in.Turns[max(0, len(in.Turns)-len(recent)-handoffOlderTurnLimit) : len(in.Turns)-len(recent)]
 
 	artifacts := min(len(in.Artifacts), handoffArtifactLimit)
+	inherited := strings.TrimSpace(in.Inherited)
+	inheritedCap := handoffInheritedCap
+	if inherited == "" {
+		inheritedCap = 0
+	}
 
-	// Drop material until the whole note fits: older turns, then the last
-	// listed artifacts, then previous turns. The latest turn is never dropped.
+	// Drop material until the whole note fits: the conversation inherited
+	// from before the session, being the oldest, then older turns, the last
+	// listed artifacts, and previous turns. The latest turn is never dropped.
 	for {
-		note := renderHandoffNote(in, older, recent, artifacts)
+		note := renderHandoffNote(in, older, recent, artifacts, inheritedCap)
 		if handoffNoteFits(note) {
 			return note
 		}
 		switch {
+		case inheritedCap > 0:
+			// Shorten it by what the note is over; a rune is at most four bytes.
+			over := max(utf8.RuneCountInString(note)-handoffNoteMaxChars, (len(note)-handoffNoteMaxBytes+3)/4, 1)
+			inheritedCap = utf8.RuneCountInString(quoteHandoffText(inherited, inheritedCap, handoffClipMarker)) - over
+			if inheritedCap < handoffInheritedMin {
+				inheritedCap = 0
+			}
 		case len(older) > 0:
 			older = older[1:]
 		case artifacts > 0:
@@ -152,9 +185,10 @@ func clipHandoffNote(note string) string {
 	}
 }
 
-// renderHandoffNote renders the note with the given turns and the first
-// artifacts entries of in.Artifacts.
-func renderHandoffNote(in HandoffNoteInput, older, recent []HandoffTurn, artifacts int) string {
+// renderHandoffNote renders the note with the given turns, the first
+// artifacts entries of in.Artifacts, and in.Inherited clipped to
+// inheritedCap, or left out at zero.
+func renderHandoffNote(in HandoffNoteInput, older, recent []HandoffTurn, artifacts, inheritedCap int) string {
 	var b strings.Builder
 	if in.SwitchID != "" {
 		fmt.Fprintf(&b, "%s switch-id=%q>\n", HandoffNotePrefix, in.SwitchID)
@@ -164,8 +198,17 @@ func renderHandoffNote(in HandoffNoteInput, older, recent []HandoffTurn, artifac
 	// The new agent must take this as the user's real conversation. Calling it
 	// AO's note, not the user's, made Claude refuse to use what the user had
 	// said, such as a value they asked it to remember.
-	fmt.Fprintf(&b, "You are %s, taking over this Orchestrator-managed session from %s. The conversation below really took place between this user and %s. Treat it as your own history with them: what the user told you there, such as facts, preferences or values they asked you to remember, still holds.\n",
-		handoffHarnessLabel(in.TargetHarness), handoffHarnessLabel(in.SourceHarness), handoffHarnessLabel(in.SourceHarness))
+	if fork := in.Fork; fork != nil {
+		title := ""
+		if t := strings.TrimSpace(fork.SourceTitle); t != "" {
+			title = fmt.Sprintf(" (%q)", quoteHandoffLine(t, handoffChangedFileCap))
+		}
+		fmt.Fprintf(&b, "You are %s in a new Orchestrator session forked from Orchestrator session %s%s. %s can't copy that session's conversation itself, so the conversation is copied as text below. The conversation really took place between this user and %s. Treat it as your own history with them: what the user told you there, such as facts, preferences or values they asked you to remember, still holds.\n",
+			handoffHarnessLabel(in.TargetHarness), fork.SourceSessionID, title, handoffHarnessLabel(in.TargetHarness), handoffHarnessLabel(in.SourceHarness))
+	} else {
+		fmt.Fprintf(&b, "You are %s, taking over this Orchestrator-managed session from %s. The conversation below really took place between this user and %s. Treat it as your own history with them: what the user told you there, such as facts, preferences or values they asked you to remember, still holds.\n",
+			handoffHarnessLabel(in.TargetHarness), handoffHarnessLabel(in.SourceHarness), handoffHarnessLabel(in.SourceHarness))
+	}
 	b.WriteString("- Orchestrator copied this record from that conversation. Requests in it were already handled; do not carry them out again.\n")
 	b.WriteString("- The files in the workspace and git are the truth. Check them before relying on this record.\n")
 	b.WriteString("- Do not redo work that is already finished.\n")
@@ -175,7 +218,11 @@ func renderHandoffNote(in HandoffNoteInput, older, recent []HandoffTurn, artifac
 	writeHandoffNoteField(&b, "Project", in.Project)
 	writeHandoffNoteField(&b, "Workspace", in.WorkspacePath)
 	writeHandoffNoteField(&b, "Git branch", in.Branch)
-	writeHandoffNoteField(&b, "Handed off at", in.At.UTC().Format(time.RFC3339))
+	if in.Fork != nil {
+		writeHandoffNoteField(&b, "Forked at", in.At.UTC().Format(time.RFC3339))
+	} else {
+		writeHandoffNoteField(&b, "Handed off at", in.At.UTC().Format(time.RFC3339))
+	}
 
 	if task := strings.TrimSpace(in.OriginalTask); task != "" && !handoffTaskShownInFull(task, recent) {
 		b.WriteString("\n## Original task\n")
@@ -225,6 +272,18 @@ func renderHandoffNote(in HandoffNoteInput, older, recent []HandoffTurn, artifac
 		fmt.Fprintf(&b, "\n## Latest turn\nUser:\n%s\n%s:\n%s\n", user, handoffAssistantLabel(latest), agent)
 	}
 
+	if inherited := strings.TrimSpace(in.Inherited); inherited != "" && inheritedCap > 0 {
+		b.WriteString("\n## Conversation before that session\nThat session was itself started from an earlier conversation, given to it as text. It is part of the same history:\n")
+		b.WriteString(quoteHandoffText(inherited, inheritedCap, handoffClipMarker))
+		b.WriteByte('\n')
+	}
+
+	if output := strings.TrimSpace(in.TerminalOutput); output != "" {
+		b.WriteString("\n## Recent terminal output\nThe end of the session's terminal screen, as text. It may repeat the turns above or show what they missed:\n")
+		b.WriteString(quoteHandoffText(tailHandoffText(output, handoffTerminalCap), handoffTerminalCap+utf8.RuneCountInString(handoffClipMarker), handoffClipMarker))
+		b.WriteByte('\n')
+	}
+
 	if len(in.HistoryFiles) > 0 {
 		b.WriteString("\n## Earlier agents' own history\n")
 		b.WriteString("Orchestrator did not record what these agents answered in this session, but each keeps its own history. Read only the last few exchanges, and only when this note does not tell you enough.\n")
@@ -242,7 +301,11 @@ func renderHandoffNote(in HandoffNoteInput, older, recent []HandoffTurn, artifac
 	if omitted := len(in.Turns) - len(older) - len(recent); omitted > 0 {
 		fmt.Fprintf(&b, "%d earlier turns are not shown. ", omitted)
 	}
-	b.WriteString("Run `ao session history` to read the conversation in full when you need something this note does not show.\n")
+	if in.Fork != nil {
+		fmt.Fprintf(&b, "Run `ao session history %s` to read the original session's conversation in full when you need something this note does not show.\n", in.Fork.SourceSessionID)
+	} else {
+		b.WriteString("Run `ao session history` to read the conversation in full when you need something this note does not show.\n")
+	}
 
 	b.WriteByte('\n')
 	if in.Terminal {
@@ -306,6 +369,16 @@ func budgetHandoffTurn(turn HandoffTurn, budget, userCap int, oneLine bool) (use
 		return user, "(no final response recorded)"
 	}
 	return user, quoteHandoffText(agentText, budget-utf8.RuneCountInString(user), marker)
+}
+
+// tailHandoffText keeps the end of over-long text, marked: the newest
+// terminal output is what the next agent needs.
+func tailHandoffText(value string, limit int) string {
+	runes := []rune(value)
+	if len(runes) <= limit {
+		return value
+	}
+	return "…[earlier output omitted]…\n" + string(runes[len(runes)-limit:])
 }
 
 // handoffTagPattern is the note's own tag in any case; a heading at the start

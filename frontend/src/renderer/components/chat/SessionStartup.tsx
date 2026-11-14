@@ -55,7 +55,7 @@ export function SessionStartup({
 							key={step.id}
 							data-step={step.id}
 							data-status={status}
-							className={cn("flex min-h-7 items-center gap-1.5 text-xs", stagger && "session-startup-step-in")}
+							className={cn("flex min-h-7 items-center gap-2 text-xs", stagger && "session-startup-step-in")}
 							style={stagger ? { animationDelay: `${index * 90}ms` } : undefined}
 						>
 							{/* The same slot and gap as the live row's mark above and the step
@@ -81,7 +81,7 @@ export function SessionStartup({
 				})}
 			</ol>
 			{failed ? (
-				<div className="mt-1 flex flex-col items-start gap-2 pl-4.5">
+				<div className="mt-1 flex flex-col items-start gap-2 pl-5">
 					{error ? <p className="text-xs leading-snug text-muted-foreground">{error}</p> : null}
 					<p className="text-xs leading-snug text-muted-foreground">{t("chat.startup.saved")}</p>
 					{onRetry ? (

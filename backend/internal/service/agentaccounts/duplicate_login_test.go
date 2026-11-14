@@ -386,7 +386,7 @@ func TestSavedAccountKeepsItsOrganization(t *testing.T) {
 			t.Fatal(err)
 		}
 		v := viewByID(t, views, acme.Account.ID)
-		if v.SignedIn || v.IdentityErr == "" || v.OrgID != "org-1" || v.OrgName != "Acme" {
+		if v.SignedIn || v.IdentityErr == "" || v.IdentityProblem != domain.AgentAccountProblemOtherOrg || v.OrgID != "org-1" || v.OrgName != "Acme" {
 			t.Fatalf("a folder now in another organization = %+v", v)
 		}
 	})

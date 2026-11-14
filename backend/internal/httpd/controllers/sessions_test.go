@@ -1986,6 +1986,29 @@ func TestSessionsAPI_SpawnPassesModelToService(t *testing.T) {
 	}
 }
 
+func TestSessionsAPI_SpawnAndDelegatePassAccountToService(t *testing.T) {
+	svc := newFakeSessionService()
+	srv := newSessionTestServer(t, svc)
+
+	body, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions",
+		`{"kind":"worker","harness":"claude-code","prompt":"fix","accountId":" acct-b "}`)
+	if status != http.StatusCreated {
+		t.Fatalf("POST session = %d, want 201; body=%s", status, body)
+	}
+	if svc.lastSpawn.AgentAccountID != "acct-b" {
+		t.Fatalf("spawn AgentAccountID = %q, want acct-b", svc.lastSpawn.AgentAccountID)
+	}
+
+	body, status, _ = doRequest(t, srv, "POST", "/api/v1/orchestrators/delegate",
+		`{"projectId":"ao","brief":"Fix it","agent":"codex","accountId":"acct-c"}`)
+	if status != http.StatusAccepted {
+		t.Fatalf("POST delegate = %d, want 202; body=%s", status, body)
+	}
+	if svc.delegationInput.AccountID != "acct-c" {
+		t.Fatalf("delegate AccountID = %q, want acct-c", svc.delegationInput.AccountID)
+	}
+}
+
 func TestSessionsAPI_SpawnPassesEffortToService(t *testing.T) {
 	svc := newFakeSessionService()
 	srv := newSessionTestServer(t, svc)

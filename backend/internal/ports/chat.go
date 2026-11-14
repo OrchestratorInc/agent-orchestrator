@@ -430,6 +430,7 @@ type ChatExcerptReference struct {
 	MessageID      string                      `json:"messageId"`
 	Revision       int64                       `json:"revision"`
 	Text           string                      `json:"text"`
+	Comment        string                      `json:"comment,omitempty"`
 }
 
 // ChatExcerptContext carries a frozen selection. Captured context lives in
@@ -795,6 +796,14 @@ type (
 	// copies current context; the caller must keep the source quiescent.
 	ChatIsolatedForker interface {
 		ForkIntoHost(ctx context.Context, sourceProviderConversationID, lastProviderTurnID string, cfg ChatStartConfig) (ChatConversation, error)
+	}
+	// ChatWorkspaceForker copies a provider conversation into a new one that
+	// opens from another workspace, without starting a provider host. Session
+	// forks use it for agents whose native sessions are keyed by folder. A
+	// non-empty upToMessageID is the provider's id for the last message to
+	// keep; empty copies the whole conversation.
+	ChatWorkspaceForker interface {
+		ForkIntoWorkspace(ctx context.Context, sourceProviderConversationID, sourceWorkspace, upToMessageID string, cfg ChatStartConfig) (providerConversationID string, err error)
 	}
 	// ChatNativeTurnID resolves a completed provider turn to its native turn ID.
 	ChatNativeTurnID interface {

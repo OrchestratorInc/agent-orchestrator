@@ -918,6 +918,8 @@ export const ComposerEditor = forwardRef<
 	ComposerEditorHandle,
 	{
 		disabled?: boolean;
+		/** Takes no input but looks exactly as usual: same text, no dimming. */
+		readOnly?: boolean;
 		enterSends: boolean;
 		/** Hides the text while a send is in flight; the draft is still held for recovery. */
 		concealed?: boolean;
@@ -940,6 +942,7 @@ export const ComposerEditor = forwardRef<
 >(function ComposerEditor(
 	{
 		disabled,
+		readOnly = false,
 		enterSends,
 		concealed,
 		dictating,
@@ -963,7 +966,8 @@ export const ComposerEditor = forwardRef<
 	const suggestionDescriptionId = useId();
 	const [dismissedSuggestionId, setDismissedSuggestionId] = useState<string>();
 	const [empty, setEmpty] = useState(true);
-	const suggestion = empty && !disabled && !concealed && !dictating && promptSuggestion?.id !== dismissedSuggestionId
+	const locked = Boolean(disabled) || readOnly;
+	const suggestion = empty && !locked && !concealed && !dictating && promptSuggestion?.id !== dismissedSuggestionId
 		? promptSuggestion
 		: undefined;
 	const dismissSuggestion = useCallback(() => {
@@ -975,7 +979,7 @@ export const ComposerEditor = forwardRef<
 	const initialConfig = {
 		namespace: "AOChatComposer",
 		nodes: [ComposerTokenNode, DictationLetterNode],
-		editable: !disabled,
+		editable: !locked,
 		theme: { paragraph: "m-0" },
 		onError(error: Error) {
 			throw error;
@@ -1063,7 +1067,7 @@ export const ComposerEditor = forwardRef<
 				<HistoryPlugin />
 				<EditorBridge
 					ref={ref}
-					disabled={disabled}
+					disabled={locked}
 					enterSends={enterSends}
 					promptSuggestion={suggestion}
 					onDismissSuggestion={dismissSuggestion}
