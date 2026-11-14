@@ -5,10 +5,12 @@ import { FileAnnotationContext } from "./FileAnnotationPreview";
 import { useChatFind } from "../../hooks/useChatFind";
 import { occurrenceKey, type FindOccurrence } from "../../lib/chat-find";
 import "./chat-find.css";
+import { ForkableTurnContext, ForkTextCopyNotice, LatestForkTurnContext } from "../SessionForkControls";
 import type { ChatFileReference, OpenFileAnnotation } from "../../../shared/chat-file-reference";
 import { TurnWorkSummary } from "./TurnWorkSummary";
 import { TurnSettleSnapshot } from "./TurnSettleSnapshot";
 import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
+import { cloudAttachmentReference } from "../../lib/cloud-attachments";
 import { cloudChatStartingInPlace } from "../../lib/cloud-lifecycle";
 import { isSettingsPageOpen } from "../../hooks/useAppShortcut";
 import { useLatestCallback, useStableSet } from "../../hooks/useStable";
@@ -98,7 +100,8 @@ import { setChatDraftBoundary } from "../../lib/chat-draft-boundary";
 import { sameContent, useStableList } from "../../lib/stable-list";
 import { useTabScrollEdges } from "../../hooks/useTabScrollEdges";
 import { useSidebarChromeClearanceRef } from "../../hooks/useSidebarChromeGeometry";
-import { apiErrorCode, getApiBaseUrl, subscribeApiBaseUrl } from "../../lib/api-client";
+import { apiErrorCode, apiErrorMessage, getApiBaseUrl, subscribeApiBaseUrl } from "../../lib/api-client";
+import type { components } from "../../../api/schema";
 import { aoBridge } from "../../lib/bridge";
 import { isDialogOrMenuOpen } from "../../lib/dom-selectors";
 import { clampTerminalFontSize, initialTerminalFontSize, terminalFontSizeStorageKey } from "../../lib/terminal-font-size";
@@ -506,6 +509,7 @@ export interface ChatWorkspaceProps {
 	 * stay available.
 	 */
 	composerLockedPlaceholder?: string;
+	sendBlockedReason?: string;
 	/** The snapshot is a saved copy, so its controller state says nothing about the agent now. */
 	savedCopy?: boolean;
 	importBlock?: AgentBlock;
@@ -561,10 +565,14 @@ export interface ChatWorkspaceProps {
 	/** Why compaction is not available right now, from the daemon's typed refusal. */
 	compactUnavailable?: string;
 	/**
-	 * Discard a turn and everything after it. Absent means the agent cannot undo,
-	 * and the affordance is not drawn at all rather than shown and then refused.
+	 * Discard a turn and everything after it, restoring the worktree too when the
+	 * confirmation listed its files, whose preview's planId is filePlanId. Absent
+	 * means the agent cannot undo, and the affordance is not drawn at all rather
+	 * than shown and then refused.
 	 */
-	onRollback?: (turnId: string) => void | Promise<unknown>;
+	onRollback?: (turnId: string, filePlanId?: string) => void | Promise<unknown>;
+	/** Lists the files a rollback would restore. Absent means only the conversation is rolled back. */
+	onPreviewRollback?: (turnId: string) => Promise<RollbackPreview>;
 	rollbackPending?: boolean;
 	rollbackError?: string;
 	/** Opens the session Files inspector from a turn's changed-files Review control. */
@@ -633,7 +641,11 @@ export interface ChatWorkspaceProps {
 	steerRefusal?: string;
 	onPromoteQueuedTurn?: (turnId: string) => Promise<unknown>;
 	onEditQueuedTurn?: (turnId: string, text: string, options?: QueuedMessageEditOptions) => Promise<unknown>;
+	/** Which queued human messages onEditQueuedTurn can edit; every one when absent. */
+	canEditQueuedMessage?: (message: ConversationMessage) => boolean;
 	onCancelQueuedTurn?: (turnId: string) => Promise<unknown>;
+	/** Which queued messages onCancelQueuedTurn can delete; every one when absent. */
+	canCancelQueuedMessage?: (message: ConversationMessage) => boolean;
 	onReorderQueuedTurns?: (turnIds: string[]) => Promise<unknown>;
 	promoteQueuedTurnPendingTurnId?: string;
 	cancelQueuedTurnPendingTurnId?: string;
@@ -653,11 +665,14 @@ export interface ChatWorkspaceProps {
 	parkUnsentSends?: boolean;
 	/** An empty header strip sits above: center the empty chat in the window, not below the strip. */
 	centerInWindow?: boolean;
+	welcomeHeading?: string;
 	/** The project has a setup script, so the start-up checklist lists that step. */
 	showSetupStep?: boolean;
 	/** Keep files the workspace cannot take yet in the composer, sent with the message. */
 	holdAttachments?: boolean;
 	onHeldAttachmentsChange?: ComponentProps<typeof ChatComposer>["onHeldAttachmentsChange"];
+	/** Why this chat takes no files, for a draft that brought some (ChatComposer). */
+	attachmentsRefusal?: string;
 }
 
 type ChatWorkspaceActivation =
@@ -818,6 +833,7 @@ function ChatWorkspaceContent({
 	agentSwitch,
 	composerNotice,
 	composerLockedPlaceholder,
+	sendBlockedReason,
 	savedCopy = false,
 	importBlock,
 	settingsLocked = false,
@@ -838,6 +854,7 @@ function ChatWorkspaceContent({
 	compacting,
 	compactUnavailable,
 	onRollback,
+	onPreviewRollback,
 	rollbackPending,
 	rollbackError,
 	onOpenFiles,
@@ -867,7 +884,9 @@ function ChatWorkspaceContent({
 	steerRefusal,
 	onPromoteQueuedTurn,
 	onEditQueuedTurn,
+	canEditQueuedMessage,
 	onCancelQueuedTurn,
+	canCancelQueuedMessage,
 	onReorderQueuedTurns,
 	promoteQueuedTurnPendingTurnId,
 	cancelQueuedTurnPendingTurnId,
@@ -878,9 +897,11 @@ function ChatWorkspaceContent({
 	composerTray,
 	parkUnsentSends = true,
 	centerInWindow = false,
+	welcomeHeading,
 	showSetupStep = true,
 	holdAttachments,
 	onHeldAttachmentsChange,
+	attachmentsRefusal,
 	draftScope,
 	draftPersistenceAvailable,
 	onRetryDraftPersistence,
@@ -1301,7 +1322,7 @@ function ChatWorkspaceContent({
 			const current = queueEditRef.current;
 			if (current?.turnId === turnId && !current.clientMessageId) updateQueueDraft(undefined, current.revision);
 		},
-		[queueEdit, stableCancelQueuedTurn, updateQueueDraft],
+		[onCancelQueuedTurn, queueEdit, stableCancelQueuedTurn, updateQueueDraft],
 	);
 	// Keep the dispatch target with this composer instance while attachment staging
 	// awaits. A newer queue editor must not redirect an older ordinary send.
@@ -1334,12 +1355,14 @@ function ChatWorkspaceContent({
 					});
 				} catch (error) {
 					// These outcomes follow the daemon's atomic receipt lookup, so even
-					// a recovered retry proves this exact edit was never accepted.
+					// a recovered retry proves this exact edit was never accepted. A
+					// Cloud control plane's refusal of the edit proves it too.
 					if ([
 						"CHAT_TURN_NOT_QUEUED",
 						"CHAT_QUEUED_EDIT_CONFLICT",
 						"CHAT_QUEUED_CONTENT_INVALID",
 						"CHAT_QUEUED_TEXT_REQUIRED",
+						"CHAT_QUEUED_EDIT_REFUSED",
 					].includes(apiErrorCode(error) ?? "")) {
 						updateQueueDraft({
 							...prepared.draft.queuedEdit,
@@ -1376,6 +1399,12 @@ function ChatWorkspaceContent({
 			(message.content ?? []).forEach((item, index) => {
 				attachments.push({ id: `content-${index}`, contentIndex: index, contentType: item.type,
 					name: item.name || (item.type === "image" ? `Image ${index + 1}` : item.uri || "Attachment") });
+			});
+			// A cloud message's files are kept by their reference, as the composer
+			// stages a new one, so saving lists them with any file added.
+			(message.cloudAttachments ?? []).forEach((attachment) => {
+				const path = cloudAttachmentReference(attachment);
+				attachments.push({ id: path, name: attachment.fileName, path });
 			});
 			updateQueueDraft({ turnId, ownerId: crypto.randomUUID(), text: parts.body, expectedRevision: message.revision, attachments, stagedAttachments: [] });
 		},
@@ -1463,6 +1492,7 @@ function ChatWorkspaceContent({
 	// The turn a confirmation is open for. Undo is not reversible and it changes what
 	// the agent knows, so it is never one click.
 	const [confirming, setConfirming] = useState<string | undefined>(undefined);
+	const previewRollback = useStableCallback(onPreviewRollback);
 	const surfaceRef = useRef<HTMLElement | null>(null);
 	const composerFocusRef = useRef<ChatComposerHandle>(null);
 	const artifactSession = session?.requestedOutput === "artifact";
@@ -1791,7 +1821,11 @@ function ChatWorkspaceContent({
 					onBeginQueuedEdit={
 						newWorkDisabled || !draftPersistenceAvailable || !onEditQueuedTurn ? undefined : beginQueuedEdit
 					}
-					onCancelQueuedTurn={newWorkDisabled ? undefined : handleCancelQueuedTurn}
+					canEditMessage={canEditQueuedMessage}
+					// Delete only where the chat can stop the message's turn: without
+					// that it would do nothing.
+					onCancelQueuedTurn={newWorkDisabled || !onCancelQueuedTurn ? undefined : handleCancelQueuedTurn}
+					canCancelMessage={canCancelQueuedMessage}
 					onReorderQueuedTurns={newWorkDisabled || !onReorderQueuedTurns ? undefined : reorderQueuedTurns}
 					promotePendingTurnId={promoteQueuedTurnPendingTurnId}
 					cancelPendingTurnId={cancelQueuedTurnPendingTurnId}
@@ -1800,11 +1834,14 @@ function ChatWorkspaceContent({
 			) : null,
 		[
 			beginQueuedEdit,
+			canCancelQueuedMessage,
+			canEditQueuedMessage,
 			canSteerQueuedMessage,
 			cancelQueuedTurnPendingTurnId,
 			draftPersistenceAvailable,
 			handleCancelQueuedTurn,
 			newWorkDisabled,
+			onCancelQueuedTurn,
 			onEditQueuedTurn,
 			onReorderQueuedTurns,
 			reorderQueuedTurns,
@@ -2121,6 +2158,7 @@ function ChatWorkspaceContent({
 							<ChatHostId.Provider value={activeRemoteHostId}>
 							<ChatTokenSkills.Provider value={skills ?? NO_SKILLS}>
 
+								{conversationEmpty ? <ForkTextCopyNotice /> : null}
 								<Timeline
 									shownAt={panelShownAt}
 							onAddToSideChat={onAddToSideChat}
@@ -2192,7 +2230,7 @@ function ChatWorkspaceContent({
 								) : null}
 								{conversationEmpty ? (
 									<h1 className="mb-5 text-center text-2xl font-normal tracking-tight text-foreground sm:text-3xl">
-										{t(artifactSession ? "chat.welcome.artifactHeading" : "chat.welcome.heading")}
+										{welcomeHeading ?? t(artifactSession ? "chat.welcome.artifactHeading" : "chat.welcome.heading")}
 									</h1>
 								) : null}
 								<WelcomePromptSuggestions
@@ -2209,7 +2247,7 @@ function ChatWorkspaceContent({
 											aria-hidden="true"
 											className="chat-welcome-leaving pointer-events-none absolute inset-x-0 bottom-full mb-5 text-center text-2xl font-normal tracking-tight text-foreground sm:text-3xl"
 										>
-											{t(artifactSession ? "chat.welcome.artifactHeading" : "chat.welcome.heading")}
+											{welcomeHeading ?? t(artifactSession ? "chat.welcome.artifactHeading" : "chat.welcome.heading")}
 										</h1>
 									) : null}
 									<McpServerBanner
@@ -2283,10 +2321,13 @@ function ChatWorkspaceContent({
 												: undefined
 										}
 										starting={orchestratorStarting || arrivingInChat || cloudStarting || composerStarting}
-										disabled={(orchestratorBlocksComposer || (openingStarting && !session) || loadingQuietly || (snapshot.controller.state === "stopped" && !suppressStopped && !accountMoveQueues && (!resumingAgent || session?.provisionState === "failed" || terminated)) || (controllerTransitioning && !accountMoveQueues) || newWorkDisabled || composerLockedPlaceholder !== undefined) && !queueEdit?.clientMessageId}
+										disabled={(orchestratorBlocksComposer || (openingStarting && !session) || loadingQuietly || (snapshot.controller.state === "stopped" && !suppressStopped && !accountMoveQueues && (!resumingAgent || session?.provisionState === "failed" || terminated)) || (controllerTransitioning && !accountMoveQueues) || (newWorkDisabled && sendBlockedReason === undefined) || composerLockedPlaceholder !== undefined) && !queueEdit?.clientMessageId}
+										sendBlockedReason={sendBlockedReason}
 										disabledPlaceholder={
 											composerLockedPlaceholder !== undefined
 												? composerLockedPlaceholder
+												: sendBlockedReason !== undefined
+												? sendBlockedReason
 												: arrivingInChat
 												? arrivingPlaceholder
 												: (openingStarting && !session) || pendingInPlaceStart
@@ -2319,6 +2360,7 @@ function ChatWorkspaceContent({
 										cloudAttachments={cloudAttachments}
 										holdAttachments={newWorkDisabled ? undefined : holdAttachments}
 										onHeldAttachmentsChange={onHeldAttachmentsChange}
+										attachmentsRefusal={attachmentsRefusal}
 										nativeImages={queueEdit?.clientMessageId ? queueEdit.nativeImages ?? nativeImages : nativeImages}
 										autoFocus={!reviewerActive}
 										autoFocusKey={draftScope.sessionId}
@@ -2353,41 +2395,138 @@ function ChatWorkspaceContent({
 				</div>
 			</div>
 
-			{/* The copy has to be honest about the cost: this is not "hide these
-			    messages", it is "the agent forgets them". Nothing in the worktree is
-			    reverted either, and a user who assumed otherwise would be badly
-			    surprised, so it is said out loud. */}
-			<ConfirmDialog
+			<RollbackConfirmation
 				open={Boolean(confirming) && !reviewerActive && !shellActive}
-				onOpenChange={(open) => {
-					if (!open) setConfirming(undefined);
-				}}
-				title="Roll back to this point?"
-				description={
-					<>
-						<p className="text-xs font-medium text-foreground">
-							The agent will forget this exchange and everything after it.
-						</p>
-						<p className="mt-1 text-xs text-muted-foreground">
-							Its memory of the conversation is discarded up to this point, so it will not know
-							about anything you or it said later. Files it already changed in the worktree are left
-							exactly as they are; only the conversation is rolled back. This cannot be undone.
-						</p>
-					</>
-				}
-				confirmLabel="Roll back"
-				destructive
+				turnId={confirming}
 				busy={rollbackPending}
-				error={rollbackError ?? null}
-				onConfirm={() => {
-					const turnId = confirming;
-					if (!turnId) return;
+				error={rollbackError}
+				onPreview={onPreviewRollback ? previewRollback : undefined}
+				onConfirm={(turnId, filePlanId) => {
 					setConfirming(undefined);
-					void Promise.resolve(onRollback?.(turnId)).catch(() => {});
+					void Promise.resolve(onRollback?.(turnId, filePlanId)).catch(() => {
+						// Open it again so the error shows; this also reads the file list fresh.
+						setConfirming(turnId);
+					});
 				}}
+				onClose={() => setConfirming(undefined)}
 			/>
 		</section>
  </FileAnnotationContext.Provider>
+	);
+}
+
+type RollbackPreview = components["schemas"]["RollbackPreviewResponse"];
+
+const rollbackChangeLabels: Record<RollbackPreview["files"][number]["change"], string> = {
+	restored: "Restored",
+	reverted: "Reverted",
+	removed: "Deleted",
+};
+
+/**
+ * The confirmation for "Roll back to here". The copy has to be honest about the
+ * cost: this is not "hide these messages", it is "the agent forgets them". When
+ * the daemon can put the worktree back too, the files that will change are
+ * listed before the button is offered; when it cannot, the dialog says the files
+ * stay as they are, because a user who assumed otherwise would be badly surprised.
+ */
+function RollbackConfirmation({
+	open,
+	turnId,
+	busy,
+	error,
+	onPreview,
+	onConfirm,
+	onClose,
+}: {
+	open: boolean;
+	turnId?: string;
+	busy?: boolean;
+	error?: string;
+	onPreview?: (turnId: string) => Promise<RollbackPreview> | undefined;
+	onConfirm: (turnId: string, filePlanId?: string) => void;
+	onClose: () => void;
+}) {
+	const [preview, setPreview] = useState<{ turnId: string; result?: RollbackPreview; error?: string }>();
+	useEffect(() => {
+		const request = turnId ? onPreview?.(turnId) : undefined;
+		if (!turnId || !request) return;
+		let current = true;
+		setPreview({ turnId });
+		request.then(
+			(result) => {
+				if (current) setPreview({ turnId, result });
+			},
+			(cause: unknown) => {
+				if (current) setPreview({ turnId, error: apiErrorMessage(cause) });
+			},
+		);
+		return () => {
+			current = false;
+		};
+	}, [turnId, onPreview]);
+
+	const loaded = preview?.turnId === turnId ? preview : undefined;
+	const checking = Boolean(onPreview) && !loaded?.result && !loaded?.error;
+	const restore = loaded?.result?.filesRestorable ? loaded.result : undefined;
+	const unavailable = loaded?.result?.reason ?? loaded?.error;
+
+	let detail: string;
+	if (checking) {
+		detail = "Checking which files this would restore…";
+	} else if (restore) {
+		const files = restore.totalFiles === 0
+			? "No files have changed since then."
+			: `${restore.totalFiles} ${restore.totalFiles === 1 ? "file" : "files"} will change.`;
+		const commits = restore.commitsSince === 1
+			? " 1 commit made since then stays on the branch, and restoring the files can leave uncommitted changes that undo it."
+			: restore.commitsSince > 1
+				? ` ${restore.commitsSince} commits made since then stay on the branch, and restoring the files can leave uncommitted changes that undo them.`
+				: "";
+		detail = `${files}${commits} Ignored files this rollback does not change are left alone. This cannot be undone.`;
+	} else {
+		detail = `${unavailable ? `Files can't be restored: ${unavailable}. ` : ""}Its memory of the conversation is discarded up to this point, so it will not know about anything you or it said later. Files it already changed in the worktree are left exactly as they are; only the conversation is rolled back. This cannot be undone.`;
+	}
+
+	return (
+		<ConfirmDialog
+			open={open}
+			onOpenChange={(next) => {
+				if (!next) onClose();
+			}}
+			title="Roll back to this point?"
+			description={
+				<>
+					<p className="text-xs font-medium text-foreground">
+						{restore
+							? "The agent will forget this exchange and everything after it, and the worktree goes back to how it was before it."
+							: "The agent will forget this exchange and everything after it."}
+					</p>
+					<p className="mt-1 text-xs text-muted-foreground">{detail}</p>
+				</>
+			}
+			confirmLabel="Roll back"
+			destructive
+			busy={busy}
+			confirmDisabled={checking}
+			error={error ?? null}
+			onConfirm={() => {
+				if (turnId) onConfirm(turnId, restore?.planId);
+			}}
+		>
+			{restore && restore.files.length > 0 ? (
+				<ul aria-label="Files that will change" className="max-h-40 overflow-y-auto rounded-md bg-surface py-1">
+					{restore.files.map((file) => (
+						<li key={file.path} className="flex items-center gap-2 px-2.5 py-1 text-xs">
+							<span className="min-w-0 flex-1 truncate font-mono text-foreground/80" title={file.path}>
+								{file.path}
+							</span>
+							<span className="shrink-0 text-muted-foreground">{rollbackChangeLabels[file.change]}</span>
+						</li>
+					))}
+				</ul>
+			) : null}
+		</ConfirmDialog>
 	);
 }
 
@@ -4202,6 +4341,15 @@ export function Timeline({
 	renderedVirtualHeight.current = virtualHeight;
 	const findGapGroupKey = find.gapBeforeSequence === undefined ? undefined
 		: groups.find((group) => group.items.some((item) => item.sequence >= find.gapBeforeSequence!))?.key;
+	// Fork is offered on finished turns; the latest is marked because every
+	// agent can fork it, while older turns need one that cuts its copy.
+	const latestForkTurnId = useMemo(() => {
+		for (let i = groups.length - 1; i >= 0; i--) {
+			const group = groups[i];
+			if (forkableGroup(group)) return group.turnId as string;
+		}
+		return undefined;
+	}, [groups]);
 	const renderedGroups = virtualized
 		? virtualRows.map((row) => ({ group: groups[row.index]!, row, index: row.index }))
 		: groups.map((group, index) => ({ group, row: undefined, index }));
@@ -5086,6 +5234,8 @@ export function Timeline({
 								{group.key === findGapGroupKey ? <div role="note" className="py-3 text-center text-caption text-muted-foreground">{t("chat.find.gap")}</div> : null}
 								<WorkerUpdateIndexContext.Provider value={workerUpdateIndex}>
 								<BatchedReportsContext.Provider value={batchedReports}>
+								<LatestForkTurnContext.Provider value={latestForkTurnId}>
+								<ForkableTurnContext.Provider value={forkableGroup(group) ? (group.turnId as string) : null}>
 								<TurnGroup
 									group={group}
 									harness={snapshot.harness}
@@ -5133,6 +5283,8 @@ export function Timeline({
 									busy={turnShowsApproval(group) ? busy : undefined}
 									queued={Boolean(group.turnId && queued.has(group.turnId))}
 								/>
+								</ForkableTurnContext.Provider>
+								</LatestForkTurnContext.Provider>
 								</BatchedReportsContext.Provider>
 								</WorkerUpdateIndexContext.Provider>
 							</div>
@@ -6180,6 +6332,13 @@ function useStableValue<T>(value: T): T {
 }
 
 /** A settling turn's rows from just before the fold, and the one at the top of the view. */
+// A turn a fork can copy: finished, not still running.
+function forkableGroup(group: TimelineGroup): boolean {
+	if (!group.turnId || group.live) return false;
+	const state = group.outcome?.state;
+	return state === "completed" || state === "recovered";
+}
+
 type SettleAnchor = {
 	turn: HTMLElement;
 	rows: HTMLElement[];
@@ -6200,8 +6359,11 @@ type TimelineGroup = {
 	anchor: number;
 	items: ConversationItem[];
 	outcome?: {
-		/** `unknown`: the controller stopped while the turn ran, so nothing reported how it ended. */
-		state: "completed" | "recovered" | "interrupted" | "failed" | "unknown";
+		/**
+		 * `unknown`: the controller stopped while the turn ran, so nothing reported how it ended.
+		 * `not_run`: it ended before the agent started on it (ConversationTurn.notRun).
+		 */
+		state: "completed" | "recovered" | "interrupted" | "failed" | "unknown" | "not_run";
 		durationMs?: number;
 		error?: string;
 		usageLimit?: ConversationUsageLimit;
@@ -6447,9 +6609,11 @@ function groupByTurn(snapshot: ConversationSnapshot, { controllerStopped = false
 		group.rollbackable = Boolean(turn.providerTurnId);
 		group.accountSwitched = group.items.some((item) => item.kind === "activity" && item.detail?.event === "account.switched");
 		group.outcome = {
-			state: turn.state,
+			state: turn.notRun ? "not_run" : turn.state,
 			usageLimit: turn.usageLimit,
-			durationMs: settledTurnDuration(turn),
+			// A turn that never started did no work to time: one refused, or a
+			// queued one a Stop or a switch ended before it was sent.
+			durationMs: turn.notRun || (turn.state === "interrupted" && !turn.startedAt) ? undefined : settledTurnDuration(turn),
 			error: turn.errorMessage || (turn.state === "failed"
 				? [...group.items].reverse().find(
 					(item): item is ConversationActivity => item.kind === "activity" && item.activityKind === "error",

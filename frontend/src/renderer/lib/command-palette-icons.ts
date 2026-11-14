@@ -2,6 +2,7 @@ import { OrchestratorIcon, type AppIcon } from "../components/icons";
 import {
 	Archive,
 	ArrowRight,
+	Bug,
 	Copy,
 	Download,
 	File,
@@ -36,6 +37,7 @@ const COMMAND_ICONS: Record<string, AppIcon> = {
 	"global-usage": Gauge,
 	"global-settings": Settings,
 	"global-theme": Sun,
+	"global-report-problem": Bug,
 };
 
 /** Fallback icons by group when no exact id match exists. */

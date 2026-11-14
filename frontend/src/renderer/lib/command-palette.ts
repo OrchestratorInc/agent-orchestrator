@@ -75,7 +75,8 @@ export type CommandAction =
 	| { kind: "copy-pr-url"; url: string }
 	| { kind: "trigger-review"; sessionId: string }
 	| { kind: "toggle-theme" }
-	| { kind: "open-shared-link" };
+	| { kind: "open-shared-link" }
+	| { kind: "report-problem" };
 
 export type CommandItem = {
 	id: string;
@@ -624,6 +625,13 @@ export function buildCommands(ctx: CommandPaletteContext, t: TFunction = appI18n
 		keywords: ["dark", "light", "appearance"],
 		action: { kind: "toggle-theme" },
 	});
+	items.push({
+		id: "global-report-problem",
+		group: "global",
+		title: t("report.action"),
+		keywords: ["bug", "report", "issue", "triage", "feedback"],
+		action: { kind: "report-problem" },
+	});
 	if (ctx.cloudReady) {
 		items.push({
 			id: "global-open-shared-link",
@@ -704,8 +712,12 @@ function contentMatchScore(q: string, item: CommandItem): number {
 /** A typed word of 4+ letters missing at most two letters of a word in text: "sidbar" for "sidebar". */
 function nearMissIn(word: string, text: string): boolean {
 	if (word.length < 4) return false;
-	return text.split(/[^\p{L}\p{N}]+/u).some((candidate) =>
+	return wordsOf(text).some((candidate) =>
 		candidate[0] === word[0] && candidate.length >= word.length && candidate.length - word.length <= 2 && isSubsequence(word, candidate));
+}
+
+function wordsOf(text: string): string[] {
+	return text.split(/[^\p{L}\p{N}]+/u);
 }
 
 export function matchScore(query: string, item: CommandItem): number {
@@ -723,6 +735,11 @@ export function matchScore(query: string, item: CommandItem): number {
 	}
 	if (titleIdx === 0) return 1000;
 	if (titleIdx > 0) return 800 - titleIdx;
+	// The closer a keyword names the row, the higher it ranks: "bug" finds Report
+	// a problem before "debug" finds Developer mode, and "code" finds Open in
+	// editor before "qr code" finds Mobile.
+	if (item.keywords?.some((keyword) => keyword.toLowerCase() === q)) return 650;
+	if (wordsOf(extras).includes(q)) return 600;
 	if (extras.includes(q)) return 500;
 	// Every word somewhere, in any order: "add codex account", "hide sidebar",
 	// "toggle sidbar".
