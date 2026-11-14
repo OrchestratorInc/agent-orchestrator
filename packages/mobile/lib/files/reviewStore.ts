@@ -99,6 +99,22 @@ function isComment(value: unknown): value is ReviewComment {
 		&& comment.target && typeof comment.target === "object" && (comment.status === "queued" || comment.status === "sent"));
 }
 
+/**
+ * Forgets every review written on one machine (or on Orchestrator Cloud): the
+ * machine was forgotten, or the Cloud account signed out or changed.
+ */
+export function forgetHostReviews(hostId: string): void {
+	const prefix = reviewKey(hostId, "");
+	let forgot = false;
+	for (const key of [...comments.keys()]) {
+		if (!key.startsWith(prefix)) continue;
+		comments.delete(key);
+		changedAt.delete(key);
+		forgot = true;
+	}
+	if (forgot) for (const listener of listeners) listener();
+}
+
 /** Called after every change to the comments, for saving them. */
 export function onReviewsChanged(listener: () => void): () => void {
 	return subscribe(listener);
