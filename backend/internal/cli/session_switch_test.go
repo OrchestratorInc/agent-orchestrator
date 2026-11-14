@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"cmp"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +14,7 @@ type switchCommandCalls struct {
 	switches     []map[string]any
 	sends        []string
 	busySends    int
+	busyCode     string
 	refusedSends int
 }
 
@@ -38,7 +40,8 @@ func switchCommandServer(t *testing.T, status int, code string) (*httptest.Serve
 			if calls.refusedSends < calls.busySends {
 				calls.refusedSends++
 				w.WriteHeader(http.StatusConflict)
-				_, _ = w.Write([]byte(`{"error":"conflict","code":"SESSION_COMPOSER_BUSY","message":"Session composer has an unsent draft"}`))
+				code := cmp.Or(calls.busyCode, "SESSION_COMPOSER_BUSY")
+				_, _ = w.Write([]byte(`{"error":"conflict","code":"` + code + `","message":"busy"}`))
 				return
 			}
 			message, _ := in["message"].(string)
@@ -138,5 +141,18 @@ func TestSessionListFiltersByAgentQuietly(t *testing.T) {
 	out, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "session", "ls", "--agent", "claude-code", "-q")
 	if err != nil || out != "demo-1\ndemo-2\n" {
 		t.Fatalf("out = %q err = %v", out, err)
+	}
+}
+
+func TestSendRetriesWhileTheSessionIsSwitching(t *testing.T) {
+	cfg := setConfigEnv(t)
+	srv, calls := switchCommandServer(t, 0, "")
+	calls.busySends, calls.busyCode = 2, "CHAT_INTERFACE_TRANSITION"
+	writeRunFileFor(t, cfg, srv)
+	sleeps := 0
+	_, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }, Sleep: func(time.Duration) { sleeps++ }},
+		"send", "--session", "demo-1", "--message", "hello")
+	if err != nil || len(calls.sends) != 1 || sleeps != 2 {
+		t.Fatalf("err = %v sends = %q sleeps = %d", err, calls.sends, sleeps)
 	}
 }

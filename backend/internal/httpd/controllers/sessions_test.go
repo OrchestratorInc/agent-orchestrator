@@ -47,6 +47,7 @@ import (
 )
 
 type fakeSessionService struct {
+	sendErr               error
 	artifactsRegistered   []string
 	artifactsUnregistered []string
 	registerArtifactsErr  error
@@ -4991,6 +4992,16 @@ func TestSessionsAPI_DelegateTaskRejectsOversizedBody(t *testing.T) {
 	assertErrorCode(t, body, status, http.StatusBadRequest, "INVALID_JSON")
 	if svc.delegationInput.ProjectID != "" {
 		t.Fatalf("delegate service called with oversized body: %#v", svc.delegationInput)
+	}
+}
+
+func TestSessionsAPI_SendDuringAHandoffIsARetryableConflict(t *testing.T) {
+	svc := newFakeSessionService()
+	svc.sendErr = fmt.Errorf("send ao-1: %w", chatsvc.ErrControllerHandoff)
+	srv := newSessionTestServer(t, svc)
+	body, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions/ao-1/send", `{"message":"hi"}`)
+	if status != http.StatusConflict || !strings.Contains(string(body), "CHAT_INTERFACE_TRANSITION") {
+		t.Fatalf("send = %d %s, want 409 CHAT_INTERFACE_TRANSITION", status, body)
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -116,13 +117,18 @@ func (c *commandContext) switchSession(ctx context.Context, cmd *cobra.Command, 
 }
 
 func (c *commandContext) sendAfterSwitch(ctx context.Context, id, message string) error {
+	return c.retryWhileCode(ctx, []string{"SESSION_COMPOSER_BUSY", "SESSION_STARTUP_PENDING", "CHAT_INTERFACE_TRANSITION"}, func() error {
+		return c.sendMessage(ctx, sendOptions{session: id, message: message})
+	})
+}
+
+func (c *commandContext) retryWhileCode(ctx context.Context, codes []string, send func() error) error {
 	deadline := time.Now().Add(switchSendRetryWindow)
 	for {
-		err := c.sendMessage(ctx, sendOptions{session: id, message: message})
+		err := send()
 		var responseErr apiResponseError
-		starting := errors.As(err, &responseErr) &&
-			(responseErr.ErrorBody.Code == "SESSION_COMPOSER_BUSY" || responseErr.ErrorBody.Code == "SESSION_STARTUP_PENDING")
-		if !starting || !time.Now().Add(switchSendRetryInterval).Before(deadline) {
+		if !errors.As(err, &responseErr) || !slices.Contains(codes, responseErr.ErrorBody.Code) ||
+			!time.Now().Add(switchSendRetryInterval).Before(deadline) {
 			return err
 		}
 		c.deps.Sleep(switchSendRetryInterval)
