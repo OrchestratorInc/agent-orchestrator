@@ -202,11 +202,6 @@ export function ComposerBackgroundTasks({ sessionId, reading }: { sessionId: str
 	if (!tasks.length) return null;
 
 	const name = (task: BackgroundTask) => backgroundTaskName(task, t);
-	// Background work is meant to keep running (a dev server never finishes), so a
-	// live task shows no spinner; only a failure needs a mark.
-	const status = (task: BackgroundTask) => isLive(task) ? null : (
-		<span role="img" aria-label={t("backgroundTasks.state.failed")} className="size-1.5 shrink-0 rounded-full bg-destructive" />
-	);
 	const time = (task: BackgroundTask) => {
 		if (failed === task.id) {
 			return (
@@ -218,9 +213,19 @@ export function ComposerBackgroundTasks({ sessionId, reading }: { sessionId: str
 		const text = elapsed(task, now);
 		return text ? <span className="shrink-0 text-caption tabular-nums text-muted-foreground">{text}</span> : null;
 	};
-	// Only a live task its provider can stop gets the square; the rest end flush.
-	const stopButton = (task: BackgroundTask) =>
-		isLive(task) && task.stoppable ? (
+	// The end of a row: a failure's red dot sits where the stop square would, so
+	// times line up. Background work is meant to keep running (a dev server never
+	// finishes), so a live task shows no mark; one its provider can't stop ends flush.
+	const trailing = (task: BackgroundTask) => {
+		if (!isLive(task)) {
+			return (
+				<span className="grid size-control-sm shrink-0 place-items-center">
+					<span role="img" aria-label={t("backgroundTasks.state.failed")} className="size-1.5 rounded-full bg-destructive" />
+				</span>
+			);
+		}
+		if (!task.stoppable) return null;
+		return (
 			<Button
 				type="button"
 				variant="quiet"
@@ -232,7 +237,8 @@ export function ComposerBackgroundTasks({ sessionId, reading }: { sessionId: str
 			>
 				<span aria-hidden="true" className="size-2 rounded-[2px] bg-current" />
 			</Button>
-		) : null;
+		);
+	};
 
 	return (
 		<section
@@ -279,17 +285,12 @@ export function ComposerBackgroundTasks({ sessionId, reading }: { sessionId: str
 				{!several || open
 					? tasks.map((task) => (
 							<li key={`${task.id}:${task.runId ?? ""}`} data-task-id={task.id} className="flex h-8 min-w-0 items-center gap-2">
-								{!several ? (
-									<SquareTerminal aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
-								) : (
-									<span className="grid size-4 shrink-0 place-items-center">{status(task)}</span>
-								)}
+								{!several ? <SquareTerminal aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" /> : null}
 								<span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground/90" title={name(task)}>
 									{name(task)}
 								</span>
-								{!several ? status(task) : null}
 								{time(task)}
-								{stopButton(task)}
+								{trailing(task)}
 							</li>
 						))
 					: null}
