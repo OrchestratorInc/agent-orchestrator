@@ -705,6 +705,9 @@ type SpawnSessionRequest struct {
 	Model string `json:"model,omitempty" maxLength:"256"`
 	// Effort is the optional reasoning level for the selected model.
 	Effort string `json:"effort,omitempty" maxLength:"32"`
+	// AccountID is the subscription account the agent starts on. Empty uses the
+	// provider's default account.
+	AccountID string `json:"accountId,omitempty" maxLength:"128"`
 
 	// RequestedOutput asks for a specific deliverable. artifact tells the worker to
 	// write a file in its artifact directory instead of opening a PR. Omitted is
@@ -1491,6 +1494,9 @@ type DelegateTaskRequest struct {
 	// Mode is omitted for the daemon-owned default. The UI sends tui only when
 	// the user explicitly accepts the fallback after Chat preflight fails.
 	Mode domain.SessionMode `json:"mode,omitempty" enum:"tui,chat"`
+	// AccountID is the subscription account the worker starts on. Empty uses
+	// the provider's default account.
+	AccountID string `json:"accountId,omitempty" maxLength:"128"`
 	// Attachments are files pasted, dropped, or picked into the delegated task
 	// brief. Each carries bytes as standard base64 (no data: URL prefix). The
 	// daemon writes them into the spawned worker worktree and appends path
@@ -3406,6 +3412,7 @@ type ConversationExcerptReferenceRequest struct {
 	MessageID      string                      `json:"messageId"`
 	Revision       int64                       `json:"revision"`
 	Text           string                      `json:"text"`
+	Comment        string                      `json:"comment,omitempty" maxLength:"4096"`
 }
 
 // ProviderSwitchRequest switches an idle session to another provider. See
@@ -3548,7 +3555,8 @@ type ConversationContentSummaryResponse struct {
 	URI             string                            `json:"uri,omitempty"`
 	Name            string                            `json:"name,omitempty"`
 	// Text is the readable chat excerpt, separate from captured raw source.
-	Text string `json:"text,omitempty"`
+	Text    string `json:"text,omitempty"`
+	Comment string `json:"comment,omitempty"`
 	// SourceMessageID and SourceRevision let the renderer navigate back to the
 	// original transcript message without exposing the internal excerpt URI.
 	SourceConversationID string `json:"sourceConversationId,omitempty"`
@@ -3723,7 +3731,7 @@ type ConversationTurnResponse struct {
 	// HasHumanPrompt includes durable human prompts outside this timeline page.
 	HasHumanPrompt bool                            `json:"hasHumanPrompt,omitempty"`
 	ErrorMessage   string                          `json:"errorMessage,omitempty"`
-	FailureCode    string                          `json:"failureCode,omitempty" enum:"provider_key_missing"`
+	FailureCode    string                          `json:"failureCode,omitempty" enum:"provider_key_missing,auth_required"`
 	UsageLimit     *ConversationUsageLimitResponse `json:"usageLimit,omitempty"`
 	RequestedAt    string                          `json:"requestedAt"`
 	StartedAt      *string                         `json:"startedAt,omitempty"`
@@ -4545,12 +4553,14 @@ type AgentAccountResponse struct {
 	SignedIn  bool       `json:"signedIn"`
 	LoggedIn  bool       `json:"loggedIn"`
 	CreatedAt *time.Time `json:"createdAt,omitempty"`
-	// Problem says why identity or limits could not be read.
-	Problem     string                     `json:"problem,omitempty"`
-	Limits      *domain.AgentAccountLimits `json:"limits,omitempty"`
-	SameLoginAs string                     `json:"sameLoginAs,omitempty"`
-	OrgID       string                     `json:"orgId,omitempty"`
-	OrgName     string                     `json:"orgName,omitempty"`
+	// Problem is the error text of a failed identity or limits check, kept as
+	// detail; ProblemKind says what failed, for the app's own wording.
+	Problem     string                         `json:"problem,omitempty"`
+	ProblemKind domain.AgentAccountProblemKind `json:"problemKind,omitempty" enum:"slow,rate_limited,unavailable,cli_missing,other_login,other_org"`
+	Limits      *domain.AgentAccountLimits     `json:"limits,omitempty"`
+	SameLoginAs string                         `json:"sameLoginAs,omitempty"`
+	OrgID       string                         `json:"orgId,omitempty"`
+	OrgName     string                         `json:"orgName,omitempty"`
 }
 
 // AgentAccountsResponse is the body of GET /agents/accounts.
@@ -4619,14 +4629,8 @@ type AgentAccountUsageByModel struct {
 
 // SessionAgentAccountsResponse is the account a session uses per provider.
 type SessionAgentAccountsResponse struct {
-	Claude        string `json:"claude,omitempty"`
-	Codex         string `json:"codex,omitempty"`
-	StayOnAccount bool   `json:"stayOnAccount"`
-}
-
-// SetSessionStayOnAccountRequest records or clears "Stay on this account".
-type SetSessionStayOnAccountRequest struct {
-	Stay *bool `json:"stay"`
+	Claude string `json:"claude,omitempty"`
+	Codex  string `json:"codex,omitempty"`
 }
 
 // SwitchSessionAgentAccountRequest moves a session to another account.

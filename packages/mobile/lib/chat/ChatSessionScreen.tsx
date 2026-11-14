@@ -63,6 +63,8 @@ import { space } from "../tokens";
 import { Button, EmptyState } from "../ui";
 import { backOr } from "../backNavigation";
 import { userFacingError, NOT_PAIRED_ACTION_COPY, RECONNECTING_ACTION_COPY } from "../connectionError";
+import { agentAccountLabel, agentAccountOptions, moveSessionAgentAccount, useAgentAccounts } from "../agentAccounts";
+import { useStillHere } from "../useStillHere";
 import { ARCHIVE_SESSION_CONFIRM } from "../worker-action-model";
 import { changedPathCount, fileRoute, filesRoute, FilesNavigationContext, type FilesNavigation } from "../files/navigation";
 import { TurnArtifactsContext, useTurnArtifactSourceFor } from "./TurnArtifacts";
@@ -266,7 +268,9 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 			? "Orchestrator restored the session in its last committed interface."
 			: interfaceTransitionNotice?.phase === "recovery_required"
 				? "The interface switch needs recovery before more work is sent."
-				: "The interface switch failed; the current interface remains available.");
+				: interfaceTransitionNotice?.targetAccountId
+					? "The switch failed. The agent stays on its previous account."
+					: "The interface switch failed; the current interface remains available.");
 	const turnActive = Boolean(
 		conversation.snapshot?.turns.some((turn) => turn.state === "running" || turn.state === "queued"),
 	);
@@ -578,6 +582,14 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	// Offered only where the agent can carry the conversation on in Terminal UI.
 	const menuCanSwitch = Boolean(interfaceSwitch.status?.supported);
 	const menuSwitching = interfaceSwitch.starting || switchingToTerminal;
+	const accountMove = interfaceSwitch.transition?.targetAccountId ? interfaceSwitch.transition : undefined;
+	const accountMoving = mobileInterfaceTransitionIsActive(accountMove);
+	// Reread the binding once a move settles: it commits at the end of the move.
+	const agentAccounts = useAgentAccounts(config, terminated ? undefined : headerHarness, session.id, accountMoving ? undefined : accountMove?.id);
+	const stillHere = useStillHere(`${currentHostId ?? ""}|${session.id}|${config ? JSON.stringify(config) : ""}`, () => navigation.isFocused?.() !== false);
+	const currentAccount = agentAccounts.accounts.find((account) => account.id === agentAccounts.current);
+	const menuAccountName = currentAccount ? agentAccountLabel(currentAccount, agentAccounts.accounts) : undefined;
+	const menuAccountCanMove = agentAccounts.accounts.some((account) => account.signedIn && account.id !== agentAccounts.current);
 	const menuGroups = useMemo(() => menuReady ? conversationMenuGroups({
 		previewReady,
 		artifactCount: menuArtifactCount,
@@ -593,7 +605,8 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		compacting: menuCompacting,
 		turnInFlight: turnActive,
 		contextPercent: menuContextPercent,
-	}) : undefined, [isOrchestrator, menuArtifactCount, menuCanCompact, menuCanSwitch, menuCompacting, menuContextPercent, menuHasPullRequest, menuPinned, menuReady, menuSwitching, openingShell, previewReady, turnActive]);
+		account: menuAccountName ? { name: menuAccountName, moving: accountMoving, canMove: menuAccountCanMove } : undefined,
+	}) : undefined, [accountMoving, menuAccountCanMove, menuAccountName, isOrchestrator, menuArtifactCount, menuCanCompact, menuCanSwitch, menuCompacting, menuContextPercent, menuHasPullRequest, menuPinned, menuReady, menuSwitching, openingShell, previewReady, turnActive]);
 	// The actions sheet follows what it shows while it is up (see `ConversationActionsEntry`).
 	const latestMenuGroups = useRef(menuGroups);
 	const menuGroupListeners = useRef(new Set<(groups: readonly ConversationMenuGroup[]) => void>());
@@ -628,6 +641,34 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 			void setWorkerPinned(session.id, !session.isPinned).catch(() => {});
 		},
 		compact: () => void conversation.compact().catch(() => {}),
+		account: async () => {
+			if (!config) return;
+			const move = (accountId: string, stop: boolean) => void moveSessionAgentAccount(config, session.id, accountId, stop)
+				.then(() => interfaceSwitch.refresh())
+				.catch((cause) => Alert.alert("Couldn't switch account", userFacingError(cause)));
+			const here = stillHere();
+			const { accounts, current } = await agentAccounts.reload().catch(() => undefined) ?? agentAccounts;
+			if (!here()) return;
+			void presentSheet({
+				kind: "account-picker",
+				subtitle: "The agent resumes this conversation on the account you choose.",
+				options: agentAccountOptions(accounts),
+				selected: current ?? "",
+				onSelect: (accountId) => {
+					if (!turnActive) return move(accountId, false);
+					const target = accounts.find((account) => account.id === accountId);
+					haptics.warning();
+					Alert.alert(
+						"Stop the turn and move?",
+						`The agent is still working. Orchestrator stops it now and resumes the conversation on ${target ? agentAccountLabel(target, accounts) : "that account"}.`,
+						[
+							{ text: "Cancel", style: "cancel" },
+							{ text: "Stop and move", style: "destructive", onPress: () => move(accountId, true) },
+						],
+					);
+				},
+			});
+		},
 		switch_tui: requestInterfaceSwitch,
 		delete: () => {
 			haptics.warning();
@@ -684,7 +725,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		}
 	}, [interfaceSwitch]);
 	const interfaceRecoveryMessage = mobileInterfaceTransitionRecoveryMessage(interfaceSwitch.transition);
-	const interfaceTransitionPhaseText = interfaceRecoveryMessage || `Switching to Terminal UI · ${interfacePhaseShortLabel(interfaceSwitch.transition?.phase)}`;
+	const interfaceTransitionPhaseText = interfaceRecoveryMessage || `${accountMove ? "Switching account" : "Switching to Terminal UI"} · ${interfacePhaseShortLabel(interfaceSwitch.transition?.phase)}`;
 	const interfaceTransitionBanner = {
 		text: interfaceSwitch.fetchFailed
 			? `${interfaceTransitionPhaseText}. Couldn't check on it${interfaceSwitch.error ? `: ${interfaceSwitch.error}` : ""}`
@@ -862,8 +903,8 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 					/>
 				) : (
 					<InterfaceSwitchCard
-						title={interfaceRecoveryMessage ? "Interface recovery blocked" : "Switching to Terminal"}
-						message={interfaceRecoveryMessage || interfacePhaseLabel(interfaceSwitch.transition?.phase)}
+						title={interfaceRecoveryMessage ? "Interface recovery blocked" : accountMove ? "Switching account" : "Switching to Terminal"}
+						message={interfaceRecoveryMessage || (accountMove ? accountPhaseLabel : interfacePhaseLabel)(interfaceSwitch.transition?.phase)}
 						blocked={Boolean(interfaceRecoveryMessage)}
 						cancellable={mobileInterfaceTransitionIsCancellable(interfaceSwitch.transition)}
 						cancelling={interfaceSwitch.cancelling}
@@ -1009,6 +1050,17 @@ function interfacePhaseLabel(phase?: string): string {
 		case "activating": return "Opening the Terminal UI.";
 		case "completed": return "Terminal UI is ready. Opening it now.";
 		default: return "Checking that the terminal can resume this agent's native conversation.";
+	}
+}
+function accountPhaseLabel(phase?: string): string {
+	switch (phase) {
+		case "draining": return "Waiting for the current turn to finish.";
+		case "source_stopping": return "Stopping the agent on its current account.";
+		case "source_stopped":
+		case "target_starting": return "Resuming the same conversation on the new account.";
+		case "activating":
+		case "completed": return "The agent is ready on the new account.";
+		default: return "Checking that the agent can move to that account.";
 	}
 }
 function signInCommand(harness: string): string | undefined { return harness === "codex" ? "codex login" : harness === "claude-code" || harness === "claude" ? "claude auth login" : undefined; }

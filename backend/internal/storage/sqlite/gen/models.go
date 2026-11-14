@@ -800,10 +800,6 @@ type Session struct {
 	DisplayNameExplicit              bool
 }
 
-type SessionAccountPin struct {
-	SessionID string
-}
-
 type SessionAgentAccount struct {
 	SessionID string
 	Provider  string
@@ -911,6 +907,15 @@ type SessionInterfaceTransitionMessage struct {
 type SessionNumFloor struct {
 	IDPrefix string
 	MaxNum   int64
+}
+
+type SessionSearchDeleted struct {
+	SessionID string
+}
+
+type SessionSearchOwner struct {
+	ID    int64
+	Token string
 }
 
 type SessionTelemetry struct {

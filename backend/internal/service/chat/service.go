@@ -36,8 +36,9 @@ var (
 )
 
 const (
-	maxExcerptReferences = 8
-	maxExcerptTextBytes  = 24 * 1024
+	maxExcerptReferences   = 8
+	maxExcerptTextBytes    = 24 * 1024
+	maxExcerptCommentRunes = 4 * 1024
 	// Each excerpt carries its source turn so a short selection keeps its
 	// meaning. Long turns are truncated so eight excerpts cannot flood the
 	// provider prompt or the durable delivery row.
@@ -1636,6 +1637,9 @@ func validateExcerptReferences(excerpts []ports.ChatExcerptReference, conversati
 		text := strings.TrimSpace(excerpt.Text)
 		if excerpt.ConversationID != conversationID || excerpt.MessageID == "" || (text == "" && !isFlowchartOnlySnapshot(excerpt.Snapshot)) || excerpt.Revision < 0 {
 			return fmt.Errorf("%w: source conversation, message, revision, and text are required", ErrExcerptInvalid)
+		}
+		if utf8.RuneCountInString(excerpt.Comment) > maxExcerptCommentRunes {
+			return fmt.Errorf("%w: annotation comment exceeds %d characters", ErrExcerptInvalid, maxExcerptCommentRunes)
 		}
 		if excerpt.Snapshot != nil {
 			if err := validateExcerptSnapshot(excerpt.Snapshot); err != nil {

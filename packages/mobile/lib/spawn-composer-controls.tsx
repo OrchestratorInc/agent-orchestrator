@@ -13,6 +13,9 @@ export function SpawnComposerControls({
 	projects,
 	projectId,
 	onSelectProject,
+	accounts = [],
+	accountId,
+	onSelectAccount,
 	agents,
 	harness,
 	onSelectHarness,
@@ -49,6 +52,14 @@ export function SpawnComposerControls({
 						{projects.map((project) => <Picker.Item key={project.id} label={project.label} value={project.id} />)}
 					</Picker>
 				</Host>
+				{accounts.length > 1 && onSelectAccount ? (
+					<Host style={styles.destinationHost} colorScheme={scheme}>
+						<Picker selectedValue={accountId ?? ""} onValueChange={onSelectAccount} appearance="menu">
+							<Picker.Item label="Default account" value="" />
+							{accounts.map((account) => <Picker.Item key={account.id} label={account.label} value={account.id} />)}
+						</Picker>
+					</Host>
+				) : null}
 				<Host style={styles.destinationHost} colorScheme={scheme}>
 					<Picker selectedValue={approvalMode} onValueChange={onSelectApprovalMode} appearance="menu">
 						{approvalModes.map((mode) => <Picker.Item key={mode.id} label={mode.label} value={mode.id} />)}

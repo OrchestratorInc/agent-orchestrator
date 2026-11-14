@@ -1,5 +1,6 @@
 import type { ComposerPickerCatalog } from "./composerSuggestions";
 import type { ConversationMenuAction, ConversationMenuGroup } from "./conversationMenuModel";
+import type { PickerOption } from "../NativePickerList";
 import type { ConversationSnapshot } from "./types";
 
 /** The conversation's context window, token counts and account limits, kept current while the sheet is up. */
@@ -21,8 +22,18 @@ export type ConversationActionsEntry = {
 	onSelect(action: ConversationMenuAction): void;
 };
 
+/** The machine's accounts for the agent, to move a session to or start a task on. */
+export type AccountPickerEntry = {
+	kind: "account-picker";
+	subtitle: string;
+	options: PickerOption[];
+	selected: string;
+	onSelect(accountId: string): void;
+};
+
 export type ChatSheetEntry =
 	| ConversationActionsEntry
+	| AccountPickerEntry
 	| { kind: "composer-picker"; catalog: ComposerPickerCatalog; initialQuery?: string; truncated?: boolean; onSelect(value: string): void }
 	| ConversationUsageEntry;
 
@@ -44,6 +55,7 @@ export function chatSheetRoute(entry: ChatSheetEntry) {
 	const pathname = {
 		"conversation-usage": "/sheets/conversation-usage",
 		"composer-picker": "/sheets/composer-picker",
+		"account-picker": "/sheets/account",
 		// Outside sheets/ for its own options: iOS bars it, the other sheets do not.
 		"conversation-actions": "/conversation-actions",
 	}[entry.kind];
