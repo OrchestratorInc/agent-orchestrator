@@ -267,6 +267,22 @@ describe("ReviewerSelect", () => {
 			expect(onConfigChange).toHaveBeenCalledWith("codex", { model: "gpt-other" });
 		});
 
+		it("can clear a saved effort on the catalog-default model when no default effort is reported", async () => {
+			const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+			client.setQueryData(["agent-models", "codex", ""], {
+				agentId: "codex", selectionMode: "catalog", models: [{ id: "gpt-test", label: "GPT Test", isDefault: true, efforts: ["low", "high"] }],
+			});
+			const onConfigChange = vi.fn();
+			render(<QueryClientProvider client={client}><ReviewerSelect
+				ariaLabel="Reviewer" value="codex" effort="high" defaultHarness="claude-code"
+				onChange={() => undefined} onConfigChange={onConfigChange}
+			/></QueryClientProvider>);
+			await openCodex();
+			await userEvent.click(screen.getByRole("menuitem", { name: "Clear effort" }));
+			// Clearing leaves the reviewer following the agent's model as well.
+			expect(onConfigChange).toHaveBeenCalledWith("codex", {});
+		});
+
 		it("offers no clear row while following the agent effort without a reported default", async () => {
 			const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 			client.setQueryData(["agent-models", "codex", ""], {
