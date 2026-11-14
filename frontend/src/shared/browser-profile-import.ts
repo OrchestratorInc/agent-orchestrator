@@ -10,7 +10,8 @@ export type BrowserImportCookieSupportReason =
 	| "firefox-plaintext"
 	| "safari-plaintext"
 	| "chromium-encryption-partial"
-	| "chromium-encryption-unsupported";
+	| "chromium-encryption-unsupported"
+	| "chromium-app-bound-encryption";
 
 export type BrowserImportSourceProfile = {
 	id: string;
@@ -58,6 +59,7 @@ export type BrowserImportWarningCode =
 	| "cookie-limit-truncated"
 	| "history-limit-truncated"
 	| "encrypted-cookies-skipped"
+	| "cookie-encryption-unsupported"
 	| "expired-cookies-skipped"
 	| "invalid-cookies-skipped"
 	| "cookie-attributes-defaulted"

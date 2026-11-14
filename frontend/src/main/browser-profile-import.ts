@@ -50,6 +50,10 @@ const IMPORT_TOTAL_MAX_BYTES = 512 * 1024 * 1024;
 const LOCAL_STATE_MAX_BYTES = 4 * 1024 * 1024;
 const STAGING_STALE_AGE_MS = 24 * 60 * 60 * 1_000;
 const SOURCE_ID_PATTERN = /^[0-9a-f]{32}$/;
+// Chromium v20 = App-Bound Encryption (Windows, Chrome 127+). The key lives in
+// `os_crypt.app_bound_encrypted_key` and Chrome only releases it to itself, so
+// these values can never be decrypted by another app.
+const APP_BOUND_ENCRYPTION_PREFIX = "v20";
 
 type BrowserFamily = "chromium" | "firefox" | "safari";
 
@@ -550,16 +554,37 @@ async function hasImportableDatabase(
 	return false;
 }
 
-function cookieCapability(
-	family: BrowserFamily,
+async function cookieCapability(
+	descriptor: BrowserDescriptor,
+	root: string,
 	platform: NodeJS.Platform,
-): { support: BrowserImportSource["cookieSupport"]; reason: BrowserImportCookieSupportReason } {
-	if (family === "firefox") return { support: "supported", reason: "firefox-plaintext" };
-	if (family === "safari") return { support: "supported", reason: "safari-plaintext" };
+): Promise<{ support: BrowserImportSource["cookieSupport"]; reason: BrowserImportCookieSupportReason }> {
+	if (descriptor.family === "firefox") return { support: "supported", reason: "firefox-plaintext" };
+	if (descriptor.family === "safari") return { support: "supported", reason: "safari-plaintext" };
+	if (platform === "win32" && await usesAppBoundEncryption(root)) {
+		// Chrome ≥127 on Windows re-encrypts every cookie with app-bound
+		// encryption (v20). Its key is only released to Chrome itself, so the
+		// sign-in cookies are unreadable — say so up front instead of letting
+		// an import complete with zero usable logins.
+		return { support: "unsupported", reason: "chromium-app-bound-encryption" };
+	}
 	return {
 		support: "partial",
 		reason: platform === "linux" ? "chromium-encryption-unsupported" : "chromium-encryption-partial",
 	};
+}
+
+async function usesAppBoundEncryption(root: string): Promise<boolean> {
+	try {
+		const localState = await readSmallJSON(path.join(root, "Local State"), LOCAL_STATE_MAX_BYTES);
+		return isRecord(localState)
+			&& isRecord(localState.os_crypt)
+			&& typeof localState.os_crypt.app_bound_encrypted_key === "string"
+			&& localState.os_crypt.app_bound_encrypted_key.length > 0;
+	} catch {
+		// A missing or malformed Local State cannot prove app-bound encryption.
+		return false;
+	}
 }
 
 export class BrowserProfileImportService {
@@ -630,7 +655,7 @@ export class BrowserProfileImportService {
 				if (!root) continue;
 				const publicSourceId = opaqueSourceId(`${descriptor.id}:source`, root);
 				if (options.sourceId && publicSourceId !== options.sourceId) continue;
-				const capability = cookieCapability(descriptor.family, this.context.platform);
+				const capability = await cookieCapability(descriptor, root, this.context.platform);
 				if (descriptor.family === "safari" && !options.includeProtectedSource) {
 					sources.push({
 						descriptor,
@@ -1170,6 +1195,7 @@ function readChromiumCookies(
 			LIMIT ${BROWSER_IMPORT_MAX_COOKIES}
 		`).all() as Record<string, unknown>[];
 		let encryptedSkipped = 0;
+		let appBoundSkipped = 0;
 		const raw: Array<Record<string, unknown>> = [];
 		for (const row of rows) {
 			const domain = stringValue(row.host_key);
@@ -1178,7 +1204,11 @@ function readChromiumCookies(
 				const encrypted = Buffer.isBuffer(row.encrypted_value) ? row.encrypted_value : Buffer.alloc(0);
 				value = decryptor?.decrypt(encrypted, domain) ?? "";
 				if (!value && encrypted.length > 0) {
-					encryptedSkipped += 1;
+					if (encrypted.subarray(0, 3).toString() === APP_BOUND_ENCRYPTION_PREFIX) {
+						appBoundSkipped += 1;
+					} else {
+						encryptedSkipped += 1;
+					}
 					continue;
 				}
 			}
@@ -1195,9 +1225,10 @@ function readChromiumCookies(
 		}
 		const normalized = normalizeCookieRows(raw, now);
 		if (encryptedSkipped > 0) normalized.warnings.push({ code: "encrypted-cookies-skipped", count: encryptedSkipped });
+		if (appBoundSkipped > 0) normalized.warnings.push({ code: "cookie-encryption-unsupported", count: appBoundSkipped });
 		if (isolatedSkipped > 0) normalized.warnings.push({ code: "isolated-cookies-skipped", count: isolatedSkipped });
 		if (truncated > 0) normalized.warnings.push({ code: "cookie-limit-truncated", count: truncated });
-		normalized.skipped += encryptedSkipped + isolatedSkipped + truncated;
+		normalized.skipped += encryptedSkipped + appBoundSkipped + isolatedSkipped + truncated;
 		return normalized;
 	});
 }

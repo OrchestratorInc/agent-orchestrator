@@ -40,6 +40,20 @@ const safariSource = {
 	historySupport: true as const,
 };
 
+const appBoundSource = {
+	...source,
+	id: "a2".padEnd(32, "2"),
+	cookieSupport: "unsupported" as const,
+	cookieSupportReason: "chromium-app-bound-encryption" as const,
+};
+
+const importedProfile = {
+	id: "11111111-1111-4111-8111-111111111111",
+	name: "Google Chrome",
+	createdAt: "2026-01-01T00:00:00.000Z",
+	updatedAt: "2026-01-01T00:00:00.000Z",
+};
+
 describe("BrowserImportDialog", () => {
 	const originalBridge = aoBridge.browserProfiles;
 
@@ -121,6 +135,39 @@ describe("BrowserImportDialog", () => {
 			includeHistory: true,
 			destination: { mode: "merge", name: "Google Chrome" },
 		}));
+	});
+
+	it("warns before importing app-bound Chrome and reports lost sign-ins in the result", async () => {
+		const bridge: AoBridge["browserProfiles"] = {
+			list: vi.fn(async () => ({ profiles: [], defaultProfileId: null })),
+			create: vi.fn(),
+			rename: vi.fn(),
+			clear: vi.fn(),
+			usage: vi.fn(async () => ({ sessions: [] })),
+			delete: vi.fn(),
+			setDefault: vi.fn(),
+			discoverImportSources: vi.fn(async () => ({ sources: [appBoundSource] })),
+			import: vi.fn(async () => ({
+				sourceName: appBoundSource.name,
+				entries: [{
+					sourceProfileNames: ["Default"],
+					destinationProfile: importedProfile,
+					importedCookies: 0,
+					skippedCookies: 4,
+					importedHistoryEntries: 21,
+					warnings: [{ code: "cookie-encryption-unsupported" as BrowserImportWarning["code"], count: 4 }],
+				}],
+			})),
+			onImportProgress: vi.fn(() => () => undefined),
+		};
+		aoBridge.browserProfiles = bridge;
+
+		render(<BrowserImportDialog onImported={() => undefined} onOpenChange={() => undefined} open />);
+		expect(await screen.findByText(/newer scheme that Orchestrator cannot read/)).toBeInTheDocument();
+
+		await userEvent.click(screen.getByRole("button", { name: "Start import" }));
+		expect(await screen.findByRole("heading", { name: "Import complete" })).toBeInTheDocument();
+		expect(screen.getByRole("alert")).toHaveTextContent(/No sign-ins could be imported/);
 	});
 
 	it("only probes and warns about Safari after Safari is selected", async () => {
