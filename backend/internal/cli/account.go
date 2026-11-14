@@ -22,6 +22,8 @@ type agentAccount struct {
 	SignedIn bool   `json:"signedIn"`
 	LoggedIn bool   `json:"loggedIn"`
 	Problem  string `json:"problem,omitempty"`
+	OrgID    string `json:"orgId,omitempty"`
+	OrgName  string `json:"orgName,omitempty"`
 }
 
 type agentAccountsResponse struct {
@@ -125,7 +127,7 @@ func writeAccountList(cmd *cobra.Command, accounts []agentAccount) error {
 		return err
 	}
 	tw := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "ID\tAGENT\tACCOUNT\tPLAN\tSTATE")
+	fmt.Fprintln(tw, "ID\tAGENT\tACCOUNT\tORG\tPLAN\tSTATE")
 	for _, account := range accounts {
 		state := "signed in"
 		if !account.SignedIn {
@@ -137,7 +139,7 @@ func writeAccountList(cmd *cobra.Command, accounts []agentAccount) error {
 		if account.Problem != "" {
 			state += " (" + account.Problem + ")"
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", account.ID, accountAgentLabel(account.Provider), accountLabel(account), dash(account.Plan), state)
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", account.ID, accountAgentLabel(account.Provider), accountLabel(account), accountOrg(account, accounts), dash(account.Plan), state)
 	}
 	return tw.Flush()
 }
@@ -158,6 +160,21 @@ func accountLabel(account agentAccount) string {
 		label += " [this computer's login]"
 	}
 	return label
+}
+
+func accountOrg(account agentAccount, peers []agentAccount) string {
+	label := account.OrgName
+	for _, peer := range peers {
+		if peer.ID == account.ID || account.OrgID == "" || peer.OrgID == account.OrgID || peer.OrgName != account.OrgName || !strings.EqualFold(peer.Email, account.Email) {
+			continue
+		}
+		short := account.OrgID[:min(8, len(account.OrgID))]
+		if label == "" {
+			return short
+		}
+		return label + " (" + short + ")"
+	}
+	return dash(label)
 }
 
 func dash(s string) string {

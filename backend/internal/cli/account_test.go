@@ -10,6 +10,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/spf13/cobra"
 )
 
 type accountServer struct {
@@ -31,7 +33,7 @@ func newAccountServer(t *testing.T, final string) (*httptest.Server, *accountSer
 	state := &accountServer{final: final}
 	accounts := `{"accounts":[` +
 		`{"id":"device-claude","provider":"claude","device":true,"email":"me@example.com","plan":"max","default":true,"signedIn":true,"loggedIn":true},` +
-		`{"id":"work","provider":"claude","device":false,"email":"work@example.com","plan":"team","default":false,"signedIn":true,"loggedIn":true},` +
+		`{"id":"work","provider":"claude","device":false,"email":"work@example.com","plan":"team","default":false,"signedIn":true,"loggedIn":true,"orgId":"org-team-1","orgName":"Team"},` +
 		`{"id":"device-codex","provider":"codex","device":true,"default":true,"signedIn":false,"loggedIn":false}]}`
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/internal/telemetry/cli-invoked" {
@@ -107,6 +109,52 @@ func TestAccountListFiltersByAgent(t *testing.T) {
 	}
 	if strings.Contains(out, "device-codex") {
 		t.Fatalf("codex account listed under --agent claude-code:\n%s", out)
+	}
+}
+
+func TestAccountListTellsOrganizationsApart(t *testing.T) {
+	accounts := []agentAccount{
+		{ID: "acme-1", Provider: "claude", Email: "dev@example.com", Plan: "team", SignedIn: true, OrgID: "aaaaaaaa-1111", OrgName: "Acme"},
+		{ID: "acme-2", Provider: "claude", Email: "Dev@example.com", Plan: "team", SignedIn: true, OrgID: "bbbbbbbb-2222", OrgName: "Acme"},
+		{ID: "personal", Provider: "claude", Email: "dev@example.com", Plan: "max", SignedIn: true, OrgID: "cccccccc-3333", OrgName: "Personal"},
+		{ID: "solo", Provider: "codex", SignedIn: true},
+	}
+	var out strings.Builder
+	cmd := &cobra.Command{}
+	cmd.SetOut(&out)
+	if err := writeAccountList(cmd, accounts); err != nil {
+		t.Fatal(err)
+	}
+	orgs := map[string]string{}
+	for _, line := range strings.Split(strings.TrimSpace(out.String()), "\n")[1:] {
+		fields := strings.Split(line, "  ")
+		var cells []string
+		for _, field := range fields {
+			if field = strings.TrimSpace(field); field != "" {
+				cells = append(cells, field)
+			}
+		}
+		orgs[cells[0]] = cells[3]
+	}
+	want := map[string]string{"acme-1": "Acme (aaaaaaaa)", "acme-2": "Acme (bbbbbbbb)", "personal": "Personal", "solo": "-"}
+	if !reflect.DeepEqual(orgs, want) {
+		t.Fatalf("ORG column = %#v, want %#v\n%s", orgs, want, out.String())
+	}
+}
+
+func TestAccountListJSONKeepsOrganization(t *testing.T) {
+	out, _, err := runAccountCLI(t, "completed", "account", "ls", "--json")
+	if err != nil {
+		t.Fatalf("account ls --json: %v", err)
+	}
+	var res agentAccountsResponse
+	if err := json.Unmarshal([]byte(out), &res); err != nil {
+		t.Fatalf("decode %q: %v", out, err)
+	}
+	for _, account := range res.Accounts {
+		if account.ID == "work" && (account.OrgID != "org-team-1" || account.OrgName != "Team") {
+			t.Fatalf("work account lost its organization: %#v", account)
+		}
 	}
 }
 

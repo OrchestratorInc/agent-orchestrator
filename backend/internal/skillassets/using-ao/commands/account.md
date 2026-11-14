@@ -48,6 +48,9 @@ your turn ends, so waiting for it in that turn never finishes.
 `ao spawn --account <account-id>` starts a worker on that account instead of
 the default.
 
+One email can have accounts in several organizations. Tell them apart by the
+`ORG` column, or by `orgId` and `orgName` in `ls --json`.
+
 ```bash
 ao account ls --agent claude-code
 ao spawn --agent claude-code --account <account-id> --prompt "..."
