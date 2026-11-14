@@ -146,6 +146,13 @@ type Config struct {
 	// ClientExtensionAliases maps explicitly supported legacy wire methods onto
 	// ACP-compliant underscore extension names handled by the pinned SDK.
 	ClientExtensionAliases map[string]string
+	// SteerRequest replaces ACP's _session/steering extension for an agent that
+	// takes mid-turn guidance through its own vendor request. Nil keeps the
+	// extension, which is enabled when the agent advertises it.
+	SteerRequest *SteerRequest
+	// SteerDrain is for an agent that collects mid-turn guidance itself with
+	// an agent-to-client request. It takes precedence over SteerRequest.
+	SteerDrain *SteerDrain
 	// ValidateTurnSettings rejects provider settings that cannot be applied to a
 	// live process. The initial permission mode is the launch-time value.
 	ValidateTurnSettings TurnSettingsValidator
@@ -510,7 +517,7 @@ func (d *Driver) openNewSession(
 	}
 	modeFor, permissionFor := d.sessionPolicy(launchCfg)
 	conv.start(
-		string(resp.SessionId), conversationCapabilities(d.cfg.Capabilities, init),
+		string(resp.SessionId), conversationCapabilities(d.cfg.Capabilities, init, steeringFor(d.cfg)),
 		modeFor, d.cfg.SessionOptions, permissionFor,
 		settings.Approval, d.cfg.ValidateTurnSettings, d.suppressedModeOptions(resp.ConfigOptions),
 		conv.legacyWire.modelState(), d.sessionModes(resp.Modes),
@@ -657,7 +664,7 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 		}
 		modeFor, permissionFor := d.sessionPolicy(launchCfg)
 		conv.start(
-			cfg.ProviderConversationID, conversationCapabilities(d.cfg.Capabilities, init),
+			cfg.ProviderConversationID, conversationCapabilities(d.cfg.Capabilities, init, steeringFor(d.cfg)),
 			modeFor, d.cfg.SessionOptions, permissionFor,
 			cfg.Permissions, d.cfg.ValidateTurnSettings, d.suppressedModeOptions(setup.ConfigOptions),
 			setup.Models, d.sessionModes(setup.Modes),
@@ -752,7 +759,7 @@ func (d *Driver) resumeSession(
 	conv.hasDurableTurns = cfg.HasPriorTurns
 	modeFor, permissionFor := d.sessionPolicy(launchCfg)
 	conv.start(
-		cfg.ProviderConversationID, conversationCapabilities(d.cfg.Capabilities, init),
+		cfg.ProviderConversationID, conversationCapabilities(d.cfg.Capabilities, init, steeringFor(d.cfg)),
 		modeFor, d.cfg.SessionOptions, permissionFor,
 		cfg.Permissions, d.cfg.ValidateTurnSettings, d.suppressedModeOptions(configOptions),
 		conv.legacyWire.modelState(), d.sessionModes(modes),
@@ -888,11 +895,12 @@ func (d *Driver) initialize(
 	proc *process,
 ) (*conversation, acpsdk.InitializeResponse, *persistenthost.ACPState, error) {
 	conv := newConversation(
-		proc, d.log, cfg.ProviderScopeID, d.cfg.ClientExtension, d.cfg.ClientExtensionAliases,
+		proc, d.log, cfg.ProviderScopeID, d.cfg.ClientExtension, d.clientExtensionAliases(),
 	)
 	conv.harness = d.cfg.Harness
 	conv.suppressSessionModes = d.cfg.SuppressSessionModes
 	conv.resetsConversation = d.cfg.ResetsConversation
+	conv.steering = steeringFor(d.cfg)
 	conv.onAuthRejected = d.cfg.OnAuthRejected
 	conv.promptResponseFailure = d.cfg.PromptResponseFailure
 	conv.promptFailureCode = d.cfg.PromptFailureCode
@@ -942,6 +950,7 @@ func (d *Driver) initialize(
 			}
 		}
 		conv.canDeleteFork = init.AgentCapabilities.SessionCapabilities.Delete != nil
+		conv.handshake = init
 		return conv, init, state, nil
 	}
 
@@ -997,6 +1006,7 @@ func (d *Driver) initialize(
 		}
 	}
 	conv.canDeleteFork = init.AgentCapabilities.SessionCapabilities.Delete != nil
+	conv.handshake = init
 	if d.cfg.AfterInitialize != nil {
 		if err := d.cfg.AfterInitialize(ctx, conv.conn, init, cfg); err != nil {
 			conv.discard()
@@ -1082,9 +1092,25 @@ func cloneCapabilities(in ports.ChatCapabilities) ports.ChatCapabilities {
 	return out
 }
 
+// clientExtensionAliases adds the steering drain's legacy method name, if it
+// has one, to the binding's own aliases so the pinned SDK dispatches it.
+func (d *Driver) clientExtensionAliases() map[string]string {
+	drain := d.cfg.SteerDrain
+	if drain == nil || drain.Method == "" || strings.HasPrefix(drain.Method, "_") {
+		return d.cfg.ClientExtensionAliases
+	}
+	aliases := make(map[string]string, len(d.cfg.ClientExtensionAliases)+1)
+	for method, alias := range d.cfg.ClientExtensionAliases {
+		aliases[method] = alias
+	}
+	aliases[drain.Method] = "_" + drain.Method
+	return aliases
+}
+
 func conversationCapabilities(
 	configured ports.ChatCapabilities,
 	init acpsdk.InitializeResponse,
+	steer steering,
 ) ports.ChatCapabilities {
 	caps := cloneCapabilities(configured)
 	if !supportsSessionRestore(init) {
@@ -1094,7 +1120,7 @@ func conversationCapabilities(
 	caps[ports.ChatCapabilityFork] = false // ACP has no turn-anchored fork in the pinned SDK.
 	caps[ports.ChatCapabilityForkCurrent] = init.AgentCapabilities.SessionCapabilities.Fork != nil &&
 		supportsSessionRestore(init)
-	if extensionSupported(init.Meta, "steering") {
+	if steer.supported(init) {
 		caps[ports.ChatCapabilitySteer] = true
 	}
 	caps[ports.ChatCapabilityImages] = init.AgentCapabilities.PromptCapabilities.Image
@@ -1197,6 +1223,29 @@ type promptStalledError struct{ error }
 func (e promptStalledError) Unwrap() error { return e.error }
 
 func (e promptStalledError) Is(target error) bool { return target == ports.ErrChatPromptStalled }
+
+// acpSessionNotFoundDetail is the text claude-agent-acp throws from every
+// session-scoped handler (session/prompt, set_config_option, set_mode, close,
+// steering) once its sessions map no longer holds the id.
+const acpSessionNotFoundDetail = "session not found"
+
+// isACPSessionMissing reports the agent answering that it holds no session with
+// the id AO sent. The adapter throws a plain Error, which the ACP SDK delivers
+// as -32603 with the text in data.details; AO's persistent host wraps prompt
+// error data as data.providerData, so both shapes are checked. Nothing else is
+// inferred from a generic -32603.
+func isACPSessionMissing(err error) bool {
+	var requestErr *acpsdk.RequestError
+	if !errors.As(err, &requestErr) || requestErr.Code != -32603 {
+		return false
+	}
+	data, _ := requestErr.Data.(map[string]any)
+	if provider, ok := data["providerData"].(map[string]any); ok {
+		data = provider
+	}
+	details, _ := data["details"].(string)
+	return strings.EqualFold(strings.TrimSpace(details), acpSessionNotFoundDetail)
+}
 
 func normalizeACPError(operation string, err error) error {
 	if isACPAuthRequired(err) {

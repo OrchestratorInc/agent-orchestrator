@@ -17,7 +17,7 @@ func TestAiderAuthRecordsTheDecidingEnvironmentVariable(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "sk-test")
 	ctx, evidence := ports.WithAuthEvidence(context.Background())
 	status, ok, err := aiderLocalAuthStatus(ctx)
-	if err != nil || !ok || status != ports.AgentAuthStatusAuthorized {
+	if err != nil || !ok || status != ports.AgentAuthStatusConfigured {
 		t.Fatalf("status = (%q, %v, %v)", status, ok, err)
 	}
 	want := domain.EnvironmentSource("ANTHROPIC_API_KEY").WithMethod(domain.AgentAccountMethodAPIKey)

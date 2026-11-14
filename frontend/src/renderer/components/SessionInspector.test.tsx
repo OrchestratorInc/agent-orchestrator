@@ -402,12 +402,12 @@ describe("SessionInspector tabs", () => {
     expect(screen.queryByTestId("inspector-branch")).not.toBeInTheDocument();
   });
 
-  it("gives a remote orchestrator the same tabs without a local account", () => {
+  it("gives a remote orchestrator the same tabs with its host's account", () => {
     renderWithQuery(<SessionInspector orchestrator hostId="box-a" session={session([], { kind: "orchestrator", hostId: "box-a" })} />);
     expect(screen.getByRole("tab", { name: "Summary" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Browser" })).toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "Files" })).not.toBeInTheDocument();
-    expect(screen.queryByTestId("session-account-summary")).not.toBeInTheDocument();
+    expect(screen.getByTestId("session-account-summary")).toBeInTheDocument();
   });
 
   it("shows an orchestrator's direct and rendered HTML artifacts beside Summary and Browser", async () => {
@@ -746,7 +746,7 @@ describe("SessionInspector PR section", () => {
     expect(screen.queryByText(/Pull requests \(/)).not.toBeInTheDocument();
     expect(prSection("Pull request").getByText("PR #7")).toBeInTheDocument();
     fireEvent.click(prSection("Pull request").getByRole("button", { name: "Checks passing" }));
-    expect(prSection("Pull request").getByText("No conflicts")).toBeInTheDocument();
+    expect(prSection("Pull request").getByText("Conflicts")).toBeInTheDocument();
     expect(prSection("Pull request").getByText("Approved")).toBeInTheDocument();
     expect(
       prSection("Pull request").getByText("Checks passing"),
@@ -1776,7 +1776,7 @@ describe("SessionInspector PR section", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "Squash and merge: PR #7" })).toBeEnabled());
     // With no review rule and no reviews, review decides nothing, so it stays out.
     fireEvent.click(prSection("Pull request").getByRole("button", { name: "Checks passing" }));
-    expect(prSection("Pull request").getByText("No conflicts")).toBeInTheDocument();
+    expect(prSection("Pull request").getByText("Conflicts")).toBeInTheDocument();
     expect(prSection("Pull request").queryByText("No reviews yet")).not.toBeInTheDocument();
     expect(prSection("Pull request").queryByText("No review required")).not.toBeInTheDocument();
     expect(prSection("Pull request").queryByText("Review pending")).not.toBeInTheDocument();
@@ -2058,6 +2058,12 @@ const artifact = (
   ...overrides,
 });
 
+const shareAccessMock = vi.hoisted(() => ({ current: new Map<string, "restricted" | "anyone">() }));
+vi.mock("./ShareArtifactPopover", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./ShareArtifactPopover")>()),
+  useReconciledShareLinks: () => shareAccessMock.current,
+}));
+
 describe("SessionInspector Artifacts section", () => {
   beforeEach(() => {
     vi.stubGlobal("IntersectionObserver", class {
@@ -2093,6 +2099,23 @@ describe("SessionInspector Artifacts section", () => {
 
     fireEvent.click(screen.getByTitle("file-0.md"));
     expect(onOpenArtifact).toHaveBeenCalledWith({ path: "file-0.md" });
+  });
+
+  it("marks published previews and rows by who their link opens for, as on the Artifacts page", () => {
+    shareAccessMock.current = new Map([["https://viewer.test/artifact/a", "restricted"], ["https://viewer.test/artifact/d", "anyone"]]);
+    const files = ["a", "b", "c", "d"].map((name, index) =>
+      artifact({ path: `${name}.md`, name: `${name}.md`, kind: "markdown", updatedAt: `2026-06-${20 - index}T00:00:00Z`, ...(name === "a" || name === "d" ? { shareUrl: `https://viewer.test/artifact/${name}` } : {}) }),
+    );
+    renderWithQuery(<SessionInspector session={session([], { outputType: "artifact", artifactFiles: files })} />);
+    // a.md is a preview tile, d.md a row under them.
+    const privateMark = within(screen.getByTitle("a.md")).getByRole("img", { name: "Shared privately" });
+    expect(privateMark).toHaveClass("text-status-in-review");
+    expect(privateMark.querySelector("svg")).toHaveClass("icon-link");
+    const publicMark = within(screen.getByTitle("d.md")).getByRole("img", { name: "Published" });
+    expect(publicMark).toHaveClass("text-success");
+    expect(publicMark.querySelector("svg")).toHaveClass("icon-globe");
+    expect(within(screen.getByTitle("b.md")).queryByRole("img")).toBeNull();
+    shareAccessMock.current = new Map();
   });
 
   it("shows an artifact list, not the empty PR state, when the session output is artifacts", () => {
@@ -3180,7 +3203,7 @@ describe("SessionInspector summary reviews", () => {
     }
   };
 
-  it("triggers a review and opens the returned reviewer terminal", async () => {
+  it("triggers a review without switching to the reviewer", async () => {
     mockCommonGets([], "", [reviewState(3, "needs_review")]);
     const runningReview = {
       ...approvedReview,
@@ -3218,13 +3241,10 @@ describe("SessionInspector summary reviews", () => {
         },
       ),
     );
-    expect(onOpenReviewerTerminal).toHaveBeenCalledWith({
-      handleId: "reviewer-pane",
-      harness: "codex",
-    });
+    expect(onOpenReviewerTerminal).not.toHaveBeenCalled();
   });
 
-  it("opens reviewer Chat when triggering a review from a Chat session", async () => {
+  it("does not switch to reviewer Chat when triggering a review from a Chat session", async () => {
     mockCommonGets([], "", [reviewState(3, "needs_review")]);
     postMock.mockResolvedValue({
       response: { status: 201 },
@@ -3247,7 +3267,8 @@ describe("SessionInspector summary reviews", () => {
     await openReviewsSection();
     await userEvent.click(await screen.findByRole("button", { name: "Review latest commit" }));
 
-    await waitFor(() => expect(onOpenReviewerChat).toHaveBeenCalledWith("review-1"));
+    await waitFor(() => expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/reviews/trigger", expect.anything()));
+    expect(onOpenReviewerChat).not.toHaveBeenCalled();
     expect(onOpenReviewerTerminal).not.toHaveBeenCalled();
   });
 
@@ -5183,11 +5204,10 @@ describe("SessionInspector summary reviews", () => {
     await userEvent.click(screen.getByRole("button", { name: confirm ? "Re-review commit" : "Cancel" }));
     if (confirm) {
       await waitFor(() => expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/reviews/trigger", expect.objectContaining({ body: expect.objectContaining({ rerun: true }) })));
-      await waitFor(() => expect(onOpenReviewerTerminal).toHaveBeenCalled());
     } else {
       expect(postMock).not.toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/reviews/trigger", expect.anything());
-      expect(onOpenReviewerTerminal).not.toHaveBeenCalled();
     }
+    expect(onOpenReviewerTerminal).not.toHaveBeenCalled();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
@@ -5795,10 +5815,7 @@ describe("SessionInspector Cloud reviews", () => {
         "sess-1",
       ),
     );
-    expect(onOpenReviewerTerminal).toHaveBeenCalledWith({
-      handleId: "cloud-reviewer-7",
-      harness: "claude-code",
-    });
+    expect(onOpenReviewerTerminal).not.toHaveBeenCalled();
   });
   it("does not ask a waking session's absent worker for its files count", async () => {
     cloudCpMock.listSessionPullRequests.mockResolvedValue({ sessionId: "sess-1", pullRequests: [] });
@@ -6344,14 +6361,19 @@ describe("SessionInspector branch summary", () => {
     renderWithQuery(<SessionInspector session={session([pr(7, "open")], { branchState: pushed(2) })} />, undefined, (client) => seedPRSummaries(client, [failing]));
 
     expect(await screen.findByTestId("pr-checks-tally")).toHaveTextContent("Checks1 failing");
-    expect(screen.queryByText("No conflicts")).not.toBeInTheDocument();
+    expect(screen.queryByText("Conflicts")).not.toBeInTheDocument();
     expect(screen.queryByTestId("pr-checks")).not.toBeInTheDocument();
     expect(screen.queryByText("Not mergeable yet")).not.toBeInTheDocument();
     expect(screen.queryByText("No reviews yet")).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: /^Checks/ }));
     expect(within(await screen.findByTestId("pr-checks")).getByText("format")).toBeInTheDocument();
-    expect(screen.getByText("No conflicts")).toBeInTheDocument();
+    expect(screen.getByText("Conflicts")).toBeInTheDocument();
+    // Like the checks row: what it is about, then a glyph and where it stands. No dot.
+    const conflicts = screen.getByText("Conflicts").closest("[data-testid='pr-status-fact']") as HTMLElement;
+    expect(conflicts).toHaveTextContent("ConflictsNone");
+    expect(conflicts.querySelector("[data-state='passed'] svg")).not.toBeNull();
+    expect(conflicts.parentElement?.querySelector("span[aria-hidden='true'].rounded-full")).toBeNull();
   });
 
   it("says the PR row opens a tab, until that tab is showing", async () => {
@@ -6373,7 +6395,7 @@ describe("SessionInspector branch summary", () => {
 
     expect(await screen.findByTestId("pr-checks-tally")).toHaveTextContent("Checks1 passed1 skipped");
     await userEvent.click(screen.getByRole("button", { name: /^Checks/ }));
-    expect(await screen.findByText("No conflicts")).toBeInTheDocument();
+    expect(await screen.findByText("Conflicts")).toBeInTheDocument();
     const checks = within(screen.getByTestId("pr-checks"));
     expect(checks.getAllByRole("listitem").map((item) => item.textContent)).toEqual(["build passed"]);
   });

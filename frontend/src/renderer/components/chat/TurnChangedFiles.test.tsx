@@ -542,7 +542,7 @@ describe("ActivityRow command labels", () => {
 			/>,
 		);
 		const row = screen.getByRole("button");
-		expect(row).toHaveClass("py-0.5", "gap-1.5", "select-none");
+		expect(row).toHaveClass("py-0.5", "gap-2", "select-none");
 		expect(screen.getByText("Checked git status")).toHaveClass(
 			"text-xs",
 			"font-normal",

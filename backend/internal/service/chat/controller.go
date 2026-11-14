@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/filesnapshot"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -216,6 +217,9 @@ type Controller struct {
 	conversation domain.ConversationRecord
 	generation   string
 	harness      domain.AgentHarness
+	// workspacePath is the worktree whose files are snapshotted before each turn
+	// and restored by a rollback.
+	workspacePath string
 
 	conv                   ports.ChatConversation
 	store                  Store
@@ -397,6 +401,7 @@ func newController(
 	conversation domain.ConversationRecord,
 	generation string,
 	harness domain.AgentHarness,
+	workspacePath string,
 	conv ports.ChatConversation,
 	store Store,
 	activity ActivityRecorder,
@@ -415,6 +420,7 @@ func newController(
 		conversation:           conversation,
 		generation:             generation,
 		harness:                harness,
+		workspacePath:          workspacePath,
 		conv:                   conv,
 		store:                  store,
 		continuationReader:     reader,
@@ -2066,6 +2072,7 @@ func (c *Controller) dispatch(
 		}
 	}
 
+	c.snapshotFiles(ctx, append([]string{turnID}, followers...))
 	// Before the provider has the prompt, so nothing the turn writes predates it.
 	c.captureArtifactBaseline(ctx, true)
 	c.mu.Lock()
@@ -2275,6 +2282,13 @@ func excerptDeliveryMessage(msg ports.ChatUserMessage) ports.ChatUserMessage {
 			fallback.WriteString(ctx.AssistantMessage)
 		}
 		fallback.WriteString("\n---")
+		if comment := strings.TrimSpace(ctx.Reference.Comment); comment != "" {
+			if numbered {
+				fmt.Fprintf(&fallback, "\nUser's comment on annotation %d:\n%s", annotationIndex, comment)
+			} else {
+				fallback.WriteString("\nUser's comment on the selected text:\n" + comment)
+			}
+		}
 	}
 	msg.Content = content
 	msg.Text += fallback.String()
@@ -2284,8 +2298,9 @@ func excerptDeliveryMessage(msg ports.ChatUserMessage) ports.ChatUserMessage {
 // drain sends the next queued message now that the agent is free.
 //
 // Runs on the projection goroutine, so it observes turn completion in order with
-// everything else the provider said. One message per call: the turn it starts
-// makes the controller busy again, and the next completion drains the next.
+// everything else the provider said. One turn per call (see drainRun for what it
+// takes): the turn it starts makes the controller busy again, and the next
+// completion drains the next.
 func (c *Controller) drain(ctx context.Context) error {
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
@@ -2337,6 +2352,7 @@ func (c *Controller) drainLockedWithLimit(ctx context.Context, allowDispatch boo
 		return nil
 	}
 
+	take := limit
 	for {
 		preview, err := c.store.ListQueuedBatch(ctx, c.conversation.ID, limit)
 		if errors.Is(err, domain.ErrNoQueuedTurn) {
@@ -2344,6 +2360,10 @@ func (c *Controller) drainLockedWithLimit(ctx context.Context, allowDispatch boo
 		}
 		if err != nil {
 			return err
+		}
+		if limit == 0 {
+			preview = preview[:drainRun(preview)]
+			take = len(preview)
 		}
 		if _, err := c.queuedBatchInput(ctx, preview, nil); err != nil {
 			if id, ok := invalidBatchTurn(err); ok {
@@ -2356,7 +2376,7 @@ func (c *Controller) drainLockedWithLimit(ctx context.Context, allowDispatch boo
 		}
 		break
 	}
-	batch, err := c.store.ClaimQueuedBatch(ctx, c.conversation.ID, true, limit, c.now())
+	batch, err := c.store.ClaimQueuedBatch(ctx, c.conversation.ID, true, take, c.now())
 	if errors.Is(err, domain.ErrNoQueuedTurn) {
 		return nil
 	}
@@ -2746,6 +2766,18 @@ func (c *Controller) Interrupt(ctx context.Context) error {
 	}
 	c.mu.Unlock()
 	defer func() { c.mu.Lock(); c.interrupts--; c.mu.Unlock() }()
+	// A steer waiting for the agent to collect guidance holds sendMu. Withdraw
+	// it so Stop does not wait for that steer to time out. Withdrawing also
+	// refuses later steers for the turn; a Stop that fails gives them back.
+	var restore func()
+	if withdrawer, ok := c.conv.(ports.ChatSteerWithdrawer); ok {
+		restore = withdrawer.WithdrawPendingSteers()
+	}
+	restoreSteering := func() {
+		if restore != nil {
+			restore()
+		}
+	}
 	// Commit the current batch before Stop settles the turn. The store keeps any
 	// later deltas settled while retaining text that arrives during cancellation.
 	c.flushDeltas(ctx)
@@ -2768,6 +2800,7 @@ func (c *Controller) Interrupt(ctx context.Context) error {
 		providerTurnIDs, err := c.store.ListVisibleRunningTurnProviderIDs(ctx, c.conversation.ID)
 		if err != nil {
 			c.sendMu.Unlock()
+			restoreSteering()
 			return fmt.Errorf("check running turns: %w", err)
 		}
 		if len(providerTurnIDs) == 0 {
@@ -2818,10 +2851,11 @@ func (c *Controller) Interrupt(ctx context.Context) error {
 			return c.reconcileDurableTurnsLocked(ctx, turn, providerTurnIDs, cutoff)
 		}
 		// The interrupt did not happen, so the queue it was going to cancel is
-		// still the user's to send.
+		// still the user's to send, and the turn can still be steered.
 		c.mu.Lock()
 		c.cancelQueuedAt = time.Time{}
 		c.mu.Unlock()
+		restoreSteering()
 		return fmt.Errorf("interrupt turn %s: %w", turn, err)
 	}
 	return nil
@@ -2922,18 +2956,22 @@ func (c *Controller) awaitTurnAcknowledged(ctx context.Context, turn string) boo
 }
 
 // Rollback discards a turn and everything after it, and reports how many turns went.
+// With filePlanID, the PlanID of the RollbackPreview the user confirmed, it also puts
+// the worktree back to how it was before the turn.
 //
-// Order is deliberate: the provider first, AO's rows second. If the provider
-// refuses, AO must not already have hidden anything — a timeline missing turns the
-// agent still remembers is the same lie in the other direction. If AO's write then
-// fails, the error is returned and logged loudly: the provider call cannot be undone,
-// and the raw provider-event archive plus the surviving turn rows are what make the
-// disagreement repairable rather than invisible.
+// Order is deliberate: files first, the provider second, AO's rows last. Files are
+// the only step that can be reversed, so they go before the provider call and are
+// put back if the provider refuses. If the provider refuses, AO must not already
+// have hidden anything — a timeline missing turns the agent still remembers is the
+// same lie in the other direction. If AO's write then fails, the error is returned
+// and logged loudly: the provider call cannot be undone, and the raw provider-event
+// archive plus the surviving turn rows are what make the disagreement repairable
+// rather than invisible.
 //
 // The busy check is inside sendMu, which is also what dispatch holds, so a turn
 // cannot start between the check and the provider call. That is the difference
 // between refusing a rollback and racing one.
-func (c *Controller) Rollback(ctx context.Context, turnID string) (int, error) {
+func (c *Controller) Rollback(ctx context.Context, turnID, filePlanID string) (int, error) {
 	rollbacker, ok := c.conv.(ports.ChatRollbacker)
 	if !ok {
 		return 0, ErrRollbackUnsupported
@@ -2981,8 +3019,15 @@ func (c *Controller) Rollback(ctx context.Context, turnID string) (int, error) {
 		return 0, fmt.Errorf("%w: %s", ErrTurnNotRollbackable, turnID)
 	}
 
+	var restore filesnapshot.Restore
+	if filePlanID != "" {
+		if restore, err = c.restoreFiles(ctx, turnID, filePlanID); err != nil {
+			return 0, err
+		}
+	}
+
 	if err := rollbacker.Rollback(ctx, turn.ProviderTurnID); err != nil {
-		return 0, classify(fmt.Errorf("roll back turn %s: %w", turnID, err))
+		return 0, c.undoFileRestore(ctx, restore, classify(fmt.Errorf("roll back turn %s: %w", turnID, err)))
 	}
 
 	discarded, err := c.store.RollbackTurns(ctx, c.conversation.ID, turnID, c.now())

@@ -5,10 +5,12 @@ import { FileAnnotationContext } from "./FileAnnotationPreview";
 import { useChatFind } from "../../hooks/useChatFind";
 import { occurrenceKey, type FindOccurrence } from "../../lib/chat-find";
 import "./chat-find.css";
+import { ForkableTurnContext, ForkTextCopyNotice, LatestForkTurnContext } from "../SessionForkControls";
 import type { ChatFileReference, OpenFileAnnotation } from "../../../shared/chat-file-reference";
 import { TurnWorkSummary } from "./TurnWorkSummary";
 import { TurnSettleSnapshot } from "./TurnSettleSnapshot";
 import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
+import { cloudAttachmentReference } from "../../lib/cloud-attachments";
 import { cloudChatStartingInPlace } from "../../lib/cloud-lifecycle";
 import { isSettingsPageOpen } from "../../hooks/useAppShortcut";
 import { useLatestCallback, useStableSet } from "../../hooks/useStable";
@@ -51,6 +53,7 @@ import { Archive, ArrowDown, Columns2, FlaskConical, ListTodo, Loader2, Notebook
 import { AnimatePresence, motion, Reorder, useReducedMotion } from "motion/react";
 import { useTranslation } from "react-i18next";
 import { ChatSelectionActions } from "./ChatSelectionActions";
+import { ChatAnnotationMarkers, DraftAnnotationMarkers, numberedReferences } from "./ChatAnnotationMarkers";
 import { selectionRangesEqual } from "../../lib/selection-toolbar";
 import { useScrollFollow } from "../../hooks/useScrollFollow";
 import {
@@ -64,7 +67,7 @@ import { isShownAORender } from "../../lib/mcp-tool";
 import { isOrchestratorPlumbing } from "./activity-step";
 import { cn } from "../../lib/utils";
 import { sessionBranchPresentation } from "../../lib/session-branch";
-import { annotationBody, annotationTextMatches, annotationReferenceRange, annotationDiagramBlock, highlightChatAnnotation } from "../../lib/chat-annotation-navigation";
+import { annotationBody, annotationTextMatches, annotationReferenceRange, annotationDiagramBlock, highlightChatAnnotation, revealFoldedRange } from "../../lib/chat-annotation-navigation";
 import {
 	acknowledgeChatInlineEditMutation,
 	beginChatInlineEditMutation,
@@ -80,6 +83,7 @@ import {
 	chatDraftScopeKey,
 	chatQueuedAttachmentScopeKey,
 	readChatSessionDraft,
+	getChatComposerMutation,
 	subscribeChatDraftRuntime,
 	writeChatInlineEdit,
 	writeChatExcerptReferences,
@@ -98,7 +102,8 @@ import { setChatDraftBoundary } from "../../lib/chat-draft-boundary";
 import { sameContent, useStableList } from "../../lib/stable-list";
 import { useTabScrollEdges } from "../../hooks/useTabScrollEdges";
 import { useSidebarChromeClearanceRef } from "../../hooks/useSidebarChromeGeometry";
-import { apiErrorCode, getApiBaseUrl, subscribeApiBaseUrl } from "../../lib/api-client";
+import { apiErrorCode, apiErrorMessage, getApiBaseUrl, subscribeApiBaseUrl } from "../../lib/api-client";
+import type { components } from "../../../api/schema";
 import { aoBridge } from "../../lib/bridge";
 import { isDialogOrMenuOpen } from "../../lib/dom-selectors";
 import { clampTerminalFontSize, initialTerminalFontSize, terminalFontSizeStorageKey } from "../../lib/terminal-font-size";
@@ -145,6 +150,7 @@ import {
 	TurnOutcome,
 	LiveResponseStatus,
 	LiveStepChoices,
+	RevealedChatActivity,
 	isLiveStepKind,
 	isModelReroute,
 	liveTaskLabel,
@@ -271,6 +277,13 @@ const CHAT_FONT_SIZE_DEFAULT = 14;
 const WHEEL_ZOOM_THRESHOLD = 80;
 const WHEEL_ZOOM_RESET_MS = 250;
 
+/**
+ * What a surface's onSend resolves to when the message went somewhere other
+ * than the main transcript (a /btw question opens a side chat), so sending it
+ * does not move the reader to the end of the main transcript.
+ */
+export const SENT_OUTSIDE_TRANSCRIPT = Symbol("chat.sentOutsideTranscript");
+
 // The daemon enriches this request with the interrupted task and response tail.
 // Continue starts another turn in the existing conversation; it is not an exact
 // execution checkpoint.
@@ -374,12 +387,23 @@ function useQueuedMessages(snapshot: ConversationSnapshot, excludeTurnId?: strin
 	}, [excludeTurnId, snapshot.items, snapshot.turns]);
 }
 
+/** A request to open find in chat; see ChatWorkspaceProps.findRequest. */
+export type ChatFindRequest = { id: string; query: string; messageId?: string };
+
 export interface ChatWorkspaceProps {
 	onAddToSideChat?: (excerpt: ChatDraftExcerptReference) => void | Promise<void>;
 	checkingSideChatAvailability?: boolean;
-	annotationNavigationRequest?: { id: string; text: string; snapshot?: ChatExcerptSnapshot; messageId?: string; revision?: number };
+	annotationNavigationRequest?: { id: string; text: string; snapshot?: ChatExcerptSnapshot; messageId?: string; revision?: number; activitySequence?: number };
 	/** Called once the chat applied annotationNavigationRequest, so its owner drops it rather than have a later mount replay it. */
 	onAnnotationNavigationHandled?: (id: string) => void;
+	/**
+	 * Opens find in chat with this query, its first match in messageId: a
+	 * session search result handing its search to the session it opens. A new
+	 * id opens it again.
+	 */
+	findRequest?: ChatFindRequest;
+	/** Called once the chat applied findRequest, so its owner drops it rather than have a later mount open find again. */
+	onFindRequestHandled?: (id: string) => void;
 	snapshot: ConversationSnapshot;
 	promptSuggestion?: ComposerPromptSuggestion;
 	/** Renderer-owned state identity; the snapshot's sessionId remains the daemon wire ID. */
@@ -506,6 +530,7 @@ export interface ChatWorkspaceProps {
 	 * stay available.
 	 */
 	composerLockedPlaceholder?: string;
+	sendBlockedReason?: string;
 	/** The snapshot is a saved copy, so its controller state says nothing about the agent now. */
 	savedCopy?: boolean;
 	importBlock?: AgentBlock;
@@ -561,10 +586,14 @@ export interface ChatWorkspaceProps {
 	/** Why compaction is not available right now, from the daemon's typed refusal. */
 	compactUnavailable?: string;
 	/**
-	 * Discard a turn and everything after it. Absent means the agent cannot undo,
-	 * and the affordance is not drawn at all rather than shown and then refused.
+	 * Discard a turn and everything after it, restoring the worktree too when the
+	 * confirmation listed its files, whose preview's planId is filePlanId. Absent
+	 * means the agent cannot undo, and the affordance is not drawn at all rather
+	 * than shown and then refused.
 	 */
-	onRollback?: (turnId: string) => void | Promise<unknown>;
+	onRollback?: (turnId: string, filePlanId?: string) => void | Promise<unknown>;
+	/** Lists the files a rollback would restore. Absent means only the conversation is rolled back. */
+	onPreviewRollback?: (turnId: string) => Promise<RollbackPreview>;
 	rollbackPending?: boolean;
 	rollbackError?: string;
 	/** Opens the session Files inspector from a turn's changed-files Review control. */
@@ -633,7 +662,11 @@ export interface ChatWorkspaceProps {
 	steerRefusal?: string;
 	onPromoteQueuedTurn?: (turnId: string) => Promise<unknown>;
 	onEditQueuedTurn?: (turnId: string, text: string, options?: QueuedMessageEditOptions) => Promise<unknown>;
+	/** Which queued human messages onEditQueuedTurn can edit; every one when absent. */
+	canEditQueuedMessage?: (message: ConversationMessage) => boolean;
 	onCancelQueuedTurn?: (turnId: string) => Promise<unknown>;
+	/** Which queued messages onCancelQueuedTurn can delete; every one when absent. */
+	canCancelQueuedMessage?: (message: ConversationMessage) => boolean;
 	onReorderQueuedTurns?: (turnIds: string[]) => Promise<unknown>;
 	promoteQueuedTurnPendingTurnId?: string;
 	cancelQueuedTurnPendingTurnId?: string;
@@ -653,11 +686,14 @@ export interface ChatWorkspaceProps {
 	parkUnsentSends?: boolean;
 	/** An empty header strip sits above: center the empty chat in the window, not below the strip. */
 	centerInWindow?: boolean;
+	welcomeHeading?: string;
 	/** The project has a setup script, so the start-up checklist lists that step. */
 	showSetupStep?: boolean;
 	/** Keep files the workspace cannot take yet in the composer, sent with the message. */
 	holdAttachments?: boolean;
 	onHeldAttachmentsChange?: ComponentProps<typeof ChatComposer>["onHeldAttachmentsChange"];
+	/** Why this chat takes no files, for a draft that brought some (ChatComposer). */
+	attachmentsRefusal?: string;
 }
 
 type ChatWorkspaceActivation =
@@ -745,6 +781,8 @@ function ChatWorkspaceContent({
 	checkingSideChatAvailability,
 	annotationNavigationRequest,
 	onAnnotationNavigationHandled,
+	findRequest,
+	onFindRequestHandled,
 	snapshot,
 	promptSuggestion,
 	sessionTitle,
@@ -818,6 +856,7 @@ function ChatWorkspaceContent({
 	agentSwitch,
 	composerNotice,
 	composerLockedPlaceholder,
+	sendBlockedReason,
 	savedCopy = false,
 	importBlock,
 	settingsLocked = false,
@@ -838,6 +877,7 @@ function ChatWorkspaceContent({
 	compacting,
 	compactUnavailable,
 	onRollback,
+	onPreviewRollback,
 	rollbackPending,
 	rollbackError,
 	onOpenFiles,
@@ -867,7 +907,9 @@ function ChatWorkspaceContent({
 	steerRefusal,
 	onPromoteQueuedTurn,
 	onEditQueuedTurn,
+	canEditQueuedMessage,
 	onCancelQueuedTurn,
+	canCancelQueuedMessage,
 	onReorderQueuedTurns,
 	promoteQueuedTurnPendingTurnId,
 	cancelQueuedTurnPendingTurnId,
@@ -878,9 +920,11 @@ function ChatWorkspaceContent({
 	composerTray,
 	parkUnsentSends = true,
 	centerInWindow = false,
+	welcomeHeading,
 	showSetupStep = true,
 	holdAttachments,
 	onHeldAttachmentsChange,
+	attachmentsRefusal,
 	draftScope,
 	draftPersistenceAvailable,
 	onRetryDraftPersistence,
@@ -1128,6 +1172,12 @@ function ChatWorkspaceContent({
 	const [steerStartedAt, setSteerStartedAt] = useState<ReadonlyMap<string, string>>(() => new Map());
 	const [steerErrors, setSteerErrors] = useState<Readonly<Record<string, string>>>({});
 	const [steerEchoes, setSteerEchoes] = useState<readonly SteerEcho[]>([]);
+	// Counts the reader's sends from this chat's composer that the main
+	// transcript took (a message, one that queues, a steer), so the transcript
+	// brings them to it wherever they had scrolled. A Cloud chat shows no local
+	// echo of a send to key that off. A send that was refused, or that went to a
+	// side chat (SENT_OUTSIDE_TRANSCRIPT), leaves the reader where they were.
+	const [composerSends, setComposerSends] = useState(0);
 	const backgroundWakeQueuedTurnIds = useMemo(
 		() => new Set(
 			(localEchos ?? [])
@@ -1301,7 +1351,7 @@ function ChatWorkspaceContent({
 			const current = queueEditRef.current;
 			if (current?.turnId === turnId && !current.clientMessageId) updateQueueDraft(undefined, current.revision);
 		},
-		[queueEdit, stableCancelQueuedTurn, updateQueueDraft],
+		[onCancelQueuedTurn, queueEdit, stableCancelQueuedTurn, updateQueueDraft],
 	);
 	// Keep the dispatch target with this composer instance while attachment staging
 	// awaits. A newer queue editor must not redirect an older ordinary send.
@@ -1334,12 +1384,14 @@ function ChatWorkspaceContent({
 					});
 				} catch (error) {
 					// These outcomes follow the daemon's atomic receipt lookup, so even
-					// a recovered retry proves this exact edit was never accepted.
+					// a recovered retry proves this exact edit was never accepted. A
+					// Cloud control plane's refusal of the edit proves it too.
 					if ([
 						"CHAT_TURN_NOT_QUEUED",
 						"CHAT_QUEUED_EDIT_CONFLICT",
 						"CHAT_QUEUED_CONTENT_INVALID",
 						"CHAT_QUEUED_TEXT_REQUIRED",
+						"CHAT_QUEUED_EDIT_REFUSED",
 					].includes(apiErrorCode(error) ?? "")) {
 						updateQueueDraft({
 							...prepared.draft.queuedEdit,
@@ -1357,7 +1409,10 @@ function ChatWorkspaceContent({
 			if (wasConversationEmpty.current && composerBoxRef.current) {
 				composerCenteredTopRef.current = composerBoxRef.current.getBoundingClientRect().top;
 			}
-			return onSend?.(text, attachments, clientMessageId, excerpts, fileReferences, displayText);
+			// A refused send throws past the count.
+			const sent = await onSend?.(text, attachments, clientMessageId, excerpts, fileReferences, displayText);
+			if (sent !== SENT_OUTSIDE_TRANSCRIPT) setComposerSends((count) => count + 1);
+			return sent;
 		},
 		[draftScope, onEditQueuedTurn, onSend, nativeImages, queueEdit, queuedMessages, updateQueueDraft],
 	);
@@ -1376,6 +1431,12 @@ function ChatWorkspaceContent({
 			(message.content ?? []).forEach((item, index) => {
 				attachments.push({ id: `content-${index}`, contentIndex: index, contentType: item.type,
 					name: item.name || (item.type === "image" ? `Image ${index + 1}` : item.uri || "Attachment") });
+			});
+			// A cloud message's files are kept by their reference, as the composer
+			// stages a new one, so saving lists them with any file added.
+			(message.cloudAttachments ?? []).forEach((attachment) => {
+				const path = cloudAttachmentReference(attachment);
+				attachments.push({ id: path, name: attachment.fileName, path });
 			});
 			updateQueueDraft({ turnId, ownerId: crypto.randomUUID(), text: parts.body, expectedRevision: message.revision, attachments, stagedAttachments: [] });
 		},
@@ -1433,6 +1494,8 @@ function ChatWorkspaceContent({
 					const acceptedAfterSequence = latestSequence() ?? 0;
 					setSteerEchoes((current) => current.map((echo) =>
 						echo.clientMessageId === id && echo.acceptedAfterSequence === undefined ? { ...echo, acceptedAfterSequence } : echo));
+					// The turn took the steer: bring the reader to it.
+					if (target) setComposerSends((count) => count + 1);
 				}
 				return outcome;
 			} catch (error) {
@@ -1463,6 +1526,7 @@ function ChatWorkspaceContent({
 	// The turn a confirmation is open for. Undo is not reversible and it changes what
 	// the agent knows, so it is never one click.
 	const [confirming, setConfirming] = useState<string | undefined>(undefined);
+	const previewRollback = useStableCallback(onPreviewRollback);
 	const surfaceRef = useRef<HTMLElement | null>(null);
 	const composerFocusRef = useRef<ChatComposerHandle>(null);
 	const artifactSession = session?.requestedOutput === "artifact";
@@ -1473,8 +1537,8 @@ function ChatWorkspaceContent({
 		const { composer } = readChatSessionDraft(draftScope);
 		return !composer.text.trim() && composer.attachments.length === 0 && !composer.excerpts?.length;
 	});
-	const annotationNavigationRef = useRef<((annotation: { text: string; snapshot?: ChatExcerptSnapshot; messageId?: string; revision?: number }) => void) | null>(null);
-	const navigateToAnnotation = useCallback((annotation: { text: string; snapshot?: ChatExcerptSnapshot; messageId?: string; revision?: number }) => {
+	const annotationNavigationRef = useRef<((annotation: { text: string; snapshot?: ChatExcerptSnapshot; messageId?: string; revision?: number; activitySequence?: number }) => void) | null>(null);
+	const navigateToAnnotation = useCallback((annotation: { text: string; snapshot?: ChatExcerptSnapshot; messageId?: string; revision?: number; activitySequence?: number }) => {
 		annotationNavigationRef.current?.(annotation);
 	}, []);
 	// This content remounts per session (it is keyed by the draft scope), so a
@@ -1791,7 +1855,11 @@ function ChatWorkspaceContent({
 					onBeginQueuedEdit={
 						newWorkDisabled || !draftPersistenceAvailable || !onEditQueuedTurn ? undefined : beginQueuedEdit
 					}
-					onCancelQueuedTurn={newWorkDisabled ? undefined : handleCancelQueuedTurn}
+					canEditMessage={canEditQueuedMessage}
+					// Delete only where the chat can stop the message's turn: without
+					// that it would do nothing.
+					onCancelQueuedTurn={newWorkDisabled || !onCancelQueuedTurn ? undefined : handleCancelQueuedTurn}
+					canCancelMessage={canCancelQueuedMessage}
 					onReorderQueuedTurns={newWorkDisabled || !onReorderQueuedTurns ? undefined : reorderQueuedTurns}
 					promotePendingTurnId={promoteQueuedTurnPendingTurnId}
 					cancelPendingTurnId={cancelQueuedTurnPendingTurnId}
@@ -1800,11 +1868,14 @@ function ChatWorkspaceContent({
 			) : null,
 		[
 			beginQueuedEdit,
+			canCancelQueuedMessage,
+			canEditQueuedMessage,
 			canSteerQueuedMessage,
 			cancelQueuedTurnPendingTurnId,
 			draftPersistenceAvailable,
 			handleCancelQueuedTurn,
 			newWorkDisabled,
+			onCancelQueuedTurn,
 			onEditQueuedTurn,
 			onReorderQueuedTurns,
 			reorderQueuedTurns,
@@ -2121,10 +2192,13 @@ function ChatWorkspaceContent({
 							<ChatHostId.Provider value={activeRemoteHostId}>
 							<ChatTokenSkills.Provider value={skills ?? NO_SKILLS}>
 
+								{conversationEmpty ? <ForkTextCopyNotice /> : null}
 								<Timeline
 									shownAt={panelShownAt}
 							onAddToSideChat={onAddToSideChat}
 									checkingSideChatAvailability={checkingSideChatAvailability}
+									findRequest={findRequest}
+									onFindRequestHandled={onFindRequestHandled}
 									workerUpdates={sessionRole === "orchestrator"}
 									annotationNavigationRef={annotationNavigationRef}
 									key={draftScopeKey}
@@ -2157,6 +2231,7 @@ function ChatWorkspaceContent({
 									newWorkDisabled={newWorkDisabled}
 									rollbackDisabled={Boolean(durableTurn || rollbackPending || newWorkDisabled)}
 									localEchos={localEchos}
+									composerSends={composerSends}
 									startup={sessionRole === "orchestrator" ? undefined : startup}
 									openingStartedAt={openingStartedAt}
 									// A Freestyle Chat session started from this device: the row under its
@@ -2192,7 +2267,7 @@ function ChatWorkspaceContent({
 								) : null}
 								{conversationEmpty ? (
 									<h1 className="mb-5 text-center text-2xl font-normal tracking-tight text-foreground sm:text-3xl">
-										{t(artifactSession ? "chat.welcome.artifactHeading" : "chat.welcome.heading")}
+										{welcomeHeading ?? t(artifactSession ? "chat.welcome.artifactHeading" : "chat.welcome.heading")}
 									</h1>
 								) : null}
 								<WelcomePromptSuggestions
@@ -2209,7 +2284,7 @@ function ChatWorkspaceContent({
 											aria-hidden="true"
 											className="chat-welcome-leaving pointer-events-none absolute inset-x-0 bottom-full mb-5 text-center text-2xl font-normal tracking-tight text-foreground sm:text-3xl"
 										>
-											{t(artifactSession ? "chat.welcome.artifactHeading" : "chat.welcome.heading")}
+											{welcomeHeading ?? t(artifactSession ? "chat.welcome.artifactHeading" : "chat.welcome.heading")}
 										</h1>
 									) : null}
 									<McpServerBanner
@@ -2283,10 +2358,13 @@ function ChatWorkspaceContent({
 												: undefined
 										}
 										starting={orchestratorStarting || arrivingInChat || cloudStarting || composerStarting}
-										disabled={(orchestratorBlocksComposer || (openingStarting && !session) || loadingQuietly || (snapshot.controller.state === "stopped" && !suppressStopped && !accountMoveQueues && (!resumingAgent || session?.provisionState === "failed" || terminated)) || (controllerTransitioning && !accountMoveQueues) || newWorkDisabled || composerLockedPlaceholder !== undefined) && !queueEdit?.clientMessageId}
+										disabled={(orchestratorBlocksComposer || (openingStarting && !session) || loadingQuietly || (snapshot.controller.state === "stopped" && !suppressStopped && !accountMoveQueues && (!resumingAgent || session?.provisionState === "failed" || terminated)) || (controllerTransitioning && !accountMoveQueues) || (newWorkDisabled && sendBlockedReason === undefined) || composerLockedPlaceholder !== undefined) && !queueEdit?.clientMessageId}
+										sendBlockedReason={sendBlockedReason}
 										disabledPlaceholder={
 											composerLockedPlaceholder !== undefined
 												? composerLockedPlaceholder
+												: sendBlockedReason !== undefined
+												? sendBlockedReason
 												: arrivingInChat
 												? arrivingPlaceholder
 												: (openingStarting && !session) || pendingInPlaceStart
@@ -2319,6 +2397,7 @@ function ChatWorkspaceContent({
 										cloudAttachments={cloudAttachments}
 										holdAttachments={newWorkDisabled ? undefined : holdAttachments}
 										onHeldAttachmentsChange={onHeldAttachmentsChange}
+										attachmentsRefusal={attachmentsRefusal}
 										nativeImages={queueEdit?.clientMessageId ? queueEdit.nativeImages ?? nativeImages : nativeImages}
 										autoFocus={!reviewerActive}
 										autoFocusKey={draftScope.sessionId}
@@ -2353,41 +2432,138 @@ function ChatWorkspaceContent({
 				</div>
 			</div>
 
-			{/* The copy has to be honest about the cost: this is not "hide these
-			    messages", it is "the agent forgets them". Nothing in the worktree is
-			    reverted either, and a user who assumed otherwise would be badly
-			    surprised, so it is said out loud. */}
-			<ConfirmDialog
+			<RollbackConfirmation
 				open={Boolean(confirming) && !reviewerActive && !shellActive}
-				onOpenChange={(open) => {
-					if (!open) setConfirming(undefined);
-				}}
-				title="Roll back to this point?"
-				description={
-					<>
-						<p className="text-xs font-medium text-foreground">
-							The agent will forget this exchange and everything after it.
-						</p>
-						<p className="mt-1 text-xs text-muted-foreground">
-							Its memory of the conversation is discarded up to this point, so it will not know
-							about anything you or it said later. Files it already changed in the worktree are left
-							exactly as they are; only the conversation is rolled back. This cannot be undone.
-						</p>
-					</>
-				}
-				confirmLabel="Roll back"
-				destructive
+				turnId={confirming}
 				busy={rollbackPending}
-				error={rollbackError ?? null}
-				onConfirm={() => {
-					const turnId = confirming;
-					if (!turnId) return;
+				error={rollbackError}
+				onPreview={onPreviewRollback ? previewRollback : undefined}
+				onConfirm={(turnId, filePlanId) => {
 					setConfirming(undefined);
-					void Promise.resolve(onRollback?.(turnId)).catch(() => {});
+					void Promise.resolve(onRollback?.(turnId, filePlanId)).catch(() => {
+						// Open it again so the error shows; this also reads the file list fresh.
+						setConfirming(turnId);
+					});
 				}}
+				onClose={() => setConfirming(undefined)}
 			/>
 		</section>
  </FileAnnotationContext.Provider>
+	);
+}
+
+type RollbackPreview = components["schemas"]["RollbackPreviewResponse"];
+
+const rollbackChangeLabels: Record<RollbackPreview["files"][number]["change"], string> = {
+	restored: "Restored",
+	reverted: "Reverted",
+	removed: "Deleted",
+};
+
+/**
+ * The confirmation for "Roll back to here". The copy has to be honest about the
+ * cost: this is not "hide these messages", it is "the agent forgets them". When
+ * the daemon can put the worktree back too, the files that will change are
+ * listed before the button is offered; when it cannot, the dialog says the files
+ * stay as they are, because a user who assumed otherwise would be badly surprised.
+ */
+function RollbackConfirmation({
+	open,
+	turnId,
+	busy,
+	error,
+	onPreview,
+	onConfirm,
+	onClose,
+}: {
+	open: boolean;
+	turnId?: string;
+	busy?: boolean;
+	error?: string;
+	onPreview?: (turnId: string) => Promise<RollbackPreview> | undefined;
+	onConfirm: (turnId: string, filePlanId?: string) => void;
+	onClose: () => void;
+}) {
+	const [preview, setPreview] = useState<{ turnId: string; result?: RollbackPreview; error?: string }>();
+	useEffect(() => {
+		const request = turnId ? onPreview?.(turnId) : undefined;
+		if (!turnId || !request) return;
+		let current = true;
+		setPreview({ turnId });
+		request.then(
+			(result) => {
+				if (current) setPreview({ turnId, result });
+			},
+			(cause: unknown) => {
+				if (current) setPreview({ turnId, error: apiErrorMessage(cause) });
+			},
+		);
+		return () => {
+			current = false;
+		};
+	}, [turnId, onPreview]);
+
+	const loaded = preview?.turnId === turnId ? preview : undefined;
+	const checking = Boolean(onPreview) && !loaded?.result && !loaded?.error;
+	const restore = loaded?.result?.filesRestorable ? loaded.result : undefined;
+	const unavailable = loaded?.result?.reason ?? loaded?.error;
+
+	let detail: string;
+	if (checking) {
+		detail = "Checking which files this would restore…";
+	} else if (restore) {
+		const files = restore.totalFiles === 0
+			? "No files have changed since then."
+			: `${restore.totalFiles} ${restore.totalFiles === 1 ? "file" : "files"} will change.`;
+		const commits = restore.commitsSince === 1
+			? " 1 commit made since then stays on the branch, and restoring the files can leave uncommitted changes that undo it."
+			: restore.commitsSince > 1
+				? ` ${restore.commitsSince} commits made since then stay on the branch, and restoring the files can leave uncommitted changes that undo them.`
+				: "";
+		detail = `${files}${commits} Ignored files this rollback does not change are left alone. This cannot be undone.`;
+	} else {
+		detail = `${unavailable ? `Files can't be restored: ${unavailable}. ` : ""}Its memory of the conversation is discarded up to this point, so it will not know about anything you or it said later. Files it already changed in the worktree are left exactly as they are; only the conversation is rolled back. This cannot be undone.`;
+	}
+
+	return (
+		<ConfirmDialog
+			open={open}
+			onOpenChange={(next) => {
+				if (!next) onClose();
+			}}
+			title="Roll back to this point?"
+			description={
+				<>
+					<p className="text-xs font-medium text-foreground">
+						{restore
+							? "The agent will forget this exchange and everything after it, and the worktree goes back to how it was before it."
+							: "The agent will forget this exchange and everything after it."}
+					</p>
+					<p className="mt-1 text-xs text-muted-foreground">{detail}</p>
+				</>
+			}
+			confirmLabel="Roll back"
+			destructive
+			busy={busy}
+			confirmDisabled={checking}
+			error={error ?? null}
+			onConfirm={() => {
+				if (turnId) onConfirm(turnId, restore?.planId);
+			}}
+		>
+			{restore && restore.files.length > 0 ? (
+				<ul aria-label="Files that will change" className="max-h-40 overflow-y-auto rounded-md bg-surface py-1">
+					{restore.files.map((file) => (
+						<li key={file.path} className="flex items-center gap-2 px-2.5 py-1 text-xs">
+							<span className="min-w-0 flex-1 truncate font-mono text-foreground/80" title={file.path}>
+								{file.path}
+							</span>
+							<span className="shrink-0 text-muted-foreground">{rollbackChangeLabels[file.change]}</span>
+						</li>
+					))}
+				</ul>
+			) : null}
+		</ConfirmDialog>
 	);
 }
 
@@ -2972,6 +3148,8 @@ export function Timeline({
 	onAddToSideChat,
 	checkingSideChatAvailability,
 	onAddToChat,
+	annotations,
+	onAnnotationsChange,
 	onForeignAnnotation,
 	annotationNavigationRef,
 	snapshot: sourceSnapshot,
@@ -3003,6 +3181,7 @@ export function Timeline({
 	newWorkDisabled,
 	rollbackDisabled = false,
 	localEchos = [],
+	composerSends = 0,
 	startup,
 	arriving = false,
 	workerUpdates = false,
@@ -3010,6 +3189,8 @@ export function Timeline({
 	openingStartupLabel,
 	controllerStopped = false,
 	shownAt,
+	findRequest,
+	onFindRequestHandled,
 }: {
 	/** The agent controller is really gone; a turn still marked running settles with an unknown outcome. */
 	controllerStopped?: boolean;
@@ -3019,9 +3200,11 @@ export function Timeline({
 	checkingSideChatAvailability?: boolean;
 	/** Replaces the default "Add to chat" (write to this draft scope's composer). */
 	onAddToChat?: (excerpt: ChatDraftExcerptReference) => void | Promise<void>;
+	annotations?: readonly ChatDraftExcerptReference[];
+	onAnnotationsChange?: (annotations: ChatDraftExcerptReference[]) => void | Promise<void>;
 	/** Handles annotations whose source is another conversation. */
 	onForeignAnnotation?: (annotation: { text: string; snapshot?: ChatExcerptSnapshot; messageId?: string; revision?: number; conversationId?: string }) => void;
-	annotationNavigationRef: MutableRefObject<((annotation: { text: string; snapshot?: ChatExcerptSnapshot; messageId?: string; revision?: number }) => void) | null>;
+	annotationNavigationRef: MutableRefObject<((annotation: { text: string; snapshot?: ChatExcerptSnapshot; messageId?: string; revision?: number; activitySequence?: number }) => void) | null>;
 	snapshot: ConversationSnapshot;
 	assetBaseUrl?: string;
 	remoteHost?: boolean;
@@ -3053,6 +3236,8 @@ export function Timeline({
 	newWorkDisabled?: boolean;
 	rollbackDisabled?: boolean;
 	localEchos?: ConversationLocalEcho[];
+	/** Goes up with each send from the chat's composer that the main transcript took; see ChatWorkspace's composerSends. */
+	composerSends?: number;
 	/** A session that is starting, or failed to start, and its setup checklist. */
 	startup?: ComponentProps<typeof SessionStartup> & { openingTurnId?: string; label?: string };
 	/** An interface switch is bringing this conversation in; only then does the transcript fade in. */
@@ -3063,6 +3248,9 @@ export function Timeline({
 	openingStartedAt?: string;
 	/** Names the opening start in place of its timer while the sandbox comes up. */
 	openingStartupLabel?: string;
+	/** Opens find in chat with a query; see ChatWorkspaceProps.findRequest. */
+	findRequest?: ChatFindRequest;
+	onFindRequestHandled?: ChatWorkspaceProps["onFindRequestHandled"];
 }) {
 	const findSurface = useRef<HTMLDivElement>(null);
 	const scroller = useRef<HTMLDivElement>(null);
@@ -3071,6 +3259,18 @@ export function Timeline({
 	const findPausedFollow = useRef(false);
 	const [findTarget, setFindTarget] = useState<FindOccurrence>();
 	const find = useChatFind({ source: sourceSnapshot, root: findSurface, viewport: scroller, hostId: useContext(ChatHostId), unavailable: findUnavailable, sideChat, pauseFollow: () => pauseFindFollow.current(), onScrollWritten: (top) => findScrollWritten.current(top), reveal: (hit) => setFindTarget({ ...hit }) });
+	// One open per request. openWith changes identity as find opens and closes,
+	// so it is read through a ref: only a new request may open find again. The
+	// owner is told, so it drops the request: this timeline remounts when its
+	// conversation reloads, and a request still held would open find again
+	// after the reader closed it.
+	const openFind = useRef(find.openWith);
+	openFind.current = find.openWith;
+	useEffect(() => {
+		if (!findRequest) return;
+		openFind.current(findRequest.query, findRequest.messageId);
+		onFindRequestHandled?.(findRequest.id);
+	}, [findRequest, onFindRequestHandled]);
 	const snapshot = find.snapshot;
 	const hasTranscript = snapshot.items.length > 0;
 	const arrivedEmpty = useRef(false);
@@ -3170,6 +3370,7 @@ export function Timeline({
 		releaseFollow();
 	};
 	const dropFindWindow = find.dropWindow;
+	const showFindWindowAt = find.showWindowAt;
 	const requestGlideToEnd = useCallback(() => {
 		findPausedFollow.current = false;
 		dropFindWindow();
@@ -3194,12 +3395,15 @@ export function Timeline({
 		range: Range;
 	} | null>(null);
 	const clearSelectionAction = useCallback(() => setSelectionAction(null), []);
+	const selectionComment = useRef("");
+	const [editingAnnotation, setEditingAnnotation] = useState<{ excerpt: ChatDraftExcerptReference; range: Range } | null>(null);
+	const closeEditingAnnotation = useCallback(() => setEditingAnnotation(null), []);
 	const selectionActionRef = useRef(selectionAction);
 	selectionActionRef.current = selectionAction;
 	const dismissedSelection = useRef<typeof selectionAction>(null);
 	const dismissedEscapePress = useRef(false);
-	useEffect(() => { dismissedSelection.current = null; clearSelectionAction(); }, [snapshot.conversationId, clearSelectionAction]);
-	const [annotationTarget, setAnnotationTarget] = useState<{ text: string; snapshot?: ChatExcerptSnapshot; messageId?: string; revision?: number }>();
+	useEffect(() => { dismissedSelection.current = null; clearSelectionAction(); closeEditingAnnotation(); }, [snapshot.conversationId, clearSelectionAction, closeEditingAnnotation]);
+	const [annotationTarget, setAnnotationTarget] = useState<{ text: string; snapshot?: ChatExcerptSnapshot; messageId?: string; revision?: number; activitySequence?: number }>();
 	const [annotationNavigationError, setAnnotationNavigationError] = useState<string>();
 	const annotationHighlightCleanup = useRef<(() => void) | undefined>(undefined);
 	const annotationHighlightTimer = useRef<number | undefined>(undefined);
@@ -3208,7 +3412,11 @@ export function Timeline({
 	// that adds nothing (a failed page or a source outside this branch) must end
 	// the search instead of requesting the same page again.
 	const annotationOlderRequestGroups = useRef<number | undefined>(undefined);
-	const selectAnnotation = useCallback((annotation: { text: string; snapshot?: ChatExcerptSnapshot; messageId?: string; revision?: number; conversationId?: string }) => {
+	// A search match in a tool call or command: the activity whose folds open, and
+	// the history window asked for around it (done once its request settled).
+	const [revealedActivity, setRevealedActivity] = useState<string>();
+	const annotationWindow = useRef<{ sequence: number; done: boolean } | undefined>(undefined);
+	const selectAnnotation = useCallback((annotation: { text: string; snapshot?: ChatExcerptSnapshot; messageId?: string; revision?: number; activitySequence?: number; conversationId?: string }) => {
 		if (onForeignAnnotation && annotation.conversationId && annotation.conversationId !== snapshot.conversationId) {
 			// The source lives in another conversation (a side chat quoting the main
 			// chat); its host navigates there instead of searching this transcript.
@@ -3219,6 +3427,7 @@ export function Timeline({
 		setAnnotationNavigationError(undefined);
 		annotationRetryCount.current = 0;
 		annotationOlderRequestGroups.current = undefined;
+		annotationWindow.current = undefined;
 		if (!annotation.messageId) {
 			const source = Array.from(scrollContent.current?.querySelectorAll<HTMLElement>("[data-chat-message-id]") ?? [])
 				.find((element) => annotationTextMatches(annotationBody(element), annotation.text));
@@ -3281,12 +3490,13 @@ export function Timeline({
 		inlineEditPending || (acceptedEditClearFailed && !durableInlineEditDelivery);
 
 	const captureTranscriptSelection = useCallback((event?: Event) => {
-		if ((event?.target as Element | null)?.closest?.("[data-chat-selection-actions]")) return;
+		if ((event?.target as Element | null)?.closest?.("[data-chat-selection-actions], [data-chat-annotation-marker]")) return;
 		if (event instanceof KeyboardEvent && !/^(Arrow(Up|Down|Left|Right)|Home|End|PageUp|PageDown|Shift)$/i.test(event.key) &&
 			!((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "a")) return;
 		const selection = window.getSelection();
+		if (event?.type === "pointerup") setEditingAnnotation(null);
 		if (!excerptsEnabled || !selection || selection.isCollapsed || selection.rangeCount === 0) {
-			setSelectionAction(null);
+			if (!selectionComment.current.trim()) setSelectionAction(null);
 			return;
 		}
 		const anchor = selection.anchorNode instanceof Element
@@ -3387,9 +3597,9 @@ export function Timeline({
 		};
 	}, [captureTranscriptSelection, clearSelectionAction, excerptsEnabled]);
 
-	const addSelectionToChat = useCallback(async () => {
+	const addSelectionToChat = useCallback(async (comment: string) => {
 		if (!selectionAction) return;
-		const excerpt = captureExcerptTurn(selectionAction.excerpt, snapshot);
+		const excerpt = { ...captureExcerptTurn(selectionAction.excerpt, snapshot), ...(comment ? { comment } : {}) };
 		if (onAddToChat) {
 			// A host with its own composer (a side chat) owns where references go.
 			await onAddToChat(excerpt);
@@ -3398,11 +3608,9 @@ export function Timeline({
 			return;
 		}
 		const composer = readChatSessionDraft(draftScope).composer;
-		// A pending delivery is cleared by revision on acceptance. Changing the
-		// draft now would keep the sent text and excerpts for a second send.
-		if (composer.delivery) throw new Error("chat.draft.excerptPendingDelivery");
+		if (getChatComposerMutation(draftScope).pending && !composer.delivery) throw new Error("chat.draft.excerptPendingDelivery");
 		const current = composer.excerpts ?? [];
-		const duplicate = current.some(
+		const duplicate = current.find(
 			(item) =>
 				item.messageId === selectionAction.excerpt.messageId &&
 				item.revision === selectionAction.excerpt.revision &&
@@ -3416,7 +3624,9 @@ export function Timeline({
 			return;
 		}
 		const order = Math.max(Date.now(), ...current.map(item => (item.order ?? 0) + 1), ...(composer.fileReferences ?? []).map(item => item.order + 1));
-		const next = duplicate ? current : [...current, { ...excerpt, order }];
+		const next = duplicate
+			? current.map((item) => (item === duplicate && comment ? { ...item, comment } : item))
+			: [...current, { ...excerpt, order }];
 		const sizeError = excerptSizeError(next);
 		if (sizeError) throw new Error(sizeError);
 		const result = writeChatExcerptReferences(draftScope, next);
@@ -3425,6 +3635,30 @@ export function Timeline({
 		setSelectionAction(null);
 		window.getSelection()?.removeAllRanges();
 	}, [draftScope, onAddToChat, selectionAction, snapshot]);
+	const rewriteAnnotation = useCallback(async (id: string, change: (item: ChatDraftExcerptReference) => ChatDraftExcerptReference | undefined) => {
+		const apply = (items: readonly ChatDraftExcerptReference[]) => items.flatMap((item) => {
+			if (item.id !== id) return [item];
+			const next = change(item);
+			return next ? [next] : [];
+		});
+		if (onAnnotationsChange) {
+			await onAnnotationsChange(apply(annotations ?? []));
+			setEditingAnnotation(null);
+			return;
+		}
+		const composer = readChatSessionDraft(draftScope).composer;
+		if (getChatComposerMutation(draftScope).pending && !composer.delivery) throw new Error("chat.draft.excerptPendingDelivery");
+		const result = writeChatExcerptReferences(draftScope, apply(composer.excerpts ?? []));
+		setDraftPersistenceError(result.ok ? undefined : "chat.draft.saveFailed");
+		if (!result.ok) throw new Error("chat.draft.excerptSaveFailed");
+		setEditingAnnotation(null);
+	}, [annotations, draftScope, onAnnotationsChange]);
+	const openAnnotation = useCallback((excerpt: ChatDraftExcerptReference, range: Range) => {
+		selectionComment.current = "";
+		setSelectionAction(null);
+		window.getSelection()?.removeAllRanges();
+		setEditingAnnotation((current) => (current?.excerpt.id === excerpt.id ? null : { excerpt, range }));
+	}, []);
 	const inlineEditRecoveryLabel = durableInlineEditDelivery
 		? durableInlineEditDelivery.state === "accepted"
 			? "chat.draft.clearEdit"
@@ -3955,6 +4189,7 @@ export function Timeline({
 					annotationId: excerpt.id, annotationOrder: excerpt.order,
 					type: "excerpt",
 					text: excerpt.text,
+					comment: excerpt.comment,
 					sourceConversationId: excerpt.conversationId,
 					sourceMessageId: excerpt.messageId,
 					sourceRevision: excerpt.revision, snapshot: excerpt.snapshot,
@@ -4028,14 +4263,17 @@ export function Timeline({
 		if (added.size > 0) setNewHumanMessageIds(added);
 	}, [timelineItems, snapshot.latestSequence, openingStartedAt, snapshot.turns]);
 	const previousEchoIds = useRef<ReadonlySet<string>>(new Set(localEchos.map((echo) => echo.clientMessageId)));
+	const previousComposerSends = useRef(composerSends);
 	useLayoutEffect(() => {
 		const ids = new Set(localEchos.map((echo) => echo.clientMessageId));
-		const sent = [...ids].some((id) => !previousEchoIds.current.has(id));
+		// A send shows as a new local echo or as a send the main transcript took; a Cloud chat's has no echo.
+		const sent = [...ids].some((id) => !previousEchoIds.current.has(id)) || composerSends !== previousComposerSends.current;
 		previousEchoIds.current = ids;
+		previousComposerSends.current = composerSends;
 		if (!sent) return;
 		// The reader just sent: bring them to their prompt even if they had scrolled away.
 		requestGlideToEnd();
-	}, [localEchos, requestGlideToEnd]);
+	}, [composerSends, localEchos, requestGlideToEnd]);
 	// The brief that started this chat reads as working from the moment it was
 	// sent, through the agent connecting, until its turn settles.
 	const openingPending = Boolean(openingStartedAt) && !openingTurnSettled(snapshot, controllerStopped);
@@ -4202,11 +4440,78 @@ export function Timeline({
 	renderedVirtualHeight.current = virtualHeight;
 	const findGapGroupKey = find.gapBeforeSequence === undefined ? undefined
 		: groups.find((group) => group.items.some((item) => item.sequence >= find.gapBeforeSequence!))?.key;
+	// Fork is offered on finished turns; the latest is marked because every
+	// agent can fork it, while older turns need one that cuts its copy.
+	const latestForkTurnId = useMemo(() => {
+		for (let i = groups.length - 1; i >= 0; i--) {
+			const group = groups[i];
+			if (forkableGroup(group)) return group.turnId as string;
+		}
+		return undefined;
+	}, [groups]);
 	const renderedGroups = virtualized
 		? virtualRows.map((row) => ({ group: groups[row.index]!, row, index: row.index }))
 		: groups.map((group, index) => ({ group, row: undefined, index }));
 	useEffect(() => {
 		if (!annotationTarget) return;
+		const activitySequence = annotationTarget.activitySequence;
+		if (activitySequence !== undefined) {
+			// A search match in a tool call or command: open the folds that hold its
+			// row and mark the word there. Anything that fails falls back to the turn.
+			const toTurn = () => setAnnotationTarget((current) => current && { ...current, activitySequence: undefined });
+			const retry = () => setAnnotationTarget((current) => current && { ...current });
+			const index = groups.findIndex((group) => group.items.some((item) => item.kind === "activity" && item.sequence === activitySequence));
+			if (index < 0) {
+				// Not loaded: one window around the row, rather than paging back
+				// through everything newer than it.
+				// A stream update while the window loads runs this again: wait for it, and
+				// fall back to the turn only once it settled without the row.
+				const request = annotationWindow.current;
+				if (request?.sequence === activitySequence) return request.done ? toTurn() : undefined;
+				const pending = { sequence: activitySequence, done: false };
+				annotationWindow.current = pending;
+				void showFindWindowAt(activitySequence).then(() => {
+					pending.done = true;
+					retry();
+				});
+				return;
+			}
+			const activity = groups[index]!.items.find((item) => item.kind === "activity" && item.sequence === activitySequence)!;
+			setRevealedActivity(activity.id);
+			const disclosureKey = `${groups[index]!.key}:worked`;
+			if (!activityDisclosureOverrides[disclosureKey]) setActivityDisclosureOverrides((current) => ({ ...current, [disclosureKey]: true }));
+			const row = Array.from(scrollContent.current?.querySelectorAll<HTMLElement>("[data-chat-activity-id]") ?? [])
+				.find((element) => element.dataset.chatActivityId === activity.id);
+			const range = row ? annotationReferenceRange(row, annotationTarget) : undefined;
+			// The row mounts once its folds open, and its output a moment later. Output
+			// shows only its tail, so a word earlier in a long log marks the whole row.
+			if (!row || !range) {
+				if (!row && virtualized) virtualizer.scrollToIndex(index, { align: "center" });
+				if (annotationRetryCount.current++ >= (row ? 5 : 20)) {
+					if (!row) return toTurn();
+				} else {
+					const retryTimer = window.setTimeout(retry, 80);
+					return () => window.clearTimeout(retryTimer);
+				}
+			}
+			const frame = requestAnimationFrame(() => {
+				window.clearTimeout(annotationHighlightTimer.current);
+				annotationHighlightCleanup.current?.();
+				annotationHighlightCleanup.current = highlightChatAnnotation(row!, annotationTarget.text);
+				const scrollerNode = scroller.current;
+				const view = scrollerNode?.getBoundingClientRect();
+				if (scrollerNode && view) {
+					const delta = activityRevealScrollDelta((range ?? row!).getBoundingClientRect(), view, Boolean(range));
+					if (delta !== 0) scrollerNode.scrollTo({ top: scrollerNode.scrollTop + delta, behavior: "auto" });
+				}
+				annotationHighlightTimer.current = window.setTimeout(() => {
+					annotationHighlightCleanup.current?.();
+					setRevealedActivity(undefined);
+				}, 2200);
+				setAnnotationTarget(undefined);
+			});
+			return () => cancelAnimationFrame(frame);
+		}
 		const index = groups.findIndex((group) => group.items.some((item) => item.id === annotationTarget.messageId));
 		if (index < 0) {
 			if (loadingOlder) return;
@@ -4245,6 +4550,13 @@ export function Timeline({
 			const scrollerNode = scroller.current;
 			const diagram = annotationDiagramBlock(source, annotationTarget);
 			let range = annotationReferenceRange(source, annotationTarget);
+			if (range && annotationRetryCount.current < 20 && revealFoldedRange(range)) {
+				// The match was below a long message's fold, which is opening: measure
+				// once it has rendered rather than center text the fold still clips.
+				annotationRetryCount.current++;
+				setAnnotationTarget((current) => current ? { ...current } : current);
+				return;
+			}
 			if (diagram && scrollerNode) {
 				const alignDiagram = () => {
 					if (!diagram.isConnected) return;
@@ -4303,7 +4615,7 @@ export function Timeline({
 			setAnnotationTarget(undefined);
 		});
 		return () => cancelAnimationFrame(frame);
-	}, [annotationTarget, groups, hasOlder, loadingOlder, onLoadOlder, virtualized, virtualizer, virtualRows, activityDisclosureOverrides]);
+	}, [annotationTarget, groups, hasOlder, loadingOlder, onLoadOlder, virtualized, virtualizer, virtualRows, activityDisclosureOverrides, showFindWindowAt]);
 	useEffect(() => {
 		const node = scroller.current;
 		const content = virtualized ? virtualContent.current
@@ -4994,6 +5306,7 @@ export function Timeline({
 	return (
 		<ChatOpeningRef.Provider value={chatOpening}>
 		<ChatEntrance.Provider value={entranceGate}>
+		<RevealedChatActivity.Provider value={revealedActivity}>
 		<LiveStepChoices.Provider value={liveStepChoices}>
 		<div
 			ref={findSurface}
@@ -5007,8 +5320,19 @@ export function Timeline({
 		>
 			{find.bar}
 			{selectionAction ? <ChatSelectionActions key={selectionAction.excerpt.id} selection={selectionAction}
-				viewportRef={scroller} onInvalid={clearSelectionAction} onAdd={addSelectionToChat}
-				onSide={onAddToSideChat ? excerpt => onAddToSideChat(captureExcerptTurn(excerpt, snapshot)) : undefined} checkingSide={checkingSideChatAvailability} /> : null}
+				viewportRef={scroller} onInvalid={clearSelectionAction} onAdd={addSelectionToChat} commentRef={selectionComment}
+				onSide={onAddToSideChat ? excerpt => onAddToSideChat(captureExcerptTurn(excerpt, snapshot)) : undefined} checkingSide={checkingSideChatAvailability} /> :
+				editingAnnotation ? <ChatSelectionActions key={`edit-${editingAnnotation.excerpt.id}`} selection={editingAnnotation}
+					viewportRef={scroller} onInvalid={closeEditingAnnotation}
+					onAdd={(comment) => rewriteAnnotation(editingAnnotation.excerpt.id, (item) => ({ ...item, comment: comment || undefined }))}
+					onRemove={() => rewriteAnnotation(editingAnnotation.excerpt.id, () => undefined)} /> : null}
+			{!excerptsEnabled ? null : onAddToChat ? (
+				<ChatAnnotationMarkers markers={numberedReferences(annotations ?? [])} conversationId={snapshot.conversationId}
+					contentRef={scrollContent} viewportRef={scroller} activeId={editingAnnotation?.excerpt.id} onOpen={openAnnotation} />
+			) : (
+				<DraftAnnotationMarkers draftScope={draftScope} conversationId={snapshot.conversationId}
+					contentRef={scrollContent} viewportRef={scroller} activeId={editingAnnotation?.excerpt.id} onOpen={openAnnotation} />
+			)}
 			<div
 				ref={scrollerRef}
 				tabIndex={-1}
@@ -5086,6 +5410,8 @@ export function Timeline({
 								{group.key === findGapGroupKey ? <div role="note" className="py-3 text-center text-caption text-muted-foreground">{t("chat.find.gap")}</div> : null}
 								<WorkerUpdateIndexContext.Provider value={workerUpdateIndex}>
 								<BatchedReportsContext.Provider value={batchedReports}>
+								<LatestForkTurnContext.Provider value={latestForkTurnId}>
+								<ForkableTurnContext.Provider value={forkableGroup(group) ? (group.turnId as string) : null}>
 								<TurnGroup
 									group={group}
 									harness={snapshot.harness}
@@ -5133,6 +5459,8 @@ export function Timeline({
 									busy={turnShowsApproval(group) ? busy : undefined}
 									queued={Boolean(group.turnId && queued.has(group.turnId))}
 								/>
+								</ForkableTurnContext.Provider>
+								</LatestForkTurnContext.Provider>
 								</BatchedReportsContext.Provider>
 								</WorkerUpdateIndexContext.Provider>
 							</div>
@@ -5303,6 +5631,7 @@ export function Timeline({
 			) : null}
 		</div>
 		</LiveStepChoices.Provider>
+		</RevealedChatActivity.Provider>
 		</ChatEntrance.Provider>
 		</ChatOpeningRef.Provider>
 	);
@@ -6180,6 +6509,13 @@ function useStableValue<T>(value: T): T {
 }
 
 /** A settling turn's rows from just before the fold, and the one at the top of the view. */
+// A turn a fork can copy: finished, not still running.
+function forkableGroup(group: TimelineGroup): boolean {
+	if (!group.turnId || group.live) return false;
+	const state = group.outcome?.state;
+	return state === "completed" || state === "recovered";
+}
+
 type SettleAnchor = {
 	turn: HTMLElement;
 	rows: HTMLElement[];
@@ -6200,8 +6536,11 @@ type TimelineGroup = {
 	anchor: number;
 	items: ConversationItem[];
 	outcome?: {
-		/** `unknown`: the controller stopped while the turn ran, so nothing reported how it ended. */
-		state: "completed" | "recovered" | "interrupted" | "failed" | "unknown";
+		/**
+		 * `unknown`: the controller stopped while the turn ran, so nothing reported how it ended.
+		 * `not_run`: it ended before the agent started on it (ConversationTurn.notRun).
+		 */
+		state: "completed" | "recovered" | "interrupted" | "failed" | "unknown" | "not_run";
 		durationMs?: number;
 		error?: string;
 		usageLimit?: ConversationUsageLimit;
@@ -6286,6 +6625,29 @@ function retrySourceTurnIds(snapshot: ConversationSnapshot): Set<string> {
 }
 
 /** How tall the trailing spacer must be to park `anchorOffset` near the top when scrolled to the end. */
+/**
+ * How far to scroll so a revealed tool or command match is readable.
+ *
+ * A matched word (hasRange) is centred when it is not already well inside the
+ * view. Without one, only the row is known, and its body is still animating
+ * open below its header: measured now, a header at the bottom edge looks
+ * visible while the output then opens out of sight. So the header goes to the
+ * upper quarter of the view, leaving the output room below it.
+ */
+export function activityRevealScrollDelta(
+	rect: { top: number; bottom: number; height: number },
+	view: { top: number; bottom: number; height: number },
+	hasRange: boolean,
+): number {
+	const padding = 12;
+	if (hasRange) {
+		if (rect.top >= view.top + padding && rect.bottom <= view.bottom - padding) return 0;
+		return rect.top + rect.height / 2 - (view.top + view.height / 2);
+	}
+	if (rect.top >= view.top + padding && rect.top <= view.top + view.height / 2) return 0;
+	return rect.top - (view.top + view.height / 4);
+}
+
 export function promptSpacerHeight({
 	viewportHeight,
 	contentHeightWithoutSpacer,
@@ -6447,9 +6809,11 @@ function groupByTurn(snapshot: ConversationSnapshot, { controllerStopped = false
 		group.rollbackable = Boolean(turn.providerTurnId);
 		group.accountSwitched = group.items.some((item) => item.kind === "activity" && item.detail?.event === "account.switched");
 		group.outcome = {
-			state: turn.state,
+			state: turn.notRun ? "not_run" : turn.state,
 			usageLimit: turn.usageLimit,
-			durationMs: settledTurnDuration(turn),
+			// A turn that never started did no work to time: one refused, or a
+			// queued one a Stop or a switch ended before it was sent.
+			durationMs: turn.notRun || (turn.state === "interrupted" && !turn.startedAt) ? undefined : settledTurnDuration(turn),
 			error: turn.errorMessage || (turn.state === "failed"
 				? [...group.items].reverse().find(
 					(item): item is ConversationActivity => item.kind === "activity" && item.activityKind === "error",

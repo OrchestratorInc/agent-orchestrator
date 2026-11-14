@@ -78,6 +78,7 @@ import {
 import { sidebarIsVisible, sidebarOccupiesLayout, useUiStore } from "../stores/ui-store";
 import { CLOUD_PROJECT_KIND, hasConfiguredOrchestratorAgent, newestActiveOrchestrator, isScratchpadWorkspace, sessionIsActive, STANDALONE_WORKSPACE_ID, toProjectKind, type WorkspaceSession, type WorkspaceSummary } from "../types/workspace";
 import type { components } from "../../api/schema";
+import { parseArtifactLink, parseSessionLink, resolveSessionLink } from "../lib/session-links";
 import { useAgentInventoryTelemetry, useSetupCheckedTelemetry } from "../hooks/useAgentInventoryTelemetry";
 import { useSessionSwitchSnap } from "../hooks/useSessionSwitchSnap";
 import { useHeldSession } from "../hooks/useHeldSession";
@@ -296,6 +297,9 @@ const ShellCenter = memo(function ShellCenter({
 	startingHarness?: string;
 }) {
 	const panelClassName = isSessionRoute || startingOrchestrator ? "center-panel-shell--session" : undefined;
+	// Once the new chat page sends, it takes the session's top bar so the first
+	// message lands where the session will show it, and nothing moves at handoff.
+	const newChatSending = useUiStore((state) => state.newChatSending);
 	const startingChat = startingOrchestrator ? <LazyChunkBoundary><Suspense fallback={null}><OrchestratorStartingChat steps={startingSteps} cloud={startingCloudOrchestrator} coderWorkspaceUrl={startingCoderWorkspaceUrl} harness={startingHarness} /></Suspense></LazyChunkBoundary> : null;
 	// Settings is a self-framed route, so its starting chat gets its own panel.
 	const selfFramedOutlet = <>
@@ -309,8 +313,8 @@ const ShellCenter = memo(function ShellCenter({
 		<CenterPanelShell
 			className={panelClassName}
 			notifications={!isHomeRoute || startingOrchestrator}
-			// The home and new chat pages have no top bar, so their panel takes the band back.
-			topbar={pageHasTopbar({ isHomeRoute, isNewChatRoute, startingOrchestrator })}
+			// The home and unsent new chat pages have no top bar, so their panel takes the band back.
+			topbar={pageHasTopbar({ isHomeRoute, isNewChatRoute: isNewChatRoute && !newChatSending, startingOrchestrator })}
 		>
 			<ShellOutlet startingChat={startingChat} />
 		</CenterPanelShell>
@@ -339,7 +343,7 @@ function ShellLayout() {
 	useWorkspacePolling();
 	const workspaceQuery = useWorkspaceQuery();
 	const workspaces = workspaceQuery.data ?? [];
-	const { hosts: remoteHosts, listed: remoteHostsListed, refresh: refreshRemoteHosts } = useRemoteHosts();
+	const { hosts: remoteHosts, listed: remoteHostsListed, settled: remoteHostsSettled, refresh: refreshRemoteHosts } = useRemoteHosts();
 	const remoteHostIdsKey = remoteHosts.map((host) => host.hostId).join("\0");
 	const remoteHostIds = useMemo(() => remoteHostIdsKey ? remoteHostIdsKey.split("\0") : [], [remoteHostIdsKey]);
 	// What each host showed last stays only for the hosts still saved, and shows
@@ -356,7 +360,7 @@ function ShellLayout() {
 	useEffect(() => {
 		for (const hostId of refusedRemoteHostKey ? refusedRemoteHostKey.split("\0") : []) void forgetRemoteHost(queryClient, hostId);
 	}, [queryClient, refusedRemoteHostKey]);
-	const { data: remoteWorkspaces, failedHostIds: remoteFailedHostIds } = useRemoteWorkspaces({ cachedHostIds: remoteHostIds });
+	const { data: remoteWorkspaces, failedHostIds: remoteFailedHostIds, loadedProjectHostIds: remoteLoadedProjectHostIds, loadedSessionHostIds: remoteLoadedSessionHostIds } = useRemoteWorkspaces({ cachedHostIds: remoteHostIds });
 	useAutoSpawnPauseNotice([...(workspaceQuery.data ?? EMPTY_PAUSE_PROJECTS), ...(remoteWorkspaces ?? EMPTY_PAUSE_PROJECTS)]);
 	const failedRemoteHostKey = remoteFailedHostIds.join("\0");
 	useEffect(() => {
@@ -1402,6 +1406,98 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			)),
 		[queryClient],
 	);
+
+	// ao-app://sessions/… deep links from external tools. The raw URL is
+	// re-read as its in-app ao:// form and resolved through the same
+	// session-links path as ao:// links, so both schemes behave alike:
+	// artifact routes open the file in the destination session, a terminated
+	// session refuses with the same toast, and a stale link focuses the app
+	// with a quiet toast instead of navigating to a wrong session.
+	//
+	// A link is handled only once its evidence can be trusted, and held until
+	// then (flushed as soon as that flips true):
+	// - the confirmed startup fetch has landed — a green query alone is not
+	//   enough, since the route loader can cache a stale [] from before the
+	//   daemon port was known (same gate the startup loader uses);
+	// - remote hosts that are on have finished loading (or failed) — a
+	//   cold-start link must not race a host's project query, whose workspaces
+	//   carry sessions only after the session query lands too. An offline host
+	//   has concluded its connect attempt, so it counts as settled and never
+	//   holds the gate open;
+	// - the remote side has concluded — useRemoteHosts' settled flag mirrors
+	//   its own enable rule (disabled or signed out never lists), so the gate
+	//   cannot drift from it; a listed host counts as settled once offline,
+	//   failed, or its project and session queries have both landed.
+	const remoteWorkspaceLoadSettled = remoteHostsSettled
+		&& (!remoteHostsListed || remoteHostIds.every((hostId) => remoteHosts.some((host) => host.hostId === hostId && host.status === "offline")
+			|| (remoteLoadedProjectHostIds.includes(hostId) && remoteLoadedSessionHostIds.includes(hostId))
+			|| remoteFailedHostIds.includes(hostId)));
+	const sessionDeepLinksReady = workspaceQuery.isSuccess && workspaceStartupState === "ready" && remoteWorkspaceLoadSettled;
+	const pendingSessionDeepLinkRef = useRef<string | null>(null);
+	const handleSessionDeepLink = useCallback(
+		(rawUrl: string) => {
+			const link = `ao://${rawUrl.slice("ao-app://".length)}`;
+			const artifact = parseArtifactLink(link);
+			const target = parseSessionLink(link) ?? artifact;
+			const workspaces = workspacesRef.current;
+			const remoteWorkspaces = remoteWorkspacesRef.current;
+			// Resolve the session and its owning workspace from the same list:
+			// a local and a remote project can share an id, and the workspace
+			// supplies the hostId for the route and artifact requests.
+			const resolvedLocal = target ? resolveSessionLink(link, workspaces) : undefined;
+			const resolvedRemote = target ? resolveSessionLink(link, remoteWorkspaces) : undefined;
+			if (resolvedLocal && resolvedRemote) {
+				// Session ids are <project>-<n> per daemon, so a paired machine
+				// running the same repo can host a session with the same id. The
+				// URL carries no host, so honoring either side is a guess that
+				// can open the wrong session — refuse instead.
+				useUiStore.getState().showGlobalToast(t("deepLink.sessionAmbiguous"));
+				return;
+			}
+			const resolved = resolvedLocal ?? resolvedRemote;
+			const workspace = resolvedLocal
+				? workspaces.find((entry) => entry.id === resolvedLocal.projectId)
+				: resolvedRemote
+					// Hosts merge into one list and can share an id (standalone), so
+					// the workspace must be the one holding the resolved session.
+					? remoteWorkspaces.find((entry) => entry.id === resolvedRemote.projectId && entry.sessions.some((session) => session.id === resolvedRemote.sessionId))
+					: undefined;
+			if (!resolved || !workspace) {
+				// A failed host query settles the gate with that host's projects
+				// holding empty session lists, so a miss on such a project is
+				// "could not load", not "does not exist" (CodeRabbit round 4).
+				const missOnFailedHost = target !== undefined && remoteFailedHostIds.some((hostId) =>
+					remoteWorkspacesRef.current.some((entry) => entry.hostId === hostId && entry.id === target.projectId));
+				useUiStore.getState().showGlobalToast(t(missOnFailedHost ? "deepLink.sessionHostUnavailable" : "deepLink.sessionNotFound"));
+				return;
+			}
+			// Same refusal as in-app ao:// links; a terminated session's
+			// artifact files are still served.
+			if (resolved.isTerminated && !artifact) {
+				useUiStore.getState().showGlobalToast(t("deepLink.sessionTerminated", { sessionId: resolved.sessionId }));
+				return;
+			}
+			if (artifact) useUiStore.getState().requestWorkspaceFileOpen(resolved.sessionId, artifact.path, workspace.hostId, "artifact");
+			void navigate(sessionNavigateTarget(resolved.projectId, resolved.sessionId, workspace.hostId));
+		},
+		[navigate, remoteFailedHostIds, t],
+	);
+	useEffect(() => {
+		return aoBridge.app.onOpenSessionDeepLink((rawUrl) => {
+			if (!sessionDeepLinksReady) {
+				pendingSessionDeepLinkRef.current = rawUrl;
+				return;
+			}
+			handleSessionDeepLink(rawUrl);
+		});
+	}, [handleSessionDeepLink, sessionDeepLinksReady]);
+	useEffect(() => {
+		if (!sessionDeepLinksReady) return;
+		const pending = pendingSessionDeepLinkRef.current;
+		if (!pending) return;
+		pendingSessionDeepLinkRef.current = null;
+		handleSessionDeepLink(pending);
+	}, [handleSessionDeepLink, sessionDeepLinksReady]);
 
 	useEffect(() => {
 		const disposePrevious = aoBridge.app.onPreviousSessionShortcut(() => navigateSession(-1));

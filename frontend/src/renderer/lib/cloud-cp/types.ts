@@ -156,6 +156,20 @@ export interface CloudCpInvitationsResponse {
 	invitations: CloudCpInvitation[];
 }
 
+/** One active member of an organization (GET /orgs/{orgId}/members). */
+export interface CloudCpOrgMember {
+	userId: string;
+	email: string;
+	displayName: string;
+	role: string;
+	createdAt: string;
+}
+
+/** GET /orgs/{orgId}/members: every active member, any member may read it. */
+export interface CloudCpOrgMembersResponse {
+	members: CloudCpOrgMember[];
+}
+
 // ---------------------------------------------------------------------------
 // Pagination (`resource_handlers.go` pageInfo / transport.go cursors)
 // ---------------------------------------------------------------------------
@@ -1497,6 +1511,22 @@ export interface CloudCpCancelTurnResponse {
 
 /** POST steering response; guidance for the active turn was accepted. */
 export interface CloudCpSteerTurnResponse {
+	event: CloudCpClientEvent;
+}
+
+/**
+ * POST /orgs/{orgId}/sessions/{sessionId}/turns/{turnId}/edit: a queued
+ * message's new text and every file it keeps (offering feature queued-edit).
+ */
+export interface CloudCpEditQueuedMessageRequest {
+	/** At most 65536 bytes; may be empty when the message carries attachments. */
+	text: string;
+	/** Files uploaded to the session that the edited message carries; one left out is dropped. */
+	attachmentIds?: string[];
+}
+
+/** The chat.user_message_edited event the edit appended. */
+export interface CloudCpEditQueuedMessageResponse {
 	event: CloudCpClientEvent;
 }
 

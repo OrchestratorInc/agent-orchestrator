@@ -1,5 +1,7 @@
 import { SideCloseRecovery } from "./main/side-close";
 import { SideLaunchRecovery } from "./main/side-launch-recovery";
+import { launchTriageInTerminal } from "./main/triage-launch";
+import { initializeDesktopLog } from "./main/desktop-log";
 import { syncMacWindowButtons } from "./main/window-chrome";
 import { MAC_TRAFFIC_LIGHT_ROW_HEIGHT, MAC_WINDOW_BUTTON_X, MAC_WINDOW_BUTTON_RADIUS } from "./shared/window-chrome";
 import { finishUpdateQuit } from "./main/update-quit";
@@ -118,6 +120,7 @@ import {
 	type AppShortcutId,
 	type KeybindingOverrides,
 } from "./shared/shortcuts";
+import { OPEN_SESSION_DEEP_LINK_CHANNEL, normalizeSessionDeepLink } from "./shared/deep-links";
 import { createTrayController, type TrayController } from "./main/tray";
 import { createTrayLifecycle, isTrayEnabled } from "./main/tray-lifecycle";
 import { createDesktopQuitController } from "./main/desktop-quit";
@@ -245,6 +248,8 @@ import type {
 	BrowserRemoteTabAction,
 } from "./main/browser-live-types";
 import { keepDaemonAlive, shouldLinkOnAttach } from "./main/daemon-owner";
+import { planDaemonScope, raiseOomScoreAdj, type DaemonScopePlan } from "./main/linux-daemon-scope";
+import { createLifecycleLog, linuxProcessContext, markRunStarted, observeUnhandledRejections, type LifecycleRecord } from "./main/lifecycle-log";
 import { planDaemonAutoRestart, daemonExitWasUngraceful } from "./main/daemon-auto-restart";
 import { readProcessStartMs } from "./main/process-start";
 import { claimFirstRunExperimentExposure, markFirstRunProjectPromptSeen, readFirstRunProjectPrompt, readMigrationState, updateMigration, writeAppStateMarker, type MigrationState } from "./main/app-state";
@@ -351,6 +356,7 @@ app.setPath(
 // absolute value is shared by policy bootstrap and every daemon spawn.
 const desktopLaunchWorkingDirectory = process.cwd();
 const desktopDataDir = resolveDesktopDataDir(process.env, os.homedir(), desktopLaunchWorkingDirectory, app.isPackaged);
+initializeDesktopLog(desktopDataDir);
 let telemetryPolicyController: DesktopTelemetryController | null = null;
 // PostHog identity: the user-facing analytics opt-out (marker file shared with the
 // daemon) and the loopback hand-off of the signed-in AO Cloud user ID.
@@ -416,10 +422,21 @@ const OPEN_FOLDER_PATH_CHANNEL = "app:openFolderPath";
 // whose renderer isn't mounted yet. Flushed once the shell signals readiness
 // via TRAY_RENDERER_READY_CHANNEL — see the OPEN_FOLDER_PATH_CHANNEL handler.
 let pendingFolderPath: string | null = null;
+// Session deep link (ao-app://sessions/…) that arrived before the shell was
+// mounted (cold-start argv or early open-url). Flushed on the same
+// TRAY_RENDERER_READY_CHANNEL handshake as pendingFolderPath.
+let pendingSessionDeepLink: string | null = null;
+// Billing return (ao-app://billing) that arrived with no shell to take it —
+// flushed on the TRAY_RENDERER_READY handshake like pendingSessionDeepLink.
+let pendingBillingSection: string | null = null;
 let daemonProcess: ChildProcess | null = null;
+// Set once this instance owns the single-instance lock; a no-op before that.
+let lifecycleLog: LifecycleRecord = () => undefined;
 let daemonStoppingProcess: ChildProcess | null = null;
 let daemonRestartAfterExitProcess: ChildProcess | null = null;
 type DaemonAutoRestartIntent = { generation: number; crashedPid: number; runFilePresent: boolean; keepAlive: boolean };
+// Why a daemon start was requested; recorded in the lifecycle log before any spawn.
+type DaemonStartTrigger = "startup" | "renderer_status" | "manual_start" | "manual_restart" | "browser_runtime_recovery" | "auto_restart" | "scope_fallback";
 let daemonAutoRestartExits: number[] = [];
 let daemonAutoRestartTimer: ReturnType<typeof setTimeout> | null = null;
 let daemonAutoRestartGeneration = 0;
@@ -641,6 +658,52 @@ if (!app.requestSingleInstanceLock()) {
 	app.exit(0);
 } else {
 	registerCloudProtocol();
+	installLifecycleLog();
+}
+
+// Persistent record of main-process and daemon lifecycle (start, exit codes,
+// signals, crashed child processes, respawn decisions) under the AO data dir.
+// Installed only by the instance that holds the single-instance lock, so a
+// second launch that is about to exit never claims the run marker.
+function installLifecycleLog(): void {
+	// Beside updater.jsonl (normally ~/.ao/logs), where users already look.
+	const runFile = runFilePath();
+	const directory = path.join(runFile ? path.dirname(runFile) : desktopDataDir, "logs");
+	const record = createLifecycleLog({ directory, version: app.getVersion(), homeDir: os.homedir() });
+	lifecycleLog = record;
+	const clearRunMarker = markRunStarted({ directory, record, version: app.getVersion(), processAlive });
+	record("app_start", {
+		ppid: process.ppid,
+		platform: process.platform,
+		arch: process.arch,
+		packaged: app.isPackaged,
+		electron: process.versions.electron,
+		appImage: Boolean(process.env.APPIMAGE),
+		sessionType: process.env.XDG_SESSION_TYPE,
+		...(process.platform === "linux" ? linuxProcessContext() : {}),
+	});
+	process.on("uncaughtExceptionMonitor", (error, origin) => record("uncaught_exception", { origin }, error));
+	observeUnhandledRejections(process as unknown as { emit: (event: string | symbol, ...args: unknown[]) => boolean }, (reason) => record("unhandled_rejection", {}, reason));
+	app.on("render-process-gone", (_event, contents, details) => {
+		record("render_process_gone", { reason: details.reason, exitCode: details.exitCode, contentsType: contents.getType() });
+	});
+	app.on("child-process-gone", (_event, details) => {
+		record("child_process_gone", {
+			type: details.type,
+			reason: details.reason,
+			exitCode: details.exitCode,
+			serviceName: details.serviceName,
+			name: details.name,
+		});
+	});
+	app.on("window-all-closed", () => record("window_all_closed"));
+	app.on("before-quit", () => record("before_quit"));
+	app.on("will-quit", () => record("will_quit"));
+	app.on("quit", (_event, exitCode) => record("quit", { exitCode }));
+	process.on("exit", (code) => {
+		record("process_exit", { code, daemonPid: daemonProcess?.pid ?? null });
+		clearRunMarker();
+	});
 }
 
 // Maps app://renderer/<path> to the built renderer in dist/. Paths without a
@@ -1322,6 +1385,7 @@ async function createWindowInternal(): Promise<void> {
 	shellWebContents.on("render-process-gone", () => trayLifecycle.clear());
 
 	mainWindow.on("closed", () => {
+		lifecycleLog("main_window_closed");
 		// The snapshot window is a BaseWindow too: left open it would count as the app's last window,
 		// and the requests still queued must not open another one.
 		artifactSnapshotStore.cancel();
@@ -1953,7 +2017,7 @@ function handleBrowserRuntimeRejection(reason: string): void {
 		state: "starting",
 		message: "Restarting the Orchestrator daemon to restore the browser runtime.",
 	});
-	void startDaemon({ forceReplaceAdopted: true });
+	void startDaemon({ forceReplaceAdopted: true, trigger: "browser_runtime_recovery" });
 }
 
 function disposeBrowserStreamLink(): void {
@@ -2093,13 +2157,14 @@ async function refreshDaemonStatus(): Promise<DaemonStatus> {
 	const existing = await inspectExistingDaemon(launch);
 	if (existing) {
 		if (!daemonAutoRestartStandDown && browserDaemonOwnershipDecision(appRunId, existing).action === "replace") {
-			return startDaemon();
+			return startDaemon({ trigger: "renderer_status" });
 		}
 		setDaemonStatus(existing.status);
 	} else if (
 		daemonStatus.state === "ready" ||
 		(daemonStatus.state === "error" && (daemonStatus.pid || daemonStatus.port))
 	) {
+		lifecycleLog("daemon_unreachable", { previousState: daemonStatus.state, previousPid: daemonStatus.pid ?? null, decision: "mark_stopped_no_respawn" });
 		setDaemonStatus({
 			state: "stopped",
 			message: "Orchestrator daemon is no longer reachable.",
@@ -2109,7 +2174,8 @@ async function refreshDaemonStatus(): Promise<DaemonStatus> {
 	return daemonStatus;
 }
 
-async function startDaemon(options: { forceReplaceAdopted?: boolean; autoRestartIntent?: DaemonAutoRestartIntent } = {}): Promise<DaemonStatus> {
+// keepAlive carries a failed launch's captured keep-alive choice into its retry.
+async function startDaemon(options: { forceReplaceAdopted?: boolean; autoRestartIntent?: DaemonAutoRestartIntent; trigger?: DaemonStartTrigger; keepAlive?: boolean } = {}): Promise<DaemonStatus> {
 	if (!options.autoRestartIntent && daemonStartAutoRestartIntent) {
 		daemonStartEpoch += 1;
 		daemonStartPromise = null;
@@ -2127,7 +2193,8 @@ async function startDaemon(options: { forceReplaceAdopted?: boolean; autoRestart
 	}
 	const startEpoch = daemonStartEpoch;
 	daemonStartAutoRestartIntent = options.autoRestartIntent;
-	const promise = startDaemonInner(startEpoch, options.autoRestartIntent).finally(() => {
+	const trigger = options.trigger ?? (options.autoRestartIntent ? "auto_restart" : "startup");
+	const promise = startDaemonInner(startEpoch, options.autoRestartIntent, trigger, options.keepAlive).finally(() => {
 		if (daemonStartPromise === promise) {
 			daemonStartPromise = null;
 			daemonStartAutoRestartIntent = undefined;
@@ -2205,9 +2272,10 @@ async function repairDevAcpRuntime(): Promise<void> {
 	});
 }
 
-async function startDaemonInner(startEpoch: number, autoRestartIntent?: DaemonAutoRestartIntent): Promise<DaemonStatus> {
-	const startCancelled = () => startEpoch !== daemonStartEpoch || (autoRestartIntent !== undefined &&
-		(autoRestartIntent.generation !== daemonAutoRestartGeneration || browserQuitRequested));
+async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAutoRestartIntent | undefined, trigger: DaemonStartTrigger, keepAliveOverride?: boolean): Promise<DaemonStatus> {
+	// Once quit is past its point of no return, no start of any kind may spawn.
+	const startCancelled = () => startEpoch !== daemonStartEpoch || browserQuitRequested ||
+		(autoRestartIntent !== undefined && autoRestartIntent.generation !== daemonAutoRestartGeneration);
 	if (daemonProcess) {
 		return daemonStatus;
 	}
@@ -2253,6 +2321,14 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent?: DaemonAu
 		if (autoRestartIntent) return daemonStatus;
 		const ownership = browserDaemonOwnershipDecision(appRunId, existing);
 		if (shouldReplaceDaemonForStartup({ ownership, forceRequested: forceReplaceAdoptedRequested })) {
+			lifecycleLog("daemon_replace", {
+				trigger,
+				via: "run_file",
+				pid: existing.status.pid ?? null,
+				forced: forceReplaceAdoptedRequested,
+				ownership: ownership.action,
+				decision: "graceful_shutdown_then_spawn",
+			});
 			try {
 				await gracefullyReplaceDaemonForBrowser(existing.status);
 				replacementKeepAlive = keepAliveForReplacement({
@@ -2321,6 +2397,14 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent?: DaemonAu
 			appRunId: portAttachAppRunId,
 		});
 		if (shouldReplaceDaemonForStartup({ ownership, forceRequested: forceReplaceAdoptedRequested })) {
+			lifecycleLog("daemon_replace", {
+				trigger,
+				via: "port_probe",
+				pid: directDaemon.pid ?? null,
+				forced: forceReplaceAdoptedRequested,
+				ownership: ownership.action,
+				decision: "graceful_shutdown_then_spawn",
+			});
 			try {
 				await gracefullyReplaceDaemonForBrowser(directDaemon);
 				replacementKeepAlive = keepAliveForReplacement({
@@ -2384,9 +2468,17 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent?: DaemonAu
 	// running.json is left alone (a hung daemon that is not replaced shows up here).
 	if (holder.pid === null && runFile && processAlive(runFile.pid)) {
 		console.warn(`AO: not stopping process ${runFile.pid} named by running.json: ${holder.reason}`);
+		lifecycleLog("daemon_port_holder_left_alone", { trigger, pid: runFile.pid, healthz: orphanProbe ? "answering" : "silent", reason: holder.reason });
 	}
 	const holderPid = holder.pid;
 	if (holderPid !== null) {
+		lifecycleLog("daemon_kill_unresponsive", {
+			trigger,
+			pid: holderPid,
+			healthz: orphanProbe ? "answering" : "silent",
+			reason: "identified_ao_daemon_holding_port",
+			decision: "sigterm_process_group_then_spawn",
+		});
 		try {
 			process.kill(-holderPid, "SIGTERM");
 		} catch {
@@ -2451,6 +2543,13 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent?: DaemonAu
 			return daemonStatus;
 		}
 	}
+	// Plan before the restart-marker check and before any descriptor is opened
+	// below: planning awaits, so the marker read and cancellation checks that
+	// follow must be the last awaits before spawn, and a stop or newer start
+	// during the wait must not leave anything to clean up.
+	const isolation = await planDaemonSpawnIsolation(launch);
+	if (startCancelled()) return daemonStatus;
+	const spawnLaunch = isolation.kind === "scope" ? isolation.launch : launch;
 	if (autoRestartIntent) {
 		const runFile = await readRunFileState();
 		if (!daemonAutoRestartMarkerMatches(autoRestartIntent, runFile)) return daemonStatus;
@@ -2472,7 +2571,7 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent?: DaemonAu
 	// defeating the keep-alive. Redirect stdio to ~/.ao/daemon.log and unref the
 	// child so the parent does not wait on it. Port discovery then relies on the
 	// running.json handshake (the log pipe scan is skipped).
-	const keep = autoRestartIntent?.keepAlive ?? replacementKeepAlive ?? keepDaemonAlive(process.env);
+	const keep = autoRestartIntent?.keepAlive ?? keepAliveOverride ?? replacementKeepAlive ?? keepDaemonAlive(process.env);
 	// We are about to own the daemon and hand it this launch's runtime token, so
 	// any forced replacement has been honored and must not leak into a later
 	// startup in this process.
@@ -2493,9 +2592,17 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent?: DaemonAu
 			stdio = ["pipe", "ignore", "ignore"];
 		}
 	}
+	lifecycleLog("daemon_spawn", {
+		trigger,
+		keepAlive: keep,
+		source: launch.source,
+		isolation: isolation.kind,
+		...(isolation.kind === "scope" ? { scopeUnit: isolation.unit, slice: isolation.slice } : { isolationReason: isolation.reason }),
+		...(autoRestartIntent ? { crashedPid: autoRestartIntent.crashedPid } : {}),
+	});
 	let child: ChildProcess;
 	try {
-		child = spawn(launch.command, launch.args, {
+		child = spawn(spawnLaunch.command, spawnLaunch.args, {
 			cwd: launch.cwd,
 			env: daemonEnv(keep),
 			shell: launch.shell,
@@ -2513,8 +2620,13 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent?: DaemonAu
 				// best-effort — the throw below is the real error
 			}
 		}
+		lifecycleLog("daemon_spawn_failed", { trigger, stage: "spawn" }, err);
 		throw err;
 	}
+	const oomScoreAdj = isolation.kind === "oom_score_adj" && child.pid !== undefined
+		? applyDaemonOomScoreAdj(child.pid, isolation.adjustment)
+		: undefined;
+	lifecycleLog("daemon_spawned", { trigger, daemonPid: child.pid ?? null, keepAlive: keep, oomScoreAdj });
 	// The child inherited its own copy of the log fd via stdio at spawn time;
 	// close the parent's copy now so each keep-alive start/stop cycle does not
 	// accumulate open descriptors until the process limit.
@@ -2559,6 +2671,7 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent?: DaemonAu
 		if (portConfirmed || daemonProcess !== child || daemonStoppingProcess === child) return;
 		portConfirmed = true;
 		stopDiscovery();
+		lifecycleLog("daemon_ready", { daemonPid: child.pid ?? null, port, startupMs: Date.now() - spawnedAtMs });
 		setDaemonStatus({ state: "ready", port, pid: child.pid });
 		// The renderer opens event streams on a *.localhost name only while the
 		// daemon also serves [::1] at this port; its probe says whether it does.
@@ -2639,6 +2752,7 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent?: DaemonAu
 		// keep-daemon mode there are no stdout/stderr scanners, so the run file is
 		// the only way a slow-but-successful boot can still recover to ready.
 		fallbackTimer = undefined;
+		lifecycleLog("daemon_port_unconfirmed", { daemonPid: child.pid ?? null, waitedMs: Date.now() - spawnedAtMs });
 		setDaemonStatus(slowDaemonStartupStatus({
 			output: daemonOutput,
 			executablePath: launch.command,
@@ -2649,6 +2763,7 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent?: DaemonAu
 
 	child.once("error", (error) => {
 		stopDiscovery();
+		lifecycleLog("daemon_spawn_failed", { trigger, stage: "child_error", daemonPid: child.pid ?? null, current: daemonProcess === child }, error);
 		if (daemonProcess !== child) return;
 		daemonProcess = null;
 		if (daemonStoppingProcess === child) daemonStoppingProcess = null;
@@ -2662,6 +2777,17 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent?: DaemonAu
 
 	child.once("exit", (code, signal) => {
 		stopDiscovery();
+		lifecycleLog("daemon_exit", {
+			daemonPid: child.pid ?? null,
+			code,
+			signal,
+			uptimeMs: Date.now() - spawnedAtMs,
+			portConfirmed,
+			current: daemonProcess === child,
+			requestedStop: daemonStoppingProcess === child,
+			restartAfterStop: daemonRestartAfterExitProcess === child,
+			quitting: browserQuitRequested,
+		});
 		if (daemonProcess !== child) return;
 		daemonProcess = null;
 		// An explicit stopDaemon() already set a clean `{ state: "stopped" }`.
@@ -2673,10 +2799,29 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent?: DaemonAu
 			daemonStoppingProcess = null;
 			if (daemonRestartAfterExitProcess === child) {
 				daemonRestartAfterExitProcess = null;
-				void startDaemonForRestart();
+				lifecycleLog("daemon_restart_decision", { daemonPid: child.pid ?? null, code, signal, decision: "restart", cause: "manual_restart_after_stop" });
+				void startDaemonForRestart(undefined, "manual_restart");
 				return;
 			}
 			setDaemonStatus({ state: "stopped" });
+			return;
+		}
+		// A scoped launch that exits with a code before it is ready may be
+		// systemd-run failing (user manager gone, slice or property refused):
+		// stop using the scope for this run and retry once without it.
+		if (isolation.kind === "scope" && !portConfirmed && signal === null && !browserQuitRequested && !daemonScopeLaunchFailed) {
+			daemonScopeLaunchFailed = true;
+			lifecycleLog("daemon_restart_decision", {
+				daemonPid: child.pid ?? null,
+				code,
+				signal,
+				decision: "restart",
+				cause: "scope_launch_failed",
+				fallback: "oom_score_adj",
+			});
+			// Keep the originating automatic-restart intent (its marker check and
+			// safeguards) and this launch's keep-alive choice.
+			void startDaemonForRestart(autoRestartIntent, "scope_fallback", keep);
 			return;
 		}
 		supervisorLink?.dispose();
@@ -2693,7 +2838,15 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent?: DaemonAu
 		const exitedPid = child.pid ?? null;
 		const generation = daemonAutoRestartGeneration;
 		void readRunFileState().then((runFile) => {
-			if (generation !== daemonAutoRestartGeneration || browserQuitRequested || daemonProcess) return;
+			const observed = { daemonPid: exitedPid, code, signal, runFilePresent: runFile.present, runFilePid: runFile.pid };
+			if (generation !== daemonAutoRestartGeneration || browserQuitRequested || daemonProcess) {
+				lifecycleLog("daemon_restart_decision", {
+					...observed,
+					decision: "no_restart",
+					cause: browserQuitRequested ? "app_quitting" : daemonProcess ? "newer_daemon_running" : "superseded_by_user_action",
+				});
+				return;
+			}
 			if (
 				daemonExitWasUngraceful({
 					runFilePresent: runFile.present,
@@ -2703,12 +2856,54 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent?: DaemonAu
 					signal,
 				})
 			) {
-				scheduleDaemonAutoRestart(exitedPid, runFile.present, keep);
+				scheduleDaemonAutoRestart(exitedPid, runFile.present, keep, observed);
+			} else {
+				lifecycleLog("daemon_restart_decision", {
+					...observed,
+					decision: "no_restart",
+					cause: runFile.present
+						? "run_file_names_other_daemon"
+						: code !== null && code !== 0
+							? "nonzero_exit_without_run_file"
+							: "graceful_exit",
+				});
 			}
 		});
 	});
 
 	return daemonStatus;
+}
+
+// Opt-in Linux isolation (AO_DAEMON_SCOPE=systemd): see linux-daemon-scope.ts.
+// The systemd-run probe runs at most once per app run.
+let daemonScopeProbe: Promise<boolean> | null = null;
+// Set when a scoped daemon exits before it is ready; later starts in this run
+// use the oom_score_adj fallback even though the cached probe succeeded.
+let daemonScopeLaunchFailed = false;
+function planDaemonSpawnIsolation(launch: DaemonLaunchSpec): Promise<DaemonScopePlan> {
+	return planDaemonScope(launch, {
+		platform: process.platform,
+		env: process.env,
+		scopeLaunchFailed: daemonScopeLaunchFailed,
+		exists: existsSync,
+		findExecutable: (name) => {
+			for (const dir of (cachedShellEnv?.PATH ?? process.env.PATH ?? "").split(path.delimiter)) {
+				if (dir && existsSync(path.join(dir, name))) return path.join(dir, name);
+			}
+			return null;
+		},
+		runProbe: (command, args) => {
+			daemonScopeProbe ??= execFileAsync(command, args, { timeout: 5_000 }).then(() => true, () => false);
+			return daemonScopeProbe;
+		},
+	}, { pid: process.pid, nowMs: Date.now() });
+}
+
+function applyDaemonOomScoreAdj(pid: number, adjustment: number): number | null {
+	return raiseOomScoreAdj(pid, adjustment, {
+		read: (file) => readFileSync(file, "utf8"),
+		write: (file, value) => writeFileSync(file, value),
+	});
 }
 
 // Signal the daemon's whole process group so the kill reaches the real daemon
@@ -2750,20 +2945,47 @@ function cancelDaemonAutoRestart(): void {
 	daemonAutoRestartExits = [];
 }
 
-function scheduleDaemonAutoRestart(crashedPid: number | null, runFilePresent: boolean, keepAlive: boolean): void {
-	if (browserQuitRequested || crashedPid === null) return;
+function scheduleDaemonAutoRestart(
+	crashedPid: number | null,
+	runFilePresent: boolean,
+	keepAlive: boolean,
+	observed: Record<string, string | number | boolean | null> = {},
+): void {
+	if (browserQuitRequested || crashedPid === null) {
+		lifecycleLog("daemon_restart_decision", { ...observed, decision: "no_restart", cause: browserQuitRequested ? "app_quitting" : "pid_unknown" });
+		return;
+	}
 	if (daemonAutoRestartTimer !== null) clearTimeout(daemonAutoRestartTimer);
 	const { plan, recentExits } = planDaemonAutoRestart(daemonAutoRestartExits, Date.now());
 	daemonAutoRestartExits = recentExits;
 	daemonAutoRestartTimer = null;
+	// Written before the timer is armed, so the reason exists even if the app
+	// dies during the backoff or the respawn itself.
+	lifecycleLog("daemon_restart_decision", {
+		...observed,
+		cause: "ungraceful_exit",
+		decision: plan.action,
+		recentExits: recentExits.length,
+		...(plan.action === "restart" ? { attempt: plan.attempt, delayMs: plan.delayMs } : {}),
+	});
 	if (plan.action === "give_up") return;
 	const intent = { generation: daemonAutoRestartGeneration, crashedPid, runFilePresent, keepAlive };
+	const cancelCause = () => daemonProcess ? "newer_daemon_running" : browserQuitRequested ? "app_quitting" : "superseded_by_user_action";
 	daemonAutoRestartTimer = setTimeout(() => {
 		daemonAutoRestartTimer = null;
-		if (intent.generation !== daemonAutoRestartGeneration || daemonProcess || browserQuitRequested) return;
+		if (intent.generation !== daemonAutoRestartGeneration || daemonProcess || browserQuitRequested) {
+			lifecycleLog("daemon_restart_cancelled", { crashedPid, cause: cancelCause() });
+			return;
+		}
 		void readRunFileState().then((runFile) => {
-			if (!daemonAutoRestartMarkerMatches(intent, runFile)) return;
-			if (intent.generation !== daemonAutoRestartGeneration || daemonProcess || browserQuitRequested) return;
+			if (!daemonAutoRestartMarkerMatches(intent, runFile)) {
+				lifecycleLog("daemon_restart_cancelled", { crashedPid, cause: "run_file_changed", runFilePresent: runFile.present, runFilePid: runFile.pid });
+				return;
+			}
+			if (intent.generation !== daemonAutoRestartGeneration || daemonProcess || browserQuitRequested) {
+				lifecycleLog("daemon_restart_cancelled", { crashedPid, cause: cancelCause() });
+				return;
+			}
 			void startDaemonForRestart(intent);
 		});
 	}, plan.delayMs);
@@ -2787,6 +3009,7 @@ async function shutdownDaemonForDesktopQuit(): Promise<void> {
 			signal: AbortSignal.timeout(3000),
 		}),
 	});
+	lifecycleLog("daemon_quit_shutdown", { accepted, daemonPid: daemonProcess?.pid ?? daemonStatus.pid ?? null, updateRestart: isUpdateRestartRequested() });
 	if (!accepted) return;
 	desktopAgentShutdownAccepted = true;
 	if (daemonProcess) daemonStoppingProcess = daemonProcess;
@@ -2806,6 +3029,7 @@ function stopDaemon(): DaemonStatus {
 	}
 
 	daemonStoppingProcess = daemonProcess;
+	lifecycleLog("daemon_stop_requested", { daemonPid: daemonProcess.pid ?? null });
 	// Drop the liveness link: an explicit stop is not a frontend death, so stop
 	// holding the socket open (and stop the reconnect loop retrying a dead daemon).
 	// A later daemon:start re-establishes the link via reportBoundPort.
@@ -2827,9 +3051,9 @@ function reportDaemonRestartFailure(error: unknown): DaemonStatus {
 	return daemonStatus;
 }
 
-async function startDaemonForRestart(autoRestartIntent?: DaemonAutoRestartIntent): Promise<DaemonStatus> {
+async function startDaemonForRestart(autoRestartIntent?: DaemonAutoRestartIntent, trigger?: DaemonStartTrigger, keepAlive?: boolean): Promise<DaemonStatus> {
 	try {
-		return await startDaemon({ autoRestartIntent });
+		return await startDaemon({ autoRestartIntent, trigger: trigger ?? (autoRestartIntent ? "auto_restart" : "manual_restart"), keepAlive });
 	} catch (error) {
 		if (autoRestartIntent && (autoRestartIntent.generation !== daemonAutoRestartGeneration || browserQuitRequested)) return daemonStatus;
 		return reportDaemonRestartFailure(error);
@@ -2841,6 +3065,7 @@ async function restartDaemon(): Promise<DaemonStatus> {
 	// A manual restart supersedes any pending automatic respawn.
 	cancelDaemonAutoRestart();
 	const child = daemonProcess;
+	lifecycleLog("daemon_restart_decision", { daemonPid: child?.pid ?? null, decision: "restart", cause: "user_requested" });
 	if (!child) return startDaemonForRestart();
 	await captureSideChatState().catch((error) => console.warn("AO: pre-restart side snapshot failed", error));
 
@@ -2923,7 +3148,7 @@ ipcMain.handle("daemon:getStatus", () => refreshDaemonStatus());
 ipcMain.handle("daemon:start", () => {
 	daemonAutoRestartStandDown = false;
 	cancelDaemonAutoRestart();
-	return startDaemon();
+	return startDaemon({ trigger: "manual_start" });
 });
 ipcMain.handle("daemon:stop", () => stopDaemon());
 ipcMain.handle("daemon:restart", async () => {
@@ -3017,6 +3242,20 @@ ipcMain.handle("editorHandoff:copyWorkspacePath", (event, sessionId: string) => 
 	return editorHandoff.copyWorkspacePath(typeof sessionId === "string" ? sessionId : "");
 });
 ipcMain.handle("app:getVersion", () => app.getVersion());
+async function triageEnv(): Promise<NodeJS.ProcessEnv> {
+	await ensureShellEnv();
+	const env = process.platform === "win32"
+		? { ...process.env, ...(cachedShellEnv ?? {}) }
+		: buildDaemonEnv(process.env, cachedShellEnv, {}, configuredLoginShell);
+	return {
+		...env,
+		AO_DEV_DAEMON_BINARY: daemonLaunchEnv().AO_DEV_DAEMON_BINARY,
+		AO_DATA_DIR: path.resolve(desktopDataDir),
+		AO_RUN_FILE: path.resolve(runFilePath() ?? path.join(desktopDataDir, "running.json")),
+	};
+}
+ipcMain.handle("triage.launch", async () => launchTriageInTerminal(await triageEnv()));
+
 const dictation = registerDictationIpc(
 	path.join(
 		app.isPackaged ? process.resourcesPath : app.getAppPath(),
@@ -3973,6 +4212,16 @@ ipcMain.on(TRAY_RENDERER_READY_CHANNEL, (event) => {
 		event.sender.send(OPEN_FOLDER_PATH_CHANNEL, pendingFolderPath);
 		pendingFolderPath = null;
 	}
+
+	if (pendingSessionDeepLink && event.sender === getShellWebContents()) {
+		event.sender.send(OPEN_SESSION_DEEP_LINK_CHANNEL, pendingSessionDeepLink);
+		pendingSessionDeepLink = null;
+	}
+
+	if (pendingBillingSection && event.sender === getShellWebContents()) {
+		event.sender.send(OPEN_SETTINGS_SHORTCUT_CHANNEL, pendingBillingSection);
+		pendingBillingSection = null;
+	}
 });
 
 // Cloud auth IPC — cloud:getSession, cloud:signIn, cloud:signOut.
@@ -4109,6 +4358,14 @@ function isShareDeepLink(raw: string): boolean {
 }
 
 async function handleCloudDeepLinkAndFocus(url: string): Promise<void> {
+	// macOS keeps the app (and tray) alive after the close button —
+	// window-all-closed does not quit — and a link clicked then fires open-url
+	// without activate, so nothing else recreates the shell. Hidden utility
+	// windows can linger, so the window list is not the test: recreate when
+	// there is no shell to deliver to. The queued links below flush once its
+	// fresh shell mounts. Windows/Linux quit on the last window closing, so
+	// this never fires there.
+	if (!getShellWebContents()) void createWindow();
 	focusCloudWindow();
 	// A shared cloud session: the renderer redeems it and opens the session.
 	if (isShareDeepLink(url)) {
@@ -4119,9 +4376,38 @@ async function handleCloudDeepLinkAndFocus(url: string): Promise<void> {
 	}
 	// Stripe Checkout and the Customer Portal return here (via the control
 	// plane's /billing/return page): open Settings on Billing, which re-reads
-	// the plan when it mounts.
+	// the plan when it mounts. Queue while the shell is missing or still
+	// loading — flushed on renderer ready like the other pending links.
 	if (isBillingDeepLink(url)) {
-		getShellWebContents()?.send(OPEN_SETTINGS_SHORTCUT_CHANNEL, "billing");
+		const contents = getShellWebContents();
+		if (contents && !contents.isDestroyed() && !contents.isLoading()) {
+			contents.send(OPEN_SETTINGS_SHORTCUT_CHANNEL, "billing");
+		} else {
+			pendingBillingSection = "billing";
+		}
+		return;
+	}
+	// ao-app://sessions/… from external tools: forward the canonical URL to the
+	// shell, which re-reads it as its in-app ao:// form and resolves it against
+	// its workspace lists with the same session-links path as ao:// links
+	// (navigate, toast when the session is gone). The canonical form lowercases
+	// the scheme and strips query/hash/trailing slashes the ao:// parser would
+	// reject. Queue it while the renderer is still mounting (cold start) —
+	// flushed on renderer ready, same handshake as pendingFolderPath below.
+	const normalized = normalizeSessionDeepLink(url);
+	if (normalized) {
+		const contents = getShellWebContents()?.isDestroyed() ? null : getShellWebContents();
+		// The newest link wins: one queued for the readiness handshake is stale
+		// once a newer link arrives, so clear it here either way. Dropping it on
+		// the direct-send path keeps the handshake from navigating the stale
+		// link after this one; replacing it on the queue path keeps the newest
+		// click last.
+		pendingSessionDeepLink = null;
+		if (contents && !contents.isLoading()) {
+			contents.send(OPEN_SESSION_DEEP_LINK_CHANNEL, normalized);
+		} else {
+			pendingSessionDeepLink = normalized;
+		}
 		return;
 	}
 	try {
