@@ -620,7 +620,7 @@ func (c *commandContext) claimSessionPR(ctx context.Context, cmd *cobra.Command,
 				autoReview = &prev.AutoReviewEnabled
 			}
 			if restoreErr := c.setSessionSwitches(ctx, id, &prev.AutoInjectCI, &prev.AutoInjectReview, autoReview); restoreErr != nil {
-				return fmt.Errorf("%w; restoring the session's automatic fixing switches also failed: %v", err, restoreErr)
+				return fmt.Errorf("%w; restoring the session's automatic fixing switches also failed: %w", err, restoreErr)
 			}
 			return err
 		}
