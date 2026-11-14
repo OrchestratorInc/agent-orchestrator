@@ -33,7 +33,7 @@ import { importableProject } from "./session-import";
 import type { ReactNode } from "react";
 import type { MenuEntry } from "../components/menu-model";
 
-export type CommandGroupId = "current" | "attention" | "files" | "content" | "messages" | "projects" | "sessions" | "prs" | "settings" | "global";
+export type CommandGroupId = "session" | "current" | "attention" | "files" | "content" | "messages" | "projects" | "sessions" | "prs" | "settings" | "global";
 
 export type NavigateTarget =
 	| { to: "/" }
@@ -154,9 +154,11 @@ export type CommandPaletteContext = {
 };
 
 // Sessions sit above Projects, as in the sidebar.
-export const commandGroupOrder: CommandGroupId[] = ["current", "attention", "files", "content", "messages", "sessions", "projects", "prs", "settings", "global"];
+export const commandGroupOrder: CommandGroupId[] = ["session", "current", "attention", "files", "content", "messages", "sessions", "projects", "prs", "settings", "global"];
 
 const commandGroupLabelKeys: Record<CommandGroupId, MessageKey> = {
+	// The palette draws this heading as the session itself.
+	session: "command.sessionFallback",
 	current: "command.group.current",
 	attention: "command.group.attention",
 	files: "command.group.files",
@@ -601,7 +603,7 @@ export function buildCommands(ctx: CommandPaletteContext, t: TFunction = appI18n
 	if (currentSession && currentBranch && !isOrchestratorSession(currentSession) && !isSyntheticBranch(currentSession)) {
 		items.push({
 			id: "current-copy-branch",
-			group: "current",
+			group: "session",
 			title: t("command.copyBranch"),
 			subtitle: currentBranch,
 			keywords: ["branch", "git", "copy", currentBranch, currentSession.title],
@@ -1066,7 +1068,7 @@ export function displayGroups(
 	return [...groups, ...searchGroups];
 }
 
-const SEARCH_GROUP_ORDER: CommandGroupId[] = ["current", "global", "settings", "attention", "sessions", "projects", "prs"];
+const SEARCH_GROUP_ORDER: CommandGroupId[] = ["session", "current", "global", "settings", "attention", "sessions", "projects", "prs"];
 
 function searchGroupRank(id: string): number {
 	const rank = SEARCH_GROUP_ORDER.indexOf(id as CommandGroupId);

@@ -178,7 +178,7 @@ describe("buildCommands grouping", () => {
 		expect(map.get("current-new-task")?.group).toBe("current");
 		expect(map.get("current-open-orchestrator")?.group).toBe("current");
 		expect(map.get("current-project-settings")?.group).toBe("current");
-		expect(map.get("current-copy-branch")?.group).toBe("current");
+		expect(map.get("current-copy-branch")?.group).toBe("session");
 		expect(map.get("current-copy-branch")?.action).toEqual({ kind: "copy-branch", branch: "feature/w-pr" });
 	});
 
