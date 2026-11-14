@@ -100,9 +100,16 @@ func RemoveLocalOAuthToken(dataDir string) error {
 // another menu option removes it again. The AO Cloud token applies only when
 // Claude Code has no first-party login of its own.
 //
-// The whole method is inert unless AO saved a token: no token on disk ->
-// immediate return, zero change for existing users.
+// Provider keys AO holds back from Claude Code are not this adapter's to
+// decide: the session manager applies them to launches, and callers pass
+// them to probes through ports.WithAuthEnvironment.
 func (p *Plugin) AugmentRuntimeEnv(env map[string]string, dataDir string) {
+	p.augmentCredential(env, dataDir)
+}
+
+// augmentCredential adds the setup-token credential. It is inert unless AO
+// saved a token: no token on disk -> immediate return.
+func (p *Plugin) augmentCredential(env map[string]string, dataDir string) {
 	// An account launch signs in through its own config folder only.
 	if strings.TrimSpace(dataDir) == "" || strings.TrimSpace(env[claudeConfigDirEnv]) != "" {
 		return
@@ -142,10 +149,14 @@ func hasNativeCredential(ctx context.Context, env map[string]string) bool {
 	return found
 }
 
-// RuntimeCredentialEnv is the setup-token AugmentRuntimeEnv gives a session
-// that sets no credential of its own, or nil when it would add none.
-func (p *Plugin) RuntimeCredentialEnv(dataDir string) map[string]string {
-	env := map[string]string{}
+// RuntimeCredentialEnv is base plus the setup-token AugmentRuntimeEnv gives a
+// session with that environment, or nil when both are empty. A key base
+// blanks is no login of Claude Code's own, so it never hides the cloud token.
+func (p *Plugin) RuntimeCredentialEnv(dataDir string, base map[string]string) map[string]string {
+	env := make(map[string]string, len(base)+1)
+	for name, value := range base {
+		env[name] = value
+	}
 	p.AugmentRuntimeEnv(env, dataDir)
 	if len(env) == 0 {
 		return nil

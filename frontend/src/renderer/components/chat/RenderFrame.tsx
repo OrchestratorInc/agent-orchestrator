@@ -1,11 +1,13 @@
-import { Code2, Download, ExternalLink, FilePlus, FileText, Loader2, Maximize2, WrapText } from "lucide-react";
+import { apiErrorException } from "../../lib/api-error-exception";
+import { Code2, Download, ExternalLink, FilePlus, FileText, Loader2, Maximize2, WrapText } from "@/components/app-icons";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
-import { apiClient, apiErrorMessage, getApiBaseUrl, subscribeApiBaseUrl } from "../../lib/api-client";
+import { apiClient, getApiBaseUrl, subscribeApiBaseUrl } from "../../lib/api-client";
 import {
 	clampRenderHeight,
 	measuredRenderHeight,
 	readRenderContentHeight,
+	readRenderImageRequest,
 	readRenderLinkRequest,
 	readRenderTheme,
 	renderFileName,
@@ -22,8 +24,11 @@ import { BrowserIcon } from "../icons";
 import { Button, type ButtonProps } from "../ui/button";
 import { Dialog, DialogContent, DialogTitle } from "../ui/dialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
+import { ChatImageDialog } from "./ChatImage";
 import { useChatArtifactLinks, useChatRemoteHost } from "./chat-image-source";
 import { useChatBrowserOpen } from "./ChatMarkdown";
+
+type RenderImage = { src: string; alt: string };
 
 /** What a frame shows: a page the agent rendered, or an HTML artifact it reported. */
 interface FramePage {
@@ -86,11 +91,13 @@ function RenderDocument({
 	page,
 	displayMode,
 	wrapContent,
+	onOpenImage,
 	className,
 }: {
 	page: FramePage;
 	displayMode: RenderDisplayMode;
 	wrapContent: boolean;
+	onOpenImage: (image: RenderImage) => void;
 	className?: string;
 }) {
 	const theme = useRenderTheme();
@@ -99,6 +106,8 @@ function RenderDocument({
 	themeRef.current = theme;
 	const wrapContentRef = useRef(wrapContent);
 	wrapContentRef.current = wrapContent;
+	const onOpenImageRef = useRef(onOpenImage);
+	onOpenImageRef.current = onOpenImage;
 	// The daemon can come back on another port, so the src follows the API base
 	// (a frame not yet loaded would otherwise point at a dead port). Theme and
 	// wrapping ride in the fragment only for the first paint; later changes are
@@ -139,10 +148,11 @@ function RenderDocument({
 				return;
 			}
 			// Only while the reader is using this frame: a page can post on load.
+			if (document.activeElement !== frame || navigator.userActivation?.isActive === false) return;
 			const url = readRenderLinkRequest(event.data);
-			if (url && document.activeElement === frame && navigator.userActivation?.isActive !== false) {
-				window.open(url, "_blank", "noopener,noreferrer");
-			}
+			if (url) window.open(url, "_blank", "noopener,noreferrer");
+			const image = readRenderImageRequest(event.data);
+			if (image) onOpenImageRef.current(image);
 		};
 		window.addEventListener("message", onMessage);
 		return () => window.removeEventListener("message", onMessage);
@@ -205,7 +215,7 @@ async function saveRenderAsArtifact(render: RenderRef): Promise<string> {
 		params: { path: { sessionId, renderId: render.id } },
 		body: { title: render.title },
 	});
-	if (!data) throw new Error(apiErrorMessage(error, "save render as artifact failed"));
+	if (!data) throw apiErrorException(error, "save render as artifact failed");
 	return data.name;
 }
 
@@ -281,6 +291,12 @@ export function RenderFrame(props: { render: RenderRef } | { artifact: ArtifactR
 	const [showSource, setShowSource] = useState(false);
 	const [saving, setSaving] = useState(false);
 	const [savingArtifact, setSavingArtifact] = useState(false);
+	const [image, setImage] = useState<RenderImage>();
+	const [imageOpen, setImageOpen] = useState(false);
+	const openImage = (next: RenderImage) => {
+		setImage(next);
+		setImageOpen(true);
+	};
 	const openInBrowserPanel = useChatBrowserOpen();
 	// The local daemon has no copy of a remote host's render, and the remote
 	// proxy URL must not reach the page: its path carries the proxy's capability
@@ -321,15 +337,28 @@ export function RenderFrame(props: { render: RenderRef } | { artifact: ArtifactR
 			<WrapText aria-hidden="true" className="size-3.5" />
 		</RenderAction>
 	);
-	// The page on its own, as a tab opens it. The render's sandbox CSP keeps it
-	// off the daemon wherever it is opened.
-	const standaloneUrl = () => `${getApiBaseUrl()}${page.path}${renderThemeFragment(readRenderTheme(), "fullscreen", false, wrapContent)}`;
-	const browserPanelAction = openInBrowserPanel ? (
+	// The page on its own, as a tab opens it. A render opens from its render
+	// route, whose sandbox CSP keeps it off the daemon wherever it is opened.
+	// An HTML artifact opens from its preview origin, the same URL the
+	// Artifacts tab and `ao preview` open: the daemon serves the artifact-files
+	// route the chat frames only to the app's own frames, and refuses a
+	// browser tab there (ORIGIN_FORBIDDEN). With no preview URL listed for it,
+	// the artifact does not open outside the chat.
+	const artifactPreviewUrl = "artifact" in props && links?.previewUrl && /^https?:\/\//.test(links.previewUrl) ? links.previewUrl : undefined;
+	const standaloneUrl = (): string | undefined => "artifact" in props
+		? artifactPreviewUrl
+		: `${getApiBaseUrl()}${page.path}${renderThemeFragment(readRenderTheme(), "fullscreen", false, wrapContent)}`;
+	const opensStandalone = !("artifact" in props) || artifactPreviewUrl !== undefined;
+	const openStandalone = (open: (url: string) => void) => {
+		const url = standaloneUrl();
+		if (url) open(url);
+	};
+	const browserPanelAction = openInBrowserPanel && opensStandalone ? (
 		<RenderAction
 			label={t("inspector.openInAOBrowser")}
 			onClick={() => {
 				setExpanded(false);
-				openInBrowserPanel(standaloneUrl());
+				openStandalone(openInBrowserPanel);
 			}}
 		>
 			<BrowserIcon aria-hidden="true" className="size-3.5" />
@@ -347,7 +376,7 @@ export function RenderFrame(props: { render: RenderRef } | { artifact: ArtifactR
 					) : null}
 				</div>
 			) : null}
-			<RenderDocument page={page} displayMode="inline" wrapContent={wrapContent} />
+			<RenderDocument page={page} displayMode="inline" wrapContent={wrapContent} onOpenImage={openImage} />
 			<div
 				className={cn(
 					"absolute end-1 flex gap-1 opacity-0 transition-opacity group-hover/render:opacity-100 focus-within:opacity-100",
@@ -406,20 +435,23 @@ export function RenderFrame(props: { render: RenderRef } | { artifact: ArtifactR
 							<OpenInPanelAction sessionId={links.sessionId} path={props.artifact.path} onOpen={() => setExpanded(false)} />
 						) : null}
 						{browserPanelAction}
-						<RenderAction
-							label={t("chat.render.openInBrowser")}
-							onClick={() => window.open(standaloneUrl(), "_blank", "noopener,noreferrer")}
-						>
-							<ExternalLink className="size-3.5" />
-						</RenderAction>
+						{opensStandalone ? (
+							<RenderAction
+								label={t("chat.render.openInBrowser")}
+								onClick={() => openStandalone((url) => window.open(url, "_blank", "noopener,noreferrer"))}
+							>
+								<ExternalLink className="size-3.5" />
+							</RenderAction>
+						) : null}
 					</div>
 					{!expanded ? null : showSource ? (
 						<RenderSource path={page.path} />
 					) : (
-						<RenderDocument page={page} displayMode="fullscreen" wrapContent={wrapContent} className="max-h-[calc(100svh-8rem)]" />
+						<RenderDocument page={page} displayMode="fullscreen" wrapContent={wrapContent} onOpenImage={openImage} className="max-h-[calc(100svh-8rem)]" />
 					)}
 				</DialogContent>
 			</Dialog>
+			{image ? <ChatImageDialog open={imageOpen} onOpenChange={setImageOpen} url={image.src} label={image.alt} /> : null}
 		</div>
 	);
 }

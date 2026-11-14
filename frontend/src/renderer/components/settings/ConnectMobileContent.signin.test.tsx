@@ -49,6 +49,7 @@ vi.mock("../../lib/account-remote-hosts", async (original) => ({
 	...(await original<typeof import("../../lib/account-remote-hosts")>()),
 	deleteAccountRemoteHost: vi.fn(async () => undefined),
 }));
+vi.mock("../../lib/mobile-pairing-code", () => ({ mobilePairingCodeQueryKey: ["mobile-pairing-code"], PAIRING_CODE_REFRESH_MS: 540_000, fetchPairingCode: async () => ({ code: "Code1234", expiresAt: Date.now() + 600_000 }) }));
 vi.mock("../../lib/link-this-computer", () => ({ linkThisComputer: vi.fn(async () => ({ hostId: "h_fixture", added: true })) }));
 vi.mock("../../lib/api-client", () => ({
 	apiClient: {
@@ -151,7 +152,7 @@ test("a new password links the computer again, so its fixed address survives", a
 		endpoints: [{ kind: "lan", host: "192.168.1.42", port: 3011, secure: false }],
 	});
 	renderContent();
-	await userEvent.click(await screen.findByRole("button", { name: "Regenerate password" }));
+	await userEvent.click(await screen.findByRole("button", { name: "Revoke all devices" }));
 
 	// Only while the account still lists it: one removed from the account is not listed again.
 	await waitFor(() => expect(linkThisComputer).toHaveBeenCalledWith("https://cp.example.test", "user_01JAO", "h_fixture", "pw-2", { ifListed: true }));
@@ -166,7 +167,7 @@ test("a new password that could not be linked says so", async () => {
 	});
 	vi.mocked(linkThisComputer).mockRejectedValueOnce(new AccountHostSyncError("AO Cloud host sync failed (502).", 502));
 	renderContent();
-	await userEvent.click(await screen.findByRole("button", { name: "Regenerate password" }));
+	await userEvent.click(await screen.findByRole("button", { name: "Revoke all devices" }));
 
 	expect(await screen.findByText("AO Cloud host sync failed (502).")).toBeVisible();
 });
@@ -182,7 +183,7 @@ test("an account that uses all of its fixed addresses lists a new password at th
 	});
 	vi.mocked(linkThisComputer).mockRejectedValueOnce(new AccountHostSyncError("AO Cloud host sync failed (409).", 409));
 	renderContent();
-	await userEvent.click(await screen.findByRole("button", { name: "Regenerate password" }));
+	await userEvent.click(await screen.findByRole("button", { name: "Revoke all devices" }));
 
 	await waitFor(() => expect(linkThisComputer).toHaveBeenLastCalledWith(
 		"https://cp.example.test", "user_01JAO", "h_fixture", "pw-2", { ifListed: true, url: "https://quiet-river.trycloudflare.com:443" },
@@ -201,7 +202,7 @@ test("on an AO Cloud without fixed addresses a new password is listed at the tun
 	});
 	vi.mocked(linkThisComputer).mockResolvedValueOnce({ hostId: "", added: false });
 	renderContent();
-	await userEvent.click(await screen.findByRole("button", { name: "Regenerate password" }));
+	await userEvent.click(await screen.findByRole("button", { name: "Revoke all devices" }));
 
 	await waitFor(() => expect(linkThisComputer).toHaveBeenLastCalledWith(
 		"https://cp.example.test", "user_01JAO", "h_fixture", "pw-2", { ifListed: true, url: "https://quiet-river.trycloudflare.com:443" },
@@ -215,7 +216,7 @@ test("a LAN-only computer gets a new password without being listed", async () =>
 		endpoints: [{ kind: "lan", host: "192.168.1.42", port: 3011, secure: false }],
 	});
 	renderContent();
-	await userEvent.click(await screen.findByRole("button", { name: "Regenerate password" }));
+	await userEvent.click(await screen.findByRole("button", { name: "Revoke all devices" }));
 
 	await waitFor(() => expect(posted()).toEqual(["/api/v1/mobile/regenerate"]));
 	expect(linkThisComputer).not.toHaveBeenCalled();
@@ -228,7 +229,7 @@ test("a signed-out computer gets a new password without linking", async () => {
 		endpoints: [{ kind: "lan", host: "192.168.1.42", port: 3011, secure: false }],
 	});
 	renderContent();
-	await userEvent.click(await screen.findByRole("button", { name: "Regenerate password" }));
+	await userEvent.click(await screen.findByRole("button", { name: "Revoke all devices" }));
 
 	await waitFor(() => expect(posted()).toEqual(["/api/v1/mobile/regenerate"]));
 	expect(linkThisComputer).not.toHaveBeenCalled();

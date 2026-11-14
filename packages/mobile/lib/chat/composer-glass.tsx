@@ -1,9 +1,9 @@
 import type { ReactElement } from "react";
 
 /**
- * Android has no Liquid Glass, and no system material to approximate one with
- * that would survive a multiline field growing under it. The composer keeps the
- * elevated fill there — see `ChatComposer`'s pill styles.
+ * Where neither Liquid Glass (iOS 26, `composer-glass.ios`) nor Android's
+ * stand-in sheet (`composer-glass.android`) draws, the composer keeps the
+ * elevated fill — see `ChatComposer`'s pill styles.
  */
 export const composerGlassSupported = false;
 

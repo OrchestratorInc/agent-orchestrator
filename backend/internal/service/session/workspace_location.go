@@ -39,7 +39,7 @@ func (s *Service) WorkspaceLocation(ctx context.Context, id domain.SessionID) (s
 	}
 	// These won't clear on their own, so a 500 would only make the caller retry forever.
 	if errors.Is(err, fs.ErrPermission) || errors.Is(err, syscall.ENOTDIR) || errors.Is(err, syscall.ELOOP) {
-		return "", apierr.Conflict("SESSION_WORKSPACE_UNREADABLE", "AO can't read this session's folder. Check its permissions.", nil)
+		return "", apierr.Conflict("SESSION_WORKSPACE_UNREADABLE", "Orchestrator can't read this session's folder. Check its permissions.", nil)
 	}
 	if err != nil {
 		return "", fmt.Errorf("stat session %s workspace: %w", id, err)

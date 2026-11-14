@@ -71,6 +71,24 @@ describe("side delivery draft ownership", () => {
 		return { ...hook, sending };
 	}
 
+	it.each([70 * 1024, 128 * 1024])("accepts a local plain side question of %i bytes", async (bytes) => {
+		const text = "q".repeat(bytes);
+		const hook = await beginSend(text);
+		expect(post.mock.calls[0][1].body.text).toBe(text);
+		await act(async () => { accept({}); await hook.sending; });
+	});
+
+	it("rejects a local side question above 128 KiB without losing the draft", async () => {
+		const text = "q".repeat(128 * 1024 + 1);
+		const hook = renderHook(() => useIndependentSideChats("session", [], [], async () => [], false));
+		await waitFor(() => expect(hook.result.current.activeId).toBe("side"));
+		act(() => hook.result.current.setQuestionDraft("side", text));
+		await act(async () => { await hook.result.current.send("side", text); });
+		expect(post).not.toHaveBeenCalled();
+		expect(hook.result.current.error).toBeDefined();
+		await waitFor(() => expect(put.mock.calls.some(([, options]) => JSON.parse(options.body.contentJson).text === text)).toBe(true));
+	});
+
 	it("refreshes the accepted title without switching the active sidechat", async () => {
 		let label = "Side Chat";
 		const originalGet = get.getMockImplementation()!;
@@ -112,7 +130,7 @@ describe("side delivery draft ownership", () => {
 
 	it("preserves a reference added while acceptance is pending", async () => {
 		const hook = await beginSend();
-		act(() =>
+		await act(async () =>
 			hook.result.current.addReference("side", {
 				id: "chip",
 				conversationId: "main",
@@ -605,7 +623,7 @@ describe("side panel navigation and recovery", () => {
 			.mockReturnValue(new DOMRect(40, 150, 100, 20));
 		await userEvent.click(screen.getByRole("button", { name: "1 annotation" }));
 		await userEvent.click(await screen.findByRole("button", { name: "Juniper" }));
-		await waitFor(() => expect(text.closest("[data-chat-message-body]")).toHaveClass("chat-annotation-target"));
+		expect(text.closest("[data-chat-message-body]")).not.toHaveClass("chat-annotation-target");
 		expect(scrollTo).not.toHaveBeenCalled();
 		rangeBounds.mockReturnValue(new DOMRect(40, 800, 100, 20));
 		await userEvent.click(screen.getByRole("button", { name: "1 annotation" }));
@@ -782,6 +800,6 @@ it("does not call the local daemon for a remote session", async () => {
 		await Promise.resolve();
 	});
 	expect(get).not.toHaveBeenCalled();
-	await expect(hook.result.current.create()).rejects.toThrow("only for local AO sessions");
+	await expect(hook.result.current.create()).rejects.toThrow("only for local Orchestrator-managed sessions");
 	expect(post).not.toHaveBeenCalled();
 });

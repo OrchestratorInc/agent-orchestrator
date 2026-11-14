@@ -1,0 +1,27 @@
+<!-- The app's pull-request glyph (Lucide's git-pull-request, as the desktop and
+     assets/icons/pull-request.png draw it) as a vector, for Compose icons,
+     which draw only vector drawables. Filled outlines of its 2-unit strokes:
+     @expo/ui's vector loader reads fillColor alone, so stroked paths came out
+     empty. Not a Material Symbol, so it is kept out of assets/icons. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+  <!-- The source branch's ring at (6,6): outer 4, a hole of 2 wound the other way. -->
+  <path
+      android:fillColor="#FF000000"
+      android:pathData="M6,2A4,4 0,1 1,6 10A4,4 0,1 1,6 2ZM6,4A2,2 0,1 0,6 8A2,2 0,1 0,6 4Z" />
+  <!-- Its line down, round at the foot. -->
+  <path
+      android:fillColor="#FF000000"
+      android:pathData="M5,9L5,21A1,1 0,0 0,7 21L7,9Z" />
+  <!-- The target branch's ring at (18,18). -->
+  <path
+      android:fillColor="#FF000000"
+      android:pathData="M18,14A4,4 0,1 1,18 22A4,4 0,1 1,18 14ZM18,16A2,2 0,1 0,18 20A2,2 0,1 0,18 16Z" />
+  <!-- The hook from (13,6) round the corner and down to the ring, round at both ends. -->
+  <path
+      android:fillColor="#FF000000"
+      android:pathData="M13,5L16,5A3,3 0,0 1,19 8L19,15A1,1 0,0 1,17 15L17,8A1,1 0,0 0,16 7L13,7A1,1 0,0 1,13 5Z" />
+</vector>

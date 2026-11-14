@@ -1,5 +1,6 @@
 // AO session ↔ Chrome tab group ownership. Each AO session works only in its
-// own tab group ("AO · <session>") in the user's window. Tabs get AO's
+// own tab group ("Orchestrator · <session>"), opened in the background of the
+// window the user last used, or in a window of its own when there is none. Tabs get AO's
 // logical ids (t1, t2, …). A tab the user drags out of the group is no longer
 // the agent's; a tab the user drags in becomes the agent's.
 
@@ -16,12 +17,14 @@ export type SessionTabs = {
 	tabs: Record<string, number>;
 	activeTabId?: string;
 	nextTab: number;
+	/** Tabs the user handed over by dragging them into the group: never closed. */
+	handedTabs?: number[];
 };
 
 export type ActiveTab = { logicalId: string; tabId: number; tab: Tab };
 
 export function groupTitle(sessionId: string): string {
-	return `AO · ${sessionId.length > 24 ? `${sessionId.slice(0, 23)}…` : sessionId}`;
+	return `Orchestrator · ${sessionId.length > 24 ? `${sessionId.slice(0, 23)}…` : sessionId}`;
 }
 
 export function groupColor(sessionId: string): string {
@@ -110,7 +113,7 @@ export class SessionTabRegistry {
 		if (session.groupId !== undefined && tab.groupId !== session.groupId) {
 			delete session.tabs[logicalId];
 			await this.save();
-			throw new BridgeError("BROWSER_TARGET_MISMATCH", `Tab ${logicalId} left this session's AO tab group`);
+			throw new BridgeError("BROWSER_TARGET_MISMATCH", `Tab ${logicalId} left this session's Orchestrator tab group`);
 		}
 		return { logicalId, tabId, tab };
 	}
@@ -121,11 +124,20 @@ export class SessionTabRegistry {
 			const windows = await this.chrome.tabs.query({ windowId }).catch(() => []);
 			if (windows.length === 0) windowId = undefined;
 		}
+		let tab: (Tab & { id?: number }) | undefined;
 		if (windowId === undefined) {
-			const focused = await this.chrome.windows.getLastFocused({ windowTypes: ["normal"] }).catch(() => undefined);
-			windowId = focused?.id ?? (await this.chrome.windows.create({ type: "normal", focused: false })).id;
+			// Beside the user's tabs, in the background: agents act on a tab that
+			// is not in front, so they never need a window of their own.
+			const user = await this.chrome.windows.getLastFocused({ windowTypes: ["normal"] }).catch(() => undefined);
+			if (user?.id !== undefined && !user.incognito) windowId = user.id;
 		}
-		const tab = await this.chrome.tabs.create({ url: url ?? "about:blank", active: false, windowId });
+		if (windowId === undefined) {
+			// No window to join: open the session's own, unfocused.
+			const created = await this.chrome.windows.create({ type: "normal", focused: false, state: "normal", url: url ?? "about:blank" });
+			windowId = created.id;
+			tab = created.tabs?.[0];
+		}
+		tab ??= await this.chrome.tabs.create({ url: url ?? "about:blank", active: false, windowId });
 		if (tab.id === undefined) throw new BridgeError("BROWSER_TARGET_UNAVAILABLE", "Chrome did not create a tab");
 		this.creating.add(tab.id);
 		try {
@@ -178,8 +190,9 @@ export class SessionTabRegistry {
 	}
 
 	/**
-	 * Release a session: close tabs still on about:blank, ungroup the rest so
-	 * the user keeps any page they were looking at.
+	 * Release a session: close its window when everything in it was the
+	 * session's. Otherwise the window also holds something of the user's, so
+	 * close tabs still on about:blank and ungroup the rest for them to keep.
 	 */
 	async destroy(sessionId: string): Promise<void> {
 		await this.load();
@@ -187,6 +200,7 @@ export class SessionTabRegistry {
 		if (!session) return;
 		this.sessions.delete(sessionId);
 		await this.save();
+		if (await this.closeOwnWindow(session)) return;
 		const keep: number[] = [];
 		for (const tabId of Object.values(session.tabs)) {
 			const tab = await this.chrome.tabs.get(tabId).catch(() => undefined);
@@ -195,6 +209,17 @@ export class SessionTabRegistry {
 			else keep.push(tabId);
 		}
 		if (keep.length > 0) await this.chrome.tabs.ungroup(keep).catch(() => undefined);
+	}
+
+	private async closeOwnWindow(session: SessionTabs): Promise<boolean> {
+		if (session.windowId === undefined || session.handedTabs?.length) return false;
+		const owned = new Set(Object.values(session.tabs));
+		const inWindow = await this.chrome.tabs.query({ windowId: session.windowId }).catch(() => []);
+		if (owned.size === 0 || inWindow.length !== owned.size || !inWindow.every((tab) => tab.id !== undefined && owned.has(tab.id))) return false;
+		return this.chrome.windows.remove(session.windowId).then(
+			() => true,
+			() => false,
+		);
 	}
 
 	/** Find which session owns a Chrome tab, if any. */
@@ -244,6 +269,7 @@ export class SessionTabRegistry {
 			const session = [...this.sessions.values()].find((candidate) => candidate.groupId === groupId);
 			if (!session) return;
 			session.tabs[`t${session.nextTab++}`] = tabId;
+			(session.handedTabs ??= []).push(tabId);
 			await this.save();
 		}
 	}

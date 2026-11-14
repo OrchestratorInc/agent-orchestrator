@@ -1,4 +1,5 @@
 import type { SideLaunchSnapshot } from "./side-close";
+import { captureMainError, ExpectedIpcError } from "./main-error-capture";
 
 export interface SideLaunchAttachment {
 	generation: number;
@@ -57,7 +58,7 @@ export class SideLaunchRecovery {
 		const old = this.current;
 		this.current = undefined;
 		if (old) {
-			const error = new Error("Side chat daemon attachment changed. Retry after reconnecting.");
+			const error = new ExpectedIpcError("Side chat daemon attachment changed. Retry after reconnecting.");
 			if (old.retry) clearTimeout(old.retry);
 			old.abort.abort(error);
 			old.attempt.reject(error);
@@ -74,16 +75,16 @@ export class SideLaunchRecovery {
 
 	async ensureReady(): Promise<void> {
 		const recovery = this.current;
-		if (!recovery) throw new Error("Side chat daemon is unavailable. Retry after reconnecting.");
+		if (!recovery) throw new ExpectedIpcError("Side chat daemon is unavailable. Retry after reconnecting.");
 		await recovery.attempt.promise;
-		if (this.current !== recovery || !recovery.ready) throw new Error("Side chat daemon attachment changed. Retry after reconnecting.");
+		if (this.current !== recovery || !recovery.ready) throw new ExpectedIpcError("Side chat daemon attachment changed. Retry after reconnecting.");
 	}
 
 	async capture(): Promise<Capture> {
 		const recovery = this.current;
-		if (!recovery) throw new Error("Side chat daemon is unavailable. Retry after reconnecting.");
+		if (!recovery) throw new ExpectedIpcError("Side chat daemon is unavailable. Retry after reconnecting.");
 		await recovery.attempt.promise;
-		if (this.current !== recovery || !recovery.ready) throw new Error("Side chat daemon attachment changed. Retry after reconnecting.");
+		if (this.current !== recovery || !recovery.ready) throw new ExpectedIpcError("Side chat daemon attachment changed. Retry after reconnecting.");
 		return new Promise<Capture>((resolve, reject) => {
 			recovery.waiters.push({ resolve, reject });
 			if (!recovery.reading) void this.read(recovery);
@@ -91,7 +92,14 @@ export class SideLaunchRecovery {
 	}
 
 	captureInBackground(): void {
-		void this.capture().catch(error => this.options.onError(error));
+		void this.capture().catch(error => this.report(error));
+	}
+
+	private report(error: unknown): void {
+		if (!(error instanceof RecoveryHTTPError && (error.status < 500 || error.status === 503 || error.status === 504))) {
+			captureMainError({ category: "side_chat", reason: "recovery", error });
+		}
+		this.options.onError(error);
 	}
 
 	private async request<T = void>(recovery: Recovery, path: string, init: RequestInit, timeoutMs: number, decode?: (response: Response) => Promise<T>): Promise<T> {
@@ -99,9 +107,12 @@ export class SideLaunchRecovery {
 		const cancel = () => abort.abort(recovery.abort.signal.reason);
 		if (recovery.abort.signal.aborted) cancel();
 		else recovery.abort.signal.addEventListener("abort", cancel, { once: true });
-		const timer = setTimeout(() => abort.abort(new Error("Side chat recovery request timed out")), timeoutMs);
+		const timer = setTimeout(() => abort.abort(new ExpectedIpcError("Side chat recovery request timed out")), timeoutMs);
 		try {
-			const response = await (this.options.fetch ?? fetch)(`http://127.0.0.1:${recovery.attachment.port}/api/v1/side-chats/launch${path}`, { ...init, signal: abort.signal });
+			const response = await (this.options.fetch ?? fetch)(`http://127.0.0.1:${recovery.attachment.port}/api/v1/side-chats/launch${path}`, { ...init, signal: abort.signal }).catch((error: unknown) => {
+				if (abort.signal.aborted) throw abort.signal.reason;
+				throw new ExpectedIpcError(error instanceof Error ? error.message : "Side chat connection unavailable", { cause: error });
+			});
 			if (!response.ok) {
 				await response.body?.cancel().catch(() => undefined);
 				throw new RecoveryHTTPError(response.status);
@@ -140,7 +151,7 @@ export class SideLaunchRecovery {
 		} catch (error) {
 			if (this.current !== recovery) return;
 			running.reject(error);
-			this.options.onError(error);
+			this.report(error);
 			if (error instanceof RecoveryHTTPError && error.status !== 408 && error.status !== 429 && error.status < 500) { recovery.payload = undefined; return; }
 			const delay = Math.min(30_000, 1000 * 2 ** Math.min(recovery.failures++, 5));
 			recovery.attempt = attempt();
@@ -158,7 +169,7 @@ export class SideLaunchRecovery {
 			const batch = recovery.waiters.splice(0);
 			try {
 				const state = await this.request(recovery, `/state?appRunId=${encodeURIComponent(recovery.attachment.appRunId)}`, {}, 5_000, response => response.json() as Promise<SideLaunchSnapshot>);
-				if (this.current !== recovery || state.appRunId !== recovery.attachment.appRunId) throw new Error("Stale side chat snapshot");
+				if (this.current !== recovery || state.appRunId !== recovery.attachment.appRunId) throw new ExpectedIpcError("Stale side chat snapshot");
 				this.options.onSnapshot(state);
 				for (const waiter of batch) waiter.resolve({ attachment: recovery.attachment, state });
 			} catch (error) {

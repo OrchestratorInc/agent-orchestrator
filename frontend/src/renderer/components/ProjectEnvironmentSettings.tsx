@@ -1,9 +1,10 @@
+import { apiErrorException } from "../lib/api-error-exception";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Eye, EyeOff, FileCode2, Plus, Trash2 } from "lucide-react";
+import { Eye, EyeOff, FileCode2, Plus, Trash2 } from "@/components/app-icons";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../api/schema";
-import { apiClient, apiErrorMessage } from "../lib/api-client";
+import { apiClient } from "../lib/api-client";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { workspaceQueryKey } from "../hooks/useWorkspaceQuery";
 import type { ProjectSettingsSaveState } from "./ProjectSettingsForm";
@@ -50,7 +51,7 @@ export function ProjectEnvironmentSettings({ projectId, onSaveState }: { project
 		queryKey: ["project", projectId],
 		queryFn: async () => {
 			const { data, error } = await apiClient.GET("/api/v1/projects/{id}", { params: { path: { id: projectId } } });
-			if (error) throw new Error(apiErrorMessage(error));
+			if (error) throw apiErrorException(error);
 			if (data?.status !== "ok") throw new Error(t("settings.project.degraded"));
 			return data.project as Project;
 		},
@@ -60,14 +61,14 @@ export function ProjectEnvironmentSettings({ projectId, onSaveState }: { project
 	const save = async (env: Record<string, string>) => {
 		// Refresh before the whole-config PUT so this page cannot erase changes made elsewhere.
 		const current = await apiClient.GET("/api/v1/projects/{id}", { params: { path: { id: projectId } } });
-		if (current.error) throw new Error(apiErrorMessage(current.error));
+		if (current.error) throw apiErrorException(current.error);
 		if (current.data?.status !== "ok" || !current.data.project) throw new Error(t("settings.project.degraded"));
 		const project = current.data.project as Project;
 		const { error: updateError } = await apiClient.PUT("/api/v1/projects/{id}", {
 			params: { path: { id: projectId } },
 			body: { displayName: project.name, config: { ...project.config, env } },
 		});
-		if (updateError) throw new Error(apiErrorMessage(updateError));
+		if (updateError) throw apiErrorException(updateError);
 	};
 	return <VariablesEditor key={projectId} initial={query.data.config?.env} description={t("settings.project.environmentDescription")} persist={save} onSaveState={onSaveState} onSaved={() => {
 		void queryClient.invalidateQueries({ queryKey: ["project", projectId] });

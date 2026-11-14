@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { forgetComposerAttachments, readComposerAttachments, updateComposerAttachments, type ComposerAttachment } from "./composerAttachments";
+import { composerTrayItems, forgetComposerAttachments, readComposerAttachments, removeComposerAttachment, updateComposerAttachments, type ComposerAttachment } from "./composerAttachments";
 
 const photo = (id: string): ComposerAttachment => ({ id, kind: "image", name: `${id}.jpg`, bytes: 3, image: { mimeType: "image/jpeg", data: "/9j/" } });
 
@@ -28,5 +28,20 @@ describe("composer attachments", () => {
 		forgetComposerAttachments("mac.d", new Set(["sent"]));
 		expect(readComposerAttachments("mac.d")).toEqual({ items: [photo("added-later")], notice: "kept" });
 		updateComposerAttachments("mac.d", () => ({ items: [] }));
+	});
+
+	it("removes the one attachment the user took out and keeps the notice", () => {
+		updateComposerAttachments("mac.e", () => ({ items: [photo("keep"), photo("drop")], notice: "kept" }));
+		removeComposerAttachment("mac.e", "drop");
+		expect(readComposerAttachments("mac.e")).toEqual({ items: [photo("keep")], notice: "kept" });
+		updateComposerAttachments("mac.e", () => ({ items: [] }));
+	});
+
+	it("shows photos from their own bytes and files by name in the tray", () => {
+		const notes: ComposerAttachment = { id: "notes", kind: "resource", name: "notes.md", bytes: 2, resource: { uri: "mobile-attachment://notes.md", name: "notes.md", mimeType: "text/markdown", text: "hi" } };
+		expect(composerTrayItems([photo("one"), notes])).toEqual([
+			{ key: "one", name: "one.jpg", previewUri: "data:image/jpeg;base64,/9j/" },
+			{ key: "notes", name: "notes.md" },
+		]);
 	});
 });

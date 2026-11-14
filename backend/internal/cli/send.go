@@ -52,7 +52,11 @@ func newSendCommand(ctx *commandContext) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "send",
 		Short: "Send a message to a running agent session",
-		Args:  noArgs,
+		Long: "Send a message to a running agent session.\n\n" +
+			"This messages agents, not shell terminals. To type a command into one of\n" +
+			"this session's terminal tabs, use `ao pane run <tab> <command>` or\n" +
+			"`ao pane send <tab> <text>`; `ao pane` lists the terminal tab keys.",
+		Args: noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return ctx.sendMessage(cmd.Context(), opts)
 		},

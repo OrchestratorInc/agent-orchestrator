@@ -1,3 +1,4 @@
+import { apiErrorException } from "../lib/api-error-exception";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { QueryClient, UseQueryOptions } from "@tanstack/react-query";
 import { useCallback, useEffect, useSyncExternalStore } from "react";
@@ -79,7 +80,7 @@ export type FilesSource =
 	 * `cloud` fetches rawUrl through the cloud control-plane bridge;
 	 * `artifactRoot` is the URL relative links resolve against.
 	 */
-	| { kind: "artifact"; rawUrl?: string; readOnly?: boolean; cloud?: boolean; artifactRoot?: string; onAccessRefused?: () => void; save?: ArtifactSave };
+	| { kind: "artifact"; rawUrl?: string; readOnly?: boolean; cloud?: boolean; artifactRoot?: string; onAccessRefused?: () => void; save?: ArtifactSave; savedVersion?: number };
 
 /** Saves an edit of an artifact file somewhere other than the local daemon, as a cloud session's control plane. */
 export type ArtifactSave = (input: { path: string; content: string; expectedFileFingerprint: string }) => Promise<{ fileFingerprint: string; size: number }>;
@@ -309,7 +310,7 @@ async function fetchSessionWorkspaceFile(sessionId: string, path: string, scope:
 	const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/workspace/file", {
 		params: { path: { sessionId }, query: { path, section: scope === "combined" ? undefined : scope, commitSha } },
 	});
-	if (error) throw new Error(apiErrorMessage(error, errorMessage));
+	if (error) throw apiErrorException(error, errorMessage);
 	if (!data) throw new Error(errorMessage);
 	return data as WorkspaceFileDetail;
 }
@@ -336,7 +337,7 @@ async function fetchSessionPRFile(sessionId: string, number: number, sourceUrl: 
 	const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/pr/{prNumber}/file", {
 		params: { path: { sessionId, prNumber: number }, query: { path, previousPath, sourceUrl, commitSha } },
 	});
-	if (error) throw new Error(apiErrorMessage(error, errorMessage));
+	if (error) throw apiErrorException(error, errorMessage);
 	if (!data) throw new Error(errorMessage);
 	return data as WorkspaceFileDetail;
 }
@@ -643,7 +644,7 @@ export async function fetchPRFileRevision(sessionId: string, number: number, sou
 	const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/pr/{prNumber}/file/revision", {
 		params: { path: { sessionId, prNumber: number }, query: { path, side, sourceUrl, commitSha } },
 	});
-	if (error || !data) throw new Error(apiErrorMessage(error, "Unable to load pull request file revision"));
+	if (error || !data) throw apiErrorException(error, "Unable to load pull request file revision");
 	return data as WorkspaceFileRevision;
 }
 
@@ -747,7 +748,7 @@ export async function updateSessionWorkspaceFile({
 		params: { path: { sessionId } },
 		body: { content, expectedFileFingerprint, path },
 	});
-	if (error) throw new Error(apiErrorMessage(error, "Unable to save workspace file"));
+	if (error) throw apiErrorException(error, "Unable to save workspace file");
 	if (!data) throw new Error("Unable to save workspace file");
 	return data as WorkspaceFileDetail;
 }
@@ -773,7 +774,7 @@ export async function updateSessionArtifactFile({
 		params: { path: { sessionId } },
 		body: { content, expectedFileFingerprint, path },
 	});
-	if (error) throw new Error(apiErrorMessage(error, "Unable to save artifact"));
+	if (error) throw apiErrorException(error, "Unable to save artifact");
 	if (!data) throw new Error("Unable to save artifact");
 	return data;
 }
@@ -783,7 +784,7 @@ export async function deleteSessionArtifactFile({ path, sessionId, hostId }: { p
 	const { error } = await clientForSessionHost(hostId).DELETE("/api/v1/sessions/{sessionId}/artifact-files", {
 		params: { path: { sessionId }, query: { path } },
 	});
-	if (error) throw new Error(apiErrorMessage(error, "Unable to delete artifact"));
+	if (error) throw apiErrorException(error, "Unable to delete artifact");
 }
 
 export function sessionWorkspaceSearchQueryOptions(
@@ -800,7 +801,7 @@ export function sessionWorkspaceSearchQueryOptions(
 				params: { path: { sessionId }, query: { query, limit } },
 				signal,
 			});
-			if (error) throw new Error(apiErrorMessage(error, errorMessage));
+			if (error) throw apiErrorException(error, errorMessage);
 			if (!data) throw new Error(errorMessage);
 			return data;
 		},

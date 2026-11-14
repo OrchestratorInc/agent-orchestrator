@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import { useTranslation } from "react-i18next";
 import type { PDFDocumentLoadingTask, PDFDocumentProxy, RenderTask, TextLayer } from "pdfjs-dist";
+import { useArtifactZoomTarget } from "../lib/artifact-zoom";
 import { aoBridge } from "../lib/bridge";
 import { formatBytes } from "./ReadOnlyFileView";
 import { PanelMessage } from "./WorkspaceDiffView";
@@ -9,7 +10,23 @@ type Pdfjs = typeof import("pdfjs-dist");
 type PageSize = { width: number; height: number };
 
 const PAGE_GAP = 12;
+/** pdf.js's viewer cap: past it a page draws at lower resolution and CSS stretches it. */
+const MAX_CANVAS_PIXELS = 2 ** 25;
+/** Chromium refuses a canvas side longer than this. */
+const MAX_CANVAS_SIDE = 16_384;
+
+/**
+ * The bitmap scale for a page of this CSS size: the display's pixel ratio,
+ * lowered so the canvas stays within MAX_CANVAS_PIXELS and MAX_CANVAS_SIDE.
+ */
+export function pdfOutputScale(width: number, height: number, pixelRatio: number): number {
+	if (width <= 0 || height <= 0) return pixelRatio;
+	return Math.min(pixelRatio, Math.sqrt(MAX_CANVAS_PIXELS / (width * height)), MAX_CANVAS_SIDE / width, MAX_CANVAS_SIDE / height);
+}
+const PADDING = 12;
 const MAX_SCALE = 2;
+/** How long a zoom settles before pages redraw at the new scale; until then the last drawing stretches. */
+const REDRAW_DELAY_MS = 150;
 /** The largest PDF read into memory for preview. */
 const MAX_PDF_BYTES = 100 * 1024 * 1024;
 
@@ -17,6 +34,28 @@ class PdfTooLargeError extends Error {
 	constructor(readonly size: number) {
 		super("PDF too large to preview");
 	}
+}
+
+/**
+ * The scroll offset that keeps a point of the page stack under the anchor as
+ * the pages resize from before to after. Pages scale but the gaps between
+ * them do not, so the point keeps its page and its relative place within it.
+ */
+export function anchoredPdfScrollTop(scrollTop: number, anchorY: number, before: readonly number[], after: readonly number[], gap = PAGE_GAP, padding = PADDING): number {
+	const y = scrollTop + anchorY - padding;
+	let top = 0;
+	let nextTop = 0;
+	let page = 0;
+	while (page < before.length - 1 && y >= top + before[page] + gap) {
+		top += before[page] + gap;
+		nextTop += after[page] + gap;
+		page += 1;
+	}
+	const height = before[page] ?? 0;
+	// Within the page it scales with the page; in the gap below it, it does not.
+	const within = Math.min(y - top, height);
+	const scaled = height > 0 ? within * (after[page] ?? 0) / height : within;
+	return nextTop + scaled + (y - top - within) + padding - anchorY;
 }
 
 let pdfjsModule: Promise<Pdfjs> | null = null;
@@ -32,13 +71,16 @@ function loadPdfjs(): Promise<Pdfjs> {
 
 /**
  * A PDF's pages, fit to the pane width, with a text layer over each page so
- * its text can be selected. Pages draw as they near the viewport and release
+ * its text can be selected. In the artifact viewer the zoom multiplies that
+ * fit, anchored at the pinch point. Pages draw as they near the viewport and release
  * their drawing once they are far from it. A file over MAX_PDF_BYTES is not read.
  * A cloud file is cross-origin to the renderer, so its bytes are read through
  * the main process.
  */
-export function PdfPreview({ cloud = false, firstPageOnly = false, load, onError, path, src }: {
+export function PdfPreview({ cloud = false, cover = false, firstPageOnly = false, load, onError, path, src }: {
 	cloud?: boolean;
+	/** A tiny tile: the first page fills the box edge to edge and is cropped, with no padding, backdrop or loading text. */
+	cover?: boolean;
 	firstPageOnly?: boolean;
 	/** Reads the document's bytes itself (a cloud attachment); src then only keys it. */
 	load?: () => Promise<Uint8Array>;
@@ -49,12 +91,35 @@ export function PdfPreview({ cloud = false, firstPageOnly = false, load, onError
 	const { t } = useTranslation();
 	const [loaded, setLoaded] = useState<{ pdf: PDFDocumentProxy; pdfjs: Pdfjs; sizes: PageSize[] } | null>(null);
 	const [width, setWidth] = useState(0);
+	const [height, setHeight] = useState(0);
 	const [tooLarge, setTooLarge] = useState<number | null>(null);
 	const scrollRef = useRef<HTMLDivElement>(null);
 	const onErrorRef = useRef(onError);
 	onErrorRef.current = onError;
 	const loadRef = useRef(load);
 	loadRef.current = load;
+	const { controller: zoomController, zoom } = useArtifactZoomTarget(!firstPageOnly);
+	const zoomRef = useRef(zoom);
+
+	// Keeps the point under the pinch (or the pane's center) in place as the pages resize.
+	useLayoutEffect(() => {
+		const previous = zoomRef.current;
+		zoomRef.current = zoom;
+		const element = scrollRef.current;
+		const anchor = zoomController?.takeAnchor();
+		if (!element || previous === zoom) return;
+		const rect = element.getBoundingClientRect();
+		const ax = anchor ? anchor.clientX - rect.left : element.clientWidth / 2;
+		const ay = anchor ? anchor.clientY - rect.top : element.clientHeight / 2;
+		const ratio = zoom / previous;
+		element.scrollLeft = (element.scrollLeft + ax - PADDING) * ratio + PADDING - ax;
+		// Matches the page heights PdfPage lays out, at the old and new zoom.
+		const heights = (level: number) => loaded && width > 0 ? loaded.sizes.map((size) => Math.floor(size.height * (Math.min(width / size.width, MAX_SCALE) * level))) : [];
+		const before = heights(previous);
+		element.scrollTop = before.length > 0
+			? anchoredPdfScrollTop(element.scrollTop, ay, before, heights(zoom))
+			: (element.scrollTop + ay - PADDING) * ratio + PADDING - ay;
+	}, [loaded, width, zoom, zoomController]);
 
 	useEffect(() => {
 		let cancelled = false;
@@ -68,7 +133,7 @@ export function PdfPreview({ cloud = false, firstPageOnly = false, load, onError
 			if (cancelled) return;
 			loadingTask = pdfjs.getDocument({ data });
 			const pdf = await loadingTask.promise;
-			const sizes = await Promise.all(Array.from({ length: firstPageOnly ? Math.min(pdf.numPages, 1) : pdf.numPages }, async (_, index) => {
+			const sizes = await Promise.all(Array.from({ length: firstPageOnly || cover ? Math.min(pdf.numPages, 1) : pdf.numPages }, async (_, index) => {
 				const { width, height } = (await pdf.getPage(index + 1)).getViewport({ scale: 1 });
 				return { width, height };
 			}));
@@ -82,7 +147,7 @@ export function PdfPreview({ cloud = false, firstPageOnly = false, load, onError
 			cancelled = true;
 			void loadingTask?.destroy();
 		};
-	}, [cloud, firstPageOnly, src]);
+	}, [cloud, cover, firstPageOnly, src]);
 
 	useEffect(() => {
 		const element = scrollRef.current;
@@ -92,7 +157,10 @@ export function PdfPreview({ cloud = false, firstPageOnly = false, load, onError
 		const observer = new ResizeObserver(([entry]) => {
 			if (timer !== null) window.clearTimeout(timer);
 			// A drag-resize settles before the pages redraw at the new width.
-			timer = window.setTimeout(() => setWidth(Math.floor(entry.contentRect.width)), measured ? 120 : 0);
+			timer = window.setTimeout(() => {
+				setWidth(Math.floor(entry.contentRect.width));
+				setHeight(Math.floor(entry.contentRect.height));
+			}, measured ? 120 : 0);
 			measured = true;
 		});
 		observer.observe(element);
@@ -102,15 +170,28 @@ export function PdfPreview({ cloud = false, firstPageOnly = false, load, onError
 		};
 	}, []);
 
+	if (cover) {
+		if (tooLarge !== null) return null;
+		const page = loaded?.sizes[0];
+		return (
+			// Centered both ways, so a page wider or taller than the box crops evenly; a portrait page shows its top.
+			<div aria-label={path} className="flex min-h-0 min-w-0 flex-1 items-start justify-center overflow-hidden" ref={scrollRef} role="document">
+				{loaded && page && width > 0 && height > 0 ? (
+					<PdfPage pageNumber={1} pdf={loaded.pdf} pdfjs={loaded.pdfjs} root={scrollRef} scale={Math.max(width / page.width, height / page.height)} size={page} />
+				) : null}
+			</div>
+		);
+	}
 	if (tooLarge !== null) return <PanelMessage>{t("files.explorer.tooLarge", { size: formatBytes(tooLarge) })}</PanelMessage>;
 	return (
-		<div aria-label={path} className="board-scrollbar min-h-0 min-w-0 flex-1 overflow-auto bg-surface p-3" ref={scrollRef} role="document">
+		<div aria-label={path} className="board-scrollbar min-h-0 min-w-0 flex-1 overflow-auto overscroll-contain bg-surface p-3" ref={scrollRef} role="document">
 			{!loaded ? (
 				<PanelMessage>{t("files.loading")}</PanelMessage>
 			) : width > 0 ? (
-				<div className="flex flex-col items-center" data-selection-feedback="" style={{ gap: PAGE_GAP }}>
+				// w-max keeps pages wider than the pane scrollable from their left edge.
+				<div className="mx-auto flex w-max min-w-full flex-col items-center" data-selection-feedback="" style={{ gap: PAGE_GAP }}>
 					{loaded.sizes.map((size, index) => (
-						<PdfPage key={index} pageNumber={index + 1} pdf={loaded.pdf} pdfjs={loaded.pdfjs} root={scrollRef} scale={Math.min(width / size.width, MAX_SCALE)} size={size} />
+						<PdfPage key={index} pageNumber={index + 1} pdf={loaded.pdf} pdfjs={loaded.pdfjs} root={scrollRef} scale={Math.min(width / size.width, MAX_SCALE) * zoom} size={size} />
 					))}
 				</div>
 			) : null}
@@ -142,6 +223,13 @@ function PdfPage({ pageNumber, pdf, pdfjs, root, scale, size }: {
 	const textRef = useRef<HTMLDivElement>(null);
 	const [near, setNear] = useState(false);
 	const drawnRef = useRef(false);
+	// The page resizes with every zoom step; it redraws once the zoom settles.
+	const [drawScale, setDrawScale] = useState(scale);
+	useEffect(() => {
+		if (scale === drawScale) return;
+		const timer = window.setTimeout(() => setDrawScale(scale), drawnRef.current ? REDRAW_DELAY_MS : 0);
+		return () => window.clearTimeout(timer);
+	}, [drawScale, scale]);
 
 	useEffect(() => {
 		const page = pageRef.current;
@@ -194,14 +282,22 @@ function PdfPage({ pageNumber, pdf, pdfjs, root, scale, size }: {
 		void (async () => {
 			const page = await pdf.getPage(pageNumber);
 			if (cancelled) return;
+			const viewport = page.getViewport({ scale: drawScale });
+			// A deep zoom draws at a capped resolution; the canvas's CSS size stretches it to the page.
+			const ratio = pdfOutputScale(viewport.width, viewport.height, window.devicePixelRatio || 1);
+			// A redraw paints offscreen and swaps in one step, so a zoomed page never blanks.
+			const target = drawnRef.current ? document.createElement("canvas") : canvas;
+			target.width = Math.floor(viewport.width * ratio);
+			target.height = Math.floor(viewport.height * ratio);
 			drawnRef.current = true;
-			const viewport = page.getViewport({ scale });
-			const ratio = window.devicePixelRatio || 1;
-			canvas.width = Math.floor(viewport.width * ratio);
-			canvas.height = Math.floor(viewport.height * ratio);
-			renderTask = page.render({ canvas, viewport, transform: ratio === 1 ? undefined : [ratio, 0, 0, ratio, 0, 0] });
+			renderTask = page.render({ canvas: target, viewport, transform: ratio === 1 ? undefined : [ratio, 0, 0, ratio, 0, 0] });
 			await renderTask.promise;
 			if (cancelled) return;
+			if (target !== canvas) {
+				canvas.width = target.width;
+				canvas.height = target.height;
+				canvas.getContext("2d")?.drawImage(target, 0, 0);
+			}
 			text.replaceChildren();
 			textLayer = new pdfjs.TextLayer({ container: text, textContentSource: page.streamTextContent(), viewport });
 			await textLayer.render();
@@ -216,7 +312,7 @@ function PdfPage({ pageNumber, pdf, pdfjs, root, scale, size }: {
 			renderTask?.cancel();
 			textLayer?.cancel();
 		};
-	}, [near, pageNumber, pdf, pdfjs, scale]);
+	}, [drawScale, near, pageNumber, pdf, pdfjs]);
 
 	const width = Math.floor(size.width * scale);
 	const height = Math.floor(size.height * scale);

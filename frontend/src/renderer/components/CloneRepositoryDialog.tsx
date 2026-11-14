@@ -1,9 +1,11 @@
 import * as Dialog from "@radix-ui/react-dialog";
-import { ChevronLeft, Folder, Link2, LoaderCircle } from "lucide-react";
-import { AnimatePresence, motion } from "motion/react";
+import { ChevronLeft, Folder, Link2, LoaderCircle } from "@/components/app-icons";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../api/schema";
+import type { CloneProgress } from "../hooks/usePreparedClone";
+import type { MessageKey } from "../i18n/messages";
 import { apiErrorMessage } from "../lib/api-client";
 import { aoBridge } from "../lib/bridge";
 import { isMacPlatform, isWindowsPlatform } from "../lib/platform";
@@ -47,6 +49,7 @@ export default function CloneRepositoryDialog({
 	onUseExisting,
 	onCancel,
 	activity = null,
+	progress = null,
 	onError,
 	onChooseRemoteDestination,
 	open,
@@ -69,6 +72,8 @@ export default function CloneRepositoryDialog({
 	onUseExisting: (path: string) => void;
 	onCancel: () => void;
 	activity?: "cloning" | "validating" | null;
+	/** The git step the running clone last reported. */
+	progress?: CloneProgress | null;
 	onError?: (message: string) => void;
 	onChooseRemoteDestination?: () => void;
 	open: boolean;
@@ -304,7 +309,7 @@ export default function CloneRepositoryDialog({
 					<div className="relative flex shrink-0 items-center gap-3 px-4 pt-3">
 						<Button
 							type="button"
-							variant="outline"
+							variant="secondary"
 							size="icon"
 							aria-label={t("createProject.cloneBack")}
 							disabled={disabled || choosingDestination}
@@ -428,13 +433,13 @@ export default function CloneRepositoryDialog({
 								{currentCheck?.kind === "error" ? (
 									<div role="alert" className="space-y-2 text-[12px] text-destructive">
 										<p>{currentCheck.message}</p>
-										<Button type="button" variant="outline" disabled={disabled} onClick={() => setCheckAttempt((attempt) => attempt + 1)}>{t("createProject.retry")}</Button>
+										<Button type="button" variant="secondary" disabled={disabled} onClick={() => setCheckAttempt((attempt) => attempt + 1)}>{t("createProject.retry")}</Button>
 									</div>
 								) : null}
 								{destination?.exists ? (
 									<div className="space-y-2 text-[12px]" role="status">
 										<p>{t("createProject.cloneDestinationConflict", { path: destination.path })}</p>
-										{destination.canUseExisting ? <Button type="button" variant="outline" disabled={disabled} onClick={() => onUseExisting(destination.path)}>{t("createProject.cloneUseExisting")}</Button> : null}
+										{destination.canUseExisting ? <Button type="button" variant="secondary" disabled={disabled} onClick={() => onUseExisting(destination.path)}>{t("createProject.cloneUseExisting")}</Button> : null}
 									</div>
 								) : null}
 								{destinationError ? (
@@ -446,13 +451,10 @@ export default function CloneRepositoryDialog({
 
 						</div>
 
-						{activity ? <div className="space-y-1 px-4 pt-3 text-[12px] text-muted-foreground" role="status" aria-live="polite">
-							<p className="flex items-center gap-2"><LoaderCircle className="size-4 animate-spin" aria-hidden="true" />{t(activity === "cloning" ? "createProject.cloneInProgress" : "createProject.cloneVerifying", { seconds: elapsed })}</p>
-							{activity === "cloning" ? <p>{t("createProject.cloneSlowHint")}</p> : null}
-						</div> : null}
+						{activity ? <CloneActivityRow activity={activity} elapsed={elapsed} progress={progress} /> : null}
 						<div className="flex shrink-0 justify-end gap-2 px-4 pb-4 pt-3">
 							<div className="flex items-center justify-end gap-3">
-								{activity === "cloning" ? <Button type="button" variant="outline" onClick={onCancel}>{t("createProject.cloneCancel")}</Button> : null}
+								{activity === "cloning" ? <Button type="button" variant="secondary" onClick={onCancel}>{t("createProject.cloneCancel")}</Button> : null}
 								<Button type="submit" variant="primary" disabled={!canContinue}>
 									{cloning && !activity ? <><LoaderCircle className="size-4 animate-spin" aria-hidden="true" />{t("createProject.cloning")}</> : t(activity ? "createProject.cloneWorking" : error ? "createProject.retry" : "createProject.cloneContinue")}
 								</Button>
@@ -468,6 +470,63 @@ export default function CloneRepositoryDialog({
 				</Dialog.Content>
 			</Dialog.Portal>
 		</Dialog.Root>
+	);
+}
+
+const clonePhaseKeys: Record<CloneProgress["phase"], MessageKey> = {
+	enumerating_objects: "createProject.clonePhaseEnumeratingObjects",
+	counting_objects: "createProject.clonePhaseCountingObjects",
+	compressing_objects: "createProject.clonePhaseCompressingObjects",
+	receiving_objects: "createProject.clonePhaseReceivingObjects",
+	resolving_deltas: "createProject.clonePhaseResolvingDeltas",
+	updating_files: "createProject.clonePhaseUpdatingFiles",
+	filtering_content: "createProject.clonePhaseFilteringContent",
+	retrying: "createProject.clonePhaseRetrying",
+};
+
+/**
+ * One line naming the step the clone is on. A new step rises in as the last
+ * one drifts up and fades away; git's percent and the timer tick in place
+ * within a step.
+ */
+function CloneActivityRow({
+	activity,
+	elapsed,
+	progress,
+}: {
+	activity: "cloning" | "validating";
+	elapsed: number;
+	progress: CloneProgress | null;
+}) {
+	const { t } = useTranslation();
+	const reducedMotion = useReducedMotion();
+	const phase = activity === "cloning" ? progress?.phase : undefined;
+	const step = activity === "validating" ? "validating" : phase ? `${phase}:${progress?.attempt ?? 1}` : "cloning";
+	const percent = phase ? progress?.percent : null;
+	const label = activity === "validating"
+		? t("createProject.cloneVerifying", { seconds: elapsed })
+		: !phase
+			? t("createProject.cloneInProgress", { seconds: elapsed })
+			: percent == null
+				? t("createProject.cloneStep", { step: t(clonePhaseKeys[phase]), seconds: elapsed })
+				: t("createProject.cloneStepPercent", { step: t(clonePhaseKeys[phase]), percent, seconds: elapsed });
+	return (
+		<div className="flex items-center gap-2 px-4 pt-3 text-[12px] leading-5 text-muted-foreground" role="status" aria-live="polite">
+			<LoaderCircle className="size-4 shrink-0 animate-spin" aria-hidden="true" />
+			<span className="relative block h-5 min-w-0 flex-1 overflow-hidden">
+				<AnimatePresence initial={false}>
+					<motion.span
+						key={step}
+						className="chat-working-shimmer absolute inset-x-0 top-0 truncate tabular-nums"
+						initial={reducedMotion ? false : { opacity: 0, y: "100%" }}
+						animate={{ opacity: 1, y: 0, transition: { duration: reducedMotion ? 0 : 0.24, ease: "easeOut" } }}
+						exit={reducedMotion ? { opacity: 0, transition: { duration: 0 } } : { opacity: 0, y: "-100%", transition: { duration: 0.2, ease: "easeIn" } }}
+					>
+						{label}
+					</motion.span>
+				</AnimatePresence>
+			</span>
+		</div>
 	);
 }
 

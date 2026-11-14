@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 // mux.ts imports ./config, which reaches React Native's Flow-typed sources
 // through these two. Same preamble as lib/chat/eventCursor.test.ts.
@@ -9,7 +9,7 @@ vi.mock("expo-secure-store", () => ({
 	getItemAsync: vi.fn(), setItemAsync: vi.fn(), deleteItemAsync: vi.fn(),
 }));
 
-import { base64ToBytes, bytesToBase64 } from "./mux";
+import { base64ToBytes, bytesToBase64, MuxClient } from "./mux";
 
 /**
  * Every literal below was produced by Go's `base64.StdEncoding`, the daemon's
@@ -91,5 +91,74 @@ describe("bytesToBase64", () => {
 	it("round-trips arbitrary non-UTF8 bytes", () => {
 		const bytes = new Uint8Array([0x00, 0x1b, 0x5b, 0xff, 0xfe, 0x7f, 0x41]);
 		expect(base64ToBytes(bytesToBase64(bytes))).toEqual(bytes);
+	});
+});
+
+// A socket that, like a real one, takes frames only once open.
+class FakeWebSocket {
+	static CONNECTING = 0;
+	static OPEN = 1;
+	static CLOSED = 3;
+	static all: FakeWebSocket[] = [];
+	readyState = FakeWebSocket.CONNECTING;
+	sent: Record<string, unknown>[] = [];
+	onopen?: () => void;
+	onclose?: () => void;
+	onmessage?: (event: { data: string }) => void;
+	onerror?: () => void;
+	constructor(readonly url: string) { FakeWebSocket.all.push(this); }
+	send(data: string) {
+		if (this.readyState !== FakeWebSocket.OPEN) throw new Error("InvalidStateError: still connecting");
+		this.sent.push(JSON.parse(data) as Record<string, unknown>);
+	}
+	close() { this.readyState = FakeWebSocket.CLOSED; this.onclose?.(); }
+	accept() { this.readyState = FakeWebSocket.OPEN; this.onopen?.(); }
+	drop() { this.readyState = FakeWebSocket.CLOSED; this.onclose?.(); }
+}
+const cfg = { host: "192.168.1.20", httpPort: "3011", muxPort: "3011", password: "pw" };
+const opens = (socket: FakeWebSocket) => socket.sent.filter((frame) => frame.ch === "terminal" && frame.type === "open");
+
+// The daemon sizes a fresh attach from the open frame; with no size, a sole
+// viewer's attach starts at the kernel default and no resize comes back. Frames
+// sent before the socket opens are dropped, so the size has to ride the open.
+describe("MuxClient terminal open", () => {
+	afterEach(() => { FakeWebSocket.all = []; vi.unstubAllGlobals(); vi.useRealTimers(); });
+	const client = () => {
+		vi.stubGlobal("WebSocket", FakeWebSocket);
+		const mux = new MuxClient(cfg, {});
+		mux.connect();
+		return mux;
+	};
+
+	it("sends the grid with an open asked for while the socket is connecting", () => {
+		const mux = client();
+		mux.openTerminal("pty-1", "proj", { cols: 80, rows: 24 });
+		const [socket] = FakeWebSocket.all;
+		socket.accept();
+		expect(opens(socket)).toEqual([{ ch: "terminal", id: "pty-1", type: "open", projectId: "proj", role: "secondary", cols: 80, rows: 24 }]);
+	});
+
+	it("keeps a resize asked for while connecting", () => {
+		const mux = client();
+		mux.openTerminal("pty-1", "proj", { cols: 80, rows: 24 });
+		mux.resize("pty-1", 120, 40, "proj"); // dropped on the wire: not open yet
+		const [socket] = FakeWebSocket.all;
+		socket.accept();
+		expect(opens(socket)).toEqual([expect.objectContaining({ cols: 120, rows: 40 })]);
+	});
+
+	it("re-attaches at the latest grid after its own reconnect", () => {
+		vi.useFakeTimers();
+		const mux = client();
+		const [first] = FakeWebSocket.all;
+		first.accept();
+		mux.openTerminal("pty-1", "proj", { cols: 80, rows: 24 });
+		mux.resize("pty-1", 100, 30, "proj");
+		first.drop();
+		vi.advanceTimersByTime(1000);
+		const second = FakeWebSocket.all[1];
+		second.accept();
+		expect(opens(second)).toEqual([expect.objectContaining({ id: "pty-1", cols: 100, rows: 30 })]);
+		mux.disconnect();
 	});
 });

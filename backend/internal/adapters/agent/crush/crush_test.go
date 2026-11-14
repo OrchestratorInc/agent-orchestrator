@@ -515,7 +515,7 @@ func TestGetAgentHooksRefusesForeignSystemPromptFile(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for foreign system prompt file")
 	}
-	if !strings.Contains(err.Error(), "refusing to overwrite non-AO file") {
+	if !strings.Contains(err.Error(), "refusing to overwrite non-Orchestrator file") {
 		t.Fatalf("err = %v", err)
 	}
 }

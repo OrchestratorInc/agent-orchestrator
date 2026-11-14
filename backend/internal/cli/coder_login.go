@@ -36,7 +36,7 @@ func newCoderLoginCommand(ctx *commandContext) *cobra.Command {
 			if err != nil {
 				return usageError{fmt.Errorf("enter an absolute http or https Coder deployment URL without credentials, query or fragment")}
 			}
-			if err := ctx.deps.RunInteractiveCommand(cmd.Context(), binary, []string{"login", deployment.String()}, cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr()); err != nil {
+			if err := ctx.deps.RunInteractiveCommand(cmd.Context(), binary, "", []string{"login", deployment.String()}, cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr()); err != nil {
 				return fmt.Errorf("coder login failed: %w", err)
 			}
 			return nil

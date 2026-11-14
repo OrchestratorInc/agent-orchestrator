@@ -1,11 +1,12 @@
+import { apiErrorException } from "../lib/api-error-exception";
 import { RadioGroup } from "radix-ui";
-import { Check, Copy, XCircle } from "lucide-react";
+import { Check, Copy, XCircle } from "@/components/app-icons";
 import type { TFunction } from "i18next";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../api/schema";
 import type { MessageKey } from "../i18n";
-import { apiClient, apiErrorMessage } from "../lib/api-client";
+import { apiClient } from "../lib/api-client";
 import { aoBridge } from "../lib/bridge";
 import { cn } from "../lib/utils";
 import { Button } from "./ui/button";
@@ -59,7 +60,7 @@ export function isActiveInstallJob(job: InstallJob | undefined): boolean {
 // identity-sensitive adapters can perform their bounded validation probe.
 export async function checkRequirementsAgain(onRefetchRequirements: () => Promise<unknown> | void): Promise<void> {
 	const { error } = await apiClient.POST("/api/v1/agents/refresh");
-	if (error) throw new Error(apiErrorMessage(error, "Could not refresh agent inventory."));
+	if (error) throw apiErrorException(error, "Could not refresh agent inventory.");
 	await onRefetchRequirements();
 }
 
@@ -133,7 +134,7 @@ export function useInstallRunner(onSucceeded: () => void) {
 			const { data, error } = await apiClient.POST("/api/v1/system/install/{target}", {
 				params: { path: { target: nextTarget } },
 			});
-			if (error || !data) throw new Error(apiErrorMessage(error, "Could not start the install."));
+			if (error || !data) throw apiErrorException(error, "Could not start the install.");
 			setJob(data as InstallJobWithNotice);
 			if (isActiveInstallJob(data)) poll(nextTarget);
 			else if (data.status === "succeeded") onSucceededRef.current();
@@ -290,14 +291,14 @@ export function InstallDependencyDialog({
 					) : null}
 					<Button
 						type="button"
-						variant="footer"
+						variant="secondary"
 						onClick={() => void window.ao?.menu?.action("app.quit")}
 					>
 						{t("startup.quit")}
 					</Button>
 					<Button
 						type="button"
-						variant="footer-primary"
+						variant="primary"
 						disabled={isCheckingAgain || install.running}
 						onClick={() => void checkAgain()}
 					>
@@ -383,7 +384,7 @@ export function InstallAction({
 		<div className="flex flex-col gap-1.5">
 			<Button
 				type="button"
-				variant="footer-primary"
+				variant="primary"
 				className="self-start"
 				disabled={disabled}
 				onClick={onInstall}
@@ -429,7 +430,7 @@ function ManualCommand({ command, t }: { command: string; t: TFunction }) {
 			</code>
 			<Button
 				type="button"
-				variant="footer"
+				variant="secondary"
 				className="shrink-0"
 				aria-label={copied ? t("startup.commandCopied") : t("startup.copyCommand")}
 				onClick={copy}

@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { AlertTriangle, Loader2 } from "lucide-react";
+import { AlertTriangle, Loader2 } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
 import { useReviewerConversation, useReviewerConversationCommands, useReviewerConversationModels } from "../../hooks/useReviewerConversation";
 import { useHostConnection } from "../../hooks/useHostConnection";
@@ -8,7 +8,26 @@ import { sessionUiKey } from "../../lib/hosts";
 import { useSessionLinkNavigation } from "../../lib/use-session-link-navigation";
 import { ChatWorkspace } from "./ChatWorkspace";
 
-export function ReviewerChatSurface({ reviewId, workerSessionId, hostId, hideHeader = false }: { reviewId: string; workerSessionId: string; hostId?: string; hideHeader?: boolean }) {
+export function ReviewerChatSurface({
+	reviewId,
+	workerSessionId,
+	hostId,
+	hostUnreachable = false,
+	hideHeader = false,
+	onOpenShell,
+	openingShell,
+	shellError,
+}: {
+	reviewId: string;
+	workerSessionId: string;
+	hostId?: string;
+	hostUnreachable?: boolean;
+	hideHeader?: boolean;
+	/** Opens a shell in the worker's worktree: the stopped banner's other way on. */
+	onOpenShell?: () => void;
+	openingShell?: boolean;
+	shellError?: string;
+}) {
 	const { t } = useTranslation();
 	const { snapshot, isLoading, error, hasOlder, isLoadingOlder, loadOlder } = useReviewerConversation(reviewId, hostId);
 	const catalog = useReviewerConversationModels(reviewId, Boolean(snapshot && snapshot.controller.state !== "stopped"), hostId);
@@ -30,7 +49,7 @@ export function ReviewerChatSurface({ reviewId, workerSessionId, hostId, hideHea
 		return (
 			<Centered>
 				<AlertTriangle className="size-4 text-destructive" />
-				{error ?? t("shell.couldNotLoadSessions")}
+				{hostUnreachable && error ? t("remote.hostOffline") : error ?? t("shell.couldNotLoadSessions")}
 			</Centered>
 		);
 	return (
@@ -41,6 +60,9 @@ export function ReviewerChatSurface({ reviewId, workerSessionId, hostId, hideHea
 			assetBaseUrl={remoteBase}
 			remoteHostId={hostId}
 			snapshot={snapshot}
+			newWorkDisabled={hostUnreachable}
+			composerLockedPlaceholder={hostUnreachable ? t("remote.offlineCopy") : undefined}
+			savedCopy={hostUnreachable}
 			draftOwner={draftOwner}
 			onSessionLinkOpen={openSessionLink}
 			sessionTitle={t("terminal.reviewer")}
@@ -61,6 +83,9 @@ export function ReviewerChatSurface({ reviewId, workerSessionId, hostId, hideHea
 			onResumeAgent={() => commands.resumeAgent(workerSessionId)}
 			resumingAgent={commands.resumingAgent}
 			resumeError={commands.resumeError}
+			onOpenShell={hostUnreachable ? undefined : onOpenShell}
+			openingShell={openingShell}
+			shellError={shellError}
 		/>
 	);
 }

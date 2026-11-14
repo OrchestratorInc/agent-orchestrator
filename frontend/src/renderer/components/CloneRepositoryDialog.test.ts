@@ -357,6 +357,28 @@ describe("clone repository input", () => {
 		expect(screen.getByRole("button", { name: "Close clone repository dialog" })).toBeDisabled();
 	});
 
+	it("says the long-clone hint once and replaces the status with each streamed git step", () => {
+		const { props, view } = renderCloneDialog({ disabled: true, cloning: true, activity: "cloning" });
+		expect(screen.getAllByText(/Large repositories can take/)).toHaveLength(1);
+
+		view.rerender(React.createElement(CloneRepositoryDialog, { ...props, progress: { phase: "counting_objects", attempt: 1 } }));
+		expect(screen.getByRole("status")).toHaveTextContent("remote: Counting objects · 0s");
+		view.rerender(React.createElement(CloneRepositoryDialog, { ...props, progress: { phase: "receiving_objects", attempt: 1 } }));
+		expect(screen.getByRole("status")).toHaveTextContent("Receiving objects · 0s");
+		view.rerender(React.createElement(CloneRepositoryDialog, { ...props, progress: { phase: "receiving_objects", attempt: 1, percent: 45 } }));
+		expect(screen.getByRole("status")).toHaveTextContent("Receiving objects · 45% · 0s");
+		// The percent ticks in place: no second line slides in for it.
+		const lines = screen.getByRole("status").querySelectorAll(".chat-working-shimmer").length;
+		view.rerender(React.createElement(CloneRepositoryDialog, { ...props, progress: { phase: "receiving_objects", attempt: 1, percent: 46 } }));
+		expect(screen.getByRole("status").querySelectorAll(".chat-working-shimmer")).toHaveLength(lines);
+		expect(screen.getByRole("status")).toHaveTextContent("Receiving objects · 46% · 0s");
+		view.rerender(React.createElement(CloneRepositoryDialog, { ...props, progress: { phase: "retrying", attempt: 2 } }));
+		expect(screen.getByRole("status")).toHaveTextContent("Connection dropped, retrying · 0s");
+
+		view.rerender(React.createElement(CloneRepositoryDialog, { ...props, cloning: false, activity: "validating", progress: { phase: "resolving_deltas", attempt: 1 } }));
+		expect(screen.getByRole("status")).toHaveTextContent("Checking checkout · 0s");
+	});
+
 	it("discards a destination picker result after the dialog closes", async () => {
 		let resolvePicker: ((path: string) => void) | undefined;
 		window.ao!.app.chooseDirectory = vi.fn(() => new Promise<string>((resolve) => {

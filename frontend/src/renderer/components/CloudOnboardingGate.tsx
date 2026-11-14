@@ -8,6 +8,7 @@ import { cloudMeQueryKey } from "../lib/cloud-offering";
 import { cloudProjectsQueryKey, cloudSessionsQueryKey } from "../hooks/useWorkspaceQuery";
 import { providerConnectionsQueryKey } from "../hooks/useProviderConnections";
 import { CloudLocalSignInDialog } from "./CloudLocalSignInDialog";
+import { clearCloudChatCaches } from "../lib/cloud-chat-history";
 
 // Mounted once at the app root. Clears cached cloud data on sign-out and renders
 // the local sign-in dialog. Signing in never prompts for a harness login: that
@@ -28,6 +29,10 @@ export function CloudOnboardingGate() {
 		queryClient.removeQueries({ queryKey: cloudMeQueryKey });
 		queryClient.removeQueries({ queryKey: cloudBillingQueryKey });
 		queryClient.removeQueries({ queryKey: providerConnectionsQueryKey });
+		// A chat's events (kept an hour after it closes) and what they hold of
+		// its history: the next account must read its own, which the control
+		// plane may serve differently (a guest gets Setup output stripped).
+		clearCloudChatCaches(queryClient);
 	}, [status, queryClient]);
 
 	if (!cloudEnabled) return null;

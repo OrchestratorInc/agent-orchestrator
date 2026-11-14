@@ -17,7 +17,7 @@ func TestCoderLoginPromptsForDeploymentAndPreservesNativeInput(t *testing.T) {
 	var gotInput string
 	deps := Deps{
 		LookPath: func(string) (string, error) { t.Fatal("explicit binary must be used"); return "", nil },
-		RunInteractiveCommand: func(_ context.Context, name string, args []string, in io.Reader, _, _ io.Writer) error {
+		RunInteractiveCommand: func(_ context.Context, name, _ string, args []string, in io.Reader, _, _ io.Writer) error {
 			gotName, gotArgs = name, args
 			data, err := io.ReadAll(in)
 			gotInput = string(data)
@@ -49,7 +49,7 @@ func TestCoderLoginRejectsInvalidDeploymentBeforeNativeLaunch(t *testing.T) {
 			called := false
 			deps := Deps{
 				LookPath: func(string) (string, error) { return "/bin/coder", nil },
-				RunInteractiveCommand: func(context.Context, string, []string, io.Reader, io.Writer, io.Writer) error {
+				RunInteractiveCommand: func(context.Context, string, string, []string, io.Reader, io.Writer, io.Writer) error {
 					called = true
 					return nil
 				},
@@ -74,7 +74,7 @@ func TestCoderLoginPropagatesNativeFailure(t *testing.T) {
 	sentinel := errors.New("native login failed")
 	deps := Deps{
 		LookPath: func(string) (string, error) { return "/bin/coder", nil },
-		RunInteractiveCommand: func(context.Context, string, []string, io.Reader, io.Writer, io.Writer) error {
+		RunInteractiveCommand: func(context.Context, string, string, []string, io.Reader, io.Writer, io.Writer) error {
 			return sentinel
 		},
 	}

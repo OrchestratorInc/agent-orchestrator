@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -770,10 +771,79 @@ func TestCoordinatorCollectsCodexUsageFromFilesystemEvents(t *testing.T) {
 
 	waitForWatchableSource(ctx, t, store, transcript)
 	appendJSONLRecord(t, transcript, codexTokenLine("2026-07-28T10:00:00Z", 100, 60, 0, 20, 5))
-	waitForTokenAggregate(t, store, session.ID, 120)
+	time.Sleep(100 * time.Millisecond)
+	assertTokenAggregate(t, store, session.ID, 0)
+	waitForFlushedTokenAggregate(t, coordinator, store, session.ID, 120)
 
 	appendJSONLRecord(t, transcript, codexTokenLine("2026-07-28T10:01:00Z", 150, 90, 0, 30, 8))
-	waitForTokenAggregate(t, store, session.ID, 180)
+	waitForFlushedTokenAggregate(t, coordinator, store, session.ID, 180)
+}
+
+func TestFlushBeforeDeleteKeepsUnreadUsageInAccountTotals(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	now := time.Now().UTC()
+	store, session := seedUsageTestSession(
+		t, t.TempDir(), "usage", domain.HarnessCodex, domain.ActivityIdle, "native-delete", now,
+	)
+	base := t.TempDir()
+	roots := usagesvc.SourceRoots{
+		CodexSessions: filepath.Join(base, "sessions"),
+		CodexArchived: filepath.Join(base, "archived_sessions"),
+	}
+	transcript := filepath.Join(roots.CodexSessions, "2026", "07", "28", "rollout-native-delete.jsonl")
+	mustNoError(t, os.MkdirAll(filepath.Dir(transcript), 0o700))
+	initial := string(codexSessionMetaLine(t, "native-delete", "")) + "\n" +
+		`{"type":"turn_context","payload":{"model":"gpt-5.6"}}` + "\n"
+	mustNoError(t, os.WriteFile(transcript, []byte(initial), 0o600))
+
+	watcher, err := NewTranscriptWatcher(ctx, []string{roots.CodexSessions, roots.CodexArchived})
+	mustNoError(t, err)
+	var coordinator *Coordinator
+	collector := usagesvc.NewCollector(store, roots, func(bool) { coordinator.NotifyInventoryChanged() })
+	coordinator = NewCoordinator(store, NewIngestor(store, IngestorConfig{ChunkBytes: 512}), watcher, CoordinatorConfig{
+		Workers:    1,
+		Initialize: collector.BackfillActive,
+	})
+	done := coordinator.Start(ctx)
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Error("usage coordinator did not stop")
+		}
+	})
+
+	waitForWatchableSource(ctx, t, store, transcript)
+	for n := int64(1); n <= 20; n++ {
+		appendJSONLRecord(t, transcript, codexTokenLine(fmt.Sprintf("2026-07-28T10:%02d:00Z", n), 100*n, 60*n, 0, 20*n, 5*n))
+	}
+	rec, ok, err := store.GetSession(ctx, session.ID)
+	mustNoError(t, err)
+	if !ok {
+		t.Fatal("session missing before finalization")
+	}
+	mustNoError(t, collector.FinalizeSession(ctx, rec.ID, rec.Metadata.RuntimeLaunchID, rec.Revision))
+	rec.IsTerminated = true
+	mustNoError(t, store.UpdateSession(ctx, rec))
+
+	flushCtx, flushCancel := context.WithTimeout(ctx, 5*time.Second)
+	coordinator.Flush(flushCtx)
+	flushCancel()
+	deleted, err := store.DeleteTerminatedSession(ctx, rec.ID)
+	if err != nil || !deleted {
+		t.Fatalf("delete session = %v, %v", deleted, err)
+	}
+	rows, err := store.AgentAccountUsageSince(ctx, time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC))
+	mustNoError(t, err)
+	var total int64
+	for _, row := range rows {
+		total += row.InputTokens + row.OutputTokens
+	}
+	if total != 2400 {
+		t.Fatalf("account usage after delete = %d tokens, want 2400; rows=%+v", total, rows)
+	}
 }
 
 func TestIngestorPersistsAppendOnlyUsageAcrossRestartAndFinalization(t *testing.T) {
@@ -1082,6 +1152,73 @@ func TestIngestorStopsRetryingConflictingNativeEvent(t *testing.T) {
 	}
 }
 
+func TestIngestorConflictedSourceLeavesSettledBindingAlone(t *testing.T) {
+	ctx := context.Background()
+	now := time.Unix(1700000000, 0).UTC()
+	store, session := seedUsageTestSession(
+		t, t.TempDir(), "usage", domain.HarnessClaudeCode, domain.ActivityExited, "", now,
+	)
+	binding := seedUsageTestBinding(t, store, session, "claude-root", domain.UsageBindingFinalizing, now)
+	path := filepath.Join(t.TempDir(), "claude-root.jsonl")
+	line := `{"type":"assistant","uuid":"native-message","message":{"id":"msg-1","model":"claude-x","stop_reason":"end_turn","usage":{"input_tokens":8,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":2}}}` + "\n"
+	mustNoError(t, os.WriteFile(path, []byte(line), 0o600))
+	identity, err := usagesvc.SourceIdentity(ctx, path)
+	mustNoError(t, err)
+	source, err := store.InsertUsageSource(ctx, domain.UsageSourceRecord{
+		BindingID:       binding.ID,
+		Kind:            domain.UsageSourceClaudeMain,
+		NativeSessionID: "claude-root",
+		ArtifactPath:    path,
+		FileIdentity:    identity,
+		State:           domain.UsageSourcePending,
+		UpdatedAt:       now,
+	})
+	mustNoError(t, err)
+	contextSource, ok, err := store.GetUsageSourceForIngestion(ctx, source.ID)
+	if err != nil || !ok {
+		t.Fatalf("source ok=%v err=%v", ok, err)
+	}
+	parsed := parseRecords(contextSource, []jsonlRecord{{Data: []byte(line), Offset: 0}}, int64(len(line)), now)
+	mustNoError(t, parsed.err)
+	conflict := parsed.Events[0]
+	(*conflict.Tokens.OutputTokens)++
+	mustNoError(t, store.ApplyUsageChunk(ctx, source.ID, 0, source.UpdatedAt, domain.SourceCursorState{
+		ByteOffset: 0,
+		State:      domain.UsageSourcePending,
+		UpdatedAt:  now,
+	}, []domain.ModelUsageEvent{conflict}))
+
+	ingestor := NewIngestor(store, IngestorConfig{Clock: func() time.Time { return now }})
+	result, err := ingestor.Ingest(ctx, source.ID)
+	mustNoError(t, err)
+	if result.RetryAt != nil {
+		t.Fatalf("conflict scheduled a retry at %s", result.RetryAt)
+	}
+	bindings, err := store.ListUsageBindingsForSession(ctx, session.ID)
+	if err != nil || len(bindings) != 1 || bindings[0].State != domain.UsageBindingPartial {
+		t.Fatalf("bindings=%+v err=%v", bindings, err)
+	}
+
+	// The conflict left the cursor at 0 with the whole transcript unread. Later
+	// passes must not flip the settled binding back through finalizing.
+	seq, err := store.LatestSeq(ctx)
+	mustNoError(t, err)
+	for range 3 {
+		now = now.Add(defaultFinalizationWait + time.Second)
+		ingestor = NewIngestor(store, IngestorConfig{Clock: func() time.Time { return now }})
+		result, err := ingestor.Ingest(ctx, source.ID)
+		mustNoError(t, err)
+		if result.RetryAt != nil {
+			t.Fatalf("settled conflict scheduled a retry at %s", result.RetryAt)
+		}
+	}
+	after, err := store.LatestSeq(ctx)
+	mustNoError(t, err)
+	if after != seq {
+		t.Fatalf("change_log advanced from %d to %d on an unchanged source", seq, after)
+	}
+}
+
 func TestRetryDelayUsesBoundedBackoff(t *testing.T) {
 	tests := []struct {
 		failure int64
@@ -1152,7 +1289,6 @@ func (c *fenceAdmissionContext) Err() error {
 
 func testPricingSnapshot(t *testing.T, openAIInputRate string) *pricing.Snapshot {
 	t.Helper()
-	root := t.TempDir()
 	upstream := []byte(`{
   "anthropic/claude-test": {
     "litellm_provider": "anthropic",
@@ -1174,13 +1310,7 @@ func testPricingSnapshot(t *testing.T, openAIInputRate string) *pricing.Snapshot
     "output_cost_per_token": 0
   }
 }`)
-	_, err := catalogsync.Sync(root, upstream, catalogsync.Source{
-		Repository: "BerriAI/litellm",
-		Revision:   "0123456789abcdef0123456789abcdef01234567",
-		Path:       "model_prices_and_context_window.json",
-	})
-	mustNoError(t, err)
-	catalog, err := pricing.NewCache(root).Load(t.Context())
+	catalog, err := catalogsync.Catalog(upstream)
 	mustNoError(t, err)
 	return catalog.Snapshot()
 }
@@ -1255,8 +1385,18 @@ func rewriteUsageFixture(path, content string) error {
 
 func waitForTokenAggregate(t *testing.T, store *sqlite.Store, sessionID domain.SessionID, total int64) {
 	t.Helper()
+	waitForFlushedTokenAggregate(t, nil, store, sessionID, total)
+}
+
+func waitForFlushedTokenAggregate(t *testing.T, coordinator *Coordinator, store *sqlite.Store, sessionID domain.SessionID, total int64) {
+	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
+		if coordinator != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			coordinator.Flush(ctx)
+			cancel()
+		}
 		aggregates, err := store.ListUsageModelAggregates(context.Background(), sessionID)
 		mustNoError(t, err)
 		var got int64
@@ -1269,4 +1409,100 @@ func waitForTokenAggregate(t *testing.T, store *sqlite.Store, sessionID domain.S
 		time.Sleep(10 * time.Millisecond)
 	}
 	assertTokenAggregate(t, store, sessionID, total)
+}
+
+func TestIngestorCorrectedConflictCanRecover(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		prefix      bool
+		appendEvent bool
+	}{
+		{name: "same size"},
+		{name: "appended event", appendEvent: true},
+		{name: "committed prefix", prefix: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			now := time.Unix(1700000000, 0).UTC()
+			store, session := seedUsageTestSession(t, t.TempDir(), "review", domain.HarnessClaudeCode, domain.ActivityExited, "", now)
+			binding := seedUsageTestBinding(t, store, session, "claude-root", domain.UsageBindingFinalizing, now)
+			path := filepath.Join(t.TempDir(), "claude-root.jsonl")
+			line := func(id string, output int) string {
+				return fmt.Sprintf(`{"type":"assistant","uuid":"%s","message":{"id":"%s","model":"claude-x","stop_reason":"end_turn","usage":{"input_tokens":8,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":%d}}}`+"\n", id, id, output)
+			}
+			prefix := ""
+			if test.prefix {
+				prefix = line("msg-0", 1)
+			}
+			content := prefix + line("msg-1", 2)
+			mustNoError(t, os.WriteFile(path, []byte(content), 0o600))
+			identity, err := usagesvc.SourceIdentity(ctx, path)
+			mustNoError(t, err)
+			source, err := store.InsertUsageSource(ctx, domain.UsageSourceRecord{
+				BindingID: binding.ID, Kind: domain.UsageSourceClaudeMain, NativeSessionID: "claude-root",
+				ArtifactPath: path, FileIdentity: identity, State: domain.UsageSourcePending, UpdatedAt: now,
+			})
+			mustNoError(t, err)
+			// A bounded first chunk leaves a durable checkpoint before the conflict.
+			ingestor := NewIngestor(store, IngestorConfig{Clock: func() time.Time { return now }, ChunkBytes: int64(len(prefix))})
+			if test.prefix {
+				_, err = ingestor.Ingest(ctx, source.ID)
+				mustNoError(t, err)
+			}
+			sourceCtx, ok, err := store.GetUsageSourceForIngestion(ctx, source.ID)
+			mustNoError(t, err)
+			if !ok {
+				t.Fatal("missing source")
+			}
+			storedContent := line("msg-1", 3)
+			parsed := parseRecords(sourceCtx, []jsonlRecord{{Data: []byte(storedContent), Offset: int64(len(prefix))}}, int64(len(content)), now)
+			mustNoError(t, parsed.err)
+			// Seed the already-recorded event without moving the source cursor.
+			cursor := cursorFromSource(sourceCtx.Source, sourceCtx.Source.ByteOffset, now)
+			mustNoError(t, store.ApplyUsageChunk(ctx, source.ID, sourceCtx.Source.ByteOffset, sourceCtx.Source.UpdatedAt, cursor, parsed.Events))
+			_, err = ingestor.Ingest(ctx, source.ID)
+			mustNoError(t, err)
+			settled, ok, err := store.GetUsageSourceForIngestion(ctx, source.ID)
+			mustNoError(t, err)
+			if !ok || settled.Source.State != domain.UsageSourceComplete || settled.Source.LastErrorCode != domain.UsageErrorSourceEventConflict || settled.BindingState != domain.UsageBindingPartial {
+				t.Fatalf("did not settle transaction conflict: %+v", settled)
+			}
+			// Correct the conflict on the same inode, with and without changing size.
+			corrected := prefix + storedContent
+			wantTokens := int64(11)
+			if test.prefix {
+				wantTokens += 9
+			}
+			if test.appendEvent {
+				corrected += line("msg-2", 5)
+				wantTokens += 13
+			}
+			info, err := os.Stat(path)
+			mustNoError(t, err)
+			mustNoError(t, os.WriteFile(path, []byte(corrected), 0o600))
+			modified := info.ModTime().Add(time.Second)
+			mustNoError(t, os.Chtimes(path, modified, modified))
+			afterIdentity, err := usagesvc.SourceIdentity(ctx, path)
+			mustNoError(t, err)
+			if afterIdentity != identity {
+				t.Fatal("fixture changed inode")
+			}
+			now = now.Add(defaultFinalizationWait + time.Second)
+			// Recovery must use durable state, even after an ingestor restart.
+			ingestor = NewIngestor(store, IngestorConfig{Clock: func() time.Time { return now }})
+			_, err = ingestor.Ingest(ctx, source.ID)
+			mustNoError(t, err)
+			got, ok, err := store.GetUsageSourceForIngestion(ctx, source.ID)
+			mustNoError(t, err)
+			if !ok || got.Source.ByteOffset != int64(len(corrected)) {
+				t.Fatalf("corrected transcript ignored: offset=%d want=%d", got.Source.ByteOffset, len(corrected))
+			}
+			state, err := decodeParserState(got.Source)
+			mustNoError(t, err)
+			if state.Integrity.ConflictSnapshot != nil {
+				t.Fatal("successful ingestion retained conflict snapshot")
+			}
+			assertTokenAggregate(t, store, session.ID, wantTokens)
+		})
+	}
 }
