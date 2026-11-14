@@ -109,7 +109,7 @@ describe("selection creation activation", () => {
 		let request!: Promise<{ id: string }>;
 		act(() => { request = chat.create(excerpt, false, "creation", { shouldActivate: () => true }); });
 		await waitFor(() => expect(capture).toHaveBeenCalledOnce());
-		act(() => chat.show("A"));
+		await act(async () => chat.show("A"));
 		await waitFor(() => expect(screen.getByRole("combobox", { name: "Side chat question" })).toHaveFocus());
 		const elsewhere = screen.getByRole("textbox", { name: "Elsewhere" });
 		act(() => elsewhere.focus());

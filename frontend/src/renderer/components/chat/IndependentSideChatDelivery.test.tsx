@@ -417,7 +417,7 @@ describe("side panel navigation and recovery", () => {
 			if (options.params.query?.before) return new Promise((resolve) => pending.set(id, resolve));
 			return Promise.resolve(page(id));
 		});
-		render(<SidePanelHarness />);
+		await act(async () => { render(<SidePanelHarness />); });
 		await screen.findByRole("button", { name: "Load earlier messages" });
 		await userEvent.click(screen.getByRole("button", { name: "Load earlier messages" }));
 		await waitFor(() => expect(pending.has("side")).toBe(true));
