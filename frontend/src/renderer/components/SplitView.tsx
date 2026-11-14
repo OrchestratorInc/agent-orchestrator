@@ -2,7 +2,6 @@ import {
 	Fragment,
 	useCallback,
 	useEffect,
-	useLayoutEffect,
 	useRef,
 	useState,
 	type CSSProperties,
@@ -12,11 +11,10 @@ import {
 	type RefObject,
 } from "react";
 import { agentLabel } from "@aoagents/product-ui";
-import { createPortal } from "react-dom";
 import { GripVertical, X } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
 import { beginPaneTabDrag } from "../lib/pane-drag";
-import { MIN_PANE_PX, ratioVar, type Box, type CssDivider } from "../lib/pane-split";
+import { MIN_PANE_PX, ratioVar, type CssDivider } from "../lib/pane-split";
 import { clampTerminalFontSize, initialTerminalFontSize, terminalFontSizeStorageKey } from "../lib/terminal-font-size";
 import { cn } from "../lib/utils";
 import type { Theme } from "../stores/ui-store";
@@ -70,59 +68,6 @@ export function SplitPaneTerminal({
 			theme={theme}
 		/>
 	);
-}
-
-/**
- * The outline that flashes on the pane focus moved to. It is drawn over the
- * whole window (the center column clips at its own edge, just inside the
- * panel's frame), so on the frame's sides it can sit exactly on the panel's
- * border, with the frame's rounding at the frame's corners; edges beside a
- * divider follow the pane. Measured once per appearance: it is remounted on
- * every focus change and lasts only a moment.
- */
-export function SplitFocusOutline({ screenRef, box }: { screenRef: RefObject<HTMLElement | null>; box: Box }) {
-	const ref = useRef<HTMLDivElement>(null);
-	const { x, y, w, h } = box;
-	useLayoutEffect(() => {
-		const outline = ref.current;
-		const screen = screenRef.current;
-		if (!outline || !screen) return;
-		const screenBox = screen.getBoundingClientRect();
-		let left = screenBox.left + x * screenBox.width;
-		let top = screenBox.top + y * screenBox.height;
-		let right = left + w * screenBox.width;
-		let bottom = top + h * screenBox.height;
-		const edge = 0.001;
-		const at = { top: y < edge, bottom: y + h > 1 - edge, left: x < edge, right: x + w > 1 - edge };
-		const surface = screen.closest<HTMLElement>(".center-panel-surface");
-		let frameStyle: CSSStyleDeclaration | null = null;
-		if (surface) {
-			// The panel's rounded frame is the surface's own border, or, under
-			// the floating top bar, an ::after layer over a borderless surface.
-			const own = getComputedStyle(surface);
-			const after = getComputedStyle(surface, "::after");
-			const framed = (Number.parseFloat(own.borderBottomRightRadius) || 0) === 0
-				&& (Number.parseFloat(after.borderBottomRightRadius) || 0) > 0;
-			frameStyle = framed ? after : own;
-			const frame = surface.getBoundingClientRect();
-			const frameTop = frame.top + (framed ? Number.parseFloat(after.top) || 0 : 0);
-			if (at.left) left = frame.left;
-			if (at.right) right = frame.right;
-			if (at.top) top = frameTop;
-			if (at.bottom) bottom = frame.bottom;
-		}
-		outline.style.left = `${left}px`;
-		outline.style.top = `${top}px`;
-		outline.style.width = `${Math.max(0, right - left)}px`;
-		outline.style.height = `${Math.max(0, bottom - top)}px`;
-		const radius = (corner: string, vertical: "top" | "bottom", horizontal: "left" | "right") =>
-			frameStyle && at[vertical] && at[horizontal] ? frameStyle.getPropertyValue(`border-${corner}-radius`) || "0px" : "0px";
-		outline.style.borderTopLeftRadius = radius("top-left", "top", "left");
-		outline.style.borderTopRightRadius = radius("top-right", "top", "right");
-		outline.style.borderBottomLeftRadius = radius("bottom-left", "bottom", "left");
-		outline.style.borderBottomRightRadius = radius("bottom-right", "bottom", "right");
-	}, [screenRef, x, y, w, h]);
-	return createPortal(<div aria-hidden="true" className="pane-split-focus" ref={ref} />, document.body);
 }
 
 const KEYBOARD_STEP = 0.05;

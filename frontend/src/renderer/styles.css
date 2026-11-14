@@ -6675,26 +6675,6 @@ body.is-pane-dragging webview {
 	cursor: grabbing;
 }
 
-/* The pane focus moved to: a thin accent outline that holds for a moment,
- * then fades out, so it never stays drawn over the panes. */
-.pane-split-focus {
-	position: fixed;
-	z-index: var(--z-chrome);
-	pointer-events: none;
-	box-shadow: inset 0 0 0 1.5px color-mix(in oklch, var(--primary) 25%, transparent);
-	animation: pane-split-focus-flash 1400ms ease-out forwards;
-}
-
-@keyframes pane-split-focus-flash {
-	0%,
-	55% {
-		opacity: 1;
-	}
-	100% {
-		opacity: 0;
-	}
-}
-
 /* Divider between the panes: a hairline, with the shared hover-only grip line. */
 .pane-split-divider {
 	position: absolute;
@@ -6802,10 +6782,5 @@ body.is-pane-dragging webview {
 	.pane-split-divider::after,
 	.pane-split-junction::after {
 		transition: none;
-	}
-	/* Reduced motion: show the outline, then remove it without a fade. */
-	.pane-split-focus {
-		animation-timing-function: steps(1, end);
-		animation-duration: 900ms;
 	}
 }
