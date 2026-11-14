@@ -54,6 +54,7 @@ export function SubagentTeam({
 	launches,
 	steps,
 	live,
+	stopped = false,
 	harness,
 	disclosureKey,
 	disclosureOverrides,
@@ -63,6 +64,8 @@ export function SubagentTeam({
 	steps: ReadonlyMap<string, ConversationActivity[]>;
 	/** The launches whose child can still be working: a turn holding it is still running. */
 	live: ReadonlySet<string>;
+	/** The controller has really stopped, so no child is still working. */
+	stopped?: boolean;
 	/** Whose agents these are, for the avatar. */
 	harness?: string;
 	disclosureKey?: string;
@@ -73,8 +76,8 @@ export function SubagentTeam({
 	const reducedMotion = useReducedMotion();
 	const openSubagent = useContext(OpenSubagentContext);
 	const agents = useMemo(
-		() => launches.map((launch) => readSubagent(launch, steps.get(launch.id) ?? [], live.has(launch.id))),
-		[launches, steps, live],
+		() => launches.map((launch) => readSubagent(launch, steps.get(launch.id) ?? [], live.has(launch.id), stopped)),
+		[launches, steps, live, stopped],
 	);
 	const working = agents.some((agent) => agent.state === "working");
 	const now = useNow(working);

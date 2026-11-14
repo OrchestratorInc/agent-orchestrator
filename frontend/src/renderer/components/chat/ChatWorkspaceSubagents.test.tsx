@@ -398,6 +398,24 @@ describe("ChatWorkspace subagents", () => {
 		expect(screen.queryByTestId("live-working-task")).not.toBeInTheDocument();
 	});
 
+	// #6064: with the controller gone, a child's step left running is not work in progress.
+	it("settles a child with a running step once the controller stops", async () => {
+		const user = userEvent.setup();
+		const childStep = { ...child("p3", 10, "tool-pages", "cd /repo; grep -rn returns src/app"), status: "running" as const };
+		render(<ChatWorkspace snapshot={{ ...snapshot("running", [childStep]), controller: { state: "stopped" } }} />);
+
+		expect(screen.getByText("The agent stopped before this turn finished")).toBeInTheDocument();
+		expect(screen.queryByTestId("live-working-label")).not.toBeInTheDocument();
+		// No child is working, so the team folds into the turn's work like a finished one.
+		await user.click(screen.getByRole("button", { name: /Worked for/ }));
+		const header = await screen.findByRole("button", { name: /2 subagents/ });
+		expect(within(header).getByText("1 no report")).toBeInTheDocument();
+		await user.click(header);
+		const row = await screen.findByRole("button", { name: /Audit: info pages/ });
+		expect(within(row).getByText("No report")).toBeInTheDocument();
+		expect(screen.queryByRole("img", { name: "Working" })).not.toBeInTheDocument();
+	});
+
 	it("does not offer the panel when the chat has no subagents", () => {
 		const onAvailableChange = vi.fn();
 		const items: ConversationItem[] = [text("prompt", 1, "user", "Hi"), text("reply", 2, "assistant", "Hello.")];

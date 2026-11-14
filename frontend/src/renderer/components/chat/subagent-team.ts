@@ -29,11 +29,15 @@ const DELIVERED_ELSEWHERE = /^This agent's report was delivered/;
 
 export type SubagentState = "working" | "done" | "failed" | "stopped" | "unknown";
 
-/** A launch with what `readSubagent` needs: the steps its turn carries and whether that turn still runs. */
+/**
+ * A launch with what `readSubagent` needs: the steps its turn carries, whether that
+ * turn still runs, and whether the controller has really stopped.
+ */
 export type SubagentRef = {
 	launch: ConversationActivity;
 	steps: readonly ConversationActivity[];
 	live: boolean;
+	stopped?: boolean;
 };
 
 export type Subagent = {
@@ -56,6 +60,9 @@ export type Subagent = {
 
 export function isSubagentLaunch(item: ConversationItem | undefined): item is ConversationActivity {
 	if (item?.kind !== "activity") return false;
+	// An approval or a question records the tool it asks about, input included, so one
+	// for `Agent` carries a launch's metadata. It is the request, not a launch.
+	if (item.activityKind === "approval" || item.activityKind === "user_input") return false;
 	const tool = item.detail?.providerToolName;
 	if (typeof tool === "string" && LAUNCH_TOOLS.has(tool)) return true;
 	return typeof launchInput(item).subagent_type === "string";
@@ -121,11 +128,16 @@ function outermostLaunch(
  * status says nothing about the child. The hand-back is the fact that it finished; a
  * running step, or a turn that is still waiting on it, is the fact that it has not.
  * Anything else is reported as unknown rather than guessed in either direction.
+ *
+ * With the controller really stopped, nothing is working on the child, so a running
+ * launch or step it left behind is stale: the child settles as unknown, like the
+ * parent's turn (#6064).
  */
 export function readSubagent(
 	launch: ConversationActivity,
 	allSteps: readonly ConversationActivity[],
 	live: boolean,
+	stopped = false,
 ): Subagent {
 	const input = launchInput(launch);
 	// The steps carry the whole chain under this launch, so an inner child's hand-back
@@ -160,11 +172,12 @@ export function readSubagent(
 			endedAt: timeOf(handback.createdAt),
 		};
 	}
-	const working =
+	const working = !stopped && (
 		launch.status === "running" ||
 		launch.status === "pending" ||
 		steps.some((step) => step.status === "running" || step.status === "pending") ||
-		(background && live);
+		(background && live)
+	);
 	if (working) return { ...base, state: "working" };
 	if (launch.status === "completed" && !background) {
 		const report = DELIVERED_ELSEWHERE.test(result) ? undefined : result || undefined;

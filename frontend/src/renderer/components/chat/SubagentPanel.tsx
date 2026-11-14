@@ -68,7 +68,7 @@ export function SubagentPanel({
 	onDisclosureChange?: (key: string, open: boolean) => void;
 }) {
 	const agents = useMemo(
-		() => subagents.map((ref) => readSubagent(ref.launch, ref.steps, ref.live)),
+		() => subagents.map((ref) => readSubagent(ref.launch, ref.steps, ref.live, ref.stopped)),
 		[subagents],
 	);
 	const now = useNow(agents.some((agent) => agent.state === "working"));

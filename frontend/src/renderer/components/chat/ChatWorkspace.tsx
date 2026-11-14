@@ -5862,7 +5862,7 @@ const TurnGroup = memo(function TurnGroup({
 	const reducedMotion = useReducedMotion();
 	const hasTerminalFailure =
 		group.outcome?.state === "failed" && Boolean(group.outcome.error);
-	const { steps: subagentSteps, live: subagentsLive } = groupSubagents(group);
+	const { steps: subagentSteps, live: subagentsLive, stopped: subagentsStopped } = groupSubagents(group);
 	const runs = useMemo(
 		() =>
 			runsOf(
@@ -5929,7 +5929,7 @@ const TurnGroup = memo(function TurnGroup({
 	// child is done, the team folds into "Worked for" with the rest of the work.
 	const teamWorking = (run: TimelineRun) =>
 		run.kind === "subagents" &&
-		run.items.some((launch) => readSubagent(launch, subagentSteps.get(launch.id) ?? [], subagentsLive.has(launch.id)).state === "working");
+		run.items.some((launch) => readSubagent(launch, subagentSteps.get(launch.id) ?? [], subagentsLive.has(launch.id), subagentsStopped).state === "working");
 	const noticeRuns = group.outcome
 		? workedRuns.filter((run) => isHumanRun(run.items[0]) || isNoticeRun(run) || teamWorking(run))
 		: [];
@@ -5967,6 +5967,7 @@ const TurnGroup = memo(function TurnGroup({
 					launches={run.items}
 					steps={subagentSteps}
 					live={subagentsLive}
+					stopped={subagentsStopped}
 					harness={harness}
 					disclosureKey={`${group.key}:${run.key}`}
 					disclosureOverrides={activityDisclosureOverrides}
@@ -6685,6 +6686,8 @@ type GroupSubagents = {
 	 * part before a steer.
 	 */
 	live: ReadonlySet<string>;
+	/** The controller has really stopped: no child is working, whatever its records say. */
+	stopped: boolean;
 };
 
 const NO_SUBAGENT_STEPS: ReadonlyMap<string, ConversationActivity[]> = new Map();
@@ -6693,8 +6696,12 @@ const NO_STEPS: readonly ConversationActivity[] = [];
 const NO_SUBAGENTS: readonly SubagentRef[] = [];
 
 /** The steps a group's launches read, and which of them can still be working. */
-function groupSubagents(group: TimelineGroup): { steps: ReadonlyMap<string, ConversationActivity[]>; live: ReadonlySet<string> } {
-	return { steps: group.subagents?.steps ?? NO_SUBAGENT_STEPS, live: group.subagents?.live ?? NO_LIVE_SUBAGENTS };
+function groupSubagents(group: TimelineGroup): { steps: ReadonlyMap<string, ConversationActivity[]>; live: ReadonlySet<string>; stopped: boolean } {
+	return {
+		steps: group.subagents?.steps ?? NO_SUBAGENT_STEPS,
+		live: group.subagents?.live ?? NO_LIVE_SUBAGENTS,
+		stopped: group.subagents?.stopped ?? false,
+	};
 }
 
 /**
@@ -6703,10 +6710,10 @@ function groupSubagents(group: TimelineGroup): { steps: ReadonlyMap<string, Conv
  */
 function conversationSubagents(groups: readonly TimelineGroup[]): SubagentRef[] {
 	return groups.flatMap((group) => {
-		const { steps, live } = groupSubagents(group);
+		const { steps, live, stopped } = groupSubagents(group);
 		return group.items.flatMap((item) =>
 			isSubagentLaunch(item) && !group.subagents?.stepIds.has(item.id)
-				? [{ launch: item, steps: steps.get(item.id) ?? NO_STEPS, live: live.has(item.id) }]
+				? [{ launch: item, steps: steps.get(item.id) ?? NO_STEPS, live: live.has(item.id), stopped }]
 				: [],
 		);
 	});
@@ -6969,7 +6976,7 @@ function groupByTurn(snapshot: ConversationSnapshot, { controllerStopped = false
 		};
 	}
 
-	const conversation = subagentsOfConversation(snapshot.items, groups);
+	const conversation = subagentsOfConversation(snapshot.items, groups, controllerStopped);
 	if (!conversation) return groups.flatMap(splitAtSteers);
 	return groups.flatMap((group) =>
 		splitAtSteers(group)
@@ -6988,6 +6995,7 @@ type ConversationSubagents = {
 	steps: ReadonlyMap<string, ConversationActivity[]>;
 	stepIds: ReadonlySet<string>;
 	live: ReadonlySet<string>;
+	stopped: boolean;
 };
 
 /**
@@ -7006,7 +7014,7 @@ type ConversationSubagents = {
  * steps runs. That is the real turn's state, so a launch before a steer, or a child
  * that has not recorded a step yet, does not read as finished with no report.
  */
-function subagentsOfConversation(items: ConversationItem[], groups: readonly TimelineGroup[]): ConversationSubagents | undefined {
+function subagentsOfConversation(items: ConversationItem[], groups: readonly TimelineGroup[], stopped: boolean): ConversationSubagents | undefined {
 	const launches = items.filter(isSubagentLaunch);
 	if (launches.length === 0) return undefined;
 	const { steps } = partitionSubagentSteps(items);
@@ -7017,7 +7025,7 @@ function subagentsOfConversation(items: ConversationItem[], groups: readonly Tim
 			.filter((launch) => liveItems.has(launch.id) || steps.get(launch.id)?.some((step) => liveItems.has(step.id)))
 			.map((launch) => launch.id),
 	);
-	return { steps, stepIds, live };
+	return { steps, stepIds, live, stopped };
 }
 
 /** Give one segment its own launches' steps and live state, and mark the steps it holds. */
@@ -7033,7 +7041,7 @@ function withSubagentSteps(segment: TimelineGroup, conversation: ConversationSub
 		}
 	}
 	if (steps.size === 0 && stepIds.size === 0) return segment;
-	return { ...segment, subagents: { steps, stepIds, live } };
+	return { ...segment, subagents: { steps, stepIds, live, stopped: conversation.stopped } };
 }
 
 /**
