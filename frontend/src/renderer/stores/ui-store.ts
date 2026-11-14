@@ -5,6 +5,7 @@ import { sessionUiKey } from "../lib/hosts";
 import type { ProjectSettingsSection as ProjectFormSection } from "../components/ProjectSettingsForm";
 import type { TerminalTarget } from "../types/terminal";
 import type { TerminalClickMode } from "../lib/terminal-mouse";
+import type { WorkspaceSession } from "../types/workspace";
 import type { FilesSelection } from "../hooks/useSessionWorkspaceFiles";
 import type { CloudCpWorkspaceReviewScope } from "../lib/cloud-cp";
 import {
@@ -309,6 +310,10 @@ export type UiState = {
 	setProjectAvatars: (enabled: boolean) => void;
 	/** True while the restart-to-update confirmation is open. */
 	updateInstallPromptOpen: boolean;
+	/** The session the Move dialog is open for; null when it is closed. */
+	moveSessionTarget: WorkspaceSession | null;
+	openMoveSession: (session: WorkspaceSession) => void;
+	closeMoveSession: () => void;
 	openUpdateInstallPrompt: () => void;
 	closeUpdateInstallPrompt: () => void;
 	openGlobalSettings: (section?: GlobalSettingsSection, options?: { focusAgentId?: string; hostId?: string; harnessView?: "local" | "cloud"; startLogin?: boolean; loginAccountId?: string; startPairing?: boolean; showDiagnostics?: HarnessDiagnosticsRequest; preserveProject?: boolean; focusSetting?: string }) => void;
@@ -628,6 +633,9 @@ export const useUiStore = create<UiState>((set, get) => ({
 		set({ chatSendKeyMode });
 	},
 	updateInstallPromptOpen: false,
+	moveSessionTarget: null,
+	openMoveSession: (session) => set({ moveSessionTarget: session }),
+	closeMoveSession: () => set({ moveSessionTarget: null }),
 	openUpdateInstallPrompt: () => set({ updateInstallPromptOpen: true }),
 	closeUpdateInstallPrompt: () => set({ updateInstallPromptOpen: false }),
 	openGlobalSettings: (section, options) => set((state) => ({

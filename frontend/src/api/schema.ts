@@ -3797,6 +3797,74 @@ export interface paths {
         patch: operations["setSessionMergePolicy"];
         trace?: never;
     };
+    "/api/v1/sessions/{sessionId}/move/complete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Mark a session as moved to AO Cloud and archive it here */
+        post: operations["completeSessionMove"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sessions/{sessionId}/move/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Push a stopped session's branch and return its settings and handoff note to move it to AO Cloud */
+        post: operations["exportSessionMove"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sessions/{sessionId}/move/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List what a move to AO Cloud would push, or why it cannot move */
+        get: operations["previewSessionMove"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sessions/{sessionId}/move/transcript": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read a stopped session's agent conversation, with its paths replaced for AO Cloud, so the move resumes it there */
+        get: operations["getSessionMoveTranscript"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sessions/{sessionId}/pin": {
         parameters: {
             query?: never;
@@ -4567,6 +4635,23 @@ export interface paths {
         put?: never;
         /** Clean up terminated session workspaces */
         post: operations["cleanupSessions"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sessions/move/import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start a session moved from AO Cloud */
+        post: operations["importSessionMove"];
         delete?: never;
         options?: never;
         head?: never;
@@ -6176,6 +6261,33 @@ export interface components {
             callerSessionId?: string;
             deleteArtifacts?: boolean;
         };
+        ControllersMoveImportTranscript: {
+            agentSessionId: string;
+            /** @description The Claude project folder the transcript was in on Orchestrator Cloud; its paths and the sandbox's working directory become this machine's. */
+            projectDir: string;
+            /**
+             * Format: base64
+             * @description The transcript, gzipped and base64-encoded.
+             */
+            transcriptGzip: string;
+        };
+        ControllersMoveTranscriptInfo: {
+            /** Format: int64 */
+            bytes: number;
+            /**
+             * @description Why the conversation would not move: an agent AO Cloud cannot resume, no saved conversation, or over 64 MiB.
+             * @enum {string}
+             */
+            unavailable?: "unsupported" | "not_found" | "too_large";
+        };
+        ControllersMoveTranscriptResponse: {
+            agentSessionId: string;
+            /**
+             * Format: base64
+             * @description The transcript, gzipped and base64-encoded, with this machine's working directory and Claude project folder replaced by placeholders AO Cloud's worker fills in.
+             */
+            transcriptGzip: string;
+        };
         ControllersPairDeviceRequest: {
             /** @description Name shown in the host's device list. */
             name?: string;
@@ -6297,6 +6409,7 @@ export interface components {
             /** @enum {string} */
             mode: "chat" | "tui";
             model?: string;
+            movedTo?: components["schemas"]["SessionMove"];
             needsResume: boolean;
             /** @enum {string} */
             outputType: "none" | "pr" | "artifact" | "pr_artifact";
@@ -7384,6 +7497,66 @@ export interface components {
             running: boolean;
             supported: boolean;
         };
+        MoveChange: {
+            path: string;
+            /** @enum {string} */
+            status: "added" | "modified" | "deleted";
+        };
+        MoveCompleteRequest: {
+            moveId: string;
+            orgId: string;
+            sessionId: string;
+        };
+        MoveCompleteResponse: {
+            session: components["schemas"]["ControllersSessionView"];
+        };
+        MoveExportRequest: {
+            moveId: string;
+            sourceLabel?: string;
+        };
+        MoveExportResponse: {
+            changes: number;
+            handoffNote: string;
+            manifest: components["schemas"]["MoveManifest"];
+            submodules?: string[];
+        };
+        MoveImportRequest: {
+            handoffNote?: string;
+            manifest: components["schemas"]["MoveManifest"];
+            moveId: string;
+            projectId: string;
+            transcript?: components["schemas"]["ControllersMoveImportTranscript"];
+        };
+        MoveImportResponse: {
+            session: components["schemas"]["ControllersSessionView"];
+            warnings?: string[];
+        };
+        MoveManifest: {
+            autoInjectCI: boolean;
+            autoInjectReview: boolean;
+            autoReview: boolean;
+            branch: string;
+            displayName?: string;
+            effort?: string;
+            harness: string;
+            issueId?: string;
+            mode?: string;
+            model?: string;
+            permissions?: string;
+            pullRequests?: string[];
+            repoKey: string;
+            requestedOutput?: string;
+            sourceLabel: string;
+            sourceSessionId: string;
+            terminateOnPrMerge: boolean;
+            tip: string;
+            wip: boolean;
+        };
+        MovePreviewResponse: {
+            branch: string;
+            changes: components["schemas"]["MoveChange"][];
+            transcript: components["schemas"]["ControllersMoveTranscriptInfo"];
+        };
         NotificationEnvelope: {
             notification: components["schemas"]["NotificationResponse"];
         };
@@ -8089,6 +8262,13 @@ export interface components {
             rssBytes: number;
             /** Format: date-time */
             sampledAt: string;
+            sessionId: string;
+        };
+        SessionMove: {
+            /** Format: date-time */
+            at: string;
+            moveId: string;
+            orgId: string;
             sessionId: string;
         };
         SessionPRCISummary: {
@@ -23014,6 +23194,241 @@ export interface operations {
             };
         };
     };
+    completeSessionMove: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MoveCompleteRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MoveCompleteResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    exportSessionMove: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MoveExportRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MoveExportResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    previewSessionMove: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MovePreviewResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getSessionMoveTranscript: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ControllersMoveTranscriptResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     pinSession: {
         parameters: {
             query?: never;
@@ -26413,6 +26828,66 @@ export interface operations {
             };
             /** @description Not Implemented */
             501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    importSessionMove: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MoveImportRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MoveImportResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };

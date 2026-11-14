@@ -452,6 +452,18 @@ export interface CloudCpCreateSessionRequest {
 	 * field (see createCloudSession).
 	 */
 	defaultInterfaceMode?: CloudCpInterfaceMode;
+	/**
+	 * Branch to continue: one already on the repository is checked out from its
+	 * commits. Only sent when offering.features lists session.branch; an older
+	 * control plane rejects the whole create.
+	 */
+	branch?: string;
+	/**
+	 * A conversation uploaded to transcript-imports/{id}, which the session
+	 * resumes instead of starting from prompt. Only sent when
+	 * offering.features lists session.transcriptImport.
+	 */
+	transcriptImportId?: string;
 }
 
 export interface CloudCpSessionRepo {

@@ -1,9 +1,10 @@
 import { useCallback, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { Archive, Code2, Copy, ExternalLink, GitBranch, GitFork, Pencil, Pin, PinOff, Play } from "@/components/app-icons";
+import { Archive, Cloud, Code2, Copy, ExternalLink, GitBranch, GitFork, Pencil, Pin, PinOff, Play } from "@/components/app-icons";
 import type { OpenTarget } from "../../shared/editor-handoff";
 import { resumeAgentOnOpen, useCanResumeAgent } from "../hooks/useCanResumeAgent";
+import { useCloudGate } from "../hooks/useCloudGate";
 import { conversationQueryKey } from "../hooks/useConversation";
 import { editorHandoffErrorMessage, useEditorHandoffState, useOpenSessionTarget } from "../hooks/useEditorHandoff";
 import { usePinSession, useUnpinSession } from "../hooks/usePinSession";
@@ -11,7 +12,7 @@ import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { aoBridge } from "../lib/bridge";
 import { sessionBranchPresentation } from "../lib/session-branch";
 import { useUiStore } from "../stores/ui-store";
-import { isOrchestratorSession, primaryPR, type WorkspaceSession } from "../types/workspace";
+import { isOrchestratorSession, primaryPR, sessionIsActive, type WorkspaceSession } from "../types/workspace";
 import { MenuEntries, type MenuEntry } from "./menu-model";
 import { OpenTargetIcon } from "./OpenTargetIcon";
 import { useForkSessionFromMenu, useSessionForkOptions } from "./SessionForkControls";
@@ -64,6 +65,9 @@ export function useSessionMenuEntries(session: WorkspaceSession | undefined, { o
 	// whether this one can, and why not.
 	const forkable = Boolean(session && !session.cloud);
 	const forkOptions = useSessionForkOptions(session, forkable);
+	const openMoveSession = useUiStore((state) => state.openMoveSession);
+	// Only a session on this computer moves to AO Cloud, so only it reads this daemon's settings.
+	const { cloudEnabled } = useCloudGate(Boolean(session && !session.hostId && !session.cloud));
 	if (!session) return [];
 
 	const branch = sessionBranchPresentation(session).branch;
@@ -73,6 +77,8 @@ export function useSessionMenuEntries(session: WorkspaceSession | undefined, { o
 	// plane for a Cloud session. A session shared from another organization is
 	// the sharer's to name and lists outside this sidebar's pins.
 	const canRenameAndPin = !session.cloud?.shared;
+	// A live worker on this computer can move to AO Cloud when Cloud is on.
+	const canMove = cloudEnabled && !session.cloud && !isOrchestratorSession(session) && sessionIsActive(session);
 	const resume = () => {
 		void resumeAgentOnOpen(session.id)
 			.catch((error: unknown) => {
@@ -128,6 +134,9 @@ export function useSessionMenuEntries(session: WorkspaceSession | undefined, { o
 			description: refused?.refusal?.message,
 			onSelect: () => forkSession(session),
 		});
+	}
+	if (canMove) {
+		entries.push({ kind: "item", id: "session-move-to-cloud", icon: <Cloud aria-hidden="true" />, label: t("move.menuItem"), onSelect: () => openMoveSession(session) });
 	}
 	entries.push({ kind: "separator", id: "session-links-sep" });
 	if (pr) {

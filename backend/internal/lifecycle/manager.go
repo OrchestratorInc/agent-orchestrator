@@ -702,6 +702,11 @@ retryProjection:
 	if previousNativeID == "" {
 		previousNativeID = rec.Metadata.ProviderConversationID
 	}
+	// Claude Code stopped before its --resume loads reports SessionEnd under a
+	// fresh id it never wrote a transcript for; the resumed conversation stays.
+	if rec.Harness == domain.HarnessClaudeCode && s.Event == "session-end" && previousNativeID != "" && s.AgentSessionID != previousNativeID {
+		s.AgentSessionID, s.TranscriptPath = "", ""
+	}
 	nativeIdentityChanged := s.AgentSessionID != "" && previousNativeID != "" && s.AgentSessionID != previousNativeID
 	if nativeIdentityChanged && !s.Timestamp.IsZero() &&
 		!rec.Metadata.NativeIdentityObservedAt.IsZero() && !s.Timestamp.After(rec.Metadata.NativeIdentityObservedAt) {

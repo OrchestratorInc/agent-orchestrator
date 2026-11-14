@@ -43,9 +43,11 @@ var (
 	ErrNotRestorable                 = errors.New("session: not restorable (not terminal)")
 	ErrTerminated                    = errors.New("session: terminated")
 	ErrAgentExited                   = errors.New("session: agent exited")
-	ErrAgentNotExited                = errors.New("session: agent has not exited")
-	ErrAgentExitInProgress           = errors.New("session: agent exit is already in progress")
-	ErrIncompleteHandle              = errors.New("session: incomplete teardown handle")
+	// ErrSessionMoved refuses to run a session that moved to AO Cloud.
+	ErrSessionMoved        = errors.New("session: moved to AO Cloud")
+	ErrAgentNotExited      = errors.New("session: agent has not exited")
+	ErrAgentExitInProgress = errors.New("session: agent exit is already in progress")
+	ErrIncompleteHandle    = errors.New("session: incomplete teardown handle")
 	// ErrProjectNotResolvable means the spawn's project has no usable repo
 	// (unregistered, archived, or missing a path). The API maps it to a 400.
 	ErrProjectNotResolvable = errors.New("session: project repo not resolvable")
@@ -1067,6 +1069,10 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 	defer func() {
 		resultErr = RelabelSpawnTimeout(resultErr, requestCtx, budget)
 	}()
+	if cfg.Transfer != nil {
+		// A moved conversation resumes in its CLI's terminal.
+		cfg.RequestedMode = domain.SessionModeTUI
+	}
 	if cfg.RequestedOutput == domain.RequestedOutputArtifact && m.artifactDir("") == "" {
 		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w", ErrArtifactOutputUnavailable)
 	}
@@ -1335,6 +1341,10 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 		}
 	}
 	prompt, systemPrompt, err := m.buildSpawnTexts(ctx, cfg, id)
+	if cfg.Transfer != nil {
+		// The resumed conversation already holds the task; the prompt is a note about the move.
+		prompt = cfg.Prompt
+	}
 	if err != nil {
 		m.cleanupArtifactDir(id)
 		if prep != nil {
@@ -1610,6 +1620,19 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, false, false)
 		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnPrepare, err)
 	}
+	transferNativeID := ""
+	if cfg.Transfer != nil {
+		if cfg.Transfer.NativeArchive != "" {
+			transferNativeID, err = m.placeTransferConversation(ctx, cfg.Harness, ws.Path, env, cfg.Transfer.NativeArchive)
+			if err != nil {
+				m.logger.Warn("spawn: moved conversation cannot be resumed; starting from the handoff note", "sessionID", id, "error", err)
+				transferNativeID = ""
+			}
+		}
+		if transferNativeID == "" {
+			prompt = cfg.Transfer.FallbackPrompt
+		}
+	}
 	// A text-handoff fork's agent starts with the original's conversation as
 	// its first message. It is not the session's task, so it isn't saved as one.
 	launchPrompt := prompt
@@ -1648,7 +1671,12 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 		}
 		launchCfg.Prompt = ""
 	}
-	argv, err := agent.GetLaunchCommand(ctx, launchCfg)
+	var argv []string
+	if transferNativeID != "" {
+		argv, err = transferRestoreArgv(ctx, agent, transferNativeID, launchCfg)
+	} else {
+		argv, err = agent.GetLaunchCommand(ctx, launchCfg)
+	}
 	if err != nil {
 		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, true, false)
 		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnLaunchCommand, err)
@@ -1727,6 +1755,9 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 		// Model override exists it wins; otherwise fall back to the resolved Mode.
 		Model:  resolvedModelForMetadata(cfg.Harness, agentConfig, adapterConfig),
 		Effort: agentConfig.Effort,
+	}
+	if transferNativeID != "" {
+		metadata.AgentSessionID = transferNativeID
 	}
 	if prompt != "" {
 		metadata.LatestUserPromptAt = m.clock()
@@ -3283,6 +3314,9 @@ func (m *Manager) RestoreWithMode(ctx context.Context, id domain.SessionID) (res
 	if !ok {
 		return RestoreResult{}, fmt.Errorf("restore %s: %w", id, ErrNotFound)
 	}
+	if rec.MovedTo != nil {
+		return RestoreResult{}, fmt.Errorf("restore %s: %w", id, ErrSessionMoved)
+	}
 	releaseHarness, err := m.beginHarnessUse(rec.Harness)
 	if err != nil {
 		return RestoreResult{}, fmt.Errorf("restore %s: %w", id, err)
@@ -3627,6 +3661,9 @@ func (m *Manager) resumeAgentWithMode(ctx context.Context, id domain.SessionID, 
 	}
 	if !ok {
 		return RestoreResult{}, fmt.Errorf("resume agent %s: %w", id, ErrNotFound)
+	}
+	if rec.MovedTo != nil {
+		return RestoreResult{}, fmt.Errorf("resume agent %s: %w", id, ErrSessionMoved)
 	}
 	if rec.HibernatedAt != nil && m.persistentHostReconcileDone != nil {
 		select {

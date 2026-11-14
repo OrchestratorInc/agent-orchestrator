@@ -128,6 +128,28 @@ export async function uploadCloudAttachment(
 	return parsed.attachment;
 }
 
+/**
+ * Upload a moving Claude Code session's conversation, gzipped, for the Cloud
+ * session createSession then starts from it (transcriptImportId = importId).
+ */
+export async function uploadCloudTranscript(
+	baseUrl: string,
+	orgId: string,
+	importId: string,
+	agentSessionId: string,
+	gzip: Uint8Array,
+): Promise<void> {
+	const query = new URLSearchParams({ harness: "claude-code", agentSessionId });
+	const response = await binaryRequest({
+		baseUrl,
+		path: `/api/cloud/v1/orgs/${encodeURIComponent(orgId)}/transcript-imports/${encodeURIComponent(importId)}?${query}`,
+		method: "PUT",
+		headers: { "Content-Type": "application/gzip" },
+		body: gzip,
+	}, { timeoutMs: uploadTimeoutMs(gzip.byteLength) });
+	if (response.status !== 204) throw new Error(errorMessage(response.body, response.status));
+}
+
 /** Read an attachment's bytes as a Blob of its content type. */
 export async function fetchCloudAttachment(
 	baseUrl: string,

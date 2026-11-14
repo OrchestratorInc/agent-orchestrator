@@ -10843,6 +10843,194 @@ paths:
       summary: Configure whether PR completion terminates the session
       tags:
       - sessions
+  /api/v1/sessions/{sessionId}/move/complete:
+    post:
+      operationId: completeSessionMove
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MoveCompleteRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MoveCompleteResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+      summary: Mark a session as moved to AO Cloud and archive it here
+      tags:
+      - sessions
+  /api/v1/sessions/{sessionId}/move/export:
+    post:
+      operationId: exportSessionMove
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MoveExportRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MoveExportResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+      summary: Push a stopped session's branch and return its settings and handoff
+        note to move it to AO Cloud
+      tags:
+      - sessions
+  /api/v1/sessions/{sessionId}/move/preview:
+    get:
+      operationId: previewSessionMove
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MovePreviewResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+      summary: List what a move to AO Cloud would push, or why it cannot move
+      tags:
+      - sessions
+  /api/v1/sessions/{sessionId}/move/transcript:
+    get:
+      operationId: getSessionMoveTranscript
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ControllersMoveTranscriptResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Read a stopped session's agent conversation, with its paths replaced
+        for AO Cloud, so the move resumes it there
+      tags:
+      - sessions
   /api/v1/sessions/{sessionId}/pin:
     delete:
       operationId: unpinSession
@@ -13930,6 +14118,49 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
       summary: Clean up terminated session workspaces
+      tags:
+      - sessions
+  /api/v1/sessions/move/import:
+    post:
+      operationId: importSessionMove
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MoveImportRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MoveImportResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+      summary: Start a session moved from AO Cloud
       tags:
       - sessions
   /api/v1/settings:
@@ -17978,6 +18209,56 @@ components:
         deleteArtifacts:
           type: boolean
       type: object
+    ControllersMoveImportTranscript:
+      properties:
+        agentSessionId:
+          minLength: 1
+          pattern: ^[0-9a-fA-F-]{36}$
+          type: string
+        projectDir:
+          description: The Claude project folder the transcript was in on Orchestrator
+            Cloud; its paths and the sandbox's working directory become this machine's.
+          minLength: 1
+          type: string
+        transcriptGzip:
+          description: The transcript, gzipped and base64-encoded.
+          format: base64
+          type: string
+      required:
+      - agentSessionId
+      - projectDir
+      - transcriptGzip
+      type: object
+    ControllersMoveTranscriptInfo:
+      properties:
+        bytes:
+          format: int64
+          type: integer
+        unavailable:
+          description: 'Why the conversation would not move: an agent AO Cloud cannot
+            resume, no saved conversation, or over 64 MiB.'
+          enum:
+          - unsupported
+          - not_found
+          - too_large
+          type: string
+      required:
+      - bytes
+      type: object
+    ControllersMoveTranscriptResponse:
+      properties:
+        agentSessionId:
+          type: string
+        transcriptGzip:
+          description: The transcript, gzipped and base64-encoded, with this machine's
+            working directory and Claude project folder replaced by placeholders AO
+            Cloud's worker fills in.
+          format: base64
+          type: string
+      required:
+      - agentSessionId
+      - transcriptGzip
+      type: object
     ControllersPairDeviceRequest:
       properties:
         name:
@@ -18288,6 +18569,8 @@ components:
           type: string
         model:
           type: string
+        movedTo:
+          $ref: '#/components/schemas/SessionMove'
         needsResume:
           type: boolean
         outputType:
@@ -21223,6 +21506,176 @@ components:
       - location
       - lastError
       type: object
+    MoveChange:
+      properties:
+        path:
+          type: string
+        status:
+          enum:
+          - added
+          - modified
+          - deleted
+          type: string
+      required:
+      - path
+      - status
+      type: object
+    MoveCompleteRequest:
+      properties:
+        moveId:
+          maxLength: 64
+          minLength: 1
+          type: string
+        orgId:
+          minLength: 1
+          type: string
+        sessionId:
+          minLength: 1
+          type: string
+      required:
+      - moveId
+      - orgId
+      - sessionId
+      type: object
+    MoveCompleteResponse:
+      properties:
+        session:
+          $ref: '#/components/schemas/ControllersSessionView'
+      required:
+      - session
+      type: object
+    MoveExportRequest:
+      properties:
+        moveId:
+          maxLength: 64
+          minLength: 1
+          pattern: ^[A-Za-z0-9._-]+$
+          type: string
+        sourceLabel:
+          maxLength: 100
+          type: string
+      required:
+      - moveId
+      type: object
+    MoveExportResponse:
+      properties:
+        changes:
+          type: integer
+        handoffNote:
+          type: string
+        manifest:
+          $ref: '#/components/schemas/MoveManifest'
+        submodules:
+          items:
+            type: string
+          type: array
+      required:
+      - manifest
+      - handoffNote
+      - changes
+      type: object
+    MoveImportRequest:
+      properties:
+        handoffNote:
+          type: string
+        manifest:
+          $ref: '#/components/schemas/MoveManifest'
+        moveId:
+          maxLength: 64
+          minLength: 1
+          pattern: ^[A-Za-z0-9._-]+$
+          type: string
+        projectId:
+          minLength: 1
+          type: string
+        transcript:
+          $ref: '#/components/schemas/ControllersMoveImportTranscript'
+      required:
+      - projectId
+      - moveId
+      - manifest
+      type: object
+    MoveImportResponse:
+      properties:
+        session:
+          $ref: '#/components/schemas/ControllersSessionView'
+        warnings:
+          items:
+            type: string
+          type: array
+      required:
+      - session
+      type: object
+    MoveManifest:
+      properties:
+        autoInjectCI:
+          type: boolean
+        autoInjectReview:
+          type: boolean
+        autoReview:
+          type: boolean
+        branch:
+          type: string
+        displayName:
+          type: string
+        effort:
+          type: string
+        harness:
+          type: string
+        issueId:
+          type: string
+        mode:
+          type: string
+        model:
+          type: string
+        permissions:
+          type: string
+        pullRequests:
+          items:
+            type: string
+          type: array
+        repoKey:
+          type: string
+        requestedOutput:
+          type: string
+        sourceLabel:
+          type: string
+        sourceSessionId:
+          type: string
+        terminateOnPrMerge:
+          type: boolean
+        tip:
+          type: string
+        wip:
+          type: boolean
+      required:
+      - sourceSessionId
+      - sourceLabel
+      - repoKey
+      - branch
+      - tip
+      - wip
+      - harness
+      - autoReview
+      - terminateOnPrMerge
+      - autoInjectReview
+      - autoInjectCI
+      type: object
+    MovePreviewResponse:
+      properties:
+        branch:
+          type: string
+        changes:
+          items:
+            $ref: '#/components/schemas/MoveChange'
+          type: array
+        transcript:
+          $ref: '#/components/schemas/ControllersMoveTranscriptInfo'
+      required:
+      - branch
+      - changes
+      - transcript
+      type: object
     NotificationEnvelope:
       properties:
         notification:
@@ -22996,6 +23449,23 @@ components:
       - cpuPercent
       - sampledAt
       - processes
+      type: object
+    SessionMove:
+      properties:
+        at:
+          format: date-time
+          type: string
+        moveId:
+          type: string
+        orgId:
+          type: string
+        sessionId:
+          type: string
+      required:
+      - moveId
+      - orgId
+      - sessionId
+      - at
       type: object
     SessionPRCISummary:
       properties:

@@ -264,6 +264,7 @@ var shippedMigrations = map[int64]string{
 	20261109153109361: "20261109153109361_session_forks.sql",
 	20261111145612313: "20261111145612313_pr_details_provider_updated_at.sql",
 	20261113111818788: "20261113111818788_clear_switched_model_reroutes.sql",
+	20261107221212658: "20261107221212658_add_session_moved_to.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they

@@ -36,6 +36,7 @@ type APIDeps struct {
 	AgentAccounts      controllers.AgentAccountService
 	Projects           projectsvc.Manager
 	Sessions           controllers.SessionService
+	SessionMoves       controllers.SessionMover
 	ArtifactVersions   controllers.ArtifactVersionService
 	Automations        controllers.AutomationService
 	DesktopWorkspaces  controllers.DesktopWorkspaceService
@@ -165,6 +166,7 @@ type API struct {
 	push          *controllers.PushController
 	imports       *controllers.ImportController
 	sessionImport *controllers.SessionImportController
+	sessionMoves  *controllers.SessionMovesController
 	fs            *controllers.FSController
 	shellTerms    *controllers.ShellTerminalsController
 	cues          *controllers.CuesController
@@ -232,6 +234,7 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 		push:          &controllers.PushController{Registry: deps.Push, Devices: deps.AccessDevices},
 		imports:       &controllers.ImportController{Svc: deps.Import},
 		sessionImport: &controllers.SessionImportController{Svc: deps.SessionImport},
+		sessionMoves:  &controllers.SessionMovesController{Svc: deps.SessionMoves},
 		fs:            &controllers.FSController{Svc: deps.Directories},
 		shellTerms:    &controllers.ShellTerminalsController{Svc: deps.ShellTerminals},
 		cues:          &controllers.CuesController{Svc: deps.Cues},
@@ -254,6 +257,16 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 
 const attachmentUploadHeader = "X-AO-Attachment-Upload"
 
+// moveCaptureRoute reports a route that captures a session's whole worktree,
+// which can outlast the default request budget.
+func moveCaptureRoute(req *http.Request) bool {
+	switch chi.RouteContext(req.Context()).RoutePattern() {
+	case "/api/v1/sessions/{sessionId}/move/export", "/api/v1/sessions/{sessionId}/move/preview", "/api/v1/sessions/{sessionId}/move/transcript":
+		return true
+	}
+	return false
+}
+
 // setupRoute reports a request that may run the project's Setup steps.
 func setupRoute(req *http.Request) bool {
 	if req.Method != http.MethodPost {
@@ -264,7 +277,9 @@ func setupRoute(req *http.Request) bool {
 		// The first open of an imported chat runs Setup in its new workspace.
 		"/api/v1/sessions/{sessionId}/resume-agent",
 		// A fork spawns a session, whose Setup runs in its new worktree.
-		"/api/v1/sessions/{sessionId}/fork":
+		"/api/v1/sessions/{sessionId}/fork",
+		// A session moved from AO Cloud is spawned, which runs Setup.
+		"/api/v1/sessions/move/import":
 		return true
 	}
 	return false
@@ -339,16 +354,18 @@ func (a *API) Register(root chi.Router) {
 					if setupRoute(req) {
 						budget := max(timeout, setupRequestBudget)
 						// Resuming an agent reads its whole native history, which takes
-						// over a minute for a large imported Codex thread.
+						// over a minute for a large imported Codex thread. A move from
+						// AO Cloud fetches its branch from origin before the spawn.
 						if attachmentUploadRoute(req) ||
-							chi.RouteContext(req.Context()).RoutePattern() == "/api/v1/sessions/{sessionId}/resume-agent" {
+							chi.RouteContext(req.Context()).RoutePattern() == "/api/v1/sessions/{sessionId}/resume-agent" ||
+							chi.RouteContext(req.Context()).RoutePattern() == "/api/v1/sessions/move/import" {
 							budget = max(timeout, 10*time.Minute)
 						}
 						serveWithSetupBudget(next, w, req, budget)
 						return
 					}
 					// An import scan reads every local history.
-					if attachmentUploadRoute(req) || sessionImportRoute(req) {
+					if attachmentUploadRoute(req) || sessionImportRoute(req) || moveCaptureRoute(req) {
 						upload.ServeHTTP(w, req)
 						return
 					}
@@ -381,6 +398,7 @@ func (a *API) Register(root chi.Router) {
 			a.push.Register(r)
 			a.imports.Register(r)
 			a.sessionImport.Register(r)
+			a.sessionMoves.Register(r)
 			a.fs.Register(r)
 			a.shellTerms.Register(r)
 			a.cues.Register(r)

@@ -1495,6 +1495,103 @@ paths:
                     $ref: "#/components/schemas/Session"
         default:
           $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/move/export:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+    post:
+      operationId: exportSessionMove
+      tags: [Sessions]
+      description: >-
+        Commits the session's uncommitted work, ignored files aside, as one
+        commit on its branch and pushes the branch, so an AO daemon's
+        move/import can continue the session from it. The session keeps
+        running; delete it once the import succeeds. Viewers get 403. A branch
+        the remote has commits for that the session lacks fails the push.
+      responses:
+        "200":
+          description: The pushed branch, in the shape an AO daemon's move/import takes.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [manifest, handoffNote]
+                properties:
+                  manifest:
+                    type: object
+                    required: [sourceSessionId, sourceLabel, repoKey, branch, tip, wip, harness]
+                    properties:
+                      sourceSessionId: { type: string, format: uuid }
+                      sourceLabel: { type: string }
+                      repoKey:
+                        type: string
+                        description: Lower-case github.com/<owner>/<name>.
+                      branch: { type: string }
+                      tip: { type: string, description: The pushed commit. }
+                      wip:
+                        type: boolean
+                        description: The tip is the commit of the uncommitted work.
+                      harness: { type: string }
+                      model: { type: string }
+                      displayName: { type: string }
+                  handoffNote: { type: string }
+                  transcript:
+                    type: object
+                    description: >-
+                      The Claude Code conversation, checkpointed after the
+                      push, for the daemon to resume. Absent for another
+                      agent or when none was captured.
+                    required: [agentSessionId, projectDir, transcriptGzip]
+                    properties:
+                      agentSessionId: { type: string }
+                      projectDir:
+                        type: string
+                        description: The sandbox's Claude project folder the conversation was in.
+                      transcriptGzip: { type: string, format: byte }
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/transcript-imports/{importId}:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - name: importId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+        description: Chosen by the caller; createSession names it as transcriptImportId.
+    put:
+      operationId: putSessionTranscriptImport
+      tags: [Sessions]
+      description: >-
+        Uploads a coding agent's conversation, gzipped, for a session moving
+        here from another machine, before createSession starts it. The
+        transcript names the source's working directory as /ao-moved/cwd and
+        its Claude project folder as /ao-moved/claude-project; the worker
+        replaces them with its own. Uploading again under the same id
+        replaces it; another user's id is 409. An upload no create uses is
+        dropped after a day.
+      parameters:
+        - name: harness
+          in: query
+          required: true
+          schema: { type: string, enum: [claude-code] }
+        - name: agentSessionId
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+          description: The conversation's id, which the agent resumes.
+      requestBody:
+        required: true
+        content:
+          application/gzip:
+            schema:
+              type: string
+              format: binary
+              description: At most 32 MiB gzipped and 64 MiB unzipped.
+      responses:
+        "204":
+          description: Stored.
+        default:
+          $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/children:
     parameters:
       - $ref: "#/components/parameters/OrgId"
@@ -5379,8 +5476,9 @@ components:
             sessions) and the deployment's own: attachments when the session
             attachment routes are on, queued-edit when a queued message can be
             edited (editQueuedMessage), queued-delete when a queued message can
-            be deleted without stopping a started turn (deleteQueuedMessage).
-            Empty when none apply.
+            be deleted without stopping a started turn (deleteQueuedMessage),
+            session.branch and session.transcriptImport for sessions moving
+            here from another machine. Empty when none apply.
           items:
             type: string
         maxAttachmentBytes:
@@ -9273,6 +9371,28 @@ components:
             from the default stored when the orchestrator was created, unlike
             local spawns, which read the user's default at spawn time; a
             changed default reaches them once a new orchestrator is created.
+        branch:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: >-
+            Git branch to continue. A branch that exists on the repository is
+            checked out from its commits; any other name starts a new branch
+            from the default branch. The default branch, the session prefix
+            and a name git refuses get 422 invalid_branch; a branch a live
+            session of the project holds gets 409 branch_in_use. Send it only
+            when /me offering.features lists session.branch: an older control
+            plane rejects the whole create.
+        transcriptImportId:
+          type: string
+          format: uuid
+          description: >-
+            A conversation uploaded to transcript-imports/{importId}. The
+            session resumes it instead of starting from prompt, which it uses
+            only if the conversation cannot be placed. The upload must be the
+            caller's and for this harness, else 422
+            transcript_import_not_found; a create uses it up. Send it only
+            when /me offering.features lists session.transcriptImport.
     CreateStandaloneAgentInput:
       type: object
       additionalProperties: false

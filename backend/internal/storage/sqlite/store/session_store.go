@@ -684,6 +684,34 @@ func (s *Store) SetSessionPinned(ctx context.Context, id domain.SessionID, isPin
 	return rows > 0, nil
 }
 
+// SetSessionMovedTo records where a session moved to. It returns ok=false
+// when the session id does not exist.
+func (s *Store) SetSessionMovedTo(ctx context.Context, id domain.SessionID, move domain.SessionMove, updatedAt time.Time) (bool, error) {
+	data, err := json.Marshal(move)
+	if err != nil {
+		return false, fmt.Errorf("encode session move %s: %w", id, err)
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	rows, err := s.qw.SetSessionMovedTo(ctx, gen.SetSessionMovedToParams{ID: id, MovedTo: string(data), UpdatedAt: updatedAt})
+	if err != nil {
+		return false, fmt.Errorf("set session moved to %s: %w", id, err)
+	}
+	return rows > 0, nil
+}
+
+// sessionMoveFromJSON reads the moved_to column. An empty or unreadable value is no move.
+func sessionMoveFromJSON(raw string) *domain.SessionMove {
+	if raw == "" {
+		return nil
+	}
+	var move domain.SessionMove
+	if err := json.Unmarshal([]byte(raw), &move); err != nil {
+		return nil
+	}
+	return &move
+}
+
 // SetSessionPreviewURL updates only the browser preview URL for an existing
 // session. It returns ok=false when the session id does not exist. The
 // sessions_cdc_update trigger fans out a session_updated CDC event when the
@@ -1172,6 +1200,7 @@ func rowToRecord(row gen.GetSessionRow) domain.SessionRecord {
 		FirstSignalAt:      nullTimeToTime(row.FirstSignalAt),
 		IsTerminated:       row.IsTerminated,
 		HibernatedAt:       nullTimeToTimePtr(row.HibernatedAt),
+		MovedTo:            sessionMoveFromJSON(row.MovedTo),
 		StaleBinary:        staleBinaryFromRow(row),
 		IsPinned:           row.IsPinned,
 		PinnedAt:           nullTimeToTimePtr(row.PinnedAt),
