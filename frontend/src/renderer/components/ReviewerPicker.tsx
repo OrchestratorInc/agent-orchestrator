@@ -92,7 +92,8 @@ export function ReviewerPicker({
 	const isMode = catalog?.selectionMode === "mode";
 	const rows = offered
 		.filter((item) => isConcreteModelID(item.id))
-		.map((item) => ({ id: item.id, label: agentModelDisplayLabel(harness, modelChoiceLabel(item)) }));
+		// The catalog's reason a model cannot run here (such as an old agent version) keeps it from being picked.
+		.map((item) => ({ id: item.id, label: agentModelDisplayLabel(harness, modelChoiceLabel(item)), unavailableReason: item.unavailableReason }));
 	const defaultID = defaultModelID(catalog);
 
 	// The daemon fills an empty session field from the project's reviewer for this
@@ -136,17 +137,24 @@ export function ReviewerPicker({
 	};
 
 	const defaultHarnessLabel = ranked.find((agent) => agent.id === defaultHarness)?.label || agentLabel(defaultHarness);
-	const modelRow = (row: { id: string; label: string }, optionId?: string, searchActive?: boolean) => (
+	const modelRow = (row: { id: string; label: string; unavailableReason?: string }, optionId?: string, searchActive?: boolean) => (
 		<OptionMenuItem
 			key={row.id}
 			id={optionId}
 			active={row.id === runsWith}
 			searchActive={searchActive}
 			radio
+			disabled={Boolean(row.unavailableReason)}
 			onSelect={() => pickModel(row.id)}
 			className="text-xs text-foreground"
 		>
-			<span className="min-w-0 truncate">{row.label}</span>
+			{/* As in the chat model menu: the reason sits under the name. */}
+			{row.unavailableReason ? (
+				<span className="min-w-0">
+					<span className="block truncate">{row.label}</span>
+					<span className="block whitespace-normal text-[10px] text-muted-foreground">{row.unavailableReason}</span>
+				</span>
+			) : <span className="min-w-0 truncate">{row.label}</span>}
 			{row.id === defaultID ? <span className="ml-2 shrink-0 text-[10px] text-muted-foreground/70">{t("agentSwitch.defaultModel")}</span> : null}
 		</OptionMenuItem>
 	);

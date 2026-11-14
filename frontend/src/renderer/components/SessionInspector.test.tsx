@@ -4985,6 +4985,41 @@ describe("SessionInspector summary reviews", () => {
     );
   });
 
+  it("does not let an unavailable model be picked as the reviewer's", async () => {
+    getMock.mockImplementation(async (path: string, options?: { params?: { path?: { agent?: string } } }) => {
+      if (path === "/api/v1/agents/{agent}/models" && options?.params?.path?.agent === "codex") {
+        return {
+          data: {
+            agentId: "codex",
+            selectionMode: "catalog",
+            models: [
+              { id: "gpt-5", label: "GPT-5", isDefault: true },
+              { id: "gpt-5-pro", label: "GPT-5 Pro", unavailableReason: "Needs Codex 0.50 or later" },
+            ],
+            allowCustom: false,
+            source: "official-catalog",
+            fetchedAt: "2026-08-30T00:00:00Z",
+            stale: false,
+          },
+          error: undefined,
+        };
+      }
+      return commonGetsResponder([], "reviewer-pane", [reviewState(3, "needs_review", "sha-1")])(path);
+    });
+    postMock.mockResolvedValue({ data: { reviewerHandleId: "", reviews: [] }, error: undefined, response: { status: 200 } });
+
+    renderWithQuery(<SessionInspector session={session([pr(3, "open")], { reviewerHarness: "codex" })} />);
+    await openReviewsSection();
+
+    await openReviewerMenu("Model");
+    const unavailable = await screen.findByRole("menuitemradio", { name: /GPT-5 Pro/ });
+    expect(unavailable).toHaveAttribute("aria-disabled", "true");
+    expect(unavailable).toHaveTextContent("Needs Codex 0.50 or later");
+    await userEvent.click(unavailable);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(postCallsFor("/api/v1/sessions/{sessionId}/reviews/switch")).toHaveLength(0);
+  });
+
   it("hides the reviewer effort row for a model that reports no effort levels", async () => {
     getMock.mockImplementation(async (path: string, options?: { params?: { path?: { agent?: string } } }) => {
       if (path === "/api/v1/agents/{agent}/models" && options?.params?.path?.agent === "codex") {
