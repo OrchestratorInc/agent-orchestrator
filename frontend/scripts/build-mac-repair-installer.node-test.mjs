@@ -80,6 +80,19 @@ test('running executable and updater checks reject AO narrowly without matching 
   }
   await f.set('ps', '/Applications/Other.app/Contents/MacOS/ShipIt\n/bin/bash\n/usr/bin/node'); assert.equal(f.check().status, 0);
 });
+test('guard messages use Orchestrator for the app and updater', async (t) => {
+  const f = await guardFixture(t);
+  await f.set('ps', '/Applications/Agent Orchestrator.app/Contents/MacOS/agent-orchestrator');
+  const app = f.check();
+  assert.notEqual(app.status, 0);
+  assert.match(app.stderr, /^Orchestrator repair: Quit Orchestrator\./);
+  assert.match(app.stderr, /before opening Orchestrator\./);
+  await f.set('ps', '/Applications/Renamed.app/Contents/Frameworks/Squirrel.framework/Versions/A/Resources/ShipIt');
+  const updater = f.check();
+  assert.notEqual(updater.status, 0);
+  assert.match(updater.stderr, /^Orchestrator repair: Orchestrator updater is running\./);
+  assert.match(updater.stderr, /before opening Orchestrator\./);
+});
 async function buildFixture(t, failAt) {
   const dir = await fixture(t), app = path.join(dir, 'Agent Orchestrator.app');
   await mkdir(app);
@@ -95,6 +108,32 @@ async function buildFixture(t, failAt) {
   };
   return { dir, app, calls, execute, options: { app, output: path.join(dir, 'repair.pkg'), dataDir: dir, identity: 'Developer ID Installer: Example (TEAMID)', keychainProfile: 'profile' } };
 }
+test('repair labels use Orchestrator while bundle paths and package identity stay fixed', async (t) => {
+  const f = await buildFixture(t);
+  let welcome, conclusion, gui;
+  await buildRepairInstaller(f.options, async (command, args) => {
+    if (command.endsWith('productbuild')) {
+      const resources = args[args.indexOf('--resources') + 1];
+      [welcome, conclusion, gui] = await Promise.all([
+        readFile(path.join(resources, 'welcome.html'), 'utf8'),
+        readFile(path.join(resources, 'conclusion.html'), 'utf8'),
+        readFile(args[args.indexOf('--distribution') + 1], 'utf8'),
+      ]);
+    }
+    return f.execute(command, args);
+  });
+  assert.match(gui, /<title>Orchestrator Repair<\/title>/);
+  assert.match(gui, /Quit Orchestrator before continuing\./);
+  assert.match(welcome, /<h1>Repair Orchestrator /);
+  assert.match(welcome, /Quit Orchestrator\./);
+  assert.match(welcome, /Your Orchestrator data and caches are preserved\./);
+  assert.doesNotMatch([gui, welcome, conclusion].join(''), /\bAO\b/);
+  assert.match(welcome, /\/Applications\/Agent Orchestrator\.app/);
+  assert.match(conclusion, /Open Orchestrator from Applications/);
+  const args = f.calls.find(([command]) => command.endsWith('pkgbuild'))[1];
+  assert.equal(args[args.indexOf('--install-location') + 1], '/Applications');
+  assert.equal(args[args.indexOf('--identifier') + 1], 'dev.agent-orchestrator.desktop.repair');
+});
 test('signs, notarizes, staples and canonically verifies before emitting output; never overwrites', async (t) => {
   const f = await buildFixture(t);
   assert.equal(await buildRepairInstaller(f.options, f.execute), f.options.output);

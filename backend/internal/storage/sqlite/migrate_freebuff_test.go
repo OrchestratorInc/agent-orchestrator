@@ -5,13 +5,13 @@ import (
 	"testing"
 )
 
-const freebuffMigrationVersion = 20261020181743263
+const freebuffMigrationVersion = 20261114172624733
 
 // TestMigrationAllowsFreebuffAndReversesSchema checks that Freebuff becomes
 // insertable, unknown harnesses stay rejected, and the down migration restores
 // the exact prior constraint.
 func TestMigrationAllowsFreebuffAndReversesSchema(t *testing.T) {
-	db := openMigratedDatabaseCopy(t, 20261019220421514)
+	db := openMigratedDatabaseCopy(t, 20261114072016988)
 	var before string
 	if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE name = 'sessions'`).Scan(&before); err != nil {
 		t.Fatal(err)
@@ -30,7 +30,7 @@ func TestMigrationAllowsFreebuffAndReversesSchema(t *testing.T) {
 		t.Fatal("unknown harness bypassed the CHECK constraint")
 	}
 	mustExec(t, db, `UPDATE sessions SET harness = '' WHERE harness = 'freebuff'`)
-	downTo(t, db, 20261019220421514)
+	downTo(t, db, 20261114072016988)
 	var after string
 	if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE name = 'sessions'`).Scan(&after); err != nil || after != before {
 		t.Fatalf("down migration did not restore original schema: %v", err)
@@ -42,7 +42,7 @@ func TestMigrationAllowsFreebuffAndReversesSchema(t *testing.T) {
 }
 
 func TestFreebuffSchemaRepairAddsMissingHarness(t *testing.T) {
-	db := openMigratedDatabaseCopy(t, 20261019220421514)
+	db := openMigratedDatabaseCopy(t, 20261114072016988)
 	if err := reconcileHarnessConstraint(db); err != nil {
 		t.Fatalf("repair: %v", err)
 	}

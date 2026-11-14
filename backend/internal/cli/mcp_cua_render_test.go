@@ -126,7 +126,7 @@ func TestRenderCuaRunStepsWithFailedObservation(t *testing.T) {
 	want := `run_steps: 1/1 steps ok
 1. click ok: ✅ Performed AXPress on [2] AXButton "".
 observation failed: window_id 99999999 is not a live window (closed, or the id is stale).
-The steps above ran, but AO could not read the window after them. Read it with get_window_state before acting again.
+The steps above ran, but Orchestrator could not read the window after them. Read it with get_window_state before acting again.
 `
 	if text != want {
 		t.Fatalf("text =\n%s\nwant\n%s", text, want)

@@ -33,33 +33,11 @@ func (a Adapter) RunInstallScript(ctx context.Context, command ports.InstallScri
 	if len(command.Interpreter) == 0 {
 		return result, errors.New("installer interpreter is empty")
 	}
-	parsed, err := url.Parse(command.URL)
-	if err != nil || parsed.Scheme != "https" || parsed.Host == "" {
-		return result, fmt.Errorf("installer URL must be absolute HTTPS: %q", command.URL)
-	}
-
 	downloadCtx, cancelDownload := context.WithTimeout(ctx, remoteScriptDownloadTimeout)
 	defer cancelDownload()
-	req, err := http.NewRequestWithContext(downloadCtx, http.MethodGet, command.URL, http.NoBody)
+	response, err := a.getHTTPS(downloadCtx, command.URL, "installer")
 	if err != nil {
-		return result, fmt.Errorf("create installer request: %w", err)
-	}
-	client := *a.httpClient
-	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
-		if len(via) > remoteScriptMaxRedirects {
-			return errors.New("installer download exceeded redirect limit")
-		}
-		if req.URL.Scheme != "https" {
-			return errors.New("installer redirect must remain HTTPS")
-		}
-		return nil
-	}
-	response, err := client.Do(req)
-	if err != nil {
-		return result, fmt.Errorf("download installer: %w", err)
-	}
-	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return result, errors.Join(fmt.Errorf("download installer: HTTP %s", response.Status), response.Body.Close())
+		return result, err
 	}
 	body, err := io.ReadAll(io.LimitReader(response.Body, remoteScriptMaxBytes+1))
 	closeErr := response.Body.Close()
@@ -124,6 +102,38 @@ func (a Adapter) RunInstallScript(ctx context.Context, command ports.InstallScri
 	// writes to relative paths stay private and are removed with it.
 	err = a.RunInstall(ctx, ports.InstallCommand{Argv: argv, Env: command.Env, Dir: jobDir, Isolated: command.Isolated}, stdout, stderr)
 	return result, err
+}
+
+// getHTTPS fetches a fixed daemon-owned HTTPS URL, refusing a plain-HTTP URL
+// or redirect and more than remoteScriptMaxRedirects hops. what names the
+// download in errors. The caller closes the body of the returned response.
+func (a Adapter) getHTTPS(ctx context.Context, rawURL, what string) (*http.Response, error) {
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" {
+		return nil, fmt.Errorf("%s URL must be absolute HTTPS: %q", what, rawURL)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, http.NoBody)
+	if err != nil {
+		return nil, fmt.Errorf("create %s request: %w", what, err)
+	}
+	client := *a.httpClient
+	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if len(via) > remoteScriptMaxRedirects {
+			return fmt.Errorf("%s download exceeded redirect limit", what)
+		}
+		if req.URL.Scheme != "https" {
+			return fmt.Errorf("%s redirect must remain HTTPS", what)
+		}
+		return nil
+	}
+	response, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("download %s: %w", what, err)
+	}
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		return nil, errors.Join(fmt.Errorf("download %s: HTTP %s", what, response.Status), response.Body.Close())
+	}
+	return response, nil
 }
 
 var powerShellParameterName = regexp.MustCompile(`^-[A-Za-z][A-Za-z0-9]*$`)

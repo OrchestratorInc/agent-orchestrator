@@ -278,7 +278,7 @@ func (r *Resolver) resolveAOInitialized(ctx context.Context, repo string) (Resol
 		branch, ok = r.legacyAOInitializedBranch(ctx, repo)
 		if !ok {
 			return Resolution{}, unresolvedf(
-				"repository %q has no remote or AO-recorded default", repo,
+				"repository %q has no remote or Orchestrator-recorded default", repo,
 			)
 		}
 		if _, err := r.run(ctx, r.binary, "-C", repo, "config", "--local", ManagedDefaultConfigKey, branch); err != nil {

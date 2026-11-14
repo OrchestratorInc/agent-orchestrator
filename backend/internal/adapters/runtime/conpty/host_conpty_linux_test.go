@@ -127,7 +127,10 @@ func TestLinuxDefaultSpawnHostEndToEnd(t *testing.T) {
 			t.Fatalf("get output: %v", outputErr)
 		}
 		text := strings.ReplaceAll(output, "\r", "")
-		if strings.Contains(text, "ready:works:prefix") && strings.Contains(text, "received:hello") {
+		// The host answers the script's DA1 query on its stdin, and nothing reads
+		// that reply before the input does, so it may arrive ahead of "hello".
+		received := strings.ReplaceAll(text, string(da1Reply), "")
+		if strings.Contains(text, "ready:works:prefix") && strings.Contains(received, "received:hello") {
 			break
 		}
 		if time.Now().After(deadline) {

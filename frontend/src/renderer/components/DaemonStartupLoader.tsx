@@ -1,4 +1,6 @@
+import { useRef } from "react";
 import { useTranslation } from "react-i18next";
+import { useAncestorFlag } from "../hooks/useElementFlag";
 import { AOMascot } from "./AOMascot";
 import { useSystemRequirementsGate } from "../hooks/useSystemRequirementsGate";
 import { InstallDependencyDialog } from "./InstallDependencyDialog";
@@ -10,12 +12,15 @@ export function DaemonStartupLoader() {
 		requirements,
 		requirementsBlocked,
 	} = useSystemRequirementsGate();
+	const screenRef = useRef<HTMLDivElement>(null);
+	useAncestorFlag(screenRef, ".app-shell-root", "data-startup-screen", true);
 
 	return (
 		<div
 			aria-busy="true"
-			aria-label={t("startup.aria", { brand: "Agent Orchestrator" })}
-			className="ao-startup-screen flex h-full w-full items-center justify-center bg-background text-foreground"
+			aria-label={t("startup.aria", { brand: "Orchestrator" })}
+			ref={screenRef}
+			className="ao-startup-screen flex h-full w-full items-center justify-center bg-sidebar text-foreground"
 			data-testid="daemon-startup-loader"
 			role="status"
 		>
