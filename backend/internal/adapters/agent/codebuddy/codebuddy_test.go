@@ -164,28 +164,34 @@ func TestCurrentSurfaceProtectsDecisionsAndDrafts(t *testing.T) {
 		name, output string
 		state        domain.ActivityState
 		ready        bool
+		refusal      error
 	}{
-		{"empty", frame("● Finished.", ""), domain.ActivityIdle, true},
-		{"completed question", frame("Do you want to continue?\nEnter to confirm was quoted in the answer.\n● Finished.", ""), domain.ActivityIdle, true},
-		{"draft", frame("● Finished.", "human draft"), domain.ActivityIdle, false},
-		{"wrapped", frame("● Finished.", "\n human continuation"), domain.ActivityIdle, false},
-		{"active", frame("✹ Waking… (1s · waiting for model)", ""), domain.ActivityActive, false},
-		{"active tip", frame("✸ Waking… (1s · streaming)\n  └ Tip: try a small task", ""), domain.ActivityActive, false},
-		{"permission", rule + "\nDo you want to create proof.json?\n> 1. Yes\n2. No", domain.ActivityWaitingInput, false},
-		{"trust", "Do you trust the files in this folder?\nEnter to confirm", domain.ActivityWaitingInput, false},
-		{"login", "Select login method:\nEnter to login", domain.ActivityWaitingInput, false},
+		{"empty", frame("● Finished.", ""), domain.ActivityIdle, true, nil},
+		{"completed question", frame("Do you want to continue?\nEnter to confirm was quoted in the answer.\n● Finished.", ""), domain.ActivityIdle, true, nil},
+		{"draft", frame("● Finished.", "human draft"), domain.ActivityIdle, false, ports.ErrTerminalComposerDraft},
+		{"wrapped", frame("● Finished.", "\n human continuation"), domain.ActivityIdle, false, ports.ErrTerminalComposerDraft},
+		{"active", frame("✹ Waking… (1s · waiting for model)", ""), domain.ActivityActive, false, ports.ErrTerminalTurnActive},
+		{"active tip", frame("✸ Waking… (1s · streaming)\n  └ Tip: try a small task", ""), domain.ActivityActive, false, ports.ErrTerminalTurnActive},
+		{"permission", rule + "\nDo you want to create proof.json?\n> 1. Yes\n2. No", domain.ActivityWaitingInput, false, nil},
+		{"trust", "Do you trust the files in this folder?\nEnter to confirm", domain.ActivityWaitingInput, false, nil},
+		{"login", "Select login method:\nEnter to login", domain.ActivityWaitingInput, false, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			state, ok := p.DetectTerminalActivity(tc.output)
 			if !ok || state != tc.state {
 				t.Fatalf("activity=%s %v", state, ok)
 			}
-			err := p.ValidateTerminalMessage(tc.output, "next task")
+			err := p.ValidateTerminalPaste(tc.output, "next task")
 			if tc.ready != (err == nil) {
 				t.Fatalf("ready=%v err=%v", tc.ready, err)
 			}
 			if err != nil && !errors.Is(err, ports.ErrTerminalMessageNotReady) {
 				t.Fatalf("not a refusal: %v", err)
+			}
+			for _, reason := range []error{ports.ErrTerminalComposerDraft, ports.ErrTerminalTurnActive} {
+				if got := err != nil && errors.Is(err, reason); got != (reason == tc.refusal) {
+					t.Fatalf("refusal %v names %v = %v, want reason %v", err, reason, got, tc.refusal)
+				}
 			}
 		})
 	}

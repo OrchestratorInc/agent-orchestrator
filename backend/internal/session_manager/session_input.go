@@ -101,7 +101,8 @@ func (m *Manager) ValidateSessionMessageInput(ctx context.Context, rec domain.Se
 		return nil
 	}
 	if !m.beginGuardedPaste(rec.ID) {
-		return ports.ErrTerminalMessageNotReady
+		// Other writers, such as queued keystrokes, are still admitted.
+		return errors.Join(ports.ErrTerminalMessageNotReady, ports.ErrTerminalComposerDraft)
 	}
 	reader, available := m.runtime.(ports.StyledTerminalOutputReader)
 	if !available {
@@ -111,7 +112,7 @@ func (m *Manager) ValidateSessionMessageInput(ctx context.Context, rec domain.Se
 	if err != nil {
 		return err
 	}
-	return guard.ValidateTerminalMessage(output, message)
+	return guard.ValidateTerminalPaste(output, message)
 }
 
 func (m *Manager) releaseSessionInput(id domain.SessionID) {

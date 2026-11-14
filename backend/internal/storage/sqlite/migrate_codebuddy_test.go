@@ -173,3 +173,18 @@ func TestCodeBuddyPreviewRepairRefusesPartialCanonicalSchema(t *testing.T) {
 		t.Fatalf("partial repair changed ledger: %d %v", retained, err)
 	}
 }
+
+// Once CodeBuddy's migration is recorded, a later change to main's canonical
+// 214/215 objects must not read as a preview ledger: the repair neither refuses
+// startup nor releases a canonical ledger entry.
+func TestCodeBuddyPreviewRepairStopsOnceItsMigrationIsRecorded(t *testing.T) {
+	db := openMigratedDatabaseCopy(t, codeBuddyHarnessMigration)
+	mustExec(t, db, `DROP TRIGGER sessions_record_harness_release_insert`)
+	if err := repairRenumberedCodeBuddyMigrationHistory(db); err != nil {
+		t.Fatalf("repair after a later canonical change: %v", err)
+	}
+	var retained int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM goose_db_version WHERE version_id IN (214, 215) AND is_applied = 1`).Scan(&retained); err != nil || retained != 2 {
+		t.Fatalf("canonical ledger entries = %d, %v; want both retained", retained, err)
+	}
+}

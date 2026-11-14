@@ -29,14 +29,19 @@ func DeriveActivityState(event string, _ []byte) (domain.ActivityState, bool) {
 // ContinuouslyDetectTerminalActivity enables current viewport observation alongside hooks.
 func (*Plugin) ContinuouslyDetectTerminalActivity() bool { return true }
 
-// ValidateTerminalMessage requires an initialized empty native composer before pasting.
-func (p *Plugin) ValidateTerminalMessage(output, message string) error {
+// ValidateTerminalPaste requires an initialized empty native composer before pasting.
+func (p *Plugin) ValidateTerminalPaste(output, message string) error {
 	if err := validateTask(message); err != nil {
 		return err
 	}
 	observation := p.InspectTerminalSurface(output)
-	if observation.Work != ports.TerminalSurfaceWorkIdle || observation.Composer != ports.TerminalComposerEmpty {
-		return errors.Join(ports.ErrTerminalMessageNotReady, errors.New("codebuddy requires an initialized empty composer; resolve native decisions or your draft in the terminal"))
+	switch {
+	case observation.Composer == ports.TerminalComposerDraft:
+		return errors.Join(ports.ErrTerminalMessageNotReady, ports.ErrTerminalComposerDraft, errors.New("codebuddy composer holds an unsent draft; submit or clear it in the terminal"))
+	case observation.Work == ports.TerminalSurfaceWorkActive:
+		return errors.Join(ports.ErrTerminalMessageNotReady, ports.ErrTerminalTurnActive, errors.New("codebuddy is still running a turn"))
+	case observation.Work != ports.TerminalSurfaceWorkIdle || observation.Composer != ports.TerminalComposerEmpty:
+		return errors.Join(ports.ErrTerminalMessageNotReady, errors.New("codebuddy requires an initialized empty composer; resolve the native decision in the terminal"))
 	}
 	return nil
 }

@@ -78,3 +78,26 @@ func TestExactCandidateVersion(t *testing.T) {
 		}
 	}
 }
+
+type versionPlugin struct {
+	binary string
+	err    error
+}
+
+func (p versionPlugin) ResolveBinary(context.Context) (string, error) { return p.binary, p.err }
+func (versionPlugin) AuthStatus(context.Context) (ports.AgentAuthStatus, error) {
+	return ports.AgentAuthStatusUnknown, nil
+}
+
+// The candidate rechecks its exact binary before each launch, including a
+// replacement on resume, inside its own Configure rather than shared launch.
+func TestLaunchVersionRecheckRefusesBeforeNativeState(t *testing.T) {
+	missing := errors.New("not installed")
+	if err := recheckLaunchVersion(context.Background(), versionPlugin{err: missing}); !errors.Is(err, ports.ErrChatDriverUnavailable) || !errors.Is(err, missing) {
+		t.Fatalf("unresolved binary = %v, want ErrChatDriverUnavailable", err)
+	}
+	unreadable := versionPlugin{binary: t.TempDir() + "/codebuddy-missing"}
+	if err := recheckLaunchVersion(context.Background(), unreadable); !errors.Is(err, ports.ErrChatDriverIncompatible) {
+		t.Fatalf("unreadable version = %v, want ErrChatDriverIncompatible", err)
+	}
+}

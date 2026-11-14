@@ -152,14 +152,6 @@ func buildConfig(plugin Plugin, cfg Config, log *slog.Logger) acpdriver.Config {
 			if err != nil {
 				return acpdriver.Launch{}, fmt.Errorf("%w: %w", ports.ErrChatDriverUnavailable, err)
 			}
-			if cfg.VersionProbe != nil {
-				versionCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-				versionErr := cfg.VersionProbe(versionCtx, binary)
-				cancel()
-				if versionErr != nil {
-					return acpdriver.Launch{}, fmt.Errorf("%w: %w", ports.ErrChatDriverIncompatible, versionErr)
-				}
-			}
 			args, overrides, err := cfg.Configure(ctx, launchCfg)
 			if err != nil {
 				return acpdriver.Launch{}, err

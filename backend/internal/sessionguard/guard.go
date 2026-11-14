@@ -455,10 +455,19 @@ func (g *Guard) sendAdmittedChecked(ctx context.Context, id domain.SessionID, ms
 	g.leaseMu.RUnlock()
 	if guarded {
 		if err := checker.ValidateSessionMessageInput(ctx, rec, msg); err != nil {
-			if errors.Is(err, ports.ErrTerminalMessageNotReady) {
-				return SuppressedAwaitingUser, nil
+			var outcome Outcome
+			switch {
+			case errors.Is(err, ports.ErrTerminalComposerDraft):
+				outcome = SuppressedComposerBusy
+			case errors.Is(err, ports.ErrTerminalTurnActive):
+				outcome = SuppressedBusy
+			case errors.Is(err, ports.ErrTerminalMessageNotReady):
+				outcome = SuppressedAwaitingUser
+			default:
+				return SuppressedUnknown, fmt.Errorf("guard %s: terminal input: %w", id, err)
 			}
-			return SuppressedUnknown, fmt.Errorf("guard %s: terminal input: %w", id, err)
+			g.logger.Info("sessionguard: write suppressed", "sessionID", id, "reason", outcome.String(), "state", string(rec.Activity.State))
+			return outcome, nil
 		}
 	}
 	// Composer-occupancy check runs last, under the held input lease and on the

@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	acpsdk "github.com/coder/acp-go-sdk"
@@ -45,6 +46,12 @@ func NewCandidate(plugin Plugin, log *slog.Logger) ports.ChatDriver {
 			ports.ChatCapabilityRollback:        false,
 		},
 		Configure: func(ctx context.Context, cfg acpdriver.LaunchConfig) ([]string, map[string]string, error) {
+			// Recheck the exact binary before every launch, including a replacement
+			// on resume, so a changed distribution cannot start. Shared native ACP
+			// launch stays unprobed for every other harness.
+			if err := recheckLaunchVersion(ctx, plugin); err != nil {
+				return nil, nil, err
+			}
 			if err := validateOwnedProfile(cfg); err != nil {
 				return nil, nil, err
 			}
@@ -191,6 +198,23 @@ func validateTurnSettings(initial ports.PermissionMode, settings ports.ChatTurnS
 	}
 	return nil
 }
+
+// recheckLaunchVersion runs the admission version check against the binary the
+// shared launch resolves (the plugin caches it) before any native state exists.
+func recheckLaunchVersion(ctx context.Context, plugin nativeacp.Plugin) error {
+	binary, err := plugin.ResolveBinary(ctx)
+	if err != nil {
+		return fmt.Errorf("%w: %w", ports.ErrChatDriverUnavailable, err)
+	}
+	versionCtx, cancel := context.WithTimeout(ctx, launchVersionTimeout)
+	defer cancel()
+	if err := versionProbe(versionCtx, binary); err != nil {
+		return fmt.Errorf("%w: %w", ports.ErrChatDriverIncompatible, err)
+	}
+	return nil
+}
+
+const launchVersionTimeout = 5 * time.Second
 
 func versionProbe(ctx context.Context, binary string) error {
 	output, err := aoprocess.CommandContext(ctx, binary, "--version").CombinedOutput()

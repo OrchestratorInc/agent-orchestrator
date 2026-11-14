@@ -126,7 +126,7 @@ type guardedPasteAgent struct {
 	validated int
 }
 
-func (a *guardedPasteAgent) ValidateTerminalMessage(string, string) error {
+func (a *guardedPasteAgent) ValidateTerminalPaste(string, string) error {
 	a.validated++
 	return nil
 }

@@ -36,7 +36,7 @@ describe("HarnessModelsPanel", () => {
 		h.catalog = { models: [], allowCustom: true, customModelEntry };
 		render(
 			<QueryClientProvider client={new QueryClient()}>
-				<HarnessModelsPanel agentId="codex" installed needsLogin={false} onOpenAccount={() => {}} />
+				<HarnessModelsPanel agentId="codebuddy" installed needsLogin={false} onOpenAccount={() => {}} />
 			</QueryClientProvider>,
 		);
 		expect(await screen.findByText(/Enter a model ID in New Task/)).toBeInTheDocument();
@@ -47,13 +47,23 @@ describe("HarnessModelsPanel", () => {
 		h.catalog = { models: [], allowCustom: true, customModelEntry };
 		render(
 			<QueryClientProvider client={new QueryClient()}>
-				<HarnessModelsPanel agentId="codex" installed needsLogin={false} onOpenAccount={() => {}} />
+				<HarnessModelsPanel agentId="codebuddy" installed needsLogin={false} onOpenAccount={() => {}} />
 			</QueryClientProvider>,
 		);
 		expect(await screen.findByText("This harness reported no models.")).toBeInTheDocument();
 		expect(screen.queryByText(/Enter a model ID in New Task/)).not.toBeInTheDocument();
 	});
 
+	it("keeps the catalog message for harnesses whose New Task picks from a catalog", async () => {
+		h.catalog = { models: [], allowCustom: true, customModelEntry: "direct" };
+		render(
+			<QueryClientProvider client={new QueryClient()}>
+				<HarnessModelsPanel agentId="codex" installed needsLogin={false} onOpenAccount={() => {}} />
+			</QueryClientProvider>,
+		);
+		expect(await screen.findByText("This harness reported no models.")).toBeInTheDocument();
+		expect(screen.queryByText(/Enter a model ID in New Task/)).not.toBeInTheDocument();
+	});
 
 	it("switches a Cursor model's variants together", async () => {
 		render(

@@ -137,6 +137,10 @@ var (
 	// submit both as one prompt (#5711). The API maps it to a retryable 409; the
 	// caller retries once the operator submits or discards their draft.
 	ErrComposerBusy = errors.New("session: composer has an unsent draft")
+	// ErrSessionBusy means a TUI session's current surface shows a running turn
+	// on a harness that cannot take a pasted message mid-turn. The API maps it to
+	// a retryable 409; the caller retries once the turn finishes.
+	ErrSessionBusy = errors.New("session: agent turn is still running")
 	// ErrDeliveryUnconfirmed means the prompt was written to the pane, but the
 	// harness never confirmed that the agent became active before the
 	// confirmation budget was exhausted (e.g. trailing Enter absorbed or dropped).
@@ -5543,6 +5547,8 @@ func (m *Manager) send(ctx context.Context, id domain.SessionID, message, client
 	switch outcome {
 	case sessionguard.SuppressedComposerBusy:
 		return fmt.Errorf("send %s: %w", id, ErrComposerBusy)
+	case sessionguard.SuppressedBusy:
+		return fmt.Errorf("send %s: %w", id, ErrSessionBusy)
 	case sessionguard.SuppressedNotFound:
 		return fmt.Errorf("send %s: %w", id, ErrNotFound)
 	case sessionguard.SuppressedTerminated:
@@ -7384,6 +7390,10 @@ func (m *Manager) deliverStartedInput(ctx context.Context, id domain.SessionID, 
 		return fmt.Errorf("send %s: %w", id, ErrAgentExited)
 	case sessionguard.SuppressedAwaitingUser:
 		return fmt.Errorf("send %s: %w", id, ErrAwaitingDecision)
+	case sessionguard.SuppressedComposerBusy:
+		return fmt.Errorf("send %s: %w", id, ErrComposerBusy)
+	case sessionguard.SuppressedBusy:
+		return fmt.Errorf("send %s: %w", id, ErrSessionBusy)
 	case sessionguard.SuppressedStartupPending:
 		return fmt.Errorf("send %s: %w", id, ErrStartupPending)
 	case sessionguard.SuppressedInputGated:

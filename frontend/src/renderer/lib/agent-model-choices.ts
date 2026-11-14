@@ -4,6 +4,14 @@ export function isConcreteModelID(id: string): boolean {
 	return id !== "" && id.toLowerCase() !== "default";
 }
 
+// Harnesses whose models are chosen natively, with no catalog, so a local New
+// Task accepts the model ID the user types. Others keep picking from the catalog.
+const NEW_TASK_TYPED_MODEL_AGENTS: ReadonlySet<string> = new Set(["codebuddy"]);
+
+export function acceptsTypedNewTaskModel(agentId: string | undefined): boolean {
+	return agentId !== undefined && NEW_TASK_TYPED_MODEL_AGENTS.has(agentId);
+}
+
 /**
  * Leaves out the models switched off in Settings → Harness → Models. An empty
  * or unset list means every model, and models a catalog adds later are offered.

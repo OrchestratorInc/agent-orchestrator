@@ -1679,7 +1679,7 @@ func (d reportSemanticDelivery) Submit(ctx context.Context, id domain.SessionID,
 		return reportsvc.ErrReportDeliveryModeUnsupported
 	}
 	err := d.sessions.SendSemantic(ctx, id, message, idempotencyKey)
-	if errors.Is(err, sessionmanager.ErrComposerBusy) {
+	if errors.Is(err, sessionmanager.ErrComposerBusy) || errors.Is(err, sessionmanager.ErrSessionBusy) {
 		return fmt.Errorf("%w: %w", reportsvc.ErrOrchestratorBusy, err)
 	}
 	return err

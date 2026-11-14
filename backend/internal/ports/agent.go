@@ -10,8 +10,16 @@ import (
 )
 
 var (
-	// ErrTerminalMessageNotReady refuses a paste into a native decision or draft.
+	// ErrTerminalMessageNotReady refuses a paste the current rendered surface
+	// cannot take. On its own it means a native decision or an unrecognized
+	// surface; ErrTerminalTurnActive and ErrTerminalComposerDraft join it to name
+	// the retryable cases.
 	ErrTerminalMessageNotReady = errors.New("terminal composer is not ready for a message")
+	// ErrTerminalTurnActive refuses a paste while the native turn is still running.
+	ErrTerminalTurnActive = errors.New("terminal turn is still active")
+	// ErrTerminalComposerDraft refuses a paste into the human's unsent draft or
+	// alongside keystrokes still being written.
+	ErrTerminalComposerDraft = errors.New("terminal composer holds human input")
 	// ErrUnsupportedEffort reports a value the selected model did not advertise.
 	ErrUnsupportedEffort = errors.New("unsupported model effort")
 	// ErrModelCapabilitiesUnavailable reports tuning that cannot be validated safely.
@@ -903,7 +911,7 @@ type RestoreConfig struct {
 // TerminalMessageInputGuard validates pastes under an exclusive input lease
 // against the current rendered viewport. Raw native keys remain available.
 type TerminalMessageInputGuard interface {
-	ValidateTerminalMessage(output, message string) error
+	ValidateTerminalPaste(output, message string) error
 }
 
 // SessionRef identifies an AO session whose agent-owned metadata may be read.

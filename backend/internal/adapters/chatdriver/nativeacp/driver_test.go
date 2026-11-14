@@ -179,34 +179,31 @@ func TestBindingReusesPluginRuntimeEnvironment(t *testing.T) {
 	}
 }
 
-func TestBindingRechecksVersionBeforeReplacementLaunch(t *testing.T) {
-	var changed bool
+// VersionProbe gates admission only. Every registered binding that sets it
+// (Cursor, Kimchi, OMP, Qwen, Hermes) must launch and relaunch on resume
+// without another version command; a candidate needing a launch-time check
+// runs it in its own Configure.
+func TestBindingLaunchDoesNotRunVersionProbe(t *testing.T) {
+	probes := 0
 	configured := false
-	mismatch := errors.New("distribution changed")
 	cfg := buildConfig(fakePlugin{binary: "/user/provider"}, Config{
-		Harness: domain.HarnessCodeBuddy,
-		VersionProbe: func(_ context.Context, binary string) error {
-			if binary != "/user/provider" {
-				t.Fatalf("wrong binary: %s", binary)
-			}
-			if changed {
-				return mismatch
-			}
+		Harness: domain.HarnessCursor,
+		VersionProbe: func(context.Context, string) error {
+			probes++
 			return nil
 		},
 		Configure: func(context.Context, acpdriver.LaunchConfig) ([]string, map[string]string, error) {
 			configured = true
-			return []string{"--acp"}, nil, nil
+			return []string{"acp"}, nil, nil
 		},
 	}, nil)
-	if err := cfg.Probe(context.Background()); err != nil {
-		t.Fatal(err)
+	if err := cfg.Probe(context.Background()); err != nil || probes != 1 {
+		t.Fatalf("admission probe = %v after %d version checks, want one", err, probes)
 	}
-	changed = true
-	if _, err := cfg.Launch(context.Background(), acpdriver.LaunchConfig{}); !errors.Is(err, ports.ErrChatDriverIncompatible) || !errors.Is(err, mismatch) {
-		t.Fatalf("changed distribution launched: %v", err)
+	if _, err := cfg.Launch(context.Background(), acpdriver.LaunchConfig{}); err != nil || !configured {
+		t.Fatalf("launch = %v (configured %v)", err, configured)
 	}
-	if configured {
-		t.Fatal("incompatible launch prepared native state")
+	if probes != 1 {
+		t.Fatalf("launch ran %d extra version checks", probes-1)
 	}
 }

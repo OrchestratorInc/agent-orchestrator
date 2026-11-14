@@ -2305,16 +2305,12 @@ describe("TaskComposer", () => {
 		expect(await screen.findByTitle("Provider temporarily unavailable")).toBeInTheDocument();
 	});
 
-	it.each([
-		["codex", "Codex", "direct"],
-		["claude-code", "Claude Code", "direct"],
-		["codex", "Codex", undefined],
-	] as const)("submits a directly entered model for %s (%s, entry=%s)", async (agent, label, customModelEntry) => {
-		clearCachedAgentModels(agent);
-		h.agentCatalog = { agents: [agentReadiness(agent, label)] };
+	it.each(["direct", undefined] as const)("submits a directly entered CodeBuddy model (entry=%s)", async (customModelEntry) => {
+		clearCachedAgentModels("codebuddy");
+		h.agentCatalog = { agents: [agentReadiness("codebuddy", "CodeBuddy Code")] };
 		h.get.mockImplementation(async (path: string) => {
 			if (path.includes("/models")) return { data: {
-				agentId: agent,
+				agentId: "codebuddy",
 				selectionMode: "text",
 				models: [],
 				allowCustom: true,
@@ -2325,7 +2321,7 @@ describe("TaskComposer", () => {
 		h.post.mockResolvedValueOnce({ data: { session: { id: "custom-model-session" } } });
 
 		render(<Wrap><TaskComposer projectId="__standalone__" onCreated={vi.fn()} /></Wrap>);
-		await waitFor(() => expect(screen.getByTestId("agent-field")).toHaveAttribute("data-value", agent));
+		await waitFor(() => expect(screen.getByTestId("agent-field")).toHaveAttribute("data-value", "codebuddy"));
 		const picker = await screen.findByRole("button", { name: "Model" });
 		await userEvent.click(picker);
 		const search = await screen.findByRole("searchbox", { name: "Search model" });
@@ -2337,15 +2333,21 @@ describe("TaskComposer", () => {
 		fireEvent.click(startTask());
 		await waitFor(() => expect(h.post).toHaveBeenCalledWith(
 			"/api/v1/sessions",
-			expect.objectContaining({ body: expect.objectContaining({ harness: agent, model: "private/model-id" }) }),
+			expect.objectContaining({ body: expect.objectContaining({ harness: "codebuddy", model: "private/model-id" }) }),
 		));
 	});
 
-	it("refuses direct model entry when the catalog explicitly disables it", async () => {
+	it.each([
+		["codebuddy", "CodeBuddy Code", "none"],
+		["codex", "Codex", "direct"],
+	] as const)("offers no typed model for %s when New Task picks from its catalog (entry=%s)", async (agent, label, customModelEntry) => {
+		clearCachedAgentModels(agent);
+		h.agentCatalog = { agents: [agentReadiness(agent, label)] };
 		h.get.mockImplementation(async (path: string) => path.includes("/models")
-			? { data: { agentId: "codex", selectionMode: "catalog", models: [], allowCustom: true, customModelEntry: "none" } }
-			: { data: { status: "ok", project: { agent: "codex", config: {} } } });
-		render(<Wrap><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);
+			? { data: { agentId: agent, selectionMode: "text", models: [], allowCustom: true, customModelEntry } }
+			: { data: { status: "ok", project: { config: {} } } });
+		render(<Wrap><TaskComposer projectId="__standalone__" onCreated={vi.fn()} /></Wrap>);
+		await waitFor(() => expect(screen.getByTestId("agent-field")).toHaveAttribute("data-value", agent));
 		await userEvent.click(await screen.findByRole("button", { name: "Model" }));
 		expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
 		expect(screen.queryByRole("menuitem", { name: /as a custom model/ })).not.toBeInTheDocument();
@@ -2416,7 +2418,7 @@ describe("TaskComposer", () => {
 		const model = await screen.findByRole("button", { name: "Model" });
 		await userEvent.click(model);
 		expect(screen.queryByRole("menuitem", { name: "Use agent model" })).not.toBeInTheDocument();
-		expect(screen.getByRole("searchbox", { name: "Search model" })).toBeInTheDocument();
+		expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
 		await userEvent.click(screen.getByRole("menuitem", { name: "GPT-5.1" }));
 		fireEvent.change(task(), { target: { value: "Use the selected model" } });
 		fireEvent.click(screen.getByText("Start task"));
