@@ -101,6 +101,15 @@ describe("pending Chat send", () => {
 		expect((await reservePendingSend(key, { id: "recover", draftText: "Fix it", text: "Fix it", hasAttachments: false })).id).toBe("photo-A");
 	});
 
+	it("still sends when the phone's storage cannot keep the retry record", async () => {
+		const key = pendingSendKey("host", "storage-full");
+		const AsyncStorage = (await import("@react-native-async-storage/async-storage")).default;
+		vi.mocked(AsyncStorage.setItem).mockRejectedValueOnce(new Error("database or disk is full"));
+		const candidate = { id: "first", draftText: "Fix it", text: "Fix it", hasAttachments: false };
+		await expect(reservePendingSend(key, candidate)).resolves.toEqual(candidate);
+		expect(await readPendingSend(key)).toBeNull();
+	});
+
 	it("scopes the retry record to both host and conversation", () => {
 		expect(pendingSendKey("host-A", "session-1")).not.toBe(pendingSendKey("host-B", "session-1"));
 		expect(pendingSendKey("host-A", "session-1")).not.toBe(pendingSendKey("host-A", "session-2"));
