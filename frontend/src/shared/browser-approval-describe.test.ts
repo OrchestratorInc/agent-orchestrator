@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it } from "vitest";
-import { approvalCropRect, approvalDescribeScript, describeApprovalTarget } from "./browser-approval-describe";
+import { APPROVAL_FOCUS_SCRIPT, approvalCropRect, approvalDescribeScript, describeApprovalTarget } from "./browser-approval-describe";
 
 // jsdom has no layout: give every element a visible box.
 beforeEach(() => {
@@ -100,6 +100,29 @@ describe("describeApprovalTarget", () => {
 		expect(describeApprovalTarget(change, { mode: "element" }, change.getElementById("b"))).toMatchObject({ formHasNewPassword: true });
 		const confirm = page(`<form method="post"><input type="password"><input type="password"><button id="b">Save</button></form>`);
 		expect(describeApprovalTarget(confirm, { mode: "element" }, confirm.getElementById("b"))).toMatchObject({ formHasNewPassword: true });
+	});
+
+	it("prefers the exact name over a normalized look-alike", () => {
+		const doc = page(`<button type="button">Continue!</button><form method="post"><input autocomplete="cc-number"><button id="pay">Continue</button></form>`);
+		expect(describeApprovalTarget(doc, { mode: "match", role: "button", name: "Continue" })).toMatchObject({ isSubmit: true, formHasPayment: true });
+	});
+
+	it("refuses an ambiguous normalized match rather than picking the first", () => {
+		const doc = page(`<button type="button">Continue!</button><form method="post"><button>Continue?</button></form>`);
+		expect(describeApprovalTarget(doc, { mode: "match", role: "button", name: "Continue" })).toBeNull();
+	});
+
+	it("marks the focused element for Enter and reports when focus moves", () => {
+		const doc = page(`<input id="a" aria-label="Message"><input id="b" aria-label="Other">`);
+		(doc.getElementById("a") as HTMLInputElement).focus();
+		const win = { innerWidth: 1, innerHeight: 1 } as Record<string, unknown>;
+		// eslint-disable-next-line no-new-func
+		const run = (code: string) => new Function("document", "window", `return ${code}`)(doc, win);
+		const described = run(approvalDescribeScript({ mode: "focused" })) as { focus?: string };
+		expect(described.focus).toEqual(expect.any(String));
+		expect(run(APPROVAL_FOCUS_SCRIPT)).toBe(described.focus);
+		(doc.getElementById("b") as HTMLInputElement).focus();
+		expect(run(APPROVAL_FOCUS_SCRIPT)).toBe("");
 	});
 
 	it("returns null when nothing matches or nothing is focused", () => {

@@ -24,8 +24,9 @@ function useNow(intervalMs = 1000): number {
  * was flagged, with the element in its page. Shared by every approval source
  * (risky browser actions, a saved login's first use on a site).
  *
- * Escape denies. Enter does not approve: a keystroke meant for the composer or
- * terminal must never confirm a payment.
+ * Escape denies. Enter never approves, not even on a focused approval button:
+ * a keystroke meant for the composer or terminal must never confirm a
+ * payment. Space or a click does.
  */
 export function ApprovalPrompt({
 	request,
@@ -64,6 +65,12 @@ export function ApprovalPrompt({
 		if (event.key === "Escape") {
 			event.preventDefault();
 			onDecide("deny");
+			return;
+		}
+		// Enter on a focused button would click it. Approval buttons ignore
+		// Enter; Space (or a click) approves.
+		if (event.key === "Enter" && event.target instanceof HTMLElement && event.target.closest("[data-approval-allow]")) {
+			event.preventDefault();
 		}
 	};
 
@@ -140,11 +147,11 @@ export function ApprovalPrompt({
 						</kbd>
 					</Button>
 					{request.site ? (
-						<Button type="button" variant="ghost" size="sm" disabled={busy} onClick={() => onDecide("allow-site")}>
+						<Button type="button" variant="ghost" size="sm" disabled={busy} data-approval-allow="" onClick={() => onDecide("allow-site")}>
 							{t("approvals.allowSite", { site: request.site })}
 						</Button>
 					) : null}
-					<Button type="button" variant="accent" size="sm" disabled={busy} onClick={() => onDecide("allow-once")}>
+					<Button type="button" variant="accent" size="sm" disabled={busy} data-approval-allow="" onClick={() => onDecide("allow-once")}>
 						{t("approvals.allowOnce")}
 					</Button>
 				</div>
