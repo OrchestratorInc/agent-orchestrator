@@ -26,6 +26,28 @@ export function runAppShortcut(event: AppShortcutEvent): void {
 	for (const listener of Array.from(localListeners)) listener(event);
 }
 
+/**
+ * For shortcuts main delivers on a channel of their own (⌘N, session and tab
+ * cycling, New terminal, Close tab): subscribes `handler` there and to the
+ * command palette running the shortcut, which only reaches in-renderer
+ * listeners. Returns the unsubscribe.
+ */
+export function onDedicatedShortcut(
+	id: AppShortcutId,
+	subscribe: (handler: () => void) => () => void,
+	handler: () => void,
+): () => void {
+	const unsubscribe = subscribe(handler);
+	const local = (event: AppShortcutEvent) => {
+		if (event.id === id) handler();
+	};
+	localListeners.add(local);
+	return () => {
+		unsubscribe();
+		localListeners.delete(local);
+	};
+}
+
 const TERMINAL_SELECTOR = ".xterm, .terminal-surface, [data-testid='session-terminal']";
 
 /**

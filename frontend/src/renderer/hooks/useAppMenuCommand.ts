@@ -52,15 +52,28 @@ export function useSessionMenuAvailable(id: AppMenuCommandId, available: boolean
 	useAppMenuAvailable(id, available && !settingsOpen);
 }
 
+// In-renderer listeners, so the command palette can run a menu action the
+// native menu delivers on its own channel.
+const localMenuActionListeners = new Set<(action: AppMenuActionId) => void>();
+
+/** Runs every handler registered for a menu action, as if its menu item were chosen. */
+export function runAppMenuAction(action: AppMenuActionId): void {
+	for (const listener of Array.from(localMenuActionListeners)) listener(action);
+}
+
 /** Runs `handler` when a native menu item with no keyboard shortcut is chosen. */
 export function useAppMenuAction(id: AppMenuActionId, handler: () => void): void {
 	const handlerRef = useRef(handler);
 	handlerRef.current = handler;
-	useEffect(
-		() =>
-			aoBridge.app.onMenuAction?.((action) => {
-				if (action === id) handlerRef.current();
-			}),
-		[id],
-	);
+	useEffect(() => {
+		const listener = (action: AppMenuActionId) => {
+			if (action === id) handlerRef.current();
+		};
+		localMenuActionListeners.add(listener);
+		const unsubscribe = aoBridge.app.onMenuAction?.(listener);
+		return () => {
+			localMenuActionListeners.delete(listener);
+			unsubscribe?.();
+		};
+	}, [id]);
 }

@@ -134,6 +134,7 @@ import { useCloudSessionEventStream } from "../hooks/useCloudSessionEvents";
 import { latestScriptRun } from "../lib/cloud-script-runs";
 import { cloudChatEventsQueryKey, recordCloudScriptStepEvents, useCachedQueryData, useCloudScriptRuns } from "../hooks/useCloudScriptRuns";
 import { useTerminalResetStore } from "../stores/terminal-reset-store";
+import { useSessionSwitchStore } from "../stores/session-switch-store";
 import { apiErrorCode, apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 import { useHostConnection } from "../hooks/useHostConnection";
@@ -2353,6 +2354,13 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		if (!interfaceUi.switchAction && !(picksAgent && !interfaceUi.switchControl)) return undefined;
 		return { session, hostId, blocked: agentWorking, picksAgent, switchTarget: interfaceUi.target, switchAction: interfaceUi.switchAction };
 	}, [agentWorking, hostId, interfaceUi.switchAction, interfaceUi.switchControl, interfaceUi.target, session]);
+	// Cmd+K offers the same switch for the session on screen.
+	useEffect(() => {
+		if (!session) return;
+		const id = session.id;
+		useSessionSwitchStore.getState().publish(id, sessionTabAgentMenu);
+		return () => useSessionSwitchStore.getState().publish(id, undefined);
+	}, [session?.id, sessionTabAgentMenu]);
 	// The session tab always shows its ⋮ menu after the title; the other tabs
 	// show a close button on hover. While an interface switch is requested or
 	// running, the switch's status (cancel on hover) takes the ⋮'s place.
