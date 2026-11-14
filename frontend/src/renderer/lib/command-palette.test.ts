@@ -945,10 +945,10 @@ describe("the blank palette", () => {
 	const many = (count: number) => Array.from({ length: count }, (_, index) =>
 		session({ id: `s${index}`, status: "working", lastInteractionAt: `2026-06-${String(10 + index).padStart(2, "0")}T00:00:00Z` }));
 
-	it("lists the most recently worked-in sessions first, a few of them", () => {
+	it("leaves sessions to a search, most recently worked-in first", () => {
 		const items = buildCommands({ workspaces: [{ id: "proj-1", name: "app", path: "/repos/app", type: "main", sessions: many(10) }] });
-		const sessions = displayGroups(items, "").find((group) => group.id === "sessions")?.items.map((item) => item.id);
-		expect(sessions).toEqual(["session:s9", "session:s8", "session:s7", "session:s6", "session:s5", "session:s4"]);
+		expect(displayGroups(items, "").some((group) => group.id === "sessions")).toBe(false);
+		expect(goToCommands(items, "sessions").slice(0, 3).map((item) => item.id)).toEqual(["session:s9", "session:s8", "session:s7"]);
 		// Typing still searches every one of them.
 		expect(filterCommands(items, "s0").some((item) => item.id === "session:s0")).toBe(true);
 	});

@@ -335,9 +335,7 @@ export function buildChatSearchCommands(
 }
 
 /** Where a row lives: its project, marked Cloud when it does not run on this machine. */
-function workspacePlace(workspace: WorkspaceSummary, t: TFunction): string | undefined {
-	// A standalone session has no project to name; "Sessions" would only repeat the list.
-	if (workspace.id === STANDALONE_WORKSPACE_ID) return undefined;
+function workspacePlace(workspace: WorkspaceSummary, t: TFunction): string {
 	return workspace.kind === CLOUD_PROJECT_KIND ? `${workspace.name} · ${t("shell.cloudProjectBadge")}` : workspace.name;
 }
 
@@ -1030,11 +1028,11 @@ export function isSearchGroup(group: CommandGroupId): boolean {
 export const SEARCH_GROUP_ROWS = 6;
 
 /**
- * Rows the blank palette lists per navigation group: a short start (the most
- * recent sessions) rather than every one. Projects wait for a search, since
- * the sidebar already lists them. Typing searches them all.
+ * Rows the blank palette lists per navigation group. Sessions and projects
+ * wait for a search (or Go to session / Go to project), since the sidebar
+ * already lists them; only the sessions that need attention lead.
  */
-export const BLANK_GROUP_ROWS: Partial<Record<CommandGroupId, number>> = { attention: 5, sessions: 6, projects: 0 };
+export const BLANK_GROUP_ROWS: Partial<Record<CommandGroupId, number>> = { attention: 5, sessions: 0, projects: 0 };
 
 function capBlankGroups(items: CommandItem[]): CommandItem[] {
 	const seen = new Map<CommandGroupId, number>();
