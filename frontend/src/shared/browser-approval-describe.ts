@@ -145,9 +145,13 @@ export function describeApprovalTarget(
 	if (tag === "input") facts.inputType = (target as HTMLInputElement).type;
 	if (tag === "a") facts.href = clean((target as HTMLAnchorElement).href, 500);
 	if (form) {
-		// form.elements includes controls outside the form tag that join it
-		// with form="id".
-		const controls = Array.from(form.elements);
+		// Controls are collected by their own form owner, in document order:
+		// that includes fields outside the form tag that join it with
+		// form="id" and image buttons (which form.elements leaves out), and a
+		// field named "elements" or "action" cannot shadow the lookup.
+		const controls = Array.from(doc.querySelectorAll("input, select, textarea, button")).filter(
+			(el) => (el as HTMLInputElement).form === form,
+		);
 		const submitControl = (el: Element) =>
 			(el.tagName.toLowerCase() === "button" && ((el as HTMLButtonElement).type || "submit").toLowerCase() === "submit") ||
 			(el.tagName.toLowerCase() === "input" && ["submit", "image"].includes((el as HTMLInputElement).type));
@@ -165,8 +169,10 @@ export function describeApprovalTarget(
 				return raw;
 			}
 		};
-		facts.formAction = clean(actionOverride !== null ? resolve(actionOverride) : form.action, 500);
-		facts.formMethod = (override("formmethod") ?? form.getAttribute("method") ?? "get").toLowerCase();
+		// Read the form's own attributes: form.action can be shadowed by a field.
+		const formAction = Element.prototype.getAttribute.call(form, "action");
+		facts.formAction = clean(resolve(actionOverride ?? formAction ?? doc.baseURI), 500);
+		facts.formMethod = (override("formmethod") ?? Element.prototype.getAttribute.call(form, "method") ?? "get").toLowerCase();
 		facts.formHasPayment = controls.some((el) => ["input", "select"].includes(el.tagName.toLowerCase()) && paymentField(el));
 		facts.formHasPassword = controls.some((el) => el.tagName.toLowerCase() === "input" && (el as HTMLInputElement).type === "password");
 		facts.submitName = submitter ? accessibleName(submitter) : undefined;

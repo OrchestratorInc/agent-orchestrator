@@ -570,6 +570,7 @@ describe("Executor", () => {
 		});
 		expect(await run("describe", { action: "act", instruction: "the checkout button" })).toEqual({
 			target: { pageUrl: "https://shop.test/", pageTitle: "Shop", instruction: "the checkout button" },
+			binding: { tabId: "t1", document: expect.any(String) },
 			untrustedExternalContent: true,
 		});
 		(document.getElementById("q") as HTMLInputElement).focus();
@@ -580,18 +581,25 @@ describe("Executor", () => {
 		expect(fake.debuggerCalls.slice(before).some((call) => call.method.startsWith("Input."))).toBe(false);
 	});
 
-	it("refuses an approved act when the instruction now matches another element", async () => {
+	it("refuses an approved action once the page, tab, or element is not the one approved", async () => {
 		const { fake, run, approve } = setup();
 		await approve("s1", false);
 		await run("open", { url: "https://shop.test/" });
 		let clicks = 0;
 		document.getElementById("buy")!.addEventListener("click", () => clicks++);
-		const before = fake.debuggerCalls.length;
-		await expect(run("act", { instruction: "the buy now button", expectRef: "e999" })).rejects.toMatchObject({ code: "BROWSER_TARGET_CHANGED" });
+		const { binding } = (await run("describe", { action: "act", instruction: "the buy now button" })) as { binding: Record<string, unknown> };
+		expect(binding).toMatchObject({ tabId: "t1", ref: expect.any(String), document: expect.any(String) });
+
+		// Another element.
+		await expect(run("act", { instruction: "the buy now button", approvalBinding: { ...binding, ref: "e999" } })).rejects.toMatchObject({ code: "BROWSER_TARGET_CHANGED" });
+		// Another document with the same refs (the page navigated while waiting).
+		await expect(run("click", { ref: binding.ref, approvalBinding: { ...binding, document: "older-document" } })).rejects.toMatchObject({ code: "BROWSER_TARGET_CHANGED" });
+		// Another tab.
+		await expect(run("press", { key: "Enter", approvalBinding: { ...binding, tabId: "t2" } })).rejects.toMatchObject({ code: "BROWSER_TARGET_CHANGED" });
 		expect(clicks).toBe(0);
-		expect(fake.debuggerCalls.slice(before).some((call) => call.method.startsWith("Input."))).toBe(false);
-		const { resolvedRef } = (await run("describe", { action: "act", instruction: "the buy now button" })) as { resolvedRef: string };
-		expect(await run("act", { instruction: "the buy now button", expectRef: resolvedRef })).toMatchObject({ outcome: "matched" });
+		expect(fake.debuggerCalls.some((call) => call.method.startsWith("Input."))).toBe(false);
+
+		expect(await run("act", { instruction: "the buy now button", approvalBinding: binding })).toMatchObject({ outcome: "matched" });
 		expect(clicks).toBe(1);
 	});
 
