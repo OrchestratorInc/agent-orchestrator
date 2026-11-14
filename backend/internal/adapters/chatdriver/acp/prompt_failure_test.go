@@ -209,26 +209,36 @@ func TestACPDriverPromptResponseFailure(t *testing.T) {
 }
 
 // claude-agent-acp reports a successful answer that quotes "Please run /login" as
-// a refused login whose title is that answer. Only a refusal the agent did not
-// stream as its answer is a real one.
+// a refused login whose title is that answer's last text block. Only a refusal
+// that does not end an answer the agent streamed is a real one.
 func TestPromptResponseLoginRefusalThatRepeatsTheAnswer(t *testing.T) {
-	const answer = "All four `auth_required` turns are false.\n\nEach answer quotes \"Please run /login\"; there were no real logouts."
+	const (
+		answer  = "All four `auth_required` turns are false.\n\nEach answer quotes \"Please run /login\"; there were no real logouts."
+		refusal = "Not logged in · Please run /login"
+	)
 	for _, tc := range []struct {
 		name     string
 		streamed map[string]string
 		title    string
+		details  string
 		actions  []any
 		want     domain.TurnState
 		reauth   bool
 	}{
 		{"answer quoting the advice", map[string]string{"msg-1": "Checking the turns.", "msg-2": answer},
-			strings.ReplaceAll(answer, "\n\n", "\n"), []any{"login"}, domain.TurnStateCompleted, false},
+			strings.ReplaceAll(answer, "\n\n", "\n"), "", []any{"login"}, domain.TurnStateCompleted, false},
+		{"last text block of the answer", map[string]string{"msg-1": "Checking the turns.\n\n" + answer},
+			answer, "", []any{"login"}, domain.TurnStateCompleted, false},
+		{"answer quoting the advice with details", map[string]string{"msg-1": answer},
+			answer, "Run /login in a terminal.", []any{"login"}, domain.TurnStateCompleted, false},
+		{"refusal the answer quoted earlier", map[string]string{"msg-1": "Each failed turn says \"" + refusal + "\". Let me check the next one."},
+			refusal, "", []any{"login"}, domain.TurnStateFailed, true},
 		{"refusal after some answer", map[string]string{"msg-1": "Let me run the tests."},
-			"Not logged in · Please run /login", []any{"login"}, domain.TurnStateFailed, true},
+			refusal, "", []any{"login"}, domain.TurnStateFailed, true},
 		{"refusal before any answer", nil,
-			"Not logged in · Please run /login", []any{"login"}, domain.TurnStateFailed, true},
+			refusal, "", []any{"login"}, domain.TurnStateFailed, true},
 		{"other failure repeating the answer", map[string]string{"msg-1": answer},
-			answer, nil, domain.TurnStateFailed, false},
+			answer, "", nil, domain.TurnStateFailed, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			authRejected := 0
@@ -238,9 +248,15 @@ func TestPromptResponseLoginRefusalThatRepeatsTheAnswer(t *testing.T) {
 				promptResponseFailure: func(response acpsdk.PromptResponse, _ string) error { return promptResponseFailure(response.Meta) },
 				onAuthRejected:        func() { authRejected++ },
 			}
-			conv.finishPrompt("turn-1", acpsdk.PromptResponse{StopReason: acpsdk.StopReasonEndTurn, Meta: testPromptFailureMeta(map[string]any{
-				"id": "turn-1:error", "severity": "error", "category": "access", "title": tc.title, "actions": tc.actions,
-			})}, nil)
+			// The adapter's sessionFailureMeta shape: details only when present.
+			failure := map[string]any{
+				"id": "turn-1:error", "revision": float64(1), "category": "access", "severity": "error",
+				"title": tc.title, "actions": tc.actions,
+			}
+			if tc.details != "" {
+				failure["details"] = tc.details
+			}
+			conv.finishPrompt("turn-1", acpsdk.PromptResponse{StopReason: acpsdk.StopReasonEndTurn, Meta: testPromptFailureMeta(failure)}, nil)
 			close(conv.events)
 			var completed *ports.ChatEvent
 			for event := range conv.events {

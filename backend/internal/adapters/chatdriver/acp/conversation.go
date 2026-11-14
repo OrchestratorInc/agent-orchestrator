@@ -998,7 +998,7 @@ func (c *conversation) finishPrompt(
 		state = turnState(resp.StopReason)
 		if c.promptResponseFailure != nil && state != domain.TurnStateInterrupted && !interruptedLocally {
 			if failure := c.promptResponseFailure(resp, turnModel); failure != nil {
-				if loginRefusalRepeatsAnswer(failure, streamed) {
+				if loginRefusalRepeatsAnswer(failure, resp.Meta, streamed) {
 					c.log.Warn("chat: ignored a refused login whose text is the turn's own answer", "turn", turnID)
 				} else {
 					state = domain.TurnStateFailed
@@ -1271,27 +1271,34 @@ func turnState(reason acpsdk.StopReason) domain.TurnState {
 	}
 }
 
-// loginRefusalRepeatsAnswer reports a refused login whose text is an answer the
+// loginRefusalRepeatsAnswer reports a refused login whose text ends an answer the
 // agent streamed this turn. claude-agent-acp fails any successful turn whose
-// result contains "Please run /login" and puts that result in the failure, so an
-// answer that only quotes the CLI's advice comes back as a refused login. A real
-// refusal is never streamed: the adapter withholds the CLI's own login message
-// and sends it only as the failure. Whitespace is ignored because the result and
-// the streamed chunks may join the answer's text blocks differently.
-func loginRefusalRepeatsAnswer(failure error, streamed []string) bool {
+// result contains "Please run /login" and makes that result the failure's title,
+// so an answer that only quotes the CLI's advice comes back as a refused login.
+// The result is the answer's last text block, so it ends the message it came
+// from. A real refusal is never streamed: the adapter withholds the CLI's own
+// login message and sends it only as the failure. Only the title is compared, so
+// details a later adapter adds cannot hide the match, and whitespace is ignored
+// because the result and the streamed chunks may space the text differently.
+func loginRefusalRepeatsAnswer(failure error, meta map[string]any, streamed []string) bool {
 	if !errors.Is(failure, ports.ErrChatAuthRequired) {
 		return false
 	}
-	text := strings.Join(strings.Fields(failure.Error()), "")
-	if text == "" {
+	title, _ := sessionFailure(meta)["title"].(string)
+	title = withoutSpaces(title)
+	if title == "" {
 		return false
 	}
 	for _, answer := range streamed {
-		if strings.Contains(strings.Join(strings.Fields(answer), ""), text) {
+		if strings.HasSuffix(withoutSpaces(answer), title) {
 			return true
 		}
 	}
 	return false
+}
+
+func withoutSpaces(text string) string {
+	return strings.Join(strings.Fields(text), "")
 }
 
 func (c *conversation) Interrupt(ctx context.Context, providerTurnID string) error {
