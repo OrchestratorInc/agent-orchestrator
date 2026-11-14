@@ -130,14 +130,14 @@ export function ReviewerSelect({
 	}, [defaultHarness, hostId, menuOpen, menuProjectID, queryClient, selectableOptions]);
 	// An unidentified model is left off the trigger rather than labelled.
 	const selectedModelLabel = modelOrModeLabel(triggerCatalog.data, model, mode, "");
-	// A saved pin can outlive a provider change. A fresh provider catalog can say
-	// the pin is absent; it cannot say what the provider actually runs instead.
+	// Catalogs are device-wide and can differ from a project-specific provider.
+	// Their contents do not establish what the reviewer actually runs.
 	const catalog = triggerCatalog.data;
 	const missingFromCatalog = !harnessOnly && isConcreteModelID(model) && !isConcreteModelID(mode) &&
 		catalog?.selectionMode === "catalog" && catalog.source === "provider" &&
 		!catalog.stale && !catalog.warning && !catalog.refreshRecommended && catalog.models.length > 0 &&
 		!catalog.models.some((item) => item.id === model);
-	const catalogNote = t("settings.models.notInCurrentCatalog", { defaultValue: "not in current catalog" });
+	const catalogNote = t("settings.models.notInDeviceCatalog", { defaultValue: "not in device catalog" });
 	const triggerLabel = [value ? agentLabel(value) : defaultHarnessLabel, harnessOnly ? null : selectedModelLabel]
 		.filter(Boolean)
 		.join(" · ");

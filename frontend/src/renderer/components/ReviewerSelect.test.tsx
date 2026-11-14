@@ -186,7 +186,7 @@ describe("ReviewerSelect", () => {
 		expect(onConfigChange).toHaveBeenCalledWith("codex", { model: "gpt-test" });
 	});
 
-	it("marks a saved reviewer alias absent from the active provider catalog", () => {
+	it("marks a saved reviewer alias absent from the device provider catalog", () => {
 		const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
 		client.setQueryData(["agent-models", "claude-code", ""], {
 			agentId: "claude-code", selectionMode: "catalog", source: "provider", stale: false,
@@ -196,8 +196,8 @@ describe("ReviewerSelect", () => {
 			ariaLabel="Reviewer" value="claude-code" model="opus" defaultHarness="codex" onChange={() => undefined}
 		/></QueryClientProvider>);
 		expect(screen.getByRole("button", { name: "Reviewer" })).toHaveTextContent("opus");
-		expect(screen.getByText("(not in current catalog)")).toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Reviewer" })).toHaveAccessibleDescription("opus: not in current catalog");
+		expect(screen.getByText("(not in device catalog)")).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Reviewer" })).toHaveAccessibleDescription("opus: not in device catalog");
 	});
 
 	it("does not flag a matching saved reviewer model", () => {
@@ -210,7 +210,7 @@ describe("ReviewerSelect", () => {
 			ariaLabel="Reviewer" value="claude-code" model="opus" defaultHarness="codex" onChange={() => undefined}
 		/></QueryClientProvider>);
 		expect(screen.getByRole("button", { name: "Reviewer" })).toHaveTextContent("Claude Code · Opus");
-		expect(screen.getByRole("button", { name: "Reviewer" })).not.toHaveTextContent("not in current catalog");
+		expect(screen.getByRole("button", { name: "Reviewer" })).not.toHaveTextContent("not in device catalog");
 	});
 
 	it("does not claim a pin is absent when the provider catalog is stale", () => {
@@ -222,7 +222,7 @@ describe("ReviewerSelect", () => {
 		render(<QueryClientProvider client={client}><ReviewerSelect
 			ariaLabel="Reviewer" value="claude-code" model="opus" defaultHarness="codex" onChange={() => undefined}
 		/></QueryClientProvider>);
-		expect(screen.getByRole("button", { name: "Reviewer" })).not.toHaveTextContent("not in current catalog");
+		expect(screen.getByRole("button", { name: "Reviewer" })).not.toHaveTextContent("not in device catalog");
 	});
 
 	it.each([
@@ -238,7 +238,7 @@ describe("ReviewerSelect", () => {
 		render(<QueryClientProvider client={client}><ReviewerSelect
 			ariaLabel="Reviewer" value="claude-code" model="opus" mode={mode} defaultHarness="codex" onChange={() => undefined}
 		/></QueryClientProvider>);
-		expect(screen.getByRole("button", { name: "Reviewer" })).not.toHaveAccessibleDescription("opus: not in current catalog");
+		expect(screen.getByRole("button", { name: "Reviewer" })).not.toHaveAccessibleDescription("opus: not in device catalog");
 	});
 
 });
