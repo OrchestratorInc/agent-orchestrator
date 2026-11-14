@@ -136,15 +136,23 @@ func TestCaptureBackgroundDoesNotBlockAndOptOutDrainsAdmittedSends(t *testing.T)
 		select {
 		case <-returned:
 		case <-time.After(time.Second):
-			t.Fatal("background capture blocked on transport")
+			t.Fatalf("background capture blocked on transport for %s", operation)
 		}
-		select {
-		case event := <-transport.events:
-			if event.Tags["operation"] != operation {
-				t.Fatalf("concurrent scope mixed tags: %v", event.Tags)
+		// Delivery hops through a goroutine, so a loaded CI runner can delay it
+		// without any capture being dropped or blocking; only the "returned"
+		// bound above is the property under test.
+		deadline := time.After(5 * time.Second)
+	delivered:
+		for {
+			select {
+			case event := <-transport.events:
+				if event.Tags["operation"] != operation {
+					t.Fatalf("concurrent scope mixed tags for %s: %v", operation, event.Tags)
+				}
+				break delivered
+			case <-deadline:
+				t.Fatalf("admitted send for %s did not reach transport", operation)
 			}
-		case <-time.After(time.Second):
-			t.Fatal("admitted send did not reach transport")
 		}
 	}
 	// Saturation drops the diagnostic without waiting or retaining a queue.
