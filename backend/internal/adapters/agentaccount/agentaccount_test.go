@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -296,8 +297,10 @@ func TestClaudeDeviceIdentitySeesSavedSetupToken(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := &Claude{
-		Binary:    func(context.Context) (string, error) { return bin, nil },
-		DeviceEnv: func() map[string]string { return map[string]string{"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-saved"} },
+		Binary: func(context.Context) (string, error) { return bin, nil },
+		DeviceEnv: func(context.Context) map[string]string {
+			return map[string]string{"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-saved"}
+		},
 	}
 	device, err := c.Identity(context.Background(), "")
 	if err != nil || !device.SignedIn {
@@ -325,20 +328,40 @@ func TestClaudeIdentityCountsSubscriptionLogins(t *testing.T) {
 	}
 	c := &Claude{Binary: func(context.Context) (string, error) { return bin, nil }}
 	for _, tc := range []struct {
-		name, status       string
-		signedIn, loggedIn bool
-		email              string
+		name, status        string
+		signedIn, loggedIn  bool
+		email, org, orgName string
 	}{
-		{"claude.ai", `{"loggedIn":true,"authMethod":"claude.ai","email":"a@example.com","subscriptionType":"max"}`, true, true, "a@example.com"},
-		{"token", `{"loggedIn":true,"authMethod":"oauth_token"}`, true, true, ""},
+		{"claude.ai", `{"loggedIn":true,"authMethod":"claude.ai","email":"a@example.com","subscriptionType":"max","orgId":"org-1","orgName":"Team"}`, true, true, "a@example.com", "org-1", "Team"},
+		{"token", `{"loggedIn":true,"authMethod":"oauth_token"}`, true, true, "", "", ""},
 		// Not a subscription, but the CLI can launch with it.
-		{"api key", `{"loggedIn":true,"authMethod":"api_key"}`, false, true, ""},
-		{"signed out", `{"loggedIn":false,"authMethod":"none"}`, false, false, ""},
+		{"api key", `{"loggedIn":true,"authMethod":"api_key"}`, false, true, "", "", ""},
+		{"signed out", `{"loggedIn":false,"authMethod":"none"}`, false, false, "", "", ""},
 	} {
 		t.Setenv("FAKE_CLAUDE_STATUS", tc.status)
 		got, err := c.Identity(context.Background(), "")
-		if err != nil || got.SignedIn != tc.signedIn || got.LoggedIn != tc.loggedIn || got.Email != tc.email {
+		if err != nil || got.SignedIn != tc.signedIn || got.LoggedIn != tc.loggedIn || got.Email != tc.email || got.OrgID != tc.org || got.OrgName != tc.orgName {
 			t.Fatalf("%s: identity = %+v, %v", tc.name, got, err)
 		}
+	}
+}
+
+// TestClaudeSlowCheckReportsTheDeadline: a CLI killed at the deadline says
+// "signal: killed"; the check reports the deadline, so the app can say the CLI
+// was slow rather than that it failed.
+func TestClaudeSlowCheckReportsTheDeadline(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses a shell script as the CLI")
+	}
+	bin := filepath.Join(t.TempDir(), "claude")
+	write(t, bin, "#!/bin/sh\nexec sleep 10\n")
+	if err := os.Chmod(bin, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	c := &Claude{Binary: func(context.Context) (string, error) { return bin, nil }}
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	if _, err := c.Identity(ctx, t.TempDir()); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("slow identity check = %v, want the deadline", err)
 	}
 }

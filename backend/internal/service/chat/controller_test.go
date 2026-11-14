@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/kimiacp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/attachmentstore"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/lifecycle"
@@ -76,8 +77,8 @@ func fullSnapshotReader(st *sqlite.Store) chatsvc.SnapshotReader {
 }
 
 func boundedSnapshotReader(st *sqlite.Store) chatsvc.SnapshotPageReader {
-	return chatsvc.SnapshotPageReaderFunc(func(ctx context.Context, id string, before, limit int64) (chatsvc.ConversationRows, error) {
-		rows, err := st.LoadConversationSnapshotPage(ctx, id, before, limit)
+	return chatsvc.SnapshotPageReaderFunc(func(ctx context.Context, id string, before, after, limit int64) (chatsvc.ConversationRows, error) {
+		rows, err := st.LoadConversationSnapshotRange(ctx, id, before, after, limit)
 		return chatsvc.ConversationRows{Conversation: rows.Conversation, ActiveBranch: rows.ActiveBranch,
 			Turns: rows.Turns, Messages: rows.Messages, Activities: rows.Activities}, err
 	})
@@ -3197,6 +3198,17 @@ func newHarnessWithConversationAndStoreForHarness(
 	agentHarness domain.AgentHarness,
 ) *harness {
 	t.Helper()
+	return newHarnessInWorkspace(t, conv, wrapStore, agentHarness, t.TempDir())
+}
+
+func newHarnessInWorkspace(
+	t *testing.T,
+	conv ports.ChatConversation,
+	wrapStore func(*sqlite.Store) chatsvc.Store,
+	agentHarness domain.AgentHarness,
+	workspace string,
+) *harness {
+	t.Helper()
 	st := openStore(t)
 	if agentHarness != domain.HarnessCodex {
 		record, found, err := st.GetSession(context.Background(), testSession)
@@ -3270,7 +3282,7 @@ func newHarnessWithConversationAndStoreForHarness(
 		SessionID:     testSession,
 		ProjectID:     testProject,
 		Harness:       agentHarness,
-		WorkspacePath: t.TempDir(),
+		WorkspacePath: workspace,
 	})
 	if err != nil {
 		t.Fatalf("Start: %v", err)
@@ -3400,6 +3412,40 @@ func TestSendVerifiesExcerptAndFallsBackToTextForProvider(t *testing.T) {
 	}
 }
 
+// Claude Code can answer on its own after a background task finishes. That
+// message has no AO turn, but it is settled transcript the user can select.
+func TestSendAcceptsExcerptFromMessageOutsideAnyTurn(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	source := "Nothing else has changed. Did you close the `test` window?"
+	h.conv.emit(
+		ports.ChatEvent{Kind: ports.ChatEventMessageDelta, ProviderItemID: "turnless", Delta: source},
+		ports.ChatEvent{Kind: ports.ChatEventMessageCompleted, ProviderItemID: "turnless", Text: source},
+	)
+	snapshot := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		return len(s.Messages) == 1 && !s.Messages[0].Streaming
+	})
+	message := snapshot.Messages[0]
+	if message.TurnID != "" {
+		t.Fatalf("source turn = %q, want a message outside any turn", message.TurnID)
+	}
+
+	if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+		Text: "I think it crashed", ClientMessageID: "turnless-followup", Origin: domain.MessageOriginHuman,
+		Excerpts: []ports.ChatExcerptReference{{
+			ConversationID: h.ctrl.ConversationID(), MessageID: message.ID,
+			Revision: message.Revision, Text: "Did you close the test window?",
+		}},
+	}); err != nil {
+		t.Fatalf("send with excerpt from a message outside any turn: %v", err)
+	}
+	sent := h.conv.sentMessages()
+	if len(sent) != 1 || !strings.Contains(sent[0].Text, "Selected text:\n---\nDid you close the test window?") ||
+		!strings.Contains(sent[0].Text, "Assistant:\n"+source) {
+		t.Fatalf("provider delivery = %#v", sent)
+	}
+}
+
 func TestProviderPromptFailureSettlesTurnAndRecordsRecoveryOnce(t *testing.T) {
 	h := newHarness(t)
 	turn, err := h.svc.Send(context.Background(), testSession, ports.ChatUserMessage{
@@ -3431,6 +3477,9 @@ func TestProviderPromptFailureSettlesTurnAndRecordsRecoveryOnce(t *testing.T) {
 	if snapshot.Turns[0].ErrorMessage != message {
 		t.Fatalf("turn error = %q", snapshot.Turns[0].ErrorMessage)
 	}
+	if got := snapshot.Turns[0].FailureCode; got != domain.ConversationFailureAuthRequired {
+		t.Fatalf("failure code = %q, want %q", got, domain.ConversationFailureAuthRequired)
+	}
 	if snapshot.Conversation.Account.ReauthReason != message {
 		t.Fatalf("reauth reason = %q", snapshot.Conversation.Account.ReauthReason)
 	}
@@ -3438,6 +3487,49 @@ func TestProviderPromptFailureSettlesTurnAndRecordsRecoveryOnce(t *testing.T) {
 		if activity.Kind == domain.ActivityKindError || strings.Contains(activity.ProviderItemID, "ao-reauth-") {
 			t.Fatalf("terminal failure was duplicated as an activity: %#v", activity)
 		}
+	}
+}
+
+// Claude's adapter sends "Not logged in · Please run /login" as a typed login
+// failure. The chat turns that into a sign-in button, so the turn carries the
+// code; a failure that is not about the login carries none.
+func TestRefusedLoginTurnCarriesAuthRequiredCode(t *testing.T) {
+	h := newHarness(t)
+	signedOut, err := h.svc.Send(context.Background(), testSession, ports.ChatUserMessage{
+		Text: "hello", ClientMessageID: "signed-out-prompt", Origin: domain.MessageOriginHuman,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.conv.emit(ports.ChatEvent{
+		Kind: ports.ChatEventTurnCompleted, ProviderTurnID: signedOut.ProviderTurnID,
+		TurnState: domain.TurnStateCompleted,
+		Err:       ports.NewChatProviderFailure("Not logged in · Please run /login", "", ports.ErrChatAuthRequired),
+	})
+	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		return len(s.Turns) == 1 && s.Turns[0].State == domain.TurnStateFailed
+	})
+	other, err := h.svc.Send(context.Background(), testSession, ports.ChatUserMessage{
+		Text: "again", ClientMessageID: "overloaded-prompt", Origin: domain.MessageOriginHuman,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.conv.emit(ports.ChatEvent{
+		Kind: ports.ChatEventTurnCompleted, ProviderTurnID: other.ProviderTurnID,
+		TurnState: domain.TurnStateFailed, Err: errors.New("provider overloaded"),
+	})
+	snapshot := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		return len(s.Turns) == 2 && s.Turns[1].State == domain.TurnStateFailed
+	})
+	if got := snapshot.Turns[0].FailureCode; got != domain.ConversationFailureAuthRequired {
+		t.Fatalf("signed-out turn failure code = %q, want %q", got, domain.ConversationFailureAuthRequired)
+	}
+	if snapshot.Turns[0].ErrorMessage != "Not logged in · Please run /login" {
+		t.Fatalf("signed-out turn keeps the provider text for details, got %q", snapshot.Turns[0].ErrorMessage)
+	}
+	if got := snapshot.Turns[1].FailureCode; got != "" {
+		t.Fatalf("ordinary failure code = %q, want none", got)
 	}
 }
 
@@ -5129,6 +5221,17 @@ func TestServiceStopTerminatesPersistentConversation(t *testing.T) {
 	}
 }
 
+func TestServiceTerminateAllTerminatesPersistentConversation(t *testing.T) {
+	provider := &terminatingConversation{fakeConversation: newFakeConversation()}
+	h := newHarnessWithConversation(t, provider)
+	if err := h.svc.TerminateAll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !provider.terminated.Load() {
+		t.Fatal("desktop quit detached the persistent provider instead of terminating it")
+	}
+}
+
 func TestServiceStopAllRetainsControllerUntilItsEventStreamActuallyEnds(t *testing.T) {
 	base := newFakeConversation()
 	h := newHarnessWithConversation(t, &stuckConversation{
@@ -6674,6 +6777,12 @@ func TestCodexRateLimitsUpdateActiveAccountCapacityWithoutConversationPersistenc
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The capacity callback fires before the event reaches the archive.
+	for deadline := time.Now().Add(5 * time.Second); len(events) == 0 && time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		if events, err = st.ProviderEventsSince(context.Background(), ctrl.ConversationID(), 0, 10); err != nil {
+			t.Fatal(err)
+		}
+	}
 	var archived map[string]any
 	if len(events) != 1 || json.Unmarshal([]byte(events[0].PayloadJson), &archived) != nil || archived["rateLimits"] != nil || strings.Contains(events[0].PayloadJson, "usedPercent") {
 		t.Fatalf("bound Codex capacity leaked into provider archive: %#v", events)
@@ -6851,6 +6960,8 @@ func TestCompactionSettlementWithoutStartDrainsQueue(t *testing.T) {
 	for _, kind := range []ports.ChatEventKind{ports.ChatEventTurnCompleted, ports.ChatEventCompacted} {
 		t.Run(string(kind), func(t *testing.T) {
 			conv := newCompactingConversation()
+			sent := make(chan struct{}, 1)
+			conv.onSend = func(string) { sent <- struct{}{} }
 			h := newHarnessWithConversation(t, conv)
 			ctx := context.Background()
 			if _, err := h.svc.Compact(ctx, testSession); err != nil {
@@ -6863,6 +6974,13 @@ func TestCompactionSettlementWithoutStartDrainsQueue(t *testing.T) {
 			h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
 				return len(s.Turns) == 1 && s.Turns[0].State == domain.TurnStateRunning
 			})
+			// Claiming a queued turn publishes Running before SendTurn crosses
+			// the provider boundary. Wait for that boundary, not just the row.
+			select {
+			case <-sent:
+			case <-time.After(5 * time.Second):
+				t.Fatal("queued turn never reached the provider after compaction")
+			}
 			if got := conv.sentTexts(); len(got) != 1 || got[0] != "after compact" {
 				t.Fatalf("provider messages = %v", got)
 			}
@@ -7252,5 +7370,62 @@ func TestReservedBoundaryAdoptsSuccessorHandleWithoutRewritingHistory(t *testing
 	if keptSource.ProviderConversationID != ancestor ||
 		keptSource.ProviderScopeID != sourceBranch.ProviderScopeID {
 		t.Fatalf("ancestor branch = %+v, want the recorded handle untouched", keptSource)
+	}
+}
+
+// No real executable is started by capability discovery or admission.
+type kimiCapabilityPlugin struct{}
+
+func (kimiCapabilityPlugin) ResolveBinary(context.Context) (string, error) { return "/fake/kimi", nil }
+func (kimiCapabilityPlugin) AuthStatus(context.Context) (ports.AgentAuthStatus, error) {
+	return ports.AgentAuthStatusAuthorized, nil
+}
+
+func TestPermissionModeCatalogMatchesPreflight(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		driver ports.ChatDriver
+		want   []ports.PermissionMode
+	}{
+		{"kimi", kimiacp.New(kimiCapabilityPlugin{}, nil), []ports.PermissionMode{ports.PermissionModeDefault}},
+		{"full approvals", fakeDriver{}, ports.PermissionModesStrictestFirst},
+		{"no approval channel", fakeDriver{caps: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true, ports.ChatCapabilityInterrupt: true, ports.ChatCapabilityResume: true}}, []ports.PermissionMode{ports.PermissionModeBypassPermissions}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := chatsvc.New(chatsvc.Options{Store: openStore(t), Drivers: fakeRegistry{driver: tc.driver}, Log: slog.New(slog.DiscardHandler)})
+			modes, err := svc.PermissionModes(context.Background(), tc.driver.Harness())
+			if err != nil || !reflect.DeepEqual(modes, tc.want) {
+				t.Fatalf("modes = %v, %v; want %v", modes, err, tc.want)
+			}
+			for _, mode := range ports.PermissionModesStrictestFirst {
+				err := svc.PreflightChat(context.Background(), tc.driver.Harness(), mode)
+				if slices.Contains(tc.want, mode) != (err == nil) {
+					t.Fatalf("preflight %s = %v; modes %v", mode, err, modes)
+				}
+				if tc.name == "kimi" && mode != ports.PermissionModeDefault && !errors.Is(err, ports.ErrChatPermissionModeUnsupported) {
+					t.Fatalf("Kimi rejection = %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestStartRejectsProviderPermissionBeforeDriverLaunch(t *testing.T) {
+	launched := false
+	svc := chatsvc.New(chatsvc.Options{
+		Store: openStore(t), Drivers: fakeRegistry{driver: fakeDriver{
+			supports: func(mode ports.PermissionMode) bool { return mode == ports.PermissionModeDefault },
+			start: func(ports.ChatStartConfig) (ports.ChatConversation, error) {
+				launched = true
+				return newFakeConversation(), nil
+			},
+		}}, Log: slog.New(slog.DiscardHandler),
+	})
+	_, err := svc.Start(context.Background(), chatsvc.StartConfig{SessionID: testSession, Harness: domain.HarnessKimi, WorkspacePath: t.TempDir(), Permissions: ports.PermissionModeAuto})
+	if !errors.Is(err, ports.ErrChatPermissionModeUnsupported) {
+		t.Fatalf("Start = %v", err)
+	}
+	if launched {
+		t.Fatal("unsupported permission reached provider launch")
 	}
 }

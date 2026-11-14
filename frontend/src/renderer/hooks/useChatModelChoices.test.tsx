@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { renderHook, waitFor } from "@testing-library/react";
+import { render, renderHook, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChatConfigOption, ChatModel } from "../types/conversation";
 
 vi.mock("./useAgentModelsQuery", () => ({
@@ -19,12 +19,19 @@ vi.mock("./useAgentModelsQuery", () => ({
 	}),
 }));
 
-// Settings-driven narrowing is covered by useOfferedModels' own tests.
-vi.mock("./useOfferedModels", () => ({
-	useOfferedModels: <T,>(_agentId: string | undefined, models: T[] | undefined) => ({ models: models ?? [], narrowed: false }),
-}));
+// Settings-driven narrowing is covered by useOfferedModels' own tests; here only
+// which ids a chat's lists are matched by against the switched-off ones.
+const settings = vi.hoisted(() => ({ disabled: undefined as string[] | undefined }));
+vi.mock("./useOfferedModels", async () => {
+	const { filterDisabledModels } = await import("../lib/agent-model-choices");
+	return {
+		useOfferedModels: <T extends { id: string },>(_agentId: string | undefined, models: T[] | undefined, { keep = [], modelID }: { keep?: ReadonlyArray<string | undefined>; modelID?: (model: T) => string } = {}) =>
+			filterDisabledModels(models ?? [], settings.disabled, keep, modelID),
+	};
+});
 
 import { useChatModelChoices } from "./useChatModelChoices";
+import { TurnSettingsBar } from "../components/chat/TurnSettingsBar";
 
 function wrapper({ children }: { children: ReactNode }) {
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -34,6 +41,8 @@ function wrapper({ children }: { children: ReactNode }) {
 const live: ChatModel[] = [{ id: "live-model", displayName: "Live Model", default: true }];
 
 describe("useChatModelChoices", () => {
+	afterEach(() => { settings.disabled = undefined; });
+
 	it("shows the saved catalog until the live list answers, then the live list", async () => {
 		const { result, rerender } = renderHook(
 			({ models, loaded }: { models: ChatModel[]; loaded: boolean }) =>
@@ -89,5 +98,63 @@ describe("useChatModelChoices", () => {
 		await waitFor(() => expect(cloud.result.current.models.map((model) => model.id)).toContain("claude-opus-5-5"));
 		expect(cloud.result.current.models.every((model) => !model.unavailableReason)).toBe(true);
 		expect(Object.values(reasons(cloud.result.current.configOptions)).every((reason) => !reason)).toBe(true);
+	});
+
+	// The worker's CLI runs Haiku 4.5 for "haiku" where this computer's runs a newer one.
+	const cloudList: ChatModel[] = [
+		{ id: "sonnet", displayName: "Sonnet 4.6", description: "Sonnet 4.6 · Best for everyday tasks", default: true },
+		{ id: "claude-opus-5-5", displayName: "Claude Opus 5.5", default: false },
+		{ id: "haiku", displayName: "Haiku 4.5", description: "Haiku 4.5 · Fastest for quick answers", default: false },
+	];
+	const cloudOptions: ChatConfigOption[] = [{
+		id: "model", name: "Model", category: "model", type: "select", currentValue: "sonnet",
+		choices: cloudList.map((model) => ({ value: model.id, name: model.displayName })),
+	}];
+	const choiceIDs = (configOptions: ChatConfigOption[] | undefined) => configOptions?.[0]?.choices.map((choice) => choice.value);
+
+	it("offers a cloud chat's own Claude list, not this computer's catalog, once it has one", async () => {
+		const { result } = renderHook(() => useChatModelChoices("claude-code", cloudList, cloudOptions, "sonnet", undefined, true, false), { wrapper });
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(result.current.models.map((model) => model.id)).toEqual(["sonnet", "claude-opus-5-5", "haiku"]);
+		expect(choiceIDs(result.current.configOptions)).toEqual(["sonnet", "claude-opus-5-5", "haiku"]);
+	});
+
+	it("filters a cloud chat's Claude choices by their own ids, as New Task does", async () => {
+		// This computer's Sonnet 5.5 is switched off; Cloud's "sonnet" alias is another model.
+		settings.disabled = ["claude-sonnet-5-5"];
+		const kept = renderHook(() => useChatModelChoices("claude-code", cloudList, cloudOptions, "haiku", undefined, true, false), { wrapper });
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(choiceIDs(kept.result.current.configOptions)).toEqual(["sonnet", "claude-opus-5-5", "haiku"]);
+		expect(kept.result.current.models.map((model) => model.id)).toContain("sonnet");
+		// An id both lists share is the same model, and is left out of both.
+		settings.disabled = ["claude-opus-5-5"];
+		const hidden = renderHook(() => useChatModelChoices("claude-code", cloudList, cloudOptions, "haiku", undefined, true, false), { wrapper });
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(choiceIDs(hidden.result.current.configOptions)).toEqual(["sonnet", "haiku"]);
+		expect(hidden.result.current.models.map((model) => model.id)).toEqual(["sonnet", "haiku"]);
+	});
+
+	it("still names and filters a local Claude chat's aliases through this computer's catalog", async () => {
+		settings.disabled = ["claude-sonnet-5-5"];
+		const options: ChatConfigOption[] = [{
+			id: "model", name: "Model", category: "model", type: "select", currentValue: "opus",
+			choices: [{ value: "opus", name: "Opus" }, { value: "sonnet", name: "Sonnet" }],
+		}];
+		const { result } = renderHook(() => useChatModelChoices("claude-code", [], options, "opus"), { wrapper });
+		// The local alias "sonnet" is this computer's Sonnet 5.5, so switching that off hides it.
+		await waitFor(() => expect(choiceIDs(result.current.configOptions)).toEqual(["opus"]));
+		expect(result.current.models.map((model) => model.id)).toEqual(["claude-opus-5-5"]);
+	});
+
+	it("still names a local Claude chat's alias by this computer's newest model of that family", async () => {
+		const options: ChatConfigOption[] = [{
+			id: "model", name: "Model", category: "model", type: "select", currentValue: "sonnet",
+			choices: [{ value: "opus", name: "Opus" }, { value: "sonnet", name: "Sonnet" }],
+		}];
+		const { result } = renderHook(() => useChatModelChoices("claude-code", [], options, "sonnet"), { wrapper });
+		await waitFor(() => expect(result.current.models.map((model) => model.id)).toEqual(["claude-sonnet-5-5", "claude-opus-5-5"]));
+		render(<TurnSettingsBar harness="claude-code" models={result.current.models} settings={{ model: "sonnet" }}
+			configOptions={result.current.configOptions} onChangeConfigOption={vi.fn()} />);
+		expect(screen.getByRole("button", { name: "Model" })).toHaveTextContent("Sonnet 5.5");
 	});
 });

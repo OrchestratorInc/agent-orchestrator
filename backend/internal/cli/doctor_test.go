@@ -753,7 +753,7 @@ func TestDoctorCodexLaunchFlagsWarnOnRejectedFlag(t *testing.T) {
 		codexCanaryFake(t, "error: unexpected argument '--dangerously-bypass-hook-trust' found\n", errors.New("exit status 2")))
 
 	check := findDoctorCheck(t, c.runDoctor(context.Background()), "codex-launch-flags")
-	if check.Level != doctorWarn || !strings.Contains(check.Message, "rejected AO's launch flags") {
+	if check.Level != doctorWarn || !strings.Contains(check.Message, "rejected Orchestrator's launch flags") {
 		t.Fatalf("canary = %+v, want WARN rejected flags", check)
 	}
 }

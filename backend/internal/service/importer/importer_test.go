@@ -302,7 +302,7 @@ func TestValidateProjectImportRootWithOriginAndChildReposWarnsProjectImport(t *t
 	if result.Warning == "" {
 		t.Fatal("warning = empty, want project import warning")
 	}
-	if got, want := result.Warning, "Selected folder has direct child repositories, but because the root repository already has an origin remote AO will import it as a project, not a workspace."; got != want {
+	if got, want := result.Warning, "Selected folder has direct child repositories, but because the root repository already has an origin remote Orchestrator will import it as a project, not a workspace."; got != want {
 		t.Fatalf("warning = %q, want %q", got, want)
 	}
 }

@@ -3,6 +3,7 @@ package deliverytelemetry
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -251,7 +252,6 @@ func TestSessionEndedSkipsGroupingWhenUnavailable(t *testing.T) {
 		lookups   int
 	}{
 		{"export off", "", "proj", nil, 0},
-		{"standalone session", "ins_1", "", nil, 0},
 		{"lookup failure", "ins_1", "proj", errors.New("db"), 1},
 	}
 	for _, tc := range cases {
@@ -268,6 +268,30 @@ func TestSessionEndedSkipsGroupingWhenUnavailable(t *testing.T) {
 				t.Fatalf("grouping lookups = %d, want %d (no ID minted while export is off)", store.lookups, tc.lookups)
 			}
 		})
+	}
+}
+
+// Standalone sessions have no project grouping, but every ended event still
+// carries an opaque, install-scoped session_telemetry_id.
+func TestSessionEndedGivesStandaloneSessionsATelemetryID(t *testing.T) {
+	ids := map[string]string{}
+	for _, installID := range []string{"ins_1", "ins_2"} {
+		store := &fakeStore{}
+		r, sink := newRecorder(store)
+		r.SetInstallID(func() string { return installID })
+		r.SessionEnded(context.Background(), domain.SessionRecord{ID: "ao-3", Kind: domain.KindWorker}, EndKilled)
+		p := sink.only(t, "ao.sessions.ended").Payload
+		id, _ := p["session_telemetry_id"].(string)
+		if len(id) != 32 || strings.Contains(id, "ao-3") {
+			t.Fatalf("session_telemetry_id = %q, want 32 opaque hex chars", id)
+		}
+		if _, ok := p["project_telemetry_id"]; ok || store.lookups != 0 || p["kind"] != "standalone" {
+			t.Fatalf("payload = %#v lookups=%d, want standalone without project grouping", p, store.lookups)
+		}
+		ids[installID] = id
+	}
+	if ids["ins_1"] == ids["ins_2"] {
+		t.Fatal("the same local session ID must not group across installs")
 	}
 }
 
