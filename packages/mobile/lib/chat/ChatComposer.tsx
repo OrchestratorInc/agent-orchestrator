@@ -2,7 +2,6 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import type { ServerConfig } from "../config";
 import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
-import { useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from "react";
 import { ActivityIndicator, Keyboard, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import Svg, { Defs, LinearGradient, Rect, Stop } from "react-native-svg";
@@ -24,12 +23,13 @@ import { DictationField } from "../voice/DictationField";
 import { useVoiceInput } from "../voice/useVoiceInput";
 import { activeTurn, type ChatConfigOption, type ChatExcerpt, type ChatImage, type ChatModel, type ChatResource, type ChatSkill, type ConversationSnapshot, type TurnSettings } from "./types";
 import {
-	composerSuggestionKey,
 	findComposerSuggestion,
+	rankComposerCatalog,
 	replaceComposerSuggestion,
+	type ComposerPickerCatalog,
 	type ComposerSuggestion,
 } from "./composerSuggestions";
-import { chatSheetRoute } from "./chatSheetRegistry";
+import { ComposerSuggestionPanel } from "./ComposerSuggestionPanel";
 import { ChatAttachmentMenu } from "./ChatAttachmentMenu";
 import { ComposerAttachmentTray } from "./ComposerAttachmentTray";
 import { ComposerGlass, composerGlassSupported } from "./composer-glass";
@@ -233,7 +233,6 @@ function Composer({
 	attachmentsUnavailable?: boolean;
 }) {
 	const t = useTheme();
-	const router = useRouter();
 	const styles = useThemedStyles(makeStyles);
 	const fieldSize = useComposerFieldSize();
 	const iconFeedback = usePressFeedback("icon");
@@ -257,7 +256,10 @@ function Composer({
 	const inputRef = useRef<TextInput>(null);
 	const consumedQuote = useRef<string | undefined>(undefined);
 	const [draftLoaded, setDraftLoaded] = useState(false);
-	const [cursor, setCursor] = useState(0);
+	// Undefined until the field reports a selection: text set from outside (a
+	// restored draft, a transcript) leaves the native caret at its end without
+	// a selection event, so an unknown caret reads as the end of the text.
+	const [cursor, setCursor] = useState<number>();
 	// Not component state: an Android pick can resolve after this composer has
 	// unmounted (see composerAttachments.ts).
 	const attachmentKey = machine ? `${machine}.${sessionId}` : sessionId;
@@ -300,7 +302,7 @@ function Composer({
 	) : null;
 	const canSteer = snapshot.capabilities?.includes("steer") && !steerUnavailable && active;
 	const canEmbedFiles = snapshot.capabilities?.includes("embedded_context");
-	const voice = useVoiceInput({ onTranscript: useCallback((spoken: string) => setText((old) => old ? `${old} ${spoken}` : spoken), []) });
+	const voice = useVoiceInput({ onTranscript: useCallback((spoken: string) => { setText((old) => old ? `${old} ${spoken}` : spoken); setCursor(undefined); }, []) });
 	const hasDraft = Boolean(text.trim() || quotes.length);
 	const listening = voice.state === "starting" || voice.state === "recording";
 	const transcribing = voice.state === "transcribing";
@@ -351,7 +353,6 @@ function Composer({
 	const stopped = snapshot.controller.state === "stopped";
 	const draftKey = machine ? `ao.chat.draft.${machine}.${sessionId}` : null;
 	const draftTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-	const openingSuggestion = useRef<string | undefined>(undefined);
 	const pickerGate = useRef(createRequestGate()).current;
 	const latestQuotes = useRef(quotes);
 	latestQuotes.current = quotes;
@@ -386,6 +387,7 @@ function Composer({
 				if (!mounted) return;
 				const draft = decodeResponseDraft(value);
 				setText((current) => current || draft.text);
+				setCursor(undefined);
 				setQuotes((current) => [...draft.quotes.filter((quote) => !current.some((item) => item.id === quote.id)), ...current]);
 			})
 			.catch(() => {})
@@ -547,38 +549,56 @@ function Composer({
 		}
 	};
 
-	const openPicker = useCallback(async (kind: "skills" | "files", activeTrigger?: ComposerSuggestion) => {
-		const request = pickerGate.begin();
-		const loadedSkills = kind === "skills" ? await onLoadSkills() : skills;
-		const loadedFiles = kind === "files" ? await onLoadFiles() : { paths: filePaths, truncated: Boolean(filePathsTruncated) };
-		if (!pickerGate.isCurrent(request)) return;
-		if (activeTrigger) {
-			const currentTrigger = findComposerSuggestion(latestText.current, latestCursor.current);
-			if (!currentTrigger || composerSuggestionKey(currentTrigger) !== composerSuggestionKey(activeTrigger)) return;
-		}
-		const pickerCatalog = kind === "skills"
-			? { kind, skills: loadedSkills } as const
-			: { kind, paths: loadedFiles.paths } as const;
-		router.push(chatSheetRoute({ kind: "composer-picker", catalog: pickerCatalog, initialQuery: activeTrigger?.query, truncated: kind === "files" ? loadedFiles.truncated : undefined, onSelect: (value) => {
-			setText((old) => {
-				const next = activeTrigger ? replaceComposerSuggestion(old, activeTrigger, value) : `${old}${old && !/\s$/.test(old) ? " " : ""}${kind === "skills" ? `/${value}` : (/\s/.test(value) ? `"${value}"` : value)} `;
-				setCursor(next.length);
-				return next;
-			});
-		} }));
-	}, [filePaths, filePathsTruncated, onLoadFiles, onLoadSkills, pickerGate, router, skills]);
+	// `/` at the start of the message or `@` after a space lists skills or
+	// worktree files over the composer. The field keeps focus, so what follows
+	// the sigil is the filter; a choice replaces the token, and the caret leaving
+	// it (a space, a deleted sigil) closes the list.
+	// Only while the field has focus: with the keyboard down a list over the
+	// composer would answer a question nobody is asking.
+	const suggestion = useMemo(() => focused ? findComposerSuggestion(text, cursor) : undefined, [cursor, focused, text]);
+	const suggestionKind = suggestion?.kind;
+	const [loadedSkills, setLoadedSkills] = useState<ChatSkill[]>();
+	const [loadedFiles, setLoadedFiles] = useState<{ paths: string[]; truncated: boolean }>();
+	const [loadingSuggestions, setLoadingSuggestions] = useState<ComposerSuggestion["kind"]>();
+	// The loaders change identity whenever their results land; the list should
+	// reload when it opens, not every time a load settles.
+	const loaders = useRef({ onLoadSkills, onLoadFiles });
+	loaders.current = { onLoadSkills, onLoadFiles };
 	useEffect(() => {
-		const suggestion = findComposerSuggestion(text, cursor);
-		if (!suggestion) {
+		if (!suggestionKind) {
 			pickerGate.invalidate();
-			openingSuggestion.current = undefined;
+			setLoadingSuggestions(undefined);
 			return;
 		}
-		const key = composerSuggestionKey(suggestion);
-		if (openingSuggestion.current === key) return;
-		openingSuggestion.current = key;
-		void openPicker(suggestion.kind, suggestion);
-	}, [cursor, openPicker, pickerGate, text]);
+		const request = pickerGate.begin();
+		setLoadingSuggestions(suggestionKind);
+		const load = suggestionKind === "skills"
+			? loaders.current.onLoadSkills().then((next) => { if (pickerGate.isCurrent(request)) setLoadedSkills(next); })
+			: loaders.current.onLoadFiles().then((next) => { if (pickerGate.isCurrent(request)) setLoadedFiles(next); });
+		void load.catch(() => {}).finally(() => { if (pickerGate.isCurrent(request)) setLoadingSuggestions(undefined); });
+	}, [pickerGate, suggestionKind]);
+	const suggestionItems = useMemo(() => {
+		if (!suggestion) return undefined;
+		const catalog: ComposerPickerCatalog = suggestion.kind === "skills"
+			? { kind: "skills", skills: loadedSkills ?? skills }
+			: { kind: "files", paths: loadedFiles?.paths ?? filePaths };
+		const empty = catalog.kind === "skills" ? !catalog.skills.length : !catalog.paths.length;
+		if (empty && loadingSuggestions === suggestion.kind) return undefined;
+		return rankComposerCatalog(catalog, suggestion.query);
+	}, [filePaths, loadedFiles, loadedSkills, loadingSuggestions, skills, suggestion]);
+	// Text that only looks like a trigger (`/usr/bin`, an unknown command) gets
+	// no list rather than an empty one in the way.
+	const showSuggestions = Boolean(suggestion && !(suggestionItems?.length === 0 && suggestion.query.trim()));
+	const selectSuggestion = useCallback((value: string) => {
+		const trigger = findComposerSuggestion(latestText.current, latestCursor.current);
+		if (!trigger) return;
+		const next = replaceComposerSuggestion(latestText.current, trigger, value);
+		const caret = next.length - (latestText.current.length - trigger.end);
+		latestText.current = next;
+		latestCursor.current = caret;
+		setText(next);
+		setCursor(caret);
+	}, []);
 	const settingsProps = { snapshot, models, options: configOptions ?? NO_OPTIONS, disabled: disabled || stopped || pending || submitting, onSettings, onOption: onConfigOption };
 	const effort = useChatEffort(settingsProps);
 	useEffect(() => { if (effort.open) setPillHeight(latestPillHeight.current); }, [effort.open]);
@@ -818,6 +838,12 @@ function Composer({
 					<Button title="Answer" variant="secondary" onPress={onRestoreRequest} />
 				</View>
 			</View> : null}
+			{!requestCard && suggestion && showSuggestions ? <ComposerSuggestionPanel
+				kind={suggestion.kind}
+				items={suggestionItems}
+				truncated={suggestion.kind === "files" ? (loadedFiles?.truncated ?? filePathsTruncated) : undefined}
+				onSelect={selectSuggestion}
+			/> : null}
 			{/* The field spans the pill between its two controls, so a touch on the
 			    pill focuses it and the pill opens. */}
 			{requestCard ?? <View style={[styles.composer, stopped && styles.inactive]} onLayout={(event) => {
