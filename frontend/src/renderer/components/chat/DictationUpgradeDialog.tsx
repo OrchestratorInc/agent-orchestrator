@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
+import { ArrowDown } from "@/components/app-icons";
 import { AudioLines, ChevronRight, Download, Laptop, Search } from "lucide-react";
 import { apiClient } from "../../lib/api-client";
 import { useUiStore } from "../../stores/ui-store";
@@ -55,7 +56,7 @@ function DictationRow({
 	installing?: { fraction: number; cancelling: boolean; onCancel: () => void };
 	onClick: () => void;
 }) {
-	if (installing) return <DictationInstallingRow label={label} {...installing} />;
+	if (installing) return <DictationInstallingRow label={label} hint={hint} {...installing} />;
 	return (
 		<Pressable
 			className="group flex w-full items-center gap-4 rounded-lg bg-interactive-hover px-4 py-3 text-left hover:bg-interactive-active disabled:pointer-events-none disabled:opacity-50"
@@ -81,17 +82,21 @@ function DictationRow({
 
 function DictationInstallingRow({
 	label,
+	hint,
 	fraction,
 	cancelling,
 	onCancel,
 }: {
 	label: string;
+	hint?: string;
 	fraction: number;
 	cancelling: boolean;
 	onCancel: () => void;
 }) {
 	const { t } = useTranslation();
 	const percent = useDictationPercent(fraction);
+	// Same shape as the row it replaces, so starting a download moves nothing: the ring stands in for the icon
+	// and the percentage and Cancel for the badge.
 	return (
 		<div className="flex w-full items-center gap-4 rounded-lg bg-interactive-hover px-4 py-3">
 			<span
@@ -104,12 +109,15 @@ function DictationInstallingRow({
 			>
 				<DictationRingGlyph
 					fraction={fraction}
-					icon={<Download aria-hidden="true" />}
+					icon={<ArrowDown aria-hidden="true" />}
 					className="size-6"
-					iconClass="[&_svg]:size-3.5"
+					iconClass="[&_svg]:size-3.5 [&_svg]:stroke-2"
 				/>
 			</span>
-			<span className="min-w-0 flex-1 truncate text-[14px] font-medium text-foreground">{label}</span>
+			<span className="min-w-0 flex-1">
+				<span className="block text-[14px] font-medium text-foreground">{label}</span>
+				{hint && <span className="block text-pretty text-[12px] leading-5 text-muted-foreground">{hint}</span>}
+			</span>
 			<span className="shrink-0 text-[12px] leading-5 tabular-nums text-muted-foreground" role="status">
 				{percent}
 			</span>
