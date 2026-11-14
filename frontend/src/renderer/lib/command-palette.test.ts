@@ -95,7 +95,7 @@ describe("session import commands", () => {
 	it("offers import for the current local project", () => {
 		const items = buildCommands({ workspaces: workspaces(), currentProjectId: "proj-1" });
 		const command = byId(items).get("current-import-sessions");
-		expect(command).toMatchObject({ group: "current", emphasis: "app", action: { kind: "open-session-import", projectId: "proj-1" } });
+		expect(command).toMatchObject({ group: "current", action: { kind: "open-session-import", projectId: "proj-1" } });
 		expect(filterCommands(items, "import app")).toContain(command);
 	});
 

@@ -123,8 +123,6 @@ export type CommandItem = {
 	agent?: AgentProvider;
 	/** The app shortcut this row runs, shown as its keys. */
 	shortcut?: AppShortcutId;
-	/** What the command acts on, drawn bold after the title: "New task in **app**". */
-	emphasis?: string;
 	/** A menu entry's own icon, drawn in place of the group's. */
 	icon?: ReactNode;
 	/** A choice's current state: a check, or its value at the end of the row. */
@@ -522,7 +520,6 @@ export function buildCommands(ctx: CommandPaletteContext, t: TFunction = appI18n
 		id: "current-new-task",
 		group: "current",
 		title: t("command.newTask"),
-		emphasis: currentProject?.name,
 		shortcut: "new-session",
 		keywords: ["new chat", "new session", "worker", "chat", "start", "agent", currentProject?.name ?? ""],
 		disabled: isProjectRestarting,
@@ -539,7 +536,6 @@ export function buildCommands(ctx: CommandPaletteContext, t: TFunction = appI18n
 				id: "current-import-sessions",
 				group: "current",
 				title: t("sessionImport.menuItem"),
-				emphasis: currentProject.name,
 				keywords: [...IMPORT_SESSION_KEYWORDS, currentProject.name],
 				action: { kind: "open-session-import", projectId: currentProject.id },
 			});
@@ -550,7 +546,6 @@ export function buildCommands(ctx: CommandPaletteContext, t: TFunction = appI18n
 				id: "current-open-orchestrator",
 				group: "current",
 				title: t("command.openOrchestrator"),
-				emphasis: currentProject.name,
 				shortcut: "open-orchestrator",
 				keywords: ["orchestrator", "spawn", currentProject.name],
 				disabled: isProjectRestarting,
@@ -563,7 +558,6 @@ export function buildCommands(ctx: CommandPaletteContext, t: TFunction = appI18n
 					id: "current-open-archive",
 					group: "current",
 					title: t("command.archivedSessions"),
-					emphasis: currentProject.name,
 					subtitle: t("command.archivedCount", { count: archivedCount }),
 					keywords: ["archive", "archived", "ended", "terminated", "restore", "history", currentProject.name],
 					action: { kind: "open-archive", projectId: currentProject.id },
@@ -573,7 +567,6 @@ export function buildCommands(ctx: CommandPaletteContext, t: TFunction = appI18n
 				id: "current-project-settings",
 				group: "current",
 				title: t("command.projectSettings"),
-				emphasis: currentProject.name,
 				keywords: ["settings", "config", currentProject.name],
 				action: {
 					kind: "navigate",
@@ -592,7 +585,6 @@ export function buildCommands(ctx: CommandPaletteContext, t: TFunction = appI18n
 			id: "current-search-files",
 			group: "current",
 			title: t("command.goToFile"),
-			emphasis: currentProject.name,
 			...(searchableCurrentSession ? { shortcut: "quick-open-file" as const } : {}),
 			keywords: ["search files", "file", "files", "path", "workspace", "worktree", "code", searchableCurrentSession?.title ?? currentProject.name],
 			action: {

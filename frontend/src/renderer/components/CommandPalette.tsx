@@ -1,9 +1,9 @@
 import { apiErrorException } from "../lib/api-error-exception";
 import { keepPreviousData, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "@tanstack/react-router";
-import { ArrowLeft, Bell, Check, ChevronRight, CircleAlert, Coffee, Folder, Loader2, Smartphone } from "@/components/app-icons";
+import { ArrowLeft, Bell, Check, ChevronRight, CircleAlert, Coffee, Loader2, Smartphone } from "@/components/app-icons";
 import { effectiveShortcutBindings, shortcutBindingKeys, type AppShortcutId } from "../../shared/shortcuts";
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type AnimationEvent, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type AnimationEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { useCommandPaletteEnabled } from "../hooks/useCommandPaletteEnabled";
 import { useCloudCp } from "../hooks/useCloudCp";
@@ -206,6 +206,8 @@ export const CommandPalette = memo(function CommandPalette() {
 	}, [params.hostId, params.sessionId, workspaces]);
 	const currentSession = currentSessionContext?.session;
 	const currentProjectId = currentSession?.workspaceId ?? params.projectId;
+	// The Actions heading names the project they act on, once, rather than every row.
+	const currentProjectName = currentProjectId ? workspaces.find((workspace) => workspace.id === currentProjectId)?.name : undefined;
 	const currentWorkspace = useMemo(
 		() => currentSessionContext?.workspace ?? workspaces.find((workspace) =>
 			workspace.id === currentProjectId && (workspace.hostId ?? "") === (params.hostId ?? "")),
@@ -1255,7 +1257,7 @@ export const CommandPalette = memo(function CommandPalette() {
 										) : t("command.noResults")}
 							</CommandEmpty>
 							{groups.map((group) => (
-								<CommandGroup key={group.id} heading={group.label || undefined}>
+								<CommandGroup key={group.id} heading={(group.id === "current" && currentProjectName ? `${group.label} · ${currentProjectName}` : group.label) || undefined}>
 									{group.items.map((item) => (
 										<PaletteRow
 											key={item.id}
@@ -1397,14 +1399,12 @@ function PaletteRow({
 			</span>
 			<span className="flex min-w-0 flex-1 flex-col gap-0.5">
 				<span className="flex min-w-0 items-baseline gap-2">
-					<span className="max-w-full shrink-0 truncate" data-slot={item.emphasis && !query ? undefined : "command-item-title"}>
+					<span className="max-w-full shrink-0 truncate" data-slot="command-item-title">
 						{item.group === "content" && item.title.includes(":") ? (
 							<>
 								{item.title.slice(0, item.title.lastIndexOf(":"))}
 								<span className="text-muted-foreground">{item.title.slice(item.title.lastIndexOf(":"))}</span>
 							</>
-						) : item.emphasis && !query ? (
-							<TitleIn title={item.title} name={item.emphasis} />
 						) : (
 							<Highlighted text={item.title} spans={item.contentMatch ? [] : titleHighlights(query, item.title)} />
 						)}
@@ -1446,25 +1446,6 @@ function PaletteRow({
 				</span>
 			) : null}
 		</CommandItem>
-	);
-}
-
-/** "New task in **app**", in the word order the locale gives. */
-function TitleIn({ title, name }: { title: ReactNode; name: string }) {
-	const { t } = useTranslation();
-	const template = t("command.titleIn", { title: "\u0001", name: "\u0002", interpolation: { escapeValue: false } });
-	return (
-		<>
-			{template.split(/([\u0001\u0002])/).map((part, index) =>
-				part === "\u0001" ? <span key={index} data-slot="command-item-title">{title}</span>
-					: part === "\u0002" ? (
-						<span key={index} className="ml-1 font-medium text-muted-foreground group-data-[selected=true]/command-item:text-foreground/75">
-							<Folder className="mr-1 inline size-icon-md! -translate-y-px align-middle" aria-hidden="true" />
-							{name}
-						</span>
-					)
-						: part)}
-		</>
 	);
 }
 
