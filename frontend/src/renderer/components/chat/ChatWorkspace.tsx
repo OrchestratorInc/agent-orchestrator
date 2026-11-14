@@ -277,6 +277,13 @@ const CHAT_FONT_SIZE_DEFAULT = 14;
 const WHEEL_ZOOM_THRESHOLD = 80;
 const WHEEL_ZOOM_RESET_MS = 250;
 
+/**
+ * What a surface's onSend resolves to when the message went somewhere other
+ * than the main transcript (a /btw question opens a side chat), so sending it
+ * does not move the reader to the end of the main transcript.
+ */
+export const SENT_OUTSIDE_TRANSCRIPT = Symbol("chat.sentOutsideTranscript");
+
 // The daemon enriches this request with the interrupted task and response tail.
 // Continue starts another turn in the existing conversation; it is not an exact
 // execution checkpoint.
@@ -1165,6 +1172,12 @@ function ChatWorkspaceContent({
 	const [steerStartedAt, setSteerStartedAt] = useState<ReadonlyMap<string, string>>(() => new Map());
 	const [steerErrors, setSteerErrors] = useState<Readonly<Record<string, string>>>({});
 	const [steerEchoes, setSteerEchoes] = useState<readonly SteerEcho[]>([]);
+	// Counts the reader's sends from this chat's composer that the main
+	// transcript took (a message, one that queues, a steer), so the transcript
+	// brings them to it wherever they had scrolled. A Cloud chat shows no local
+	// echo of a send to key that off. A send that was refused, or that went to a
+	// side chat (SENT_OUTSIDE_TRANSCRIPT), leaves the reader where they were.
+	const [composerSends, setComposerSends] = useState(0);
 	const backgroundWakeQueuedTurnIds = useMemo(
 		() => new Set(
 			(localEchos ?? [])
@@ -1396,7 +1409,10 @@ function ChatWorkspaceContent({
 			if (wasConversationEmpty.current && composerBoxRef.current) {
 				composerCenteredTopRef.current = composerBoxRef.current.getBoundingClientRect().top;
 			}
-			return onSend?.(text, attachments, clientMessageId, excerpts, fileReferences, displayText);
+			// A refused send throws past the count.
+			const sent = await onSend?.(text, attachments, clientMessageId, excerpts, fileReferences, displayText);
+			if (sent !== SENT_OUTSIDE_TRANSCRIPT) setComposerSends((count) => count + 1);
+			return sent;
 		},
 		[draftScope, onEditQueuedTurn, onSend, nativeImages, queueEdit, queuedMessages, updateQueueDraft],
 	);
@@ -1478,6 +1494,8 @@ function ChatWorkspaceContent({
 					const acceptedAfterSequence = latestSequence() ?? 0;
 					setSteerEchoes((current) => current.map((echo) =>
 						echo.clientMessageId === id && echo.acceptedAfterSequence === undefined ? { ...echo, acceptedAfterSequence } : echo));
+					// The turn took the steer: bring the reader to it.
+					if (target) setComposerSends((count) => count + 1);
 				}
 				return outcome;
 			} catch (error) {
@@ -2213,6 +2231,7 @@ function ChatWorkspaceContent({
 									newWorkDisabled={newWorkDisabled}
 									rollbackDisabled={Boolean(durableTurn || rollbackPending || newWorkDisabled)}
 									localEchos={localEchos}
+									composerSends={composerSends}
 									startup={sessionRole === "orchestrator" ? undefined : startup}
 									openingStartedAt={openingStartedAt}
 									// A Freestyle Chat session started from this device: the row under its
@@ -3162,6 +3181,7 @@ export function Timeline({
 	newWorkDisabled,
 	rollbackDisabled = false,
 	localEchos = [],
+	composerSends = 0,
 	startup,
 	arriving = false,
 	workerUpdates = false,
@@ -3216,6 +3236,8 @@ export function Timeline({
 	newWorkDisabled?: boolean;
 	rollbackDisabled?: boolean;
 	localEchos?: ConversationLocalEcho[];
+	/** Goes up with each send from the chat's composer that the main transcript took; see ChatWorkspace's composerSends. */
+	composerSends?: number;
 	/** A session that is starting, or failed to start, and its setup checklist. */
 	startup?: ComponentProps<typeof SessionStartup> & { openingTurnId?: string; label?: string };
 	/** An interface switch is bringing this conversation in; only then does the transcript fade in. */
@@ -4241,14 +4263,17 @@ export function Timeline({
 		if (added.size > 0) setNewHumanMessageIds(added);
 	}, [timelineItems, snapshot.latestSequence, openingStartedAt, snapshot.turns]);
 	const previousEchoIds = useRef<ReadonlySet<string>>(new Set(localEchos.map((echo) => echo.clientMessageId)));
+	const previousComposerSends = useRef(composerSends);
 	useLayoutEffect(() => {
 		const ids = new Set(localEchos.map((echo) => echo.clientMessageId));
-		const sent = [...ids].some((id) => !previousEchoIds.current.has(id));
+		// A send shows as a new local echo or as a send the main transcript took; a Cloud chat's has no echo.
+		const sent = [...ids].some((id) => !previousEchoIds.current.has(id)) || composerSends !== previousComposerSends.current;
 		previousEchoIds.current = ids;
+		previousComposerSends.current = composerSends;
 		if (!sent) return;
 		// The reader just sent: bring them to their prompt even if they had scrolled away.
 		requestGlideToEnd();
-	}, [localEchos, requestGlideToEnd]);
+	}, [composerSends, localEchos, requestGlideToEnd]);
 	// The brief that started this chat reads as working from the moment it was
 	// sent, through the agent connecting, until its turn settles.
 	const openingPending = Boolean(openingStartedAt) && !openingTurnSettled(snapshot, controllerStopped);

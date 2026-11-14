@@ -98,7 +98,8 @@ const sideMocks = vi.hoisted(() => ({
 	agentSwitch: undefined as AgentSwitchProps | undefined,
 	workspaceSend: undefined as
 		| undefined
-		| ((text: string, attachments: undefined, clientMessageId: string) => Promise<void>),
+		| ((text: string, attachments: undefined, clientMessageId: string) => Promise<unknown>),
+	sentOutsideTranscript: Symbol("chat.sentOutsideTranscript"),
 }));
 vi.mock("./IndependentSideChats", () => ({
 	useIndependentSideChats: () => ({ ...sideMocks, panel: null }),
@@ -157,6 +158,7 @@ vi.mock("./ChatWorkspace", async () => {
 	const { TurnSettingsBar } = await vi.importActual<typeof import("./TurnSettingsBar")>("./TurnSettingsBar");
 	return {
 		CONTINUE_STOPPED_TURN_PROMPT: "Continue from where you stopped.",
+		SENT_OUTSIDE_TRANSCRIPT: sideMocks.sentOutsideTranscript,
 		continuableTurnId: (snapshot: ConversationSnapshot) => snapshot.continueTurnId ?? "",
 		ChatWorkspace: ({
 			agentSwitch,
@@ -1388,11 +1390,14 @@ describe("side command routing", () => {
 					<SessionChatSurface session={session} />
 				</Wrapper>,
 			);
+			const results: unknown[] = [];
 			await act(async () => {
-				await sideMocks.workspaceSend!("/btw first", undefined, "submission-1");
-				await sideMocks.workspaceSend!("/btw second", undefined, "submission-2");
-				await sideMocks.workspaceSend!("/btw second", undefined, "submission-2");
+				results.push(await sideMocks.workspaceSend!("/btw first", undefined, "submission-1"));
+				results.push(await sideMocks.workspaceSend!("/btw second", undefined, "submission-2"));
+				results.push(await sideMocks.workspaceSend!("/btw second", undefined, "submission-2"));
 			});
+			// None went to the main transcript, so none moves its reader to the end.
+			expect(results).toEqual([sideMocks.sentOutsideTranscript, sideMocks.sentOutsideTranscript, sideMocks.sentOutsideTranscript]);
 			expect(sideMocks.create.mock.calls).toEqual([
 				[undefined, true, "submission-1"],
 				[undefined, true, "submission-2"],
@@ -1423,7 +1428,9 @@ describe("side command routing", () => {
 		const mainSend=vi.fn().mockResolvedValue(undefined);
 		(conversationCommandState as {send?:unknown}).send=mainSend;
 		render(<Wrapper client={new QueryClient()}><SessionChatSurface session={session}/></Wrapper>);
-		await act(async()=>{await sideMocks.workspaceSend!(text,undefined,"literal-side");});
+		let result: unknown;
+		await act(async()=>{result=await sideMocks.workspaceSend!(text,undefined,"literal-side");});
+		expect(result).not.toBe(sideMocks.sentOutsideTranscript);
 		expect(sideMocks.create).not.toHaveBeenCalled();
 		expect(mainSend).toHaveBeenCalledWith(expect.objectContaining({text}));
 		delete (conversationCommandState as {send?:unknown}).send;

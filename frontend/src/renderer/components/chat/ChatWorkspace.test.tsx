@@ -9,7 +9,7 @@ import userEvent from "@testing-library/user-event";
 import { Activity, Profiler, useState } from "react";
 import { placeLexicalCaret, typeInLexicalEditor } from "../../test/lexical";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { activityRevealScrollDelta, ChatWorkspace, forgetReadingPositions, promptSpacerHeight, promptTopInset, type ChatFindRequest } from "./ChatWorkspace";
+import { activityRevealScrollDelta, ChatWorkspace, SENT_OUTSIDE_TRANSCRIPT, forgetReadingPositions, promptSpacerHeight, promptTopInset, type ChatFindRequest } from "./ChatWorkspace";
 import { AssistantMessage, HumanMessage, OriginMessage } from "./ChatTimelineItems";
 import { AutomationMessage } from "./AutomationMessage";
 import { ChatLinkProvider } from "./ChatMarkdown";
@@ -586,6 +586,76 @@ describe("ChatWorkspace timeline", () => {
 		view.rerender(<ChatWorkspace snapshot={snapshot} localEchos={localEchos} />);
 		expect(screen.queryByRole("button", { name: "Jump to latest" })).not.toBeInTheDocument();
 		expect(log.scrollTop).toBe(4000);
+	});
+
+	// A Cloud chat shows a send only once the control plane has it, so no local echo appears.
+	describe("in a chat that shows no local echo of a send", () => {
+		const running = (snapshot: ConversationSnapshot): ConversationSnapshot => ({
+			...snapshot,
+			turns: snapshot.turns.map((turn, index) => index === snapshot.turns.length - 1 ? { ...turn, state: "running" as const, completedAt: undefined } : turn),
+		});
+		const readBack = () => {
+			const log = screen.getByRole("log");
+			stubGeometry(log, { scrollHeight: 4000, clientHeight: 800, scrollTop: 1000 });
+			fireEvent.wheel(log, { deltaY: -120 });
+			fireEvent.scroll(log);
+			expect(screen.getByRole("button", { name: "Jump to latest" })).toBeInTheDocument();
+			return log;
+		};
+
+		it.each([
+			["a message", chatFixtureLongHistory(8)],
+			["a message that queues behind the running turn", running(chatFixtureLongHistory(8))],
+		])("brings the reader to the end when they send %s after scrolling away", async (_name, snapshot) => {
+			const onSend = vi.fn().mockResolvedValue(undefined);
+			render(<ChatWorkspace snapshot={snapshot} onSend={onSend} />);
+			const log = readBack();
+			await typeInLexicalEditor(screen.getByRole("combobox", { name: "Message the agent" }), "New question");
+			await userEvent.keyboard("{Enter}");
+			await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+			await waitFor(() => expect(log.scrollTop).toBe(4000));
+			expect(screen.queryByRole("button", { name: "Jump to latest" })).not.toBeInTheDocument();
+		});
+
+		it("brings the reader to the end when they steer the running turn after scrolling away", async () => {
+			const onSteer = vi.fn().mockResolvedValue({ status: "accepted" });
+			render(<ChatWorkspace snapshot={running(chatFixtureLongHistory(8))} onSend={vi.fn()} onSteer={onSteer} />);
+			const log = readBack();
+			await typeInLexicalEditor(screen.getByRole("combobox", { name: "Message the agent" }), "Only the unit ones");
+			await userEvent.keyboard("{Control>}{Enter}{/Control}");
+			await waitFor(() => expect(onSteer).toHaveBeenCalledTimes(1));
+			await waitFor(() => expect(log.scrollTop).toBe(4000));
+			expect(screen.queryByRole("button", { name: "Jump to latest" })).not.toBeInTheDocument();
+		});
+
+		// Only a send the main transcript took moves the reader: a /btw question
+		// is asked aside so they keep their place, and a refused send shows nothing new.
+		it.each([
+			["a question the surface sent to a side chat", () => vi.fn().mockResolvedValue(SENT_OUTSIDE_TRANSCRIPT)],
+			["a message the chat refused", () => vi.fn().mockRejectedValue(Object.assign(new Error("Someone else is typing."), { code: "COMPOSER_LOCKED" }))],
+		])("keeps the reader's place when they send %s", async (_name, makeOnSend) => {
+			const onSend = makeOnSend();
+			render(<ChatWorkspace snapshot={chatFixtureLongHistory(8)} onSend={onSend} />);
+			const log = readBack();
+			await typeInLexicalEditor(screen.getByRole("combobox", { name: "Message the agent" }), "/btw what is this?");
+			await userEvent.keyboard("{Enter}");
+			await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+			await act(async () => { await Promise.resolve(); });
+			expect(log.scrollTop).toBe(1000);
+			expect(screen.getByRole("button", { name: "Jump to latest" })).toBeInTheDocument();
+		});
+
+		it("keeps the reader's place when the running turn refuses their steer", async () => {
+			const onSteer = vi.fn().mockResolvedValue({ status: "not-accepted" });
+			render(<ChatWorkspace snapshot={running(chatFixtureLongHistory(8))} onSend={vi.fn()} onSteer={onSteer} />);
+			const log = readBack();
+			await typeInLexicalEditor(screen.getByRole("combobox", { name: "Message the agent" }), "Only the unit ones");
+			await userEvent.keyboard("{Control>}{Enter}{/Control}");
+			await waitFor(() => expect(onSteer).toHaveBeenCalledTimes(1));
+			await act(async () => { await Promise.resolve(); });
+			expect(log.scrollTop).toBe(1000);
+			expect(screen.getByRole("button", { name: "Jump to latest" })).toBeInTheDocument();
+		});
 	});
 
 	it("releases on a small nudge up from the end and re-latches when the reader scrolls back down", () => {
