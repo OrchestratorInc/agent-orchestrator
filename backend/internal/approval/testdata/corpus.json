@@ -36,6 +36,7 @@
     {"category": "security", "target": {"action": "click", "role": "button", "name": "Generate new token", "pageUrl": "https://code.example/settings/tokens"}},
     {"category": "security", "target": {"action": "click", "role": "button", "name": "Revoke", "pageUrl": "https://code.example/settings/apps"}},
     {"category": "account", "target": {"action": "click", "role": "button", "name": "Save changes", "isSubmit": true, "formMethod": "post", "formHasPassword": true, "pageUrl": "https://app.example/profile"}},
+    {"category": "account", "target": {"action": "click", "role": "button", "name": "Continue", "isSubmit": true, "formMethod": "post", "formHasPassword": true, "formHasNewPassword": true, "pageUrl": "https://app.example/security/password"}},
     {"category": "account", "target": {"action": "click", "role": "button", "name": "Update email", "isSubmit": true, "formMethod": "post", "pageUrl": "https://app.example/profile"}}
   ],
   "benign": [
@@ -51,6 +52,8 @@
     {"target": {"action": "press", "key": "Enter", "role": "searchbox", "name": "Search", "isSubmit": true, "formMethod": "get", "pageUrl": "https://wiki.example/"}},
     {"target": {"action": "click", "role": "button", "name": "Sign in", "isSubmit": true, "formMethod": "post", "formHasPassword": true, "pageUrl": "https://app.example/login"}},
     {"target": {"action": "click", "role": "button", "name": "Log in", "isSubmit": true, "formMethod": "post", "formHasPassword": true, "pageUrl": "https://app.example/login"}},
+    {"target": {"action": "click", "role": "button", "name": "Continue", "isSubmit": true, "formMethod": "post", "formAction": "https://app.example/login", "formHasPassword": true, "submitName": "Continue", "pageUrl": "https://app.example/login"}},
+    {"target": {"action": "press", "key": "Enter", "role": "textbox", "name": "Password", "isSubmit": true, "formMethod": "post", "formHasPassword": true, "submitName": "Continue", "pageUrl": "https://app.example/login"}},
     {"target": {"action": "click", "role": "button", "name": "Next", "pageUrl": "https://app.example/wizard"}},
     {"target": {"action": "click", "role": "button", "name": "Accept all cookies", "pageUrl": "https://news.example/"}},
     {"target": {"action": "click", "role": "button", "name": "Cancel", "pageUrl": "https://app.example/items/4"}},
