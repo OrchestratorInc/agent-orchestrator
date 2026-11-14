@@ -12,7 +12,7 @@ export function baseOptions(i18n: I18n, homeUrl = "/"): BaseLayoutProps {
         <span className="inline-flex items-center gap-2 text-sm font-medium text-foreground">
           {/* The logo carries the company name, so the label only says "Docs". */}
           <img
-            src={`${COMPANY.MARKETING_URL}/ao-logo.svg`}
+            src="/docs/ao-logo.svg"
             alt={COMPANY.NAME}
             width={20}
             height={20}

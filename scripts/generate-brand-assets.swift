@@ -531,10 +531,12 @@ for size in [16, 32, 48, 128] {
     writePNG(resized(desktop, size, size), "frontend/src/browser-extension/icons/icon-\(size).png")
 }
 
-// The flat logo: docs OG images and the site's copy (assets/ao-logo.svg,
-// mirrored to orchestrator.inc by hand). The app UI uses ao-mascot.svg.
+// The flat logo: docs OG images, the docs header and the site's copy
+// (assets/ao-logo.svg, mirrored to orchestrator.inc by hand). The app UI uses
+// ao-mascot.svg.
 write(Data(flatLogo.utf8), to: "frontend/assets/ao-logo.svg")
 write(Data(flatLogo.utf8), to: "assets/ao-logo.svg")
+write(Data(flatLogo.utf8), to: "frontend/src/docs/public/docs/ao-logo.svg")
 write(Data(appMascot.utf8), to: "frontend/assets/ao-mascot.svg")
 
 // QR code centre: drawn on white paper, so the flat logo without a tile.
