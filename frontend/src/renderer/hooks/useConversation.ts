@@ -1150,13 +1150,14 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 	});
 
 	const rollback = useMutation({
-		mutationFn: async (turnId: string) => {
+		mutationFn: async ({ turnId, filePlanId }: { turnId: string; filePlanId?: string }) => {
 			const { data, error } = await clientForSessionHost(hostId).POST(
 				"/api/v1/sessions/{sessionId}/conversation/turns/{turnId}/rollback",
 				{
 					params: {
 						path: { sessionId: sessionId as string, turnId },
 					},
+					body: filePlanId ? { restoreFiles: true, planId: filePlanId } : { restoreFiles: false },
 				},
 			);
 			if (error) throw error;
@@ -1287,7 +1288,8 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 	);
 	const sendTargetsCurrentSession = send.variables?.targetSessionId === sessionId;
 	// A refused agent switch shows in the composer's own switch notice, not again as a send error.
-	const sendError = sendTargetsCurrentSession && !(send.error instanceof ProviderSwitchFailed) ? send.error : undefined;
+	const sendCode = apiErrorCode(send.error);
+	const sendError = sendTargetsCurrentSession && !(send.error instanceof ProviderSwitchFailed) && sendCode !== undefined && !HOST_UNREACHABLE_CODES.has(sendCode) ? send.error : undefined;
 	const interruptTargetsCurrentSession = interrupt.variables?.targetSessionId === sessionId;
 	const retryTargetsCurrentSession = retryTurn.variables?.targetSessionId === sessionId;
 	const autoResumeTargetsCurrentSession = autoResume.variables?.targetSessionId === sessionId;
@@ -1378,9 +1380,29 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 				: apiErrorCode(compact.error) === "CHAT_COMPACTION_BUSY"
 					? "Stop the current turn before compacting"
 					: undefined,
-		rollback: (turnId: string) => rollback.mutateAsync(turnId),
+		/** Rolls back to a turn, restoring the files a preview listed when given
+		 *  that preview's planId. */
+		rollback: (turnId: string, filePlanId?: string) => rollback.mutateAsync({ turnId, filePlanId }),
+		/** What rolling back to a turn would restore on disk, read fresh each time
+		 *  the confirmation opens because the worktree keeps changing. */
+		previewRollback: async (turnId: string) => {
+			const { data, error } = await clientForSessionHost(hostId).GET(
+				"/api/v1/sessions/{sessionId}/conversation/turns/{turnId}/rollback",
+				{
+					params: { path: { sessionId: sessionId as string, turnId } },
+					signal: AbortSignal.timeout(10_000),
+				},
+			);
+			if (error) throw error;
+			return data;
+		},
 		rollbackPending: rollback.isPending,
-		rollbackError: rollback.error ? apiErrorMessage(rollback.error) : undefined,
+		rollbackError:
+			apiErrorCode(rollback.error) === "CHAT_ROLLBACK_FILES_CHANGED"
+				? "Files changed while this was open. Check the updated list, then roll back again."
+				: rollback.error
+					? apiErrorMessage(rollback.error)
+					: undefined,
 		retryControl: {
 			setAutoResume: (turnId: string, enabled: boolean) => {
 				if (!sessionId) return Promise.reject(new Error("No conversation session is selected."));
@@ -1522,8 +1544,10 @@ function steerRefusal(error: unknown): string | undefined {
 			return "The turn finished before this landed. Send it as a message instead.";
 		case "CHAT_INTERFACE_TRANSITION":
 			return "The session is switching interfaces. This guidance was not delivered; send it after the switch finishes.";
-		case "CHAT_TURN_NOT_STEERABLE":
-			return `${apiErrorMessage(error)} Try again once it finishes.`;
+		case "CHAT_TURN_NOT_STEERABLE": {
+			const message = apiErrorMessage(error).trim();
+			return `${/[.!?]$/.test(message) ? message : `${message}.`} Try again once it finishes.`;
+		}
 		case "CHAT_STEER_UNSUPPORTED":
 			// Answered by hiding the control, so there is nothing to say.
 			return undefined;
@@ -1756,11 +1780,11 @@ export function useConversationConfigOptions(sessionId: string | undefined, enab
 
 	return {
 		options: query.data ?? [],
-		loaded: query.isSuccess,
+		loaded: query.data !== undefined,
 		setOption: async (optionId: string, value: ChatConfigOptionValue) =>
 			(await mutation.mutateAsync({ optionId, value })).options,
 		pending: mutation.isPending,
-		error: mutation.error || query.error ? apiErrorMessage(mutation.error ?? query.error) : undefined,
+		error: mutation.error || (query.error && !query.data) ? apiErrorMessage(mutation.error ?? query.error) : undefined,
 	};
 }
 

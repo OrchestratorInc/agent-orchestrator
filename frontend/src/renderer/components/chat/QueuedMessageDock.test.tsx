@@ -84,7 +84,7 @@ function simulateDrag(activeId: string, overId: string) {
 }
 
 describe("QueuedMessageDock reorder", () => {
-	it("submits FIFO order when dragging the first display row to the bottom", async () => {
+	it("submits FIFO order when dragging the last row to the top", async () => {
 		const onReorderQueuedTurns = vi.fn().mockResolvedValue(undefined);
 		render(
 			<QueuedMessageDock
@@ -100,7 +100,7 @@ describe("QueuedMessageDock reorder", () => {
 		});
 	});
 
-	it("submits FIFO order when dragging the last display row to the top", async () => {
+	it("submits FIFO order when dragging the first row to the bottom", async () => {
 		const onReorderQueuedTurns = vi.fn().mockResolvedValue(undefined);
 		render(
 			<QueuedMessageDock
@@ -126,9 +126,9 @@ describe("QueuedMessageDock reorder", () => {
 		);
 
 		expect(rowTexts()).toEqual([
-			expect.stringContaining("third queued"),
-			expect.stringContaining("second queued"),
 			expect.stringContaining("first queued"),
+			expect.stringContaining("second queued"),
+			expect.stringContaining("third queued"),
 		]);
 
 		simulateDrag("queued-3", "queued-1");
@@ -137,9 +137,9 @@ describe("QueuedMessageDock reorder", () => {
 			expect(screen.getByRole("status")).toHaveTextContent("reorder failed");
 		});
 		expect(rowTexts()).toEqual([
-			expect.stringContaining("third queued"),
-			expect.stringContaining("second queued"),
 			expect.stringContaining("first queued"),
+			expect.stringContaining("second queued"),
+			expect.stringContaining("third queued"),
 		]);
 	});
 
@@ -160,6 +160,104 @@ describe("QueuedMessageDock reorder", () => {
 		await waitFor(() => {
 			expect(onReorderQueuedTurns).toHaveBeenCalledWith(["queued-2", "queued-1"]);
 		});
+	});
+});
+
+describe("QueuedMessageDock order and steering", () => {
+	it("lists messages in send order with a pending send last", () => {
+		render(
+			<QueuedMessageDock
+				messages={[
+					...queuedMessages(["first queued", "second queued"]),
+					{ ...queuedMessages(["just sent"])[0]!, turnId: "local:pending", pending: true },
+				]}
+			/>,
+		);
+
+		expect(rowTexts()).toEqual([
+			expect.stringContaining("first queued"),
+			expect.stringContaining("second queued"),
+		]);
+		const dock = screen.getByTestId("queued-message-dock");
+		const texts = Array.from(dock.querySelectorAll(".queue-dock-row-text")).map((node) => node.textContent);
+		expect(texts).toEqual(["first queued", "second queued", "just sent"]);
+	});
+
+	it("keeps every row's actions and grip in place while a new message is sent", () => {
+		const props = {
+			canSteer: true,
+			onPromoteQueuedTurn: vi.fn().mockResolvedValue(undefined),
+			onCancelQueuedTurn: vi.fn().mockResolvedValue(undefined),
+			onReorderQueuedTurns: vi.fn().mockResolvedValue(undefined),
+		};
+		const confirmed = queuedMessages(["first queued", "second queued"]);
+		const pending = { ...queuedMessages(["just sent"])[0]!, turnId: "local:pending", pending: true };
+		const { rerender } = render(<QueuedMessageDock {...props} messages={confirmed} />);
+		const grips = () => screen.getAllByRole("button", { name: "Drag to reorder queued message" });
+		const deletes = () => screen.getAllByRole("button", { name: "Delete queued message" });
+		const steers = () => screen.getAllByRole("button", { name: "Steer this queued message into the running turn" });
+		expect(grips()).toHaveLength(2);
+		for (const grip of grips()) expect(grip).toBeEnabled();
+
+		rerender(<QueuedMessageDock {...props} messages={[...confirmed, pending]} sending />);
+
+		// Every row, the unconfirmed one included, keeps the same controls.
+		expect(grips()).toHaveLength(3);
+		expect(deletes()).toHaveLength(3);
+		expect(steers()).toHaveLength(3);
+		const pendingRow = screen.getByTestId("queued-message-local:pending");
+		for (const button of within(pendingRow).getAllByRole("button")) {
+			expect(button).toBeDisabled();
+		}
+
+		rerender(<QueuedMessageDock {...props} messages={[...confirmed, pending]} />);
+		expect(grips()[0]).toBeEnabled();
+		for (const button of within(pendingRow).getAllByRole("button")) {
+			expect(button).toBeDisabled();
+		}
+	});
+
+	it("keeps Steer on every row while a turn can be steered", () => {
+		render(
+			<QueuedMessageDock
+				canSteer
+				messages={queuedMessages(["first queued", "second queued", "third queued"])}
+				onPromoteQueuedTurn={vi.fn().mockResolvedValue(undefined)}
+			/>,
+		);
+
+		for (const turnId of ["queued-1", "queued-2", "queued-3"]) {
+			const steer = within(screen.getByTestId(`queued-message-${turnId}`)).getByRole("button", {
+				name: "Steer this queued message into the running turn",
+			});
+			expect(steer).not.toHaveClass("opacity-0");
+		}
+	});
+
+	it("keeps rows steady instead of dimming them while the composer sends", () => {
+		const props = {
+			canSteer: true,
+			messages: queuedMessages(["first queued", "second queued", "third queued"]),
+			onPromoteQueuedTurn: vi.fn().mockResolvedValue(undefined),
+			onCancelQueuedTurn: vi.fn().mockResolvedValue(undefined),
+			onBeginQueuedEdit: vi.fn(),
+		};
+		const { rerender } = render(<QueuedMessageDock {...props} sending />);
+		const steerButtons = () =>
+			screen.getAllByRole("button", { name: "Steer this queued message into the running turn" });
+
+		expect(steerButtons()).toHaveLength(3);
+		for (const button of [
+			...steerButtons(),
+			...screen.getAllByRole("button", { name: "Delete queued message" }),
+		]) {
+			expect(button).toBeDisabled();
+			expect(button).toHaveClass("disabled:opacity-100");
+		}
+
+		rerender(<QueuedMessageDock {...props} />);
+		for (const button of steerButtons()) expect(button).toBeEnabled();
+		expect(screen.getAllByRole("button", { name: "Delete queued message" })[0]).toBeEnabled();
 	});
 });
 
@@ -209,5 +307,36 @@ describe("ChatWorkspace queue reorder", () => {
 		await waitFor(() => {
 			expect(onReorderQueuedTurns).toHaveBeenCalledWith(["queued-last", "queued-automation", "queued-first"]);
 		});
+	});
+});
+
+describe("QueuedMessageDock action errors", () => {
+	it("shows the daemon's reason when steering a queued message is refused", async () => {
+		// The typed client throws the API error envelope, not an Error instance.
+		const onPromoteQueuedTurn = vi.fn().mockRejectedValue({
+			error: {
+				code: "CHAT_TURN_NOT_STEERABLE",
+				message: "the running turn cannot take guidance: it collects between tool calls",
+			},
+		});
+		render(
+			<QueuedMessageDock
+				messages={queuedMessages(["use staging instead"])}
+				canSteer
+				onPromoteQueuedTurn={onPromoteQueuedTurn}
+			/>,
+		);
+
+		await userEvent.click(
+			screen.getAllByRole("button", { name: "Steer this queued message into the running turn" })[0]!,
+		);
+
+		await waitFor(() => {
+			expect(screen.getByTestId("queued-message-dock")).toHaveTextContent(
+				"the running turn cannot take guidance: it collects between tool calls",
+			);
+		});
+		expect(screen.getByTestId("queued-message-dock")).not.toHaveTextContent("That action failed.");
+		expect(screen.getByTestId("queued-message-queued-1")).toBeInTheDocument();
 	});
 });

@@ -1,17 +1,19 @@
 import { LoaderCircle, Plus, RefreshCw, RotateCcw, Trash2, X } from "@/components/app-icons";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { agentAccountName, agentAccountProviderNames, useAgentAccountActions, useAgentAccounts, useAgentAccountUsage, type AgentAccount, type AgentAccountLimitWindow, type AgentAccountLogin, type AgentAccountProvider } from "../../hooks/useAgentAccounts";
+import { agentAccountLabel, agentAccountProviderNames, useAgentAccountActions, useAgentAccounts, useAgentAccountUsage, withoutSameLogins, type AgentAccount, type AgentAccountLimitWindow, type AgentAccountLogin, type AgentAccountProvider } from "../../hooks/useAgentAccounts";
 import type { TerminalSessionState } from "../../hooks/useTerminalSession";
 import { baseUrlForHost } from "../../lib/host-clients";
 import { useShellMaybe } from "../../lib/shell-context";
+import { useSettings, useUpdateAccountHandoff } from "../../hooks/useSettings";
 import { createTerminalMux, muxUrlFromApiBase } from "../../lib/terminal-mux";
 import { useResolvedTheme, useUiStore } from "../../stores/ui-store";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { TerminalPane } from "../TerminalPane";
 import { Button } from "../ui/button";
+import { Switch } from "../ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
-import { HarnessDetailGroup } from "./harness/harness-ui";
+import { HarnessDetailGroup, HarnessDetailRow } from "./harness/harness-ui";
 
 const providerNames = agentAccountProviderNames;
 
@@ -42,7 +44,9 @@ export function AgentAccountsPanel({ provider, cliLogin, hostId }: { provider: A
 	const [error, setError] = useState("");
 	const [removing, setRemoving] = useState<AgentAccount | null>(null);
 	const tokensByAccount = new Map((usage.data ?? []).map((row) => [row.accountId, row.inputTokens + row.outputTokens]));
-	const rows = (accounts.data ?? []).filter((account) => account.provider === provider);
+	const providerAccounts = (accounts.data ?? []).filter((account) => account.provider === provider);
+	const rows = withoutSameLogins(providerAccounts, providerAccounts.find((account) => account.default)?.id);
+	const cliTwinOf = (account: AgentAccount) => account.device ? undefined : providerAccounts.find((other) => other.sameLoginAs === account.id && !rows.includes(other));
 	const login = logins[loginKey];
 
 	const run = useCallback(async (key: string, action: () => Promise<unknown>) => {
@@ -80,10 +84,11 @@ export function AgentAccountsPanel({ provider, cliLogin, hostId }: { provider: A
 		verifying.current = true;
 		const result = await actions.verifyLogin(current.operationId).finally(() => { verifying.current = false; });
 		if (result.status === "waiting") setLoginNote(t("settings.agentAccounts.loginWaiting"));
+		else if (result.status === "not_subscription") setLoginNote(t("settings.agentAccounts.loginNotSubscription"));
 		else {
 			setLogin(undefined);
 			if (result.status === "duplicate") setError(t("settings.agentAccounts.loginDuplicate", { email: result.account?.email ?? "" }));
-			if (result.status === "mismatch") setError(t("settings.agentAccounts.loginMismatch", { email: result.account?.email ?? "" }));
+			if (result.status === "mismatch") setError(t("settings.agentAccounts.loginMismatch", { email: [result.account?.email, result.account?.orgName].filter(Boolean).join(" · ") }));
 		}
 	});
 	const closeLogin = (current: AgentAccountLogin) => {
@@ -113,25 +118,27 @@ export function AgentAccountsPanel({ provider, cliLogin, hostId }: { provider: A
 			{accounts.isError ? <p role="alert" className="px-3 py-2.5 text-xs text-error">{accounts.error.message}</p> : null}
 			{accounts.isLoading ? <p className="px-3 py-2.5 text-xs text-muted-foreground">{t("settings.agentAccounts.loading")}</p> : null}
 			{/* The CLI login does not wait on the list: a cold read can take a while, and a failed one has no row. */}
-			{cliLogin && !rows.some((account) => account.device) ? <div className="flex items-center justify-between gap-3 px-3 py-2.5">
+			{cliLogin && !providerAccounts.some((account) => account.device) ? <div className="flex items-center justify-between gap-3 px-3 py-2.5">
 				<p className="truncate text-sm font-medium text-foreground">{t("settings.agentAccounts.cliLoginOf", { provider: providerNames[provider] })}</p>
 				<Button type="button" size="sm" variant="ghost" data-terminal-focus-handoff="true" disabled={busy !== null || cliLogin.disabled} onClick={cliLogin.onSignIn}>{t("settings.harness.login")}</Button>
 			</div> : null}
-			{rows.map((account) => <AccountRow
+			{rows.map((account) => { const cliTwin = cliTwinOf(account); return <AccountRow
 				key={account.id}
 				account={account}
-				aoTokens={tokensByAccount.get(account.id)}
+				name={agentAccountLabel(account, rows, t)}
+				aoTokens={(tokensByAccount.get(account.id) ?? 0) + (cliTwin ? tokensByAccount.get(cliTwin.id) ?? 0 : 0) || undefined}
 				busy={busy}
 				cliLogin={account.device ? cliLogin : undefined}
 				onMakeDefault={() => void run(`default:${account.id}`, () => actions.makeDefault(account.id))}
 				onUseReset={() => void run(`reset:${account.id}`, () => actions.useReset(account.id))}
 				onSignInAgain={() => void startLogin(account.id)}
 				onRemove={() => { setError(""); setRemoving(account); }}
-			/>)}
+			/>; })}
+			{hostId ? null : <AccountHandoffRow />}
 		</HarnessDetailGroup>
 		{removing ? <ConfirmDialog open destructive
 			title={t("settings.agentAccounts.remove")}
-			description={t("settings.agentAccounts.removeDescription", { email: agentAccountName(removing, t) })}
+			description={t("settings.agentAccounts.removeDescription", { email: agentAccountLabel(removing, rows, t) })}
 			confirmLabel={t(busy === `remove:${removing.id}` ? "settings.agentAccounts.removing" : "settings.agentAccounts.remove")}
 			busy={busy === `remove:${removing.id}`}
 			error={error || undefined}
@@ -141,8 +148,9 @@ export function AgentAccountsPanel({ provider, cliLogin, hostId }: { provider: A
 	</>;
 }
 
-function AccountRow({ account, aoTokens, busy, cliLogin, onMakeDefault, onUseReset, onSignInAgain, onRemove }: {
+function AccountRow({ account, name, aoTokens, busy, cliLogin, onMakeDefault, onUseReset, onSignInAgain, onRemove }: {
 	account: AgentAccount;
+	name: string;
 	aoTokens: number | undefined;
 	busy: string | null;
 	/** Only on the CLI's own login, which has no folder of its own to remove. */
@@ -165,7 +173,7 @@ function AccountRow({ account, aoTokens, busy, cliLogin, onMakeDefault, onUseRes
 	return <div className="px-3 py-2.5" data-agent-account={account.id}>
 		<div className="flex items-start justify-between gap-3">
 			<div className="min-w-0">
-				<p className="truncate text-sm font-medium text-foreground">{agentAccountName(account, t)}</p>
+				<p className="truncate text-sm font-medium text-foreground">{name}</p>
 				<p className="mt-0.5 truncate text-xs text-muted-foreground">{meta}</p>
 			</div>
 			<div className="flex shrink-0 items-center gap-2">
@@ -186,6 +194,23 @@ function AccountRow({ account, aoTokens, busy, cliLogin, onMakeDefault, onUseRes
 		{account.problem ? <p className="mt-2 text-xs text-warning">{account.problem}</p> : null}
 		<AccountLimits account={account} />
 	</div>;
+}
+
+function AccountHandoffRow() {
+	const { t } = useTranslation();
+	const { settings, isLoading } = useSettings();
+	const { update, saving, error } = useUpdateAccountHandoff();
+	return <>
+		<HarnessDetailRow label={t("settings.agentAccounts.handoff")} description={t("settings.agentAccounts.handoffDescription")}>
+			<Switch
+				aria-label={t("settings.agentAccounts.handoff")}
+				checked={settings?.accountHandoff ?? false}
+				disabled={isLoading || saving || !settings}
+				onCheckedChange={update}
+			/>
+		</HarnessDetailRow>
+		{error ? <p role="alert" className="px-3 pb-2 text-xs text-error">{error}</p> : null}
+	</>;
 }
 
 /** The account's limit meters, shared by the Harness Account tab and the session summary. */

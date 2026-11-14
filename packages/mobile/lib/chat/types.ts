@@ -167,6 +167,13 @@ export type ActivityDetail = {
 	host?: string;
 	commandSource?: string;
 	event?: "compaction" | "model.rerouted" | "auth.reauth_required" | "steer" | "plan" | string;
+	/** A provider_switch marker's sides, as the daemon records them (see providerSwitchModel). */
+	sourceHarness?: string;
+	targetHarness?: string;
+	sourceModel?: string;
+	targetModel?: string;
+	targetEffort?: string;
+	targetAutoCompactWindow?: string;
 	/** steer: the AO session that sent it, when another agent did. */
 	senderSessionId?: string;
 	senderProjectId?: string;

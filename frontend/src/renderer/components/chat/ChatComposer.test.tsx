@@ -2,7 +2,7 @@ import { upgradeExcerpt } from "../../lib/chat-excerpt-snapshot";
 import { CLOUD_CHAT_MESSAGE_BYTES } from "../../../shared/chat-excerpt";
 import { appI18n } from "../../i18n/instance";
 import { purgeFileAttachmentsForSession } from "../../hooks/useFileAttachments";
-import { act, fireEvent, render as rtlRender, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render as rtlRender, screen, waitFor, within } from "@testing-library/react";
 import type { ReactElement } from "react";
 import userEvent from "@testing-library/user-event";
 import { Activity, Profiler } from "react";
@@ -458,8 +458,8 @@ describe("send keys", () => {
 		// The placeholder reserves the same gutter, so typing starts where it began.
 		const placeholder = field.parentElement?.querySelector<HTMLElement>(".pointer-events-none.text-muted-foreground");
 		expect(placeholder).toHaveClass("px-[7px]", "overflow-hidden", "chat-composer-scrollbar", "[scrollbar-gutter:stable_both-edges]");
-		// The send circle sits as far in from the right as the + glyph's ink does from the left.
-		expect(screen.getByRole("group", { name: "Send message controls" })).toHaveClass("me-2.5");
+		// The send circle sits on the form padding like the + does, so its right and bottom insets match.
+		expect(screen.getByRole("group", { name: "Send message controls" }).className).not.toMatch(/(^|\s)(me|mr|pe|pr)-/);
 	});
 
 	it("uses a circular primary send control that enables when armed", async () => {
@@ -2344,6 +2344,56 @@ describe("attachments", () => {
 		]);
 	});
 
+	// A draft keeps its files when it moves to a chat that cannot take them (a
+	// new task's Cloud standalone agent): they stay as chips with that chat's
+	// reason, and nothing is sent until they are removed.
+	it("keeps files a chat cannot take as chips with its reason, sending nothing until they are removed", async () => {
+		const reason = "Files can't start a standalone agent. Remove them to continue.";
+		const held = renderComposer({ draftSessionId: "composer-files-refused", holdAttachments: true });
+		fireEvent.paste(held.field, { clipboardData: clipboardData([textFile()]) });
+		await screen.findByLabelText("Remove notes.txt");
+		cleanup();
+		const { onSend, field } = renderComposer({ draftSessionId: "composer-files-refused", attachmentsRefusal: reason });
+		await screen.findByLabelText("Remove notes.txt");
+		expect(screen.getByText(reason)).toBeTruthy();
+		await typeInComposer(field, "start without the file");
+		await userEvent.click(field);
+		await userEvent.keyboard("{Enter}");
+		expect(onSend).not.toHaveBeenCalled();
+		expect(screen.queryByText("The files are not durably available. Nothing was sent.")).toBeNull();
+		await userEvent.click(screen.getByLabelText("Remove notes.txt"));
+		await waitFor(() => expect(screen.queryByText(reason)).toBeNull());
+		await userEvent.click(field);
+		await userEvent.keyboard("{Enter}");
+		await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+		expect(onSend.mock.calls[0]?.[0]).toBe("start without the file");
+	});
+
+	// A send whose answer was lost keeps its identity and its files until its
+	// outcome is known: a chat that takes no new files does not hold back its
+	// retry, which goes with the same id and the same files, and says nothing
+	// about files while that send is pending.
+	it("retries a pending send with its files even where new files are refused", async () => {
+		const reason = "Files can't start a standalone agent. Remove them to continue.";
+		const sessionId = "composer-files-pending-retry";
+		const onSend = vi.fn().mockRejectedValueOnce(new Error("response lost")).mockResolvedValue(undefined);
+		const first = render(<ChatComposer parkUnsentSends={false} draftSessionId={sessionId} holdAttachments onSend={onSend} />);
+		const field = screen.getByLabelText("Message the agent");
+		await typeInComposer(field, "read this file");
+		fireEvent.paste(field, { clipboardData: clipboardData([textFile()]) });
+		await screen.findByLabelText("Remove notes.txt");
+		fireEvent.keyDown(field, { key: "Enter" });
+		await waitFor(() => expect(screen.getByRole("button", { name: "Retry message safely" })).toBeEnabled());
+		first.unmount();
+		render(<ChatComposer parkUnsentSends={false} draftSessionId={sessionId} holdAttachments attachmentsRefusal={reason} onSend={onSend} />);
+		await screen.findByLabelText("Remove notes.txt");
+		expect(screen.queryByText(reason)).toBeNull();
+		await userEvent.click(screen.getByRole("button", { name: "Retry message safely" }));
+		await waitFor(() => expect(onSend).toHaveBeenCalledTimes(2));
+		expect(onSend.mock.calls[1]).toEqual(onSend.mock.calls[0]);
+		expect(onSend.mock.calls[1]?.[1]).toEqual([{ mimeType: "text/plain", data: btoa("hello"), name: "notes.txt" }]);
+	});
+
 	it("keeps held file bytes available after a definitive send rejection", async () => {
 		const onSend = vi.fn()
 			.mockRejectedValueOnce(Object.assign(new Error("Agent not installed"), { code: "TASK_CREATE_FAILED" }))
@@ -3074,20 +3124,71 @@ describe("unavailable states", () => {
 		expect(onInterrupt).not.toHaveBeenCalled();
 	});
 
-	it("explains when a send is blocked by the previous in-flight message", async () => {
-		const onSend = vi.fn().mockImplementation(
-			() => new Promise<void>(() => {
-				/* keep pending */
-			}),
-		);
-		render(<ChatComposer busy onSend={onSend} willQueue />);
+	it("sends a message entered while the previous one is in flight as soon as that one lands", async () => {
+		const onSend = vi.fn().mockResolvedValue(undefined);
+		const view = render(<ChatComposer busy onSend={onSend} willQueue />);
 		const field = screen.getByLabelText("Message the agent");
 
 		await typeInComposer(field, "follow up");
 		await userEvent.keyboard("{Enter}");
 
 		expect(onSend).not.toHaveBeenCalled();
-		expect(screen.getByRole("alert")).toHaveTextContent(/still sending the previous message/i);
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+		expect(field).toHaveTextContent("follow up");
+
+		view.rerender(<ChatComposer onSend={onSend} willQueue />);
+
+		await waitFor(() => expect(onSend).toHaveBeenCalledOnce());
+		expect(onSend).toHaveBeenCalledWith("follow up");
+		await waitFor(() => expect(field.textContent).toBe(""));
+	});
+
+	it("keeps a held message in the box when the previous send is parked as unsent", async () => {
+		const sessionId = "composer-held-behind-parked-send";
+		const onSend = vi.fn().mockResolvedValue(undefined);
+		const view = render(<ChatComposer busy onSend={onSend} willQueue draftSessionId={sessionId} />);
+		const field = screen.getByLabelText("Message the agent");
+
+		await typeInComposer(field, "follow up");
+		await userEvent.keyboard("{Enter}");
+		await waitFor(() => expect(field).toHaveAttribute("contenteditable", "true"));
+		expect(onSend).not.toHaveBeenCalled();
+
+		// Another surface's send gets no answer and moves to the unsent strip.
+		await act(async () => {
+			const lost = prepareChatComposerDelivery(sessionId, {
+				kind: "send",
+				optimistic: true,
+				composerText: "follow up",
+				attachments: [],
+				requestText: "the message that got no answer",
+				clientMessageId: "lost-before-held",
+			});
+			if (!lost.ok) throw new Error("Failed to prepare test delivery");
+			expect(parkChatComposerDelivery(sessionId, "lost-before-held").ok).toBe(true);
+		});
+		view.rerender(<ChatComposer onSend={onSend} willQueue draftSessionId={sessionId} />);
+		await act(async () => {});
+
+		expect(onSend).not.toHaveBeenCalled();
+		expect(field).toHaveTextContent("follow up");
+	});
+
+	it("does not send a held message that was edited before the previous one landed", async () => {
+		const onSend = vi.fn().mockResolvedValue(undefined);
+		const view = render(<ChatComposer busy onSend={onSend} willQueue />);
+		const field = screen.getByLabelText("Message the agent");
+
+		await typeInComposer(field, "follow up");
+		await userEvent.keyboard("{Enter}");
+		await waitFor(() => expect(field).toHaveAttribute("contenteditable", "true"));
+		await typeInComposer(field, " and more");
+
+		view.rerender(<ChatComposer onSend={onSend} willQueue />);
+		await act(async () => {});
+
+		expect(onSend).not.toHaveBeenCalled();
+		expect(field).toHaveTextContent("follow up and more");
 	});
 });
 

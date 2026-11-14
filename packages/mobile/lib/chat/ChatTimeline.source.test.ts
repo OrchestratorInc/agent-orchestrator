@@ -155,15 +155,24 @@ describe("jump to latest", () => {
 
 // TurnRollbackButton.test and ElicitationInputField.test render these controls.
 describe("turn rollback", () => {
-	const summary = source.slice(source.indexOf("function TurnSummary"), source.indexOf("function TurnPlan"));
+	const actions = source.slice(source.indexOf("function turnActionButtons"), source.indexOf("function TurnPlan"));
 
 	// Forgetting a turn cannot be undone, so the control asks through the
 	// system's destructive alert rather than a card drawn into the timeline.
 	it("offers the confirming control on a settled turn the provider knows", () => {
-		expect(summary).toContain("const canRollBack = settled && Boolean(turn.providerTurnId) && !turn.rolledBack;");
-		expect(summary).toContain("{onRollback && canRollBack ? <View style={styles.turnLine}><TurnRollbackButton turnId={turn.id} onRollback={onRollback} /></View> : null}");
-		expect(summary).not.toContain("rollbackConfirm");
-		expect(summary).not.toContain("setConfirming");
+		expect(actions).toContain("const canRollBack = Boolean(onRollback) && settled && Boolean(turn.providerTurnId) && !turn.rolledBack;");
+		expect(actions).toContain("{canRollBack && onRollback ? <TurnRollbackButton turnId={turn.id} onRollback={onRollback} /> : null}");
+		// Fork shares the row: it shows on a turn a fork can copy, beside Roll back.
+		expect(actions).toContain("{canFork && onFork ? <TurnForkButton turnId={turn.id} onFork={onFork} /> : null}");
+		expect(actions).not.toContain("rollbackConfirm");
+		expect(actions).not.toContain("setConfirming");
+	});
+
+	// Copy, Fork and Roll back are one row under the reply, as on the desktop.
+	it("puts the turn's actions beside Copy on its final reply", () => {
+		expect(source).toContain("<CopyResponseButton text={item.text} />\n\t\t\t\t\t{turnActions}");
+		expect(source).toContain("renderRows(partition.final, actionsHost, actions)");
+		expect(source).toContain("actions={actionsHost ? null : actions}");
 	});
 });
 

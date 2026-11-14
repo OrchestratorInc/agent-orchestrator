@@ -11,15 +11,431 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/claudecode"
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/process"
+	"github.com/aoagents/agent-orchestrator/backend/internal/providerkeys"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/shellterm"
 )
+
+type guidedTerminalFake struct {
+	mu         sync.Mutex
+	input      shellterm.OpenCommandTerminalInput
+	output     string
+	alive      bool
+	keys       []string
+	closed     bool
+	closeErr   error
+	closeCalls int
+}
+
+func (f *guidedTerminalFake) OpenCommandTerminal(_ context.Context, input shellterm.OpenCommandTerminalInput) (shellterm.ShellTerminal, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.input = input
+	f.alive = true
+	return shellterm.ShellTerminal{HandleID: "private-auth-pty"}, nil
+}
+func (f *guidedTerminalFake) ObserveAuthTerminal(_ context.Context, _ string) (shellterm.AuthTerminalObservation, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return shellterm.AuthTerminalObservation{Output: f.output, Alive: f.alive}, nil
+}
+func (f *guidedTerminalFake) SendAuthTerminalKey(_ context.Context, _ string, action string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.keys = append(f.keys, action)
+	return nil
+}
+func (f *guidedTerminalFake) CloseShellTerminal(_ context.Context, _ string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.closeCalls++
+	if f.closeErr != nil {
+		return f.closeErr
+	}
+	f.closed = true
+	return nil
+}
+
+func (f *guidedTerminalFake) IsShellTerminalChildAlive(context.Context, string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.alive && !f.closed, nil
+}
+
+func (f *guidedTerminalFake) CommandTerminalHandles(_ context.Context, owner string) ([]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.input.Owner != owner || f.closed {
+		return nil, nil
+	}
+	return []string{"private-auth-pty"}, nil
+}
+
+func TestEveryCommandPlanHasAnInlineLoginMethod(t *testing.T) {
+	for _, plan := range plans {
+		if len(plan.command) == 0 || plan.LaunchMode != LaunchTerminal {
+			continue
+		}
+		if got := loginMethods(plan.AgentID); len(got) == 0 {
+			t.Errorf("%s has no inline login method", plan.AgentID)
+		}
+	}
+}
+
+func TestGuidedNativeLoginDoesNotStartAnotherCommandAfterCleanupFailure(t *testing.T) {
+	pty := &guidedTerminalFake{closeErr: errors.New("child still running")}
+	svc := New(foundExecutable("opencode"), pty)
+	t.Cleanup(svc.Close)
+	started, err := svc.StartLogin(t.Context(), "opencode", "native", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = svc.CancelLogin(t.Context(), "opencode", started.ID)
+	var apiErr *apierr.Error
+	if !errors.As(err, &apiErr) || apiErr.Code != "AGENT_AUTH_CANCEL_PENDING" {
+		t.Fatalf("cancel error=%v", err)
+	}
+	_, err = svc.StartLogin(t.Context(), "opencode", "native", "")
+	if !errors.As(err, &apiErr) || apiErr.Code != "AGENT_AUTH_CLEANUP_PENDING" {
+		t.Fatalf("restart error=%v", err)
+	}
+	pty.mu.Lock()
+	calls := pty.closeCalls
+	pty.mu.Unlock()
+	if calls != 3 {
+		t.Fatalf("cleanup calls=%d", calls)
+	}
+}
+
+func TestGuidedNativeLoginHidesTerminalAndCancels(t *testing.T) {
+	// No OpenCode catalog, so OpenCode keeps its fixed key methods.
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	pty := &guidedTerminalFake{output: "private credential=do-not-return\n> OpenAI\n"}
+	svc := New(foundExecutable("opencode"), pty)
+	t.Cleanup(svc.Close)
+	plan, err := svc.Plan(t.Context(), "opencode")
+	if err != nil || len(plan.Methods) < 4 || plan.Methods[3].ID != "native" {
+		t.Fatalf("plan methods=%+v err=%v", plan.Methods, err)
+	}
+	started, err := svc.StartLogin(t.Context(), "opencode", "native", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if started.NativePrompt != "waiting" || started.Status != "running" {
+		t.Fatalf("started=%+v", started)
+	}
+	var current LoginSnapshot
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		current, err = svc.Login(t.Context(), "opencode", started.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if current.NativePrompt == "menu" {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if current.NativePrompt != "menu" || current.SelectedOption != "OpenAI" {
+		t.Fatalf("prompt=%+v", current)
+	}
+	encoded, _ := json.Marshal(current)
+	if strings.Contains(string(encoded), "do-not-return") || strings.Contains(string(encoded), "private-auth-pty") {
+		t.Fatalf("leaked terminal: %s", encoded)
+	}
+	if _, err := svc.ActOnLogin(t.Context(), "opencode", started.ID, "next", ""); err != nil {
+		t.Fatal(err)
+	}
+	pty.mu.Lock()
+	if !reflect.DeepEqual(pty.keys, []string{"next"}) || !reflect.DeepEqual(pty.input.Argv[1:], []string{"auth", "login"}) {
+		t.Fatalf("keys=%v argv=%v", pty.keys, pty.input.Argv)
+	}
+	pty.mu.Unlock()
+	if _, err := svc.CancelLogin(t.Context(), "opencode", started.ID); err != nil {
+		t.Fatal(err)
+	}
+	pty.mu.Lock()
+	closed := pty.closed
+	pty.mu.Unlock()
+	if !closed {
+		t.Fatal("hidden PTY was not closed")
+	}
+}
+
+func TestNativePromptRequiresFallbackForUnreviewedOutput(t *testing.T) {
+	for _, output := range []string{"secret=do-not-return\n> Custom provider", "Enter your API key: do-not-return", "Choose a provider\n", "Choose a provider\n1) Anthropic\n2) Custom gateway\n"} {
+		kind, label, options, _ := nativePrompt(output)
+		if kind != "terminal_required" || label != "" || options != nil {
+			t.Fatalf("output=%q kind=%q label=%q options=%v", output, kind, label, options)
+		}
+	}
+	// A lone numbered line is ordinary output text, not a menu.
+	if kind, _, _, _ := nativePrompt("1. Read the docs first"); kind != "waiting" {
+		t.Fatalf("lone numbered line kind=%q", kind)
+	}
+}
+
+func TestNativePromptRecognizesNumberedMenus(t *testing.T) {
+	kind, selected, options, _ := nativePrompt("Select a provider\n1) Anthropic\n2) OpenAI\n3) OpenRouter\n")
+	if kind != "menu" || selected != "" || !reflect.DeepEqual(options, []string{"Anthropic", "OpenAI", "OpenRouter"}) {
+		t.Fatalf("kind=%q selected=%q options=%v", kind, selected, options)
+	}
+	kind, selected, options, _ = nativePrompt("1) Anthropic\n2) Custom provider\n")
+	if kind != "terminal_required" || selected != "" || options != nil {
+		t.Fatalf("unreviewed numbered menu kind=%q options=%v", kind, options)
+	}
+}
+
+func TestCopilotAndKimiLoginLinksStayOnTheirHosts(t *testing.T) {
+	for _, tc := range []struct {
+		agent, url string
+		ok         bool
+	}{
+		{"copilot", "https://github.com/login/device", true},
+		{"copilot", "https://github.com/login/oauth/authorize?client_id=x", true},
+		{"copilot", "https://evil.example/login/device", false},
+		{"kimi", "https://auth.kimi.ai/device?user_code=ABCD-1234", true},
+		{"kimi", "https://auth.kimi.com/device?user_code=ABCD-1234", true},
+		{"kimi", "https://kimi.example.com/device", false},
+	} {
+		if got := safeLoginURL(tc.agent, tc.url); got != tc.ok {
+			t.Errorf("safeLoginURL(%s, %s) = %v", tc.agent, tc.url, got)
+		}
+	}
+}
+
+func TestNativePromptReadsOnlyTheLatestMenuWithItsDigits(t *testing.T) {
+	// An earlier menu in scrollback, then the current one with a cursor line.
+	output := "1) Anthropic\n2) OpenAI\nSaved.\nSelect a provider\n\u276f 1) OpenRouter\n  2) Anthropic\n"
+	kind, _, options, digits := nativePrompt(output)
+	if kind != "menu" || !reflect.DeepEqual(options, []string{"OpenRouter", "Anthropic"}) || !reflect.DeepEqual(digits, []string{"1", "2"}) {
+		t.Fatalf("kind=%q options=%v digits=%v", kind, options, digits)
+	}
+}
+
+func TestNativePromptIgnoresAnsweredMenusInScrollback(t *testing.T) {
+	for _, tc := range []struct{ output, kind string }{
+		// Answered, then a new prompt the UI can't fill: the terminal takes over.
+		{"Choose a provider:\n1. Anthropic\n2. OpenAI\n> 2\nPaste your API key:\n", "terminal_required"},
+		// Answered, then progress: nothing to choose, and old words don't count.
+		{"Choose a provider:\n1. Anthropic\n2. OpenAI\n> 2\nSelected OpenAI\nWaiting for authorization...\n", "waiting"},
+		// Typed but not yet submitted: still the prompt, so Enter stays on offer.
+		{"Choose a provider:\n1. Anthropic\n2. OpenAI\n> 2\n", "menu"},
+		{"Select a provider\n1) Anthropic\n2) OpenAI\n(Use number keys, Enter to confirm)\n", "menu"},
+		// A gutter-drawn picker (cliclack's Windows fallback, as in goose
+		// configure) is read past its gutter: an unreviewed label hands off.
+		{"T  goose-configure\n|\n*  What would you like to configure?\n|  > Configure Providers (Change provider or update credentials)\n|    Custom Providers\n|    goose settings\n—\n", "terminal_required"},
+		{"◆  Select provider\n│  ● OpenAI\n│  ○ Anthropic\n└\n", "menu"},
+	} {
+		if kind, _, _, _ := nativePrompt(tc.output); kind != tc.kind {
+			t.Errorf("nativePrompt(%q) = %q, want %q", tc.output, kind, tc.kind)
+		}
+	}
+}
+
+func TestNativeSignInIsNotOfferedWhereItNeedsTypedInput(t *testing.T) {
+	for _, agentID := range []string{"droid", "qwen", "prime-agent"} {
+		for _, method := range loginMethods(agentID) {
+			if method.ID == "native" {
+				t.Errorf("%s offers guided native sign-in it cannot open", agentID)
+			}
+		}
+	}
+}
+
+type signInProberFake struct {
+	state domain.AgentAuthenticationState
+}
+
+func (f *signInProberFake) ResolveAgentBinary(_ context.Context, agentID string) (string, error) {
+	return "/test/bin/" + agentID, nil
+}
+func (f *signInProberFake) InvalidateAgentAuthentication(string) {}
+func (f *signInProberFake) EnsureAgentReadiness(context.Context, string, domain.AgentReadinessPurpose) (domain.AgentReadinessSnapshot, error) {
+	return domain.AgentReadinessSnapshot{Authentication: domain.AgentAuthenticationObservation{State: f.state}}, nil
+}
+
+// The hidden PTY reports no exit status: Esc, Ctrl+C or a CLI error also end
+// it. Only the harness's probe may turn an exit into a sign-in.
+func TestNativeSignInExitIsConfirmedByTheHarnessProbe(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		state     domain.AgentAuthenticationState
+		want      string
+		claimKept bool
+	}{
+		{"authorized", domain.AgentAuthenticationAuthorized, "succeeded", false},
+		// Gemini, Hermes and MiMo Code can only report their own credentials as present.
+		{"configured", domain.AgentAuthenticationConfigured, "succeeded", false},
+		{"signed out", domain.AgentAuthenticationUnauthorized, "failed", true},
+		{"inconclusive", domain.AgentAuthenticationUnknown, "failed", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("GEMINI_API_KEY", "")
+			t.Cleanup(func() { _ = providerkeys.RestoreInherited("GEMINI_API_KEY") })
+			dataDir := t.TempDir()
+			if err := providerkeys.Save(t.Context(), dataDir, "GEMINI_API_KEY", "ao-gemini-key"); err != nil {
+				t.Fatal(err)
+			}
+			if err := providerkeys.ClaimForHarness(t.Context(), dataDir, "GEMINI_API_KEY", "gemini"); err != nil {
+				t.Fatal(err)
+			}
+			pty := &guidedTerminalFake{output: "Waiting for authentication...\n"}
+			svc := NewWithAgentResolver(foundExecutable("gemini"), &signInProberFake{state: tc.state}, pty, dataDir)
+			t.Cleanup(svc.Close)
+			started, err := svc.StartLogin(t.Context(), "gemini", "native", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			pty.mu.Lock()
+			pty.alive = false
+			pty.mu.Unlock()
+			var current LoginSnapshot
+			deadline := time.Now().Add(5 * time.Second)
+			for time.Now().Before(deadline) {
+				if current, err = svc.Login(t.Context(), "gemini", started.ID); err != nil {
+					t.Fatal(err)
+				}
+				if current.Status != "running" {
+					break
+				}
+				time.Sleep(20 * time.Millisecond)
+			}
+			if current.Status != tc.want {
+				t.Fatalf("status=%q, want %q", current.Status, tc.want)
+			}
+			_, withhold, err := providerkeys.ForSession(dataDir, "gemini")
+			if err != nil || (len(withhold) == 0) != tc.claimKept {
+				t.Fatalf("claim kept=%v, want %v (err %v)", len(withhold) == 0, tc.claimKept, err)
+			}
+		})
+	}
+}
+
+// claimProbeFake records whether the harness's AO-saved key was still passed
+// to it while its sign-in was being confirmed.
+type claimProbeFake struct {
+	signInProberFake
+	dataDir   string
+	agentID   string
+	mu        sync.Mutex
+	probed    bool
+	stillSeen bool
+}
+
+func (f *claimProbeFake) EnsureAgentReadiness(ctx context.Context, id string, p domain.AgentReadinessPurpose) (domain.AgentReadinessSnapshot, error) {
+	_, withhold, _ := providerkeys.ForSession(f.dataDir, f.agentID)
+	f.mu.Lock()
+	f.probed, f.stillSeen = true, len(withhold) == 0
+	f.mu.Unlock()
+	return f.signInProberFake.EnsureAgentReadiness(ctx, id, p)
+}
+
+func TestNativeSignInProbeRunsWithoutTheOldKeyClaim(t *testing.T) {
+	t.Setenv("GEMINI_API_KEY", "")
+	t.Cleanup(func() { _ = providerkeys.RestoreInherited("GEMINI_API_KEY") })
+	dataDir := t.TempDir()
+	if err := providerkeys.Save(t.Context(), dataDir, "GEMINI_API_KEY", "ao-gemini-key"); err != nil {
+		t.Fatal(err)
+	}
+	if err := providerkeys.ClaimForHarness(t.Context(), dataDir, "GEMINI_API_KEY", "gemini"); err != nil {
+		t.Fatal(err)
+	}
+	prober := &claimProbeFake{signInProberFake: signInProberFake{state: domain.AgentAuthenticationUnauthorized}, dataDir: dataDir, agentID: "gemini"}
+	pty := &guidedTerminalFake{output: "Waiting for authentication...\n"}
+	svc := NewWithAgentResolver(foundExecutable("gemini"), prober, pty, dataDir)
+	t.Cleanup(svc.Close)
+	started, err := svc.StartLogin(t.Context(), "gemini", "native", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pty.mu.Lock()
+	pty.alive = false
+	pty.mu.Unlock()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if cur, err := svc.Login(t.Context(), "gemini", started.ID); err != nil || cur.Status != "running" {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	prober.mu.Lock()
+	defer prober.mu.Unlock()
+	if !prober.probed || prober.stillSeen {
+		t.Fatalf("probed=%v, key still passed during probe=%v", prober.probed, prober.stillSeen)
+	}
+	// A failed sign-in gives the claim back.
+	if _, withhold, _ := providerkeys.ForSession(dataDir, "gemini"); len(withhold) != 0 {
+		t.Fatalf("claim was not restored after a failed sign-in: %v", withhold)
+	}
+}
+
+func TestGuidedNativeLoginDrivesNumberedMenuWithDigitsOnly(t *testing.T) {
+	pty := &guidedTerminalFake{output: "Select a provider\n1) Anthropic\n2) OpenAI\n"}
+	svc := New(foundExecutable("goose"), pty)
+	t.Cleanup(svc.Close)
+	started, err := svc.StartLogin(t.Context(), "goose", "native", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var current LoginSnapshot
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		current, err = svc.Login(t.Context(), "goose", started.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if current.NativePrompt == "menu" {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if current.NativePrompt != "menu" || !reflect.DeepEqual(current.NativeOptions, []string{"Anthropic", "OpenAI"}) {
+		t.Fatalf("snapshot=%+v", current)
+	}
+	if _, err := svc.ActOnLogin(t.Context(), "goose", started.ID, "next", ""); err == nil {
+		t.Fatal("accepted navigation on a numbered menu")
+	}
+	if _, err := svc.ActOnLogin(t.Context(), "goose", started.ID, "3", ""); err == nil {
+		t.Fatal("accepted a digit outside the recognized options")
+	}
+	// A choice made on a menu that has since changed is refused.
+	var apiErr *apierr.Error
+	if _, err := svc.ActOnLogin(t.Context(), "goose", started.ID, "2", "Anthropic"); !errors.As(err, &apiErr) || apiErr.Code != "AGENT_AUTH_MENU_CHANGED" {
+		t.Fatalf("stale choice err=%v", err)
+	}
+	if _, err := svc.ActOnLogin(t.Context(), "goose", started.ID, "2", "OpenAI"); err != nil {
+		t.Fatal(err)
+	}
+	// A CLI that reads a line needs Enter after the digit.
+	deadline = time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if current, _ = svc.Login(t.Context(), "goose", started.ID); current.NativePrompt == "menu" {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if _, err := svc.ActOnLogin(t.Context(), "goose", started.ID, "select", ""); err != nil {
+		t.Fatalf("Enter on a numbered menu: %v", err)
+	}
+	pty.mu.Lock()
+	if !reflect.DeepEqual(pty.keys, []string{"2", "select"}) {
+		t.Fatalf("keys=%v", pty.keys)
+	}
+	pty.mu.Unlock()
+	if _, err := svc.CancelLogin(t.Context(), "goose", started.ID); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestLoginMethodsInvokeOnlyFixedCommands(t *testing.T) {
 	for _, tc := range []struct {
@@ -35,6 +451,32 @@ func TestLoginMethodsInvokeOnlyFixedCommands(t *testing.T) {
 		{"claude-code", "console", []string{"auth", "login", "--console"}, false},
 		{"claude-code", "sso", []string{"auth", "login", "--sso"}, false},
 		{"claude-code", "setup_token", nil, true},
+		{"cline", "browser", []string{"auth", "cline"}, false},
+		{"kiro", "browser", []string{"login"}, false},
+		{"cursor", "browser", []string{"login"}, false},
+		{"continue", "browser", []string{"login"}, false},
+		{"grok", "browser", []string{"login"}, false},
+		{"command-code", "browser", []string{"login"}, false},
+		{"copilot", "browser", []string{"login", "--web-flow"}, false},
+		{"copilot", "device_code", []string{"login", "--device-code"}, false},
+		{"copilot", "copilot_token", []string{"login", "--with-token"}, true},
+		{"kimi", "device_code_global", []string{"login", "--region", "global"}, false},
+		{"kimi", "device_code_cn", []string{"login", "--region", "mainland-cn"}, false},
+		{"opencode", "anthropic_key", nil, true},
+		{"opencode", "openai_key", nil, true},
+		{"opencode", "openrouter_key", nil, true},
+		{"opencode-v2", "anthropic_key", []string{"auth", "import", "--standalone"}, true},
+		{"opencode-v2", "openai_key", []string{"auth", "import", "--standalone"}, true},
+		{"opencode-v2", "openrouter_key", []string{"auth", "import", "--standalone"}, true},
+		{"codewhale", "codewhale_deepseek_key", []string{"auth", "set", "--provider", "deepseek", "--api-key-stdin"}, true},
+		{"codewhale", "codewhale_openai_key", []string{"auth", "set", "--provider", "openai", "--api-key-stdin"}, true},
+		{"codewhale", "codewhale_openrouter_key", []string{"auth", "set", "--provider", "openrouter", "--api-key-stdin"}, true},
+		{"aider", "aider_openai_key", nil, true},
+		{"aider", "aider_anthropic_key", nil, true},
+		{"aider", "aider_openrouter_key", nil, true},
+		{"aider", "aider_deepseek_key", nil, true},
+		{"aider", "aider_gemini_key", nil, true},
+		{"gemini", "gemini_api_key", nil, true},
 	} {
 		t.Run(tc.agent+"/"+tc.method, func(t *testing.T) {
 			args, secret, err := loginArgs(tc.agent, tc.method)
@@ -49,7 +491,8 @@ func TestUILoginRejectsInvalidInputBeforeLaunch(t *testing.T) {
 	svc := New(foundExecutable("codex"), nil)
 	svc.commandContext = func(context.Context, string, ...string) *exec.Cmd { t.Fatal("launched invalid login"); return nil }
 	for _, tc := range []struct{ agent, method, secret string }{
-		{"unknown", "browser", ""}, {"cursor", "browser", ""}, {"codex", "--arbitrary", ""},
+		{"unknown", "browser", ""}, {"kiro", "device_code", ""}, {"cursor", "api_key", "test"}, {"continue", "api_key", "test"}, {"grok", "device_code", ""}, {"command-code", "api_key", "test"}, {"opencode-v2", "browser", ""}, {"cline", "api_key", "test"}, {"codewhale", "provider_from_client", "test"}, {"codex", "--arbitrary", ""},
+		{"aider", "aider_custom_key", ""}, {"aider", "browser", ""}, {"gemini", "browser", ""}, {"gemini", "api_key", "test"},
 		{"codex", "browser", "secret"}, {"codex", "api_key", ""}, {"codex", "api_key", "one\ntwo"},
 		{"codex", "api_key", strings.Repeat("s", 16*1024+1)}, {"claude-code", "api_key", "secret"},
 	} {
@@ -86,6 +529,14 @@ func TestLoginOutputExposesOnlyRecognizedPrompts(t *testing.T) {
 			t.Fatalf("accepted unsafe URL: %s", raw)
 		}
 	}
+	if !safeLoginURL("cline", "https://app.cline.bot/auth/cli") {
+		t.Fatal("rejected Cline's account host")
+	}
+	for _, raw := range []string{"http://app.cline.bot/auth/cli", "https://app.cline.bot.evil.test/auth/cli", "https://evil@app.cline.bot/auth/cli", "https://app.cline.bot:444/auth/cli"} {
+		if safeLoginURL("cline", raw) {
+			t.Fatalf("accepted unsafe Cline URL: %s", raw)
+		}
+	}
 }
 
 // The subprocess verifies stdin without touching any real harness credentials.
@@ -109,6 +560,18 @@ func TestUILoginHelper(t *testing.T) {
 			os.Exit(3)
 		}
 		fmt.Println("test-secret https://auth.openai.com/oauth/authorize?secret=test-secret")
+	case "opencode-v2":
+		var credentials []struct {
+			ID            string `json:"id"`
+			IntegrationID string `json:"integrationID"`
+			Value         struct {
+				Type string `json:"type"`
+				Key  string `json:"key"`
+			} `json:"value"`
+		}
+		if err := json.NewDecoder(os.Stdin).Decode(&credentials); err != nil || len(credentials) != 1 || credentials[0].ID == "" || credentials[0].IntegrationID != "anthropic" || credentials[0].Value.Type != "key" || credentials[0].Value.Key != "test-secret" || !strings.HasSuffix(os.Getenv("XDG_DATA_HOME"), "opencode-v2-home") {
+			os.Exit(3)
+		}
 	case "fail":
 		fmt.Println("private failure details")
 		os.Exit(4)
@@ -161,6 +624,70 @@ func TestUILoginSecretUsesStdinAndDiscardsOutput(t *testing.T) {
 	if strings.Contains(string(data), "test-secret") {
 		t.Fatalf("credential leaked: %s", data)
 	}
+}
+
+func TestCodewhaleProviderKeyUsesNativeStdinWithoutExposingOutput(t *testing.T) {
+	t.Setenv("AO_TEST_UI_LOGIN", "secret")
+	svc := New(foundExecutable("codewhale"), nil)
+	svc.commandContext = func(ctx context.Context, _ string, args ...string) *exec.Cmd {
+		if !reflect.DeepEqual(args, []string{"auth", "set", "--provider", "deepseek", "--api-key-stdin"}) {
+			t.Fatalf("unexpected Codewhale args: %v", args)
+		}
+		return process.CommandContext(ctx, os.Args[0], "-test.run=^TestUILoginHelper$")
+	}
+	t.Cleanup(svc.Close)
+	started, err := svc.StartLogin(t.Context(), "codewhale", "codewhale_deepseek_key", "test-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		result, err := svc.Login(t.Context(), "codewhale", started.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.Status != "running" {
+			data, _ := json.Marshal(result)
+			if result.Status != "succeeded" || result.LoginURL != "" || strings.Contains(string(data), "test-secret") {
+				t.Fatalf("result=%s", data)
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("Codewhale credential import did not finish")
+}
+
+func TestOpenCodeV2ImportUsesStdinAndIsolatedNativeHome(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	t.Setenv("AO_TEST_UI_LOGIN", "opencode-v2")
+	svc := New(foundExecutable("opencode"), nil)
+	svc.commandContext = func(ctx context.Context, _ string, args ...string) *exec.Cmd {
+		if !reflect.DeepEqual(args, []string{"auth", "import", "--standalone"}) {
+			t.Fatalf("unexpected OpenCode 2 import args: %v", args)
+		}
+		return process.CommandContext(ctx, os.Args[0], "-test.run=^TestUILoginHelper$")
+	}
+	t.Cleanup(svc.Close)
+	started, err := svc.StartLogin(t.Context(), "opencode-v2", "anthropic_key", "test-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		result, err := svc.Login(t.Context(), "opencode-v2", started.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.Status != "running" {
+			if result.Status != "succeeded" || result.LoginURL != "" {
+				t.Fatalf("result=%+v", result)
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("OpenCode 2 import did not finish")
 }
 
 func TestUILoginFailureDoesNotExposeProcessOutput(t *testing.T) {
@@ -532,6 +1059,7 @@ func TestUILoginNativeClaudeSignInClearsSavedSetupToken(t *testing.T) {
 	if err := claudecode.SaveLocalOAuthToken(svc.dataDir, []byte("sk-ant-oat01-earlier-setup-token")); err != nil {
 		t.Fatal(err)
 	}
+	claimAnthropicKeyForClaude(t, svc.dataDir)
 	started, err := svc.StartLogin(t.Context(), "claude-code", "browser", "")
 	if err != nil {
 		t.Fatal(err)
@@ -555,6 +1083,65 @@ func TestUILoginNativeClaudeSignInClearsSavedSetupToken(t *testing.T) {
 	}
 	if _, err := os.Stat(claudecode.LocalOAuthTokenPath(svc.dataDir)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("earlier setup token survived a newer sign-in: %v", err)
+	}
+	// So does an API key saved from Claude Code's panel.
+	assertClaudeKeyReleased(t, svc.dataDir)
+}
+
+// claimAnthropicKeyForClaude saves ANTHROPIC_API_KEY from Claude Code's panel,
+// as if the user had chosen the API key there before switching sign-in.
+func claimAnthropicKeyForClaude(t *testing.T, dataDir string) {
+	t.Helper()
+	if err := providerkeys.Save(t.Context(), dataDir, "ANTHROPIC_API_KEY", "sk-ant-api03-earlier"); err != nil {
+		t.Fatal(err)
+	}
+	if err := providerkeys.ClaimForHarness(t.Context(), dataDir, "ANTHROPIC_API_KEY", "claude-code"); err != nil {
+		t.Fatal(err)
+	}
+	if _, withhold, _ := providerkeys.ForSession(dataDir, "claude-code"); len(withhold) != 0 {
+		t.Fatalf("claim not in effect: withhold=%v", withhold)
+	}
+}
+
+// assertClaudeKeyReleased checks that Claude Code no longer receives the key
+// while the key itself stays saved for other harnesses.
+func assertClaudeKeyReleased(t *testing.T, dataDir string) {
+	t.Helper()
+	inject, withhold, err := providerkeys.ForSession(dataDir, "claude-code")
+	if err != nil || inject["ANTHROPIC_API_KEY"] != "" || len(withhold) != 1 || withhold[0] != "ANTHROPIC_API_KEY" {
+		t.Fatalf("Claude Code still receives ANTHROPIC_API_KEY: inject=%v withhold=%v err=%v", inject, withhold, err)
+	}
+	if keys, err := providerkeys.Load(dataDir); err != nil || keys["ANTHROPIC_API_KEY"] != "sk-ant-api03-earlier" {
+		t.Fatalf("shared key was not kept: %v %v", keys, err)
+	}
+}
+
+func TestUILoginClaudeSetupTokenReleasesItsAPIKeyClaim(t *testing.T) {
+	dataDir := t.TempDir()
+	svc := NewWithAgentResolver(executableFinderFunc(func(name string) (string, error) { return "/test/bin/" + name, nil }), nil, nil, dataDir)
+	t.Cleanup(svc.Close)
+	claimAnthropicKeyForClaude(t, dataDir)
+	if _, err := svc.StartLogin(t.Context(), "claude-code", "setup_token", "sk-ant-oat01-newer-setup-token"); err != nil {
+		t.Fatal(err)
+	}
+	assertClaudeKeyReleased(t, dataDir)
+}
+
+func TestUILoginClaudeSetupTokenKeepsTheAPIKeyWhenTheTokenCannotBeSaved(t *testing.T) {
+	dataDir := t.TempDir()
+	svc := NewWithAgentResolver(executableFinderFunc(func(name string) (string, error) { return "/test/bin/" + name, nil }), nil, nil, dataDir)
+	t.Cleanup(svc.Close)
+	claimAnthropicKeyForClaude(t, dataDir)
+	// A non-empty directory where the token file belongs cannot be replaced.
+	if err := os.MkdirAll(filepath.Join(claudecode.LocalOAuthTokenPath(dataDir), "child"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.StartLogin(t.Context(), "claude-code", "setup_token", "sk-ant-oat01-unsaved-setup-token"); err == nil {
+		t.Fatal("StartLogin succeeded although the setup token could not be saved")
+	}
+	// The previous sign-in, the API key saved from Claude Code's panel, stays.
+	if inject, withhold, err := providerkeys.ForSession(dataDir, "claude-code"); err != nil || len(withhold) != 0 || inject["ANTHROPIC_API_KEY"] != "sk-ant-api03-earlier" {
+		t.Fatalf("Claude Code lost its API key after a failed token save: withhold=%v err=%v", withhold, err)
 	}
 }
 
@@ -660,5 +1247,141 @@ func TestLoginFailsClosedWhenSurvivingTerminalsCannotBeChecked(t *testing.T) {
 				t.Fatalf("expected an inconclusive check to refuse login: %v", err)
 			}
 		})
+	}
+}
+
+// A sign-in that cannot release the old API-key claim is incomplete: new
+// sessions would still get, and bill, that key. Both completion paths end
+// failed and keep the claim, so the panel offers a retry.
+func TestSignInFailsWhenTheKeyClaimCannotBeReleased(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("needs a data directory the test user cannot write")
+	}
+	finish := func(t *testing.T, svc *Service, agentID, id string) string {
+		t.Helper()
+		deadline := time.Now().Add(10 * time.Second)
+		for time.Now().Before(deadline) {
+			snapshot, err := svc.Login(t.Context(), agentID, id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if snapshot.Status != "running" {
+				return snapshot.Status
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		t.Fatal("sign-in did not finish")
+		return ""
+	}
+	readOnly := func(t *testing.T, dir string) {
+		t.Helper()
+		if err := os.Chmod(dir, 0o500); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	}
+	t.Run("account sign-in", func(t *testing.T) {
+		svc := loginTestService(t, "succeed")
+		svc.executables = executableFinderFunc(func(name string) (string, error) { return "/test/bin/" + name, nil })
+		svc.dataDir = t.TempDir()
+		claimAnthropicKeyForClaude(t, svc.dataDir)
+		if err := os.MkdirAll(filepath.Join(svc.dataDir, authWorkspaceRootName, "ui-claude-code"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		readOnly(t, svc.dataDir)
+		started, err := svc.StartLogin(t.Context(), "claude-code", "browser", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if status := finish(t, svc, "claude-code", started.ID); status != "failed" {
+			t.Fatalf("status = %q, want failed", status)
+		}
+		if _, withhold, _ := providerkeys.ForSession(svc.dataDir, "claude-code"); len(withhold) != 0 {
+			t.Fatalf("claim dropped: withhold=%v", withhold)
+		}
+	})
+	t.Run("guided native sign-in", func(t *testing.T) {
+		t.Setenv("GEMINI_API_KEY", "")
+		t.Cleanup(func() { _ = providerkeys.RestoreInherited("GEMINI_API_KEY") })
+		dataDir := t.TempDir()
+		if err := providerkeys.Save(t.Context(), dataDir, "GEMINI_API_KEY", "ao-gemini-key"); err != nil {
+			t.Fatal(err)
+		}
+		if err := providerkeys.ClaimForHarness(t.Context(), dataDir, "GEMINI_API_KEY", "gemini"); err != nil {
+			t.Fatal(err)
+		}
+		pty := &guidedTerminalFake{output: "Waiting for authentication...\n"}
+		svc := NewWithAgentResolver(foundExecutable("gemini"), &signInProberFake{state: domain.AgentAuthenticationAuthorized}, pty, dataDir)
+		t.Cleanup(svc.Close)
+		started, err := svc.StartLogin(t.Context(), "gemini", "native", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		readOnly(t, dataDir)
+		pty.mu.Lock()
+		pty.alive = false
+		pty.mu.Unlock()
+		if status := finish(t, svc, "gemini", started.ID); status != "failed" {
+			t.Fatalf("status = %q, want failed", status)
+		}
+		if _, withhold, _ := providerkeys.ForSession(dataDir, "gemini"); len(withhold) != 0 {
+			t.Fatalf("claim dropped: withhold=%v", withhold)
+		}
+	})
+}
+
+// `ao claude-login` runs Claude Code's own login in a terminal and then asks
+// the daemon to record it, so the daemon alone changes AO's key claims.
+func TestRecordSignInReleasesTheKeyClaimAndEarlierSetupToken(t *testing.T) {
+	dataDir := t.TempDir()
+	svc := NewWithAgentResolver(executableFinderFunc(func(name string) (string, error) { return "/test/bin/" + name, nil }), nil, nil, dataDir)
+	t.Cleanup(svc.Close)
+	if err := claudecode.SaveLocalOAuthToken(dataDir, []byte("sk-ant-oat01-earlier-setup-token")); err != nil {
+		t.Fatal(err)
+	}
+	claimAnthropicKeyForClaude(t, dataDir)
+	released, err := svc.RecordSignIn(t.Context(), "claude-code")
+	if err != nil || released != "ANTHROPIC_API_KEY" {
+		t.Fatalf("RecordSignIn = %q, %v", released, err)
+	}
+	assertClaudeKeyReleased(t, dataDir)
+	if _, err := os.Stat(claudecode.LocalOAuthTokenPath(dataDir)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("earlier setup token survived a newer sign-in: %v", err)
+	}
+	if released, err := svc.RecordSignIn(t.Context(), "claude-code"); err != nil || released != "" {
+		t.Fatalf("second RecordSignIn = %q, %v; want nothing left to release", released, err)
+	}
+	if _, err := svc.RecordSignIn(t.Context(), "not-a-harness"); err == nil {
+		t.Fatal("recorded a sign-in for an unknown harness")
+	}
+}
+
+// A key save or CLI login started while a native sign-in still runs must not
+// drop that sign-in from the registry, where it could no longer be cancelled.
+func TestRunningNativeSignInBlocksAnotherLoginForTheHarness(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("GEMINI_CLI_HOME", home)
+	t.Setenv("GEMINI_API_KEY", "")
+	t.Cleanup(func() { _ = providerkeys.RestoreInherited("GEMINI_API_KEY") })
+	pty := &guidedTerminalFake{output: "Waiting for authentication...\n"}
+	svc := NewWithAgentResolver(foundExecutable("gemini"), &signInProberFake{state: domain.AgentAuthenticationUnknown}, pty, t.TempDir())
+	t.Cleanup(svc.Close)
+	native, err := svc.StartLogin(t.Context(), "gemini", "native", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = svc.StartLogin(t.Context(), "gemini", "gemini_api_key", "sk-gemini")
+	var apiErr *apierr.Error
+	if !errors.As(err, &apiErr) || apiErr.Code != "AGENT_AUTH_IN_PROGRESS" {
+		t.Fatalf("key save during a native sign-in = %v, want AGENT_AUTH_IN_PROGRESS", err)
+	}
+	if entries, err := os.ReadDir(home); err != nil || len(entries) != 0 {
+		t.Fatalf("Gemini's home changed while the native sign-in ran: %v, %v", entries, err)
+	}
+	if snapshot, err := svc.Login(t.Context(), "gemini", native.ID); err != nil || snapshot.Status != "running" {
+		t.Fatalf("native sign-in = %+v, %v; want it still tracked and running", snapshot, err)
+	}
+	if _, err := svc.CancelLogin(t.Context(), "gemini", native.ID); err != nil {
+		t.Fatalf("the native sign-in could not be cancelled: %v", err)
 	}
 }
