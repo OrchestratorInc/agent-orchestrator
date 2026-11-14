@@ -38,7 +38,7 @@ import { conversationActionError, conversationErrorCode, conversationErrorIsPerm
 import { subscribeConversationEvents } from "./conversationEvents";
 import { conversationPollIntervalFor } from "./conversationPoll";
 import { createAsyncValueCache } from "./asyncValueCache";
-import { createRequestGate } from "./requestGate";
+import { createRefreshQueue } from "./refreshQueue";
 import { withAttachmentReferences } from "./messageAttachments";
 import { isEmptyTurnOptionCatalog, loadTurnOptionCatalog } from "./turnOptionsCatalog";
 import { rememberedTurnOptions, rememberTurnOptions, type TurnOptions } from "./lastTurnOptions";
@@ -46,7 +46,14 @@ import { NOT_PAIRED_ACTION_COPY, RECONNECTING_ACTION_COPY } from "../connectionE
 import { excerptDraftText } from "./responseQuotes";
 import { clearPendingSend, needsAttachmentRecovery, pendingSendKey, readPendingSend, reservePendingSend } from "./pendingSend";
 
-const REFRESH_DEBOUNCE_MS = 120;
+/**
+ * The most often a changing chat is re-read. The daemon reports a change
+ * about every 100 ms while an agent writes; the first one is read at once and
+ * the rest at this pace, so a steady reply shows a few times a second rather
+ * than waiting for a pause that never comes (a debounce that restarted on
+ * every change held a streaming reply back until it stopped).
+ */
+export const REFRESH_INTERVAL_MS = 250;
 const conversationPageCache = createMobileConversationPageCache();
 const turnOptionsCache = createAsyncValueCache<string, TurnOptions>(16, 30_000);
 const skillsCache = createAsyncValueCache<string, ChatSkill[]>(16, 30_000);
@@ -84,7 +91,6 @@ export type ConversationAction =
 export type MobileConversation = {
 	snapshot?: ConversationSnapshot;
 	loading: boolean;
-	refreshing: boolean;
 	loadingOlder: boolean;
 	error?: string;
 	unavailable?: { code?: string; message: string };
@@ -153,7 +159,6 @@ export function useMobileConversation(
 		: { pages: [] as ConversationPage[], loading: true });
 	const [pages, setPages] = useState<ConversationPage[]>(initialState.pages);
 	const [loading, setLoading] = useState(initialState.loading);
-	const [refreshing, setRefreshing] = useState(false);
 	const [loadingOlder, setLoadingOlder] = useState(false);
 	const [error, setError] = useState<string>();
 	const [unavailable, setUnavailable] = useState<{ code?: string; message: string }>();
@@ -177,7 +182,8 @@ export function useMobileConversation(
 	const turnOptionsRequest = useRef(0);
 	const turnOptionsInFlight = useRef<Promise<unknown> | undefined>(undefined);
 	const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-	const refreshGate = useRef(createRequestGate()).current;
+	const lastRefreshAt = useRef(0);
+	const refreshQueue = useRef(createRefreshQueue()).current;
 
 	const snapshot = useMemo(() => mergeConversationPages(pages), [pages]);
 	// The agent the chat runs, for a retried switch's send (see deliver).
@@ -213,36 +219,43 @@ export function useMobileConversation(
 
 	const refresh = useCallback(async () => {
 		if (!cfg) return;
-		const request = refreshGate.begin();
-		setRefreshing(true);
-		try {
-			const live = options?.reviewId
-				? await getReviewerConversationPage(cfg, options.reviewId)
-				: await getConversationPage(cfg, sessionId);
-			if (!mounted.current || !refreshGate.isCurrent(request)) return;
-			setPages((old) => {
-				const next = withLivePage(old, live);
-				conversationPageCache.set(cacheKey, next);
-				return next;
-			});
-			setUnavailable(undefined);
-			setError(undefined);
-		} catch (cause) {
-			if (!mounted.current || !refreshGate.isCurrent(request)) return;
-			const classified = classifyConversationError(cause, Boolean(options?.reviewId));
-			if (classified.permanent) setUnavailable({ code: classified.code, message: classified.message });
-			else setError(classified.message);
-		} finally {
-			if (mounted.current && refreshGate.isCurrent(request)) {
-				setLoading(false);
-				setRefreshing(false);
+		// One read at a time, at most one more queued (see refreshQueue): every
+		// answer is shown, where a newer request used to discard the older one's.
+		// On a slow link that left the transcript still for the whole reply.
+		await refreshQueue.run(async (isCurrent) => {
+			try {
+				const live = options?.reviewId
+					? await getReviewerConversationPage(cfg, options.reviewId)
+					: await getConversationPage(cfg, sessionId);
+				if (!mounted.current || !isCurrent()) return;
+				setPages((old) => {
+					const next = withLivePage(old, live);
+					conversationPageCache.set(cacheKey, next);
+					return next;
+				});
+				setUnavailable(undefined);
+				setError(undefined);
+			} catch (cause) {
+				if (!mounted.current || !isCurrent()) return;
+				const classified = classifyConversationError(cause, Boolean(options?.reviewId));
+				if (classified.permanent) setUnavailable({ code: classified.code, message: classified.message });
+				else setError(classified.message);
+			} finally {
+				if (mounted.current && isCurrent()) setLoading(false);
 			}
-		}
-	}, [cacheKey, cfg, options?.reviewId, refreshGate, sessionId]);
+		});
+	}, [cacheKey, cfg, options?.reviewId, refreshQueue, sessionId]);
 
+	// The first change is read at once; changes after it at most every
+	// REFRESH_INTERVAL_MS. One timer covers every change made while it waits.
 	const scheduleRefresh = useCallback(() => {
-		if (refreshTimer.current) clearTimeout(refreshTimer.current);
-		refreshTimer.current = setTimeout(() => void refresh(), REFRESH_DEBOUNCE_MS);
+		if (refreshTimer.current) return;
+		const wait = Math.max(0, lastRefreshAt.current + REFRESH_INTERVAL_MS - Date.now());
+		refreshTimer.current = setTimeout(() => {
+			refreshTimer.current = null;
+			lastRefreshAt.current = Date.now();
+			void refresh();
+		}, wait);
 	}, [refresh]);
 
 	const loadOlder = useCallback(async () => {
@@ -278,10 +291,11 @@ export function useMobileConversation(
 		void refresh();
 		return () => {
 			mounted.current = false;
-			refreshGate.invalidate();
+			refreshQueue.invalidate();
 			if (refreshTimer.current) clearTimeout(refreshTimer.current);
+			refreshTimer.current = null;
 		};
-	}, [refresh, refreshGate]);
+	}, [refresh, refreshQueue]);
 
 	useEffect(() => {
 		setPendingSends([]);
@@ -583,7 +597,6 @@ export function useMobileConversation(
 	return {
 		snapshot,
 		loading,
-		refreshing,
 		loadingOlder,
 		error,
 		unavailable,
