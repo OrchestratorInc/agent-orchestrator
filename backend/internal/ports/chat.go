@@ -91,12 +91,19 @@ var (
 	ErrChatCapabilityUnavailable = errors.New("chat model capability unavailable")
 	// ErrChatHistoryLoadFailed means one provider transcript load did not
 	// produce a replay: the ACP session/load answered with a provider-side
-	// failure (JSON-RPC -32603 "Internal error"), or a single load attempt ran
-	// past AO's per-attempt bound while the overall settle budget still had
-	// time left. Neither is an unsettled AO checkpoint, so callers must stop
-	// re-sending the same load and report the failure instead of spending the
-	// rest of the budget on it.
+	// verdict (JSON-RPC -32603 "Internal error"). That is not an unsettled AO
+	// checkpoint, so callers must stop re-sending the same load and report the
+	// failure instead of spending the rest of the budget on it. A load that
+	// merely ran out of time is ErrChatHistoryLoadDeadline, not this.
 	ErrChatHistoryLoadFailed = errors.New("chat conversation history load failed")
+	// ErrChatHistoryLoadDeadline means one provider transcript load ran out of
+	// time before producing a replay: AO's own per-attempt bound cut it, or the
+	// provider answered JSON-RPC -32602 whose text carries a context deadline
+	// (the agent's session/load handler timed out on its side while AO's
+	// calling context was still live). No provider verdict on the transcript
+	// exists yet, so the settle loop retries inside the remaining budget with
+	// an escalating per-attempt bound instead of stopping.
+	ErrChatHistoryLoadDeadline = errors.New("chat conversation history load ran out of time")
 
 	// ErrChatPromptStalled means the chat host's watchdog failed a prompt
 	// because the adapter sent nothing for the whole stall window. The provider
