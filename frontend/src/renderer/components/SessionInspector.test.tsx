@@ -5138,7 +5138,7 @@ describe("SessionInspector summary reviews", () => {
     await openReviewsSection();
 
     // The daemon owns the run: an idle reviewer that does not submit is failed
-    // by the run supervisor after its grace period, so the UI never guesses.
+    // by the daemon after its grace period, so the UI never guesses.
     expect(
       await screen.findByText("Reviewing... · Codex"),
     ).toBeInTheDocument();

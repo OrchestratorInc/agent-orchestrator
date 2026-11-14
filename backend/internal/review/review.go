@@ -111,9 +111,9 @@ type Deps struct {
 	Launcher   Launcher
 	// ChatRecoveryDone gates operations that could mistake a recovering reviewer for an exited one.
 	ChatRecoveryDone <-chan struct{}
-	// Supervisor sets the run supervisor's time limits; zero fields take
-	// DefaultSupervisorConfig's values.
-	Supervisor SupervisorConfig
+	// RunLifecycle sets the review runs' time limits; zero fields take
+	// DefaultRunLifecycleConfig's values.
+	RunLifecycle RunLifecycleConfig
 
 	// Clock and NewID are injectable for deterministic tests.
 	Clock func() time.Time
@@ -139,7 +139,7 @@ type Engine struct {
 	triggerMu    sync.Mutex
 	triggerLocks map[domain.SessionID]*sync.Mutex
 
-	supervisor supervisorState
+	runs runLifecycleState
 }
 
 const autoReviewFailedRetryLimit = domain.AutoReviewFailedRetryLimit
@@ -166,7 +166,7 @@ func New(d Deps) *Engine {
 		triggerLocks: make(map[domain.SessionID]*sync.Mutex),
 
 		chatRecoveryDone: d.ChatRecoveryDone,
-		supervisor:       newSupervisorState(d.Supervisor),
+		runs:             newRunLifecycleState(d.RunLifecycle),
 	}
 }
 
@@ -184,7 +184,7 @@ func (e *Engine) lockWorker(id domain.SessionID) func() {
 	return mu.Unlock
 }
 
-// tryLockWorker is lockWorker for the run supervisor, which must not queue
+// tryLockWorker is lockWorker for the reaper-driven run lifecycle, which must not queue
 // behind a trigger that is still launching a reviewer.
 func (e *Engine) tryLockWorker(id domain.SessionID) (func(), bool) {
 	mu := e.workerMutex(id)
@@ -454,7 +454,7 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 	if modeChanging {
 		hasConfigOverride = true
 	}
-	// Settle any run the supervisor would end on its next tick, so this
+	// Settle any run the next reaper pass would end, so this
 	// trigger never plans over a reviewer that is already gone.
 	if settled, err := e.evaluateSessionLocked(ctx, workerID); err != nil {
 		return TriggerResult{}, err
@@ -792,7 +792,8 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 			}
 		}
 	}
-	// The prompt reached the reviewer: from here the run supervisor owns it.
+	// The prompt reached the reviewer: from here the reaper-driven run
+	// lifecycle owns it.
 	startedAt := e.clock()
 	for i := range created {
 		created[i].ReviewID = reviewRow.ID
@@ -1536,7 +1537,7 @@ func (e *Engine) List(ctx stdctx.Context, workerID domain.SessionID) (SessionRev
 }
 
 func (e *Engine) listLocked(ctx stdctx.Context, workerID domain.SessionID, selectedHarness domain.ReviewerHarness) (SessionReviews, error) {
-	// List never repairs state itself. It lets the supervisor settle this
+	// List never repairs state itself. It lets the run lifecycle settle this
 	// session first so a poll never shows a run the next tick would end.
 	if _, err := e.evaluateSessionLocked(ctx, workerID); err != nil {
 		return SessionReviews{}, err
@@ -1631,7 +1632,7 @@ func legacyReviewerHandle(review domain.Review) string {
 // Cancel asks every reviewer working for a worker to stop. Runs that never
 // reached a reviewer are cancelled at once; the rest move to cancelling and
 // become cancelled once the stop is confirmed, inline when it already is,
-// otherwise by the run supervisor (which force-kills a reviewer that ignores
+// otherwise by the next reaper pass (which force-kills a reviewer that ignores
 // the interrupt for longer than its cancel timeout).
 func (e *Engine) Cancel(ctx stdctx.Context, workerID domain.SessionID) (CancelResult, error) {
 	if workerID == "" {
@@ -1743,7 +1744,6 @@ func (e *Engine) Cancel(ctx stdctx.Context, workerID domain.SessionID) (CancelRe
 	if err != nil {
 		return CancelResult{}, err
 	}
-	e.wakeSupervisor(workerID)
 	return CancelResult{ReviewerHandleID: primaryHandle, Reviews: Plan(prs, runs), CancelledRuns: cancelled}, nil
 }
 

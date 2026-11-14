@@ -442,7 +442,7 @@ SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, 
 FROM review_run WHERE status IN ('queued', 'launching', 'running', 'cancelling') ORDER BY created_at ASC, id ASC
 `
 
-// Every active run across the daemon, for the run supervisor and startup sweep.
+// Every active run across the daemon, for the reaper-driven run lifecycle.
 func (q *Queries) ListActiveReviewRuns(ctx context.Context) ([]ReviewRun, error) {
 	rows, err := q.db.QueryContext(ctx, listActiveReviewRuns)
 	if err != nil {

@@ -823,7 +823,7 @@ func (l *agentLauncher) Reusable(harness domain.ReviewerHarness) bool {
 }
 
 // ReportsActivity reports whether the harness's terminal reviewer reliably
-// reports activity through hooks, for the run supervisor.
+// reports activity through hooks, for the review run lifecycle.
 func (l *agentLauncher) ReportsActivity(harness domain.ReviewerHarness) bool {
 	reviewer, ok := l.reviewers.Reviewer(harness)
 	if !ok {

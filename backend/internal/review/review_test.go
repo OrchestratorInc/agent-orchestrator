@@ -491,7 +491,7 @@ type fakeLauncher struct {
 	onSpawn          func(LaunchSpec)
 	onRestore        func(LaunchSpec)
 	onNotify         func(string, LaunchSpec)
-	// reportsActivity opts the fake's harness into the supervisor's
+	// reportsActivity opts the fake's harness into the run lifecycle's
 	// first-activity and idle rules.
 	reportsActivity bool
 	// killOnDestroy makes Destroy confirm the kill, as a real process-group
