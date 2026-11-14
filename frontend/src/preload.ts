@@ -917,6 +917,10 @@ const api = {
 		replace: (path: string, target: string, identity: string) => ipcRenderer.invoke("cliShadow:replace", path, target, identity) as Promise<import("./shared/cli-shadow").CliShadowReplaceResult>,
 		reveal: () => ipcRenderer.invoke("cliShadow:reveal") as Promise<void>,
 	},
+	storage: {
+		browserCacheSize: () => ipcRenderer.invoke("storage:browserCacheSize") as Promise<number>,
+		clearBrowserCache: () => ipcRenderer.invoke("storage:clearBrowserCache") as Promise<void>,
+	},
 	updateSettings: {
 		get: () => ipcRenderer.invoke("updateSettings:get") as Promise<UpdateSettings>,
 		set: (settings: UpdateSettings) => ipcRenderer.invoke("updateSettings:set", settings) as Promise<void>,

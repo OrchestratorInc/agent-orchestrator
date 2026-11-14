@@ -1,0 +1,44 @@
+---
+title: Storage
+description: See how much disk space Orchestrator uses and let it free what it no longer needs.
+---
+
+Every session gets its own git worktree, and an agent that installs dependencies can grow one from about 100 MB of source to a few gigabytes. Orchestrator measures its own data folder (`~/.ao`) and keeps it small without touching anything outside it.
+
+Open **Settings → Storage** to see the space by category, what can be freed, and the cleanup settings. The same report is `ao storage`.
+
+## What Orchestrator cleans
+
+| Data | What happens | When |
+| --- | --- | --- |
+| Source, uncommitted work, `.env` files and history of open sessions | Never touched | Never |
+| Dependencies and build output of quiet sessions (`node_modules`, `dist`, `build`, `.next`, `target` and similar) | Offloaded, then restored when the session resumes | 48 hours quiet with an open pull request, 2 hours with none, 30 minutes after its pull requests merge or close |
+| Worktrees of ended sessions | Removed through the normal cleanup; one with uncommitted changes is kept, and one holding git-ignored files that cannot be rebuilt (a `.env`, a local database) is only offered, with those files listed | 7 days after the session ends |
+| Old database backups, unused logs, unused dependency templates | Removed; the newest backup is always kept | 14, 14 and 30 days |
+| Free space inside the database | Returned to the disk | When there is enough to matter |
+| Dev-build data (`~/.ao/dev`) | Removed only if you turn it on | 7 days unused |
+
+A session counts as quiet only when its agent has stopped: it exited, or a Chat session hibernated. A folder is offloaded only when git ignores it and its name is a known dependency or build folder, or the project lists it in `storageOffloadPaths` in its config (for a repo-specific build folder). Secrets such as `.env*`, `*.pem` and `*.key`, and agent and editor folders, are never removed. Set `storageOffloadDisabled` in a project's config to keep its sessions from being offloaded.
+
+## Restoring an offloaded session
+
+When an offloaded session resumes, Orchestrator brings its dependencies back before the agent continues:
+
+- On a disk that can clone files copy-on-write (APFS on macOS, Btrfs or XFS on Linux, a Dev Drive on Windows 11 24H2 or later), Orchestrator keeps one copy of each `node_modules` per lockfile and clones it back in moments, using almost no extra space. New sessions with the same lockfile start from that copy too.
+- Otherwise it runs the project's **Setup** script, such as `npm ci`.
+- A project with no Setup script shows the restore as needing attention in **Settings → Storage**; reinstall the dependencies from the session.
+
+## Low disk space
+
+Orchestrator checks free space every 5 minutes, and every minute once space is low:
+
+- **Low** (under 15% or 20 GB free): quiet sessions are offloaded after at most 12 hours.
+- **Critical** (under 5% or 5 GB free): every quiet session is offloaded and Settings shows a warning.
+
+A level changes after two readings in a row and clears only once free space is back above a higher mark, so it does not flicker.
+
+## Clean up by hand
+
+**Clean up** on a category, or `ao storage clean`, previews what would be removed and asks before removing it. `ao storage clean --dry-run` only prints the plan. Every action, automatic or not, is listed by `ao storage log`.
+
+To keep Orchestrator from cleaning up on its own, turn off **Clean up automatically**. On a managed machine, setting `AO_STORAGE_AUTOCLEAN=off` for the daemon does the same; scheduled passes then only log what they would have done.

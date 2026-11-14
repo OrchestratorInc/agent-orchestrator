@@ -39,6 +39,12 @@ type ProjectConfig struct {
 	// PreRemove are shell commands run before an AO-managed Git worktree is
 	// permanently removed, each within its own time limit when it sets one.
 	PreRemove []string `json:"preRemove,omitempty"`
+	// StorageOffloadPaths are extra repo-relative folders a quiet session may
+	// have offloaded beside the built-in dependency and build folders, such as
+	// a repo-specific build output. Only paths git ignores are ever removed.
+	StorageOffloadPaths []string `json:"storageOffloadPaths,omitempty"`
+	// StorageOffloadDisabled keeps this project's sessions from being offloaded.
+	StorageOffloadDisabled bool `json:"storageOffloadDisabled,omitempty"`
 
 	// AgentRules are project-specific standing instructions for worker sessions.
 	AgentRules string `json:"agentRules,omitempty"`
@@ -260,6 +266,14 @@ func (c ProjectConfig) Validate() error {
 	}
 	if err := validateScriptSteps("preRemove", c.PreRemove); err != nil {
 		return err
+	}
+	for _, p := range c.StorageOffloadPaths {
+		if strings.TrimSpace(p) == "" {
+			return fmt.Errorf("storageOffloadPaths: empty path")
+		}
+		if err := validateRepoRelative(p); err != nil {
+			return fmt.Errorf("storageOffloadPaths %q: %w", p, err)
+		}
 	}
 	if err := validateRepoRelative(c.AgentRulesFile); err != nil {
 		return fmt.Errorf("agentRulesFile %q: %w", c.AgentRulesFile, err)

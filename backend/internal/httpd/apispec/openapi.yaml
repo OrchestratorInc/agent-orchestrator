@@ -14912,6 +14912,182 @@ paths:
       summary: ""
       tags:
       - conversations
+  /api/v1/storage:
+    get:
+      operationId: getStorage
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StorageReportResponse'
+          description: OK
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Report what AO stores on disk and what cleanup would free
+      tags:
+      - system
+  /api/v1/storage/actions:
+    get:
+      operationId: listStorageActions
+      parameters:
+      - in: query
+        name: limit
+        schema:
+          maximum: 1000
+          minimum: 1
+          type:
+          - "null"
+          - integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StorageActionsResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List what storage cleanups did, newest first
+      tags:
+      - system
+  /api/v1/storage/clean:
+    post:
+      operationId: cleanStorage
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StorageCleanRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StorageCleanResponse'
+          description: OK
+        "202":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StorageCleanResponse'
+          description: Accepted
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Preview or start a storage cleanup
+      tags:
+      - system
+  /api/v1/storage/scan:
+    post:
+      operationId: scanStorage
+      responses:
+        "202":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StorageReportResponse'
+          description: Accepted
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Measure the disk usage of AO again in the background
+      tags:
+      - system
+  /api/v1/storage/settings:
+    patch:
+      operationId: updateStorageSettings
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateStorageSettingsRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StorageSettings'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Change storage cleanup settings
+      tags:
+      - system
   /api/v1/system/github-auth:
     get:
       operationId: getGitHubAuthRequirement
@@ -22338,6 +22514,12 @@ components:
           type: array
         sessionPrefix:
           type: string
+        storageOffloadDisabled:
+          type: boolean
+        storageOffloadPaths:
+          items:
+            type: string
+          type: array
         symlinks:
           items:
             type: string
@@ -25610,6 +25792,382 @@ components:
       - outcome
       - duplicate
       type: object
+    StorageAction:
+      properties:
+        at:
+          format: date-time
+          type: string
+        bytes:
+          format: int64
+          type: integer
+        dryRun:
+          type: boolean
+        error:
+          type: string
+        id:
+          format: int64
+          type: integer
+        kind:
+          enum:
+          - offload
+          - ended_worktrees
+          - orphan_worktrees
+          - db_backups
+          - logs
+          - dev_profiles
+          - dependency_templates
+          - database
+          - trash
+          - restore
+          type: string
+        reason:
+          type: string
+        result:
+          enum:
+          - planned
+          - done
+          - skipped
+          - failed
+          type: string
+        sessionId:
+          type: string
+        target:
+          type: string
+      required:
+      - at
+      - kind
+      - target
+      - reason
+      - bytes
+      - dryRun
+      - result
+      type: object
+    StorageActionsResponse:
+      properties:
+        actions:
+          items:
+            $ref: '#/components/schemas/StorageAction'
+          type: array
+      required:
+      - actions
+      type: object
+    StorageCategoryUsage:
+      properties:
+        bytes:
+          format: int64
+          type: integer
+        category:
+          enum:
+          - worktrees
+          - database
+          - db_backups
+          - harnesses
+          - browser_data
+          - logs
+          - dev_profiles
+          - dependency_templates
+          - other
+          type: string
+        reclaimableBytes:
+          format: int64
+          type: integer
+      required:
+      - category
+      - bytes
+      - reclaimableBytes
+      type: object
+    StorageCleanRequest:
+      properties:
+        dryRun:
+          type: boolean
+        includeDev:
+          type: boolean
+        kinds:
+          items:
+            type: string
+          type: array
+        sessionIds:
+          items:
+            type: string
+          type: array
+      type: object
+    StorageCleanResponse:
+      properties:
+        actions:
+          items:
+            $ref: '#/components/schemas/StorageAction'
+          type: array
+        dryRun:
+          type: boolean
+        finishedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        freedBytes:
+          format: int64
+          type: integer
+        running:
+          type: boolean
+        startedAt:
+          format: date-time
+          type: string
+      required:
+      - startedAt
+      - running
+      - dryRun
+      - freedBytes
+      - actions
+      type: object
+    StorageDatabase:
+      properties:
+        fileBytes:
+          format: int64
+          type: integer
+        freeBytes:
+          format: int64
+          type: integer
+        tables:
+          items:
+            $ref: '#/components/schemas/StorageTableSize'
+          type: array
+        tablesKnown:
+          type: boolean
+        walBytes:
+          format: int64
+          type: integer
+      required:
+      - fileBytes
+      - walBytes
+      - freeBytes
+      - tables
+      - tablesKnown
+      type: object
+    StorageDisk:
+      properties:
+        checkedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        error:
+          type: string
+        freeBytes:
+          format: int64
+          type: integer
+        level:
+          enum:
+          - normal
+          - low
+          - critical
+          type: string
+        path:
+          type: string
+        totalBytes:
+          format: int64
+          type: integer
+      required:
+      - path
+      - totalBytes
+      - freeBytes
+      - level
+      type: object
+    StoragePlannedAction:
+      properties:
+        automatic:
+          type: boolean
+        bytes:
+          format: int64
+          type: integer
+        kind:
+          enum:
+          - offload
+          - ended_worktrees
+          - orphan_worktrees
+          - db_backups
+          - logs
+          - dev_profiles
+          - dependency_templates
+          - database
+          - trash
+          type: string
+        reason:
+          type: string
+        sessionId:
+          type: string
+        target:
+          type: string
+      required:
+      - kind
+      - target
+      - reason
+      - bytes
+      - automatic
+      type: object
+    StorageReportResponse:
+      properties:
+        autoCleanAllowed:
+          type: boolean
+        autoReclaimableBytes:
+          format: int64
+          type: integer
+        categories:
+          items:
+            $ref: '#/components/schemas/StorageCategoryUsage'
+          type: array
+        cleaning:
+          type: boolean
+        copyOnWrite:
+          type: boolean
+        database:
+          $ref: '#/components/schemas/StorageDatabase'
+        disk:
+          $ref: '#/components/schemas/StorageDisk'
+        lastClean:
+          $ref: '#/components/schemas/StorageCleanResponse'
+        plan:
+          items:
+            $ref: '#/components/schemas/StoragePlannedAction'
+          type: array
+        reclaimableBytes:
+          format: int64
+          type: integer
+        scanDurationMs:
+          format: int64
+          type: integer
+        scanError:
+          type: string
+        scannedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        scanning:
+          type: boolean
+        settings:
+          $ref: '#/components/schemas/StorageSettings'
+        totalBytes:
+          format: int64
+          type: integer
+        worktrees:
+          items:
+            $ref: '#/components/schemas/StorageWorktree'
+          type: array
+      required:
+      - scanDurationMs
+      - scanning
+      - totalBytes
+      - reclaimableBytes
+      - autoReclaimableBytes
+      - disk
+      - categories
+      - worktrees
+      - database
+      - plan
+      - settings
+      - autoCleanAllowed
+      - copyOnWrite
+      - cleaning
+      type: object
+    StorageSettings:
+      properties:
+        autoClean:
+          type: boolean
+        backupDays:
+          type: integer
+        cleanDevProfiles:
+          type: boolean
+        devProfileDays:
+          type: integer
+        endedWorktreeDays:
+          type: integer
+        logDays:
+          type: integer
+        offloadEnabled:
+          type: boolean
+        offloadIdleHours:
+          type: integer
+        offloadMergedIdleMinutes:
+          type: integer
+        offloadNoPrGraceHours:
+          type: integer
+        templateDays:
+          type: integer
+        updatedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+      required:
+      - autoClean
+      - offloadEnabled
+      - offloadIdleHours
+      - offloadNoPrGraceHours
+      - offloadMergedIdleMinutes
+      - endedWorktreeDays
+      - backupDays
+      - logDays
+      - cleanDevProfiles
+      - devProfileDays
+      - templateDays
+      type: object
+    StorageTableSize:
+      properties:
+        bytes:
+          format: int64
+          type: integer
+        name:
+          type: string
+      required:
+      - name
+      - bytes
+      type: object
+    StorageWorktree:
+      properties:
+        bytes:
+          format: int64
+          type: integer
+        dependencyBytes:
+          format: int64
+          type: integer
+        lastUsedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        offloaded:
+          type: boolean
+        offloadedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        offloadedBytes:
+          format: int64
+          type: integer
+        path:
+          type: string
+        projectId:
+          type: string
+        restoreError:
+          type: string
+        sessionId:
+          type: string
+        state:
+          enum:
+          - live
+          - quiet
+          - ended
+          - orphan
+          type: string
+      required:
+      - path
+      - state
+      - bytes
+      - dependencyBytes
+      - offloaded
+      - offloadedBytes
+      type: object
     SubmitAgentUILoginCodeRequest:
       properties:
         code:
@@ -26137,6 +26695,53 @@ components:
           type: string
       required:
       - title
+      type: object
+    UpdateStorageSettingsRequest:
+      properties:
+        autoClean:
+          type:
+          - "null"
+          - boolean
+        backupDays:
+          type:
+          - "null"
+          - integer
+        cleanDevProfiles:
+          type:
+          - "null"
+          - boolean
+        devProfileDays:
+          type:
+          - "null"
+          - integer
+        endedWorktreeDays:
+          type:
+          - "null"
+          - integer
+        logDays:
+          type:
+          - "null"
+          - integer
+        offloadEnabled:
+          type:
+          - "null"
+          - boolean
+        offloadIdleHours:
+          type:
+          - "null"
+          - integer
+        offloadMergedIdleMinutes:
+          type:
+          - "null"
+          - integer
+        offloadNoPrGraceHours:
+          type:
+          - "null"
+          - integer
+        templateDays:
+          type:
+          - "null"
+          - integer
       type: object
     UpdateVersionRefreshRequest:
       properties:

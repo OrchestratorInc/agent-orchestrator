@@ -82,7 +82,7 @@ import {
 } from "./main/ui-settings";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { chmod, copyFile, mkdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -3144,6 +3144,29 @@ registerCliShadowIpc({
 	reveal: (filePath) => shell.showItemInFolder(filePath),
 });
 
+// The HTTP caches of the app's own session and of every persisted browser
+// partition under userData. Only caches: cookies, sign-ins and site storage
+// are never touched, so clearing costs nothing but a slower next load.
+function browserCacheSessions(): Electron.Session[] {
+	const sessions = [session.defaultSession];
+	try {
+		const partitions = readdirSync(path.join(app.getPath("userData"), "Partitions"), { withFileTypes: true });
+		for (const entry of partitions) {
+			if (entry.isDirectory()) sessions.push(session.fromPartition(`persist:${entry.name}`));
+		}
+	} catch {
+		// No persisted partitions yet.
+	}
+	return sessions;
+}
+
+ipcMain.handle("storage:browserCacheSize", async () => {
+	const sizes = await Promise.all(browserCacheSessions().map((s) => s.getCacheSize().catch(() => 0)));
+	return sizes.reduce((total, size) => total + size, 0);
+});
+ipcMain.handle("storage:clearBrowserCache", async () => {
+	await Promise.all(browserCacheSessions().map((s) => s.clearCache()));
+});
 ipcMain.handle("daemon:getStatus", () => refreshDaemonStatus());
 ipcMain.handle("daemon:start", () => {
 	daemonAutoRestartStandDown = false;

@@ -516,6 +516,8 @@ type Manager struct {
 	startupChatRetryDelays      []time.Duration
 	agentOpMu                   sync.Mutex
 	agentOperations             map[domain.SessionID]agentOperationKind
+	// storage holds the storage service's dependency restore/seed hooks.
+	storage storageHooksSlot
 	// launchStartWait bounds the wait to see a new supervised launch alive.
 	launchStartWait           time.Duration
 	interfaceRecoveryMu       sync.Mutex
@@ -3365,6 +3367,10 @@ func (m *Manager) RestoreWithMode(ctx context.Context, id domain.SessionID) (res
 }
 
 func (m *Manager) relaunchRestoredSession(ctx context.Context, rec domain.SessionRecord, project domain.ProjectRecord, ws ports.WorkspaceInfo) (RestoreResult, error) {
+	// Every relaunch (restore, live reconcile, boot restore-all) brings back
+	// offloaded dependencies first; a worktree kept through termination may
+	// still have them offloaded, and a recreated one settles here at once.
+	m.restoreOffloadedDependencies(ctx, rec)
 	result, err := m.relaunchSession(ctx, "restore", rec, project, ws, nil)
 	if err != nil {
 		return RestoreResult{}, err
@@ -3748,6 +3754,9 @@ func (m *Manager) resumeAgentWithMode(ctx context.Context, id domain.SessionID, 
 			return RestoreResult{}, fmt.Errorf("resume agent %s: hibernation state changed: %w", id, ErrResumeInProgress)
 		}
 	}
+	// A quiet session may have had its dependencies offloaded; bring them back
+	// before the agent can use them.
+	m.restoreOffloadedDependencies(ctx, rec)
 	result, err = m.resumeAgentRecordWithPolicy(ctx, "resume agent", rec,
 		requireNativeHistory || (rec.StaleBinary != nil && rec.StaleBinary.SwitchFailedAt != nil))
 	if err == nil && m.chat != nil && domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat &&
@@ -5875,6 +5884,33 @@ func (m *Manager) Cleanup(ctx context.Context, project domain.ProjectID) (Cleanu
 	if err != nil {
 		return CleanupResult{}, fmt.Errorf("cleanup %s: %w", project, err)
 	}
+	return m.cleanupTerminalRecords(ctx, recs), nil
+}
+
+// CleanupSessions reclaims the workspaces of the named terminal sessions only,
+// exactly as Cleanup does for a whole project: a dirty or locked workspace is
+// never forced and is reported in Skipped. Unknown or live ids are ignored.
+func (m *Manager) CleanupSessions(ctx context.Context, ids []domain.SessionID) (CleanupResult, error) {
+	recs, err := m.store.ListAllSessions(ctx)
+	if err != nil {
+		return CleanupResult{}, fmt.Errorf("cleanup sessions: %w", err)
+	}
+	want := make(map[domain.SessionID]bool, len(ids))
+	for _, id := range ids {
+		want[id] = true
+	}
+	selected := make([]domain.SessionRecord, 0, len(ids))
+	for _, rec := range recs {
+		if want[rec.ID] {
+			selected = append(selected, rec)
+		}
+	}
+	return m.cleanupTerminalRecords(ctx, selected), nil
+}
+
+// cleanupTerminalRecords reclaims the workspaces of the terminal sessions among
+// recs, preserving any whose teardown is refused.
+func (m *Manager) cleanupTerminalRecords(ctx context.Context, recs []domain.SessionRecord) CleanupResult {
 	result := CleanupResult{
 		Cleaned:     make([]domain.SessionID, 0, len(recs)),
 		AlreadyGone: []domain.SessionID{},
@@ -5917,7 +5953,7 @@ func (m *Manager) Cleanup(ctx context.Context, project domain.ProjectID) (Cleanu
 		}
 		result.Cleaned = append(result.Cleaned, rec.ID)
 	}
-	return result, nil
+	return result
 }
 
 // cleanupWorkspaceUnderGate acquires the per-project workspace gate and then
@@ -6982,6 +7018,10 @@ func (m *Manager) provisionWorkspace(ctx context.Context, project domain.Project
 	if err := applySymlinks(project.Path, workspacePath, project.Config.Symlinks); err != nil {
 		return err
 	}
+	// After the symlinks, so a configured shared folder is never shadowed by
+	// a private copy cloned from a template. A fork's copied dependencies
+	// already exist, and seeding leaves existing folders alone.
+	m.seedWorkspaceDependencies(ctx, project, workspacePath)
 	var aoEnv map[string]string
 	if m.takeForkWorkspace(workspacePath) {
 		// Setup still runs for a fork: the original's lockfile may differ

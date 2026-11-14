@@ -24,6 +24,7 @@ const (
 	agentOperationReconcile         agentOperationKind = "reconcile"
 	agentOperationInterfaceRecovery agentOperationKind = "interface_recovery"
 	agentOperationProviderSwitch    agentOperationKind = "provider_switch"
+	agentOperationStorageOffload    agentOperationKind = "storage_offload"
 )
 
 var errAgentOperationInProgress = errors.New("session: another exclusive operation is in progress")

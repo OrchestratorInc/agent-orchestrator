@@ -1,0 +1,211 @@
+package storagemgr
+
+import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
+)
+
+func waitIdle(t *testing.T, svc *Service) Report {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		report, err := svc.Report(context.Background())
+		if err != nil {
+			t.Fatalf("report: %v", err)
+		}
+		if !report.Scanning && !report.Cleaning {
+			return report
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("storage service did not settle")
+	return Report{}
+}
+
+func TestCleanBeforeFirstScanAsksToRetry(t *testing.T) {
+	svc, _ := newTestService(t, newFakeStore(), nil, nil, nil)
+	if _, err := svc.Clean(context.Background(), CleanRequest{DryRun: true}); !errors.Is(err, ErrScanRequired) {
+		t.Fatalf("err = %v, want ErrScanRequired", err)
+	}
+	waitIdle(t, svc)
+}
+
+func TestCleanRejectsUnknownKind(t *testing.T) {
+	svc, _ := newTestService(t, newFakeStore(), nil, nil, nil)
+	if _, err := svc.Clean(context.Background(), CleanRequest{Kinds: []domain.StorageCleanKind{"everything"}}); err == nil {
+		t.Fatal("unknown kind must be rejected")
+	}
+}
+
+func TestBackupCleanupKeepsNewestAndAudits(t *testing.T) {
+	store := newFakeStore()
+	svc, layout := newTestService(t, store, nil, nil, nil)
+	old := filepath.Join(layout.DataDir, "ao.db.backup-before-0170-repair")
+	newest := filepath.Join(layout.DataDir, "ao.db.bak-before-0200")
+	writeFile(t, old, "old backup")
+	writeFile(t, newest, "newest backup")
+	past := time.Now().Add(-60 * 24 * time.Hour)
+	if err := os.Chtimes(old, past, past); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	svc.StartScan()
+	report := waitIdle(t, svc)
+	if report.Categories[2].Category != domain.StorageDBBackups || report.Categories[2].Bytes == 0 {
+		t.Fatalf("backup category = %+v", report.Categories[2])
+	}
+
+	preview, err := svc.Clean(ctx, CleanRequest{DryRun: true, Kinds: []domain.StorageCleanKind{domain.StorageCleanBackups}})
+	if err != nil {
+		t.Fatalf("dry run: %v", err)
+	}
+	if len(preview.Actions) != 1 || preview.Actions[0].Target != old || preview.Actions[0].Result != domain.StorageActionPlanned {
+		t.Fatalf("preview = %+v, want only the old backup", preview.Actions)
+	}
+	if !pathExists(old) {
+		t.Fatal("a dry run must not delete")
+	}
+
+	if _, err := svc.Clean(ctx, CleanRequest{Kinds: []domain.StorageCleanKind{domain.StorageCleanBackups}}); err != nil {
+		t.Fatalf("clean: %v", err)
+	}
+	report = waitIdle(t, svc)
+	if pathExists(old) || !pathExists(newest) {
+		t.Fatalf("old exists=%v newest exists=%v, want old removed and newest kept", pathExists(old), pathExists(newest))
+	}
+	if report.LastClean == nil || report.LastClean.FreedBytes == 0 {
+		t.Fatalf("last clean = %+v", report.LastClean)
+	}
+	actions := store.snapshotActions()
+	if len(actions) == 0 || actions[0].Kind != domain.StorageCleanBackups || actions[0].Result != domain.StorageActionDone {
+		t.Fatalf("audit = %+v", actions)
+	}
+}
+
+func TestOffloadSkippedWhenAgentMayRun(t *testing.T) {
+	store := newFakeStore()
+	svc, _ := newTestService(t, store, nil, nil, refuseAll{})
+	action := svc.runOffload(context.Background(), PlannedAction{Kind: domain.StorageCleanOffload, SessionID: "p-1", Target: "/w/p-1", Bytes: 10})
+	if action.Result != domain.StorageActionSkipped || action.Bytes != 0 {
+		t.Fatalf("action = %+v, want skipped with nothing freed", action)
+	}
+}
+
+type refuseAll struct{}
+
+func (refuseAll) WithQuietSession(context.Context, domain.SessionID, func(domain.SessionRecord) error) error {
+	return sessionmanager.ErrSessionNotQuiet
+}
+
+func TestUpdateSettingsValidates(t *testing.T) {
+	svc, _ := newTestService(t, newFakeStore(), nil, nil, nil)
+	ctx := context.Background()
+	if _, err := svc.UpdateSettings(ctx, func(s *domain.StorageSettings) { s.OffloadIdleHours = 0 }); err == nil {
+		t.Fatal("offloadIdleHours=0 must be rejected")
+	}
+	got, err := svc.UpdateSettings(ctx, func(s *domain.StorageSettings) { s.OffloadIdleHours = 72 })
+	if err != nil || got.OffloadIdleHours != 72 || got.UpdatedAt.IsZero() {
+		t.Fatalf("got=%+v err=%v", got, err)
+	}
+	// A second change keeps the first: each one patches what is stored now.
+	got, err = svc.UpdateSettings(ctx, func(s *domain.StorageSettings) { s.LogDays = 30 })
+	if err != nil || got.OffloadIdleHours != 72 || got.LogDays != 30 {
+		t.Fatalf("got=%+v err=%v", got, err)
+	}
+}
+
+func TestOrphanRemovalSkippedWhenASessionOwnsIt(t *testing.T) {
+	svc, layout := newTestService(t, newFakeStore(), nil, nil, nil)
+	svc.workspaces = ownedWorkspaces{}
+	target := filepath.Join(layout.Worktrees(), "p", "orphan")
+	writeFile(t, filepath.Join(target, "README"), "x")
+	action := svc.runOrphanRemoval(context.Background(), PlannedAction{Kind: domain.StorageCleanOrphanWorktrees, Target: target, ProjectID: "p", Bytes: 1})
+	if action.Result != domain.StorageActionSkipped || !pathExists(target) {
+		t.Fatalf("action=%+v exists=%v, want skipped and kept", action, pathExists(target))
+	}
+}
+
+type ownedWorkspaces struct{}
+
+func (ownedWorkspaces) WithUnownedWorkspace(context.Context, domain.ProjectID, string, func() error) error {
+	return sessionmanager.ErrWorkspaceOwned
+}
+
+func TestAutomaticPassWithAutoCleanOffOnlyLogsDryRun(t *testing.T) {
+	store := newFakeStore()
+	store.settings.AutoClean = false
+	svc, layout := newTestService(t, store, nil, nil, nil)
+	logFile := filepath.Join(layout.Logs(), "old.jsonl")
+	writeFile(t, logFile, "log")
+	past := time.Now().Add(-60 * 24 * time.Hour)
+	if err := os.Chtimes(logFile, past, past); err != nil {
+		t.Fatal(err)
+	}
+	// With auto-clean off nothing is automatic, so the pass has nothing to run.
+	svc.automaticPass(context.Background())
+	if !pathExists(logFile) {
+		t.Fatal("auto-clean off must not delete")
+	}
+
+	store.settings.AutoClean = true
+	svc.autoAllowed = false
+	svc.automaticPass(context.Background())
+	if !pathExists(logFile) {
+		t.Fatal("the kill switch must not delete")
+	}
+	found := false
+	for _, action := range store.snapshotActions() {
+		if action.Target == logFile && action.DryRun && action.Result == domain.StorageActionPlanned {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("kill switch should log the would-be action: %+v", store.snapshotActions())
+	}
+}
+
+func TestMergeOffloadFactsKeepsEarlierPaths(t *testing.T) {
+	prev := domain.SessionStorageFacts{
+		OffloadedPaths: []string{"node_modules"},
+		OffloadedBytes: 100,
+		TemplateKeys:   map[string]string{"node_modules": "k1"},
+	}
+	next := domain.SessionStorageFacts{OffloadedPaths: []string{"dist"}, OffloadedBytes: 20, TemplateKeys: map[string]string{}}
+	merged := mergeOffloadFacts(prev, next)
+	if len(merged.OffloadedPaths) != 2 || merged.OffloadedBytes != 120 || merged.TemplateKeys["node_modules"] != "k1" {
+		t.Fatalf("merged = %+v, want both paths, summed bytes and the earlier template key", merged)
+	}
+}
+
+func TestShutdownWaitsForRunningCleanup(t *testing.T) {
+	svc, _ := newTestService(t, newFakeStore(), nil, nil, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := svc.Start(ctx)
+	job, err := svc.beginJob()
+	if err != nil {
+		t.Fatalf("begin job: %v", err)
+	}
+	cancel()
+	select {
+	case <-done:
+		t.Fatal("the schedule stopped while a cleanup was still running")
+	case <-time.After(100 * time.Millisecond):
+	}
+	svc.endJob(job)
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the schedule did not stop after the cleanup ended")
+	}
+	if _, err := svc.beginJob(); !errors.Is(err, ErrStopping) {
+		t.Fatalf("err = %v, want ErrStopping", err)
+	}
+	waitIdle(t, svc)
+}

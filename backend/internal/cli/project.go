@@ -132,6 +132,9 @@ type projectConfig struct {
 	// of another field never silently turns it off.
 	WorkersRequestReview bool             `json:"workersRequestReview,omitempty"`
 	Reviewers            []reviewerConfig `json:"reviewers,omitempty"`
+	// The storage offload settings round-trip the same way.
+	StorageOffloadPaths    []string `json:"storageOffloadPaths,omitempty"`
+	StorageOffloadDisabled bool     `json:"storageOffloadDisabled,omitempty"`
 }
 
 // setConfigRequest mirrors the daemon's SetConfigInput body for

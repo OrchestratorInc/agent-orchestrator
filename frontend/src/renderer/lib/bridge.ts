@@ -406,6 +406,10 @@ export const aoBridge: AoBridge =
 			replace: async () => ({ ok: false as const, code: "io" as const, message: "Not available in this environment." }),
 			reveal: async () => undefined,
 		},
+		storage: {
+			browserCacheSize: async () => 0,
+			clearBrowserCache: async () => undefined,
+		},
 		updateSettings: {
 			get: async () => ({ enabled: false, channel: "latest", nightlyAck: false, feature: null, macDifferentialUpdates: false }),
 			set: async () => undefined,
