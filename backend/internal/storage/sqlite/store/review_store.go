@@ -498,7 +498,7 @@ func (s *Store) ListActiveReviewRunsBySession(ctx context.Context, id domain.Ses
 }
 
 // ListActiveReviewRuns returns every active review pass across the daemon,
-// oldest first, for the run supervisor and the startup sweep.
+// oldest first, for the reaper-driven run lifecycle and its boot pass.
 func (s *Store) ListActiveReviewRuns(ctx context.Context) ([]domain.ReviewRun, error) {
 	rows, err := s.qr.ListActiveReviewRuns(ctx)
 	if err != nil {

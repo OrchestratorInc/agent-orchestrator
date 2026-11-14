@@ -69,7 +69,7 @@ type ReviewerRestorer interface {
 
 // ReviewerActivityHooks is implemented by reviewer adapters whose terminal
 // reviewer reliably reports active and idle through AO's activity hooks. The
-// review run supervisor applies its first-activity and idle rules only to
+// review run lifecycle applies its first-activity and idle rules only to
 // these; every other reviewer is judged by liveness and its maximum duration.
 type ReviewerActivityHooks interface {
 	ReviewActivityHooks() bool

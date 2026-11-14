@@ -202,6 +202,18 @@ Observation is separated from action:
 - **Lifecycle layer:** Reduces observations into durable facts.
 - **Service layer:** Computes display status from facts.
 
+Review runs follow the same split. The Runtime Reaper also probes reviewers,
+but only those serving an in-progress review run, and reports each pass to the
+review engine's run lifecycle (`internal/review/run_lifecycle.go`) instead of
+the session LCM: a reviewer has no session row. The run lifecycle reduces the
+pass into guarded `review_run` transitions (`queued`, `launching`, `running`,
+`cancelling`, then `completed`, `failed`, `cancelled` or `superseded`), applies
+the time limits (launch, first activity, idle grace, max duration, cancel), and
+force-kills a reviewer that ignores a cancel. The reaper's first pass after
+startup is the boot pass, which settles runs a previous daemon left in
+progress. Reviewer activity hooks, trigger, cancel and the reviews list settle
+their worker's runs directly without waiting for the next pass.
+
 ### 4. Change data capture
 
 All durable changes flow through a CDC pipeline:
@@ -979,7 +991,15 @@ flowchart TD
     Skip --> NextSession{More sessions?}
     CDC --> NextSession
     NextSession -->|Yes| ForEach
-    NextSession -->|No| Loop
+    NextSession -->|No| Reviewers[List reviewers serving<br/>an in-progress review run]
+
+    Reviewers --> AnyReview{Any?}
+    AnyReview -->|No| Loop
+    AnyReview -->|Yes| ProbeReviewer[Probe each reviewer<br/>exact launch or Chat controller]
+    ProbeReviewer --> ReviewerBreaker[Reviewer mass-death breaker]
+    ReviewerBreaker --> ApplyReview[ApplyReviewerObservations]
+    ApplyReview --> RunLifecycle[Review run lifecycle<br/>guarded review_run transitions]
+    RunLifecycle --> Loop
 
 ```
 

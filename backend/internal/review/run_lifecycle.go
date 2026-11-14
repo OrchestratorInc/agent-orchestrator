@@ -4,20 +4,18 @@ import (
 	stdctx "context"
 	"errors"
 	"log/slog"
-	"sort"
 	"sync"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// SupervisorConfig holds the run supervisor's time limits. Every active run
-// state has an owner and one of these limits, so a run always reaches a final
-// state without anyone polling the review list.
-type SupervisorConfig struct {
-	// TickInterval is how often every active run is evaluated. Activity
-	// signals and cancels also wake the supervisor for their session at once.
-	TickInterval time.Duration
+// RunLifecycleConfig holds the time limits of review runs. Every active run
+// state has one, so a run always reaches a final state. The runtime reaper
+// drives evaluation: each of its cycles observes the reviewers serving an
+// in-progress run and hands the pass to ApplyReviewerObservations.
+type RunLifecycleConfig struct {
 	// LaunchTimeout bounds launching: the reviewer start or task delivery.
 	LaunchTimeout time.Duration
 	// FirstActivityWindow is how long a delivered task may wait for the first
@@ -29,27 +27,28 @@ type SupervisorConfig struct {
 	// MaxDuration bounds a running pass, including time spent waiting for input.
 	MaxDuration time.Duration
 	// CancelTimeout is how long a cancel waits for the reviewer to stop before
-	// the supervisor force-kills it.
+	// the reviewer is force-killed.
 	CancelTimeout time.Duration
+	// SuspendGap is the longest pause between two reaper passes that still
+	// counts as the daemon running. A longer one (the machine slept, or the
+	// daemon was stalled) is not counted against any run's time limits.
+	SuspendGap time.Duration
 }
 
-// DefaultSupervisorConfig returns the documented default time limits.
-func DefaultSupervisorConfig() SupervisorConfig {
-	return SupervisorConfig{
-		TickInterval:        15 * time.Second,
+// DefaultRunLifecycleConfig returns the documented default time limits.
+func DefaultRunLifecycleConfig() RunLifecycleConfig {
+	return RunLifecycleConfig{
 		LaunchTimeout:       2 * time.Minute,
 		FirstActivityWindow: 2 * time.Minute,
 		IdleGrace:           60 * time.Second,
 		MaxDuration:         60 * time.Minute,
 		CancelTimeout:       30 * time.Second,
+		SuspendGap:          time.Minute,
 	}
 }
 
-func (c SupervisorConfig) withDefaults() SupervisorConfig {
-	d := DefaultSupervisorConfig()
-	if c.TickInterval <= 0 {
-		c.TickInterval = d.TickInterval
-	}
+func (c RunLifecycleConfig) withDefaults() RunLifecycleConfig {
+	d := DefaultRunLifecycleConfig()
 	if c.LaunchTimeout <= 0 {
 		c.LaunchTimeout = d.LaunchTimeout
 	}
@@ -65,29 +64,38 @@ func (c SupervisorConfig) withDefaults() SupervisorConfig {
 	if c.CancelTimeout <= 0 {
 		c.CancelTimeout = d.CancelTimeout
 	}
+	if c.SuspendGap <= 0 {
+		c.SuspendGap = d.SuspendGap
+	}
 	return c
 }
 
 // activityMark is the latest activity signal the daemon accepted for one
-// reviewer launch. It is evidence for the supervisor, never run state.
+// reviewer launch. It is evidence for the run lifecycle, never run state.
 type activityMark struct {
 	launchID string
 	state    domain.ActivityState
 	at       time.Time
 }
 
-type supervisorState struct {
-	config SupervisorConfig
-	wake   chan domain.SessionID
-
-	mu       sync.Mutex
-	activity map[string]activityMark
+// suspendGap is a stretch of wall-clock time the daemon did not observe, which
+// no run's time limit counts.
+type suspendGap struct {
+	from, to time.Time
 }
 
-func newSupervisorState(config SupervisorConfig) supervisorState {
-	return supervisorState{
+type runLifecycleState struct {
+	config RunLifecycleConfig
+
+	mu           sync.Mutex
+	activity     map[string]activityMark
+	lastObserved time.Time
+	gaps         []suspendGap
+}
+
+func newRunLifecycleState(config RunLifecycleConfig) runLifecycleState {
+	return runLifecycleState{
 		config:   config.withDefaults(),
-		wake:     make(chan domain.SessionID, 64),
 		activity: make(map[string]activityMark),
 	}
 }
@@ -210,18 +218,19 @@ func (e *Engine) endReviewerRuns(ctx stdctx.Context, workerID domain.SessionID, 
 	return err
 }
 
-// ObserveReviewActivity feeds an accepted reviewer activity signal to the run
-// supervisor: it records the first activity of the launch serving a delivered
-// run, remembers when the reviewer went idle, and wakes the supervisor for
-// the worker so it reacts without waiting for the next tick.
+// ObserveReviewActivity reduces an accepted reviewer activity signal: it
+// records the first activity of the launch serving a delivered run, remembers
+// when the reviewer went idle, and settles that worker's runs at once instead
+// of waiting for the next reaper pass. A worker whose trigger is launching is
+// left to that pass.
 func (e *Engine) ObserveReviewActivity(ctx stdctx.Context, review domain.Review, launchID string, state domain.ActivityState) error {
 	if review.ID == "" || state == "" {
 		return nil
 	}
 	now := e.clock()
-	e.supervisor.mu.Lock()
-	e.supervisor.activity[review.ID] = activityMark{launchID: launchID, state: state, at: now}
-	e.supervisor.mu.Unlock()
+	e.runs.mu.Lock()
+	e.runs.activity[review.ID] = activityMark{launchID: launchID, state: state, at: now}
+	e.runs.mu.Unlock()
 	if launchID != "" {
 		switch state {
 		case domain.ActivityActive, domain.ActivityBlocked, domain.ActivityWaitingInput:
@@ -230,35 +239,33 @@ func (e *Engine) ObserveReviewActivity(ctx stdctx.Context, review domain.Review,
 			}
 		}
 	}
-	e.wakeSupervisor(review.SessionID)
+	if unlock, ok := e.tryLockWorker(review.SessionID); ok {
+		defer unlock()
+		if _, err := e.evaluateSessionLocked(ctx, review.SessionID); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
 func (e *Engine) forgetActivity(reviewID string) {
-	e.supervisor.mu.Lock()
-	delete(e.supervisor.activity, reviewID)
-	e.supervisor.mu.Unlock()
+	e.runs.mu.Lock()
+	delete(e.runs.activity, reviewID)
+	e.runs.mu.Unlock()
 }
 
 // activitySince returns when the reviewer entered state, as far as this
 // daemon observed. A state read from the review row with no signal seen
 // since startup counts from now.
 func (e *Engine) activitySince(review domain.Review, state domain.ActivityState, now time.Time) time.Time {
-	e.supervisor.mu.Lock()
-	defer e.supervisor.mu.Unlock()
-	mark, ok := e.supervisor.activity[review.ID]
+	e.runs.mu.Lock()
+	defer e.runs.mu.Unlock()
+	mark, ok := e.runs.activity[review.ID]
 	if ok && mark.state == state && mark.launchID == review.ReviewerLaunchID {
 		return mark.at
 	}
-	e.supervisor.activity[review.ID] = activityMark{launchID: review.ReviewerLaunchID, state: state, at: now}
+	e.runs.activity[review.ID] = activityMark{launchID: review.ReviewerLaunchID, state: state, at: now}
 	return now
-}
-
-func (e *Engine) wakeSupervisor(workerID domain.SessionID) {
-	select {
-	case e.supervisor.wake <- workerID:
-	default:
-	}
 }
 
 func (e *Engine) tracksActivity(review domain.Review) bool {
@@ -270,68 +277,152 @@ func (e *Engine) tracksActivity(review domain.Review) bool {
 	return ok && reporter.ReportsActivity(review.Harness)
 }
 
-// RunSupervisor owns every active review run until the daemon stops: it
-// evaluates them on each tick and whenever a reviewer reports activity or a
-// cancel is requested. It returns when ctx is done.
-func (e *Engine) RunSupervisor(ctx stdctx.Context) {
-	if err := e.waitForChatRecovery(ctx); err != nil {
-		return
+// ListObservableReviewers names the reviewers the runtime reaper should probe:
+// only those serving an in-progress run. With no review in progress it is a
+// single indexed query that returns nothing. A worker whose in-progress runs
+// have no reviewer row gets a handle-less target so its runs are still
+// judged on their time limits.
+func (e *Engine) ListObservableReviewers(ctx stdctx.Context) ([]ports.ReviewerTarget, error) {
+	runs, err := e.store.ListActiveReviewRuns(ctx)
+	if err != nil || len(runs) == 0 {
+		return nil, err
 	}
-	ticker := time.NewTicker(e.supervisor.config.TickInterval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			if err := e.EvaluateAll(ctx); err != nil && ctx.Err() == nil {
-				slog.Default().WarnContext(ctx, "review run supervisor tick failed", "err", err)
+	bySession := groupRunsBySession(runs)
+	var targets []ports.ReviewerTarget
+	for _, workerID := range bySession.order {
+		reviews, err := e.store.ListReviewsBySession(ctx, workerID)
+		if err != nil {
+			return nil, err
+		}
+		lookup := newReviewLookup(reviews)
+		seen := map[string]bool{}
+		orphaned := false
+		for _, run := range bySession.runs[workerID] {
+			review, ok := lookup.find(run)
+			if !ok {
+				orphaned = true
+				continue
 			}
-		case workerID := <-e.supervisor.wake:
-			if unlock, ok := e.tryLockWorker(workerID); ok {
-				_, err := e.evaluateSessionLocked(ctx, workerID)
-				unlock()
-				if err != nil && ctx.Err() == nil {
-					slog.Default().WarnContext(ctx, "review run supervisor evaluation failed", "session", workerID, "err", err)
-				}
+			if seen[review.ID] {
+				continue
 			}
+			seen[review.ID] = true
+			targets = append(targets, ports.ReviewerTarget{ReviewID: review.ID, SessionID: workerID, HandleID: reviewerProbeHandle(review), LaunchID: review.ReviewerLaunchID})
+		}
+		if orphaned && len(seen) == 0 {
+			targets = append(targets, ports.ReviewerTarget{SessionID: workerID})
 		}
 	}
+	return targets, nil
 }
 
-// EvaluateAll applies the supervisor's rules to every active run. A worker
-// whose trigger is still launching is skipped, except that a launch hung past
+// ProbeReviewer is the reaper's liveness probe for one reviewer: the exact
+// supervised launch when the runtime records one, the Chat controller for a
+// Chat reviewer.
+func (e *Engine) ProbeReviewer(ctx stdctx.Context, target ports.ReviewerTarget) (bool, error) {
+	return e.launcher.Alive(ctx, target.HandleID, target.LaunchID)
+}
+
+// ApplyReviewerObservations reduces one reaper pass into review-run
+// transitions. The boot pass settles runs a previous daemon left in progress;
+// every later pass applies the time limits and liveness rules. A worker whose
+// trigger still holds its lock is skipped, except that a launch hung past
 // LaunchTimeout is failed without waiting for that call to return.
-func (e *Engine) EvaluateAll(ctx stdctx.Context) error {
+func (e *Engine) ApplyReviewerObservations(ctx stdctx.Context, pass ports.ReviewerObservationPass) error {
+	if err := e.waitForChatRecovery(ctx); err != nil {
+		return err
+	}
+	e.noteObservation(e.clock())
+	probes := observedProbes(pass)
 	runs, err := e.store.ListActiveReviewRuns(ctx)
 	if err != nil {
 		return err
 	}
-	bySession := map[domain.SessionID][]domain.ReviewRun{}
-	var sessions []domain.SessionID
-	for _, run := range runs {
-		if _, seen := bySession[run.SessionID]; !seen {
-			sessions = append(sessions, run.SessionID)
-		}
-		bySession[run.SessionID] = append(bySession[run.SessionID], run)
-	}
+	bySession := groupRunsBySession(runs)
 	var errs []error
-	for _, workerID := range sessions {
-		unlock, ok := e.tryLockWorker(workerID)
-		if !ok {
-			errs = append(errs, e.failHungLaunches(ctx, bySession[workerID]))
+	for _, workerID := range bySession.order {
+		if pass.Boot {
+			unlock := e.lockWorker(workerID)
+			errs = append(errs, e.sweepSessionLocked(ctx, workerID, bySession.runs[workerID], probes[workerID]))
+			unlock()
 			continue
 		}
-		_, err := e.evaluateSessionLocked(ctx, workerID)
+		unlock, ok := e.tryLockWorker(workerID)
+		if !ok {
+			errs = append(errs, e.failHungLaunches(ctx, bySession.runs[workerID]))
+			continue
+		}
+		_, err := e.evaluateSessionWith(ctx, workerID, probes[workerID])
 		unlock()
 		errs = append(errs, err)
 	}
 	return errors.Join(errs...)
 }
 
+// observedProbes turns a reaper pass into per-worker probe answers keyed by
+// review id. A failed probe is unknown, never dead.
+func observedProbes(pass ports.ReviewerObservationPass) map[domain.SessionID]map[string]reviewerProbe {
+	out := map[domain.SessionID]map[string]reviewerProbe{}
+	for _, obs := range pass.Observations {
+		if obs.Target.ReviewID == "" {
+			continue
+		}
+		if out[obs.Target.SessionID] == nil {
+			out[obs.Target.SessionID] = map[string]reviewerProbe{}
+		}
+		probe := reviewerProbe{alive: true, known: false}
+		switch obs.Reviewer {
+		case ports.ProbeAlive:
+			probe = reviewerProbe{alive: true, known: true}
+		case ports.ProbeDead:
+			probe = reviewerProbe{alive: false, known: true}
+		}
+		out[obs.Target.SessionID][obs.Target.ReviewID] = probe
+	}
+	return out
+}
+
+type sessionRuns struct {
+	order []domain.SessionID
+	runs  map[domain.SessionID][]domain.ReviewRun
+}
+
+func groupRunsBySession(runs []domain.ReviewRun) sessionRuns {
+	out := sessionRuns{runs: map[domain.SessionID][]domain.ReviewRun{}}
+	for _, run := range runs {
+		if _, seen := out.runs[run.SessionID]; !seen {
+			out.order = append(out.order, run.SessionID)
+		}
+		out.runs[run.SessionID] = append(out.runs[run.SessionID], run)
+	}
+	return out
+}
+
+// noteObservation records a pause between reaper passes longer than
+// SuspendGap, so that time is not counted against any run.
+func (e *Engine) noteObservation(now time.Time) {
+	e.runs.mu.Lock()
+	defer e.runs.mu.Unlock()
+	last := e.runs.lastObserved
+	e.runs.lastObserved = now
+	if last.IsZero() || now.Sub(last) <= e.runs.config.SuspendGap {
+		return
+	}
+	e.runs.gaps = append(e.runs.gaps, suspendGap{from: last, to: now})
+	// Only gaps that can still overlap an active run matter.
+	horizon := now.Add(-2 * e.runs.config.MaxDuration)
+	kept := e.runs.gaps[:0]
+	for _, gap := range e.runs.gaps {
+		if gap.to.After(horizon) {
+			kept = append(kept, gap)
+		}
+	}
+	e.runs.gaps = kept
+}
+
 // EvaluateSession settles one worker's active runs now. Trigger, Cancel and
-// List call the locked form so they never act on a run the supervisor would
-// end on its next tick.
+// List call the locked form so they never act on a run the next reaper pass
+// would end.
 func (e *Engine) EvaluateSession(ctx stdctx.Context, workerID domain.SessionID) error {
 	unlock := e.lockWorker(workerID)
 	defer unlock()
@@ -343,24 +434,30 @@ func (e *Engine) failHungLaunches(ctx stdctx.Context, runs []domain.ReviewRun) e
 	now := e.clock()
 	var hung []domain.ReviewRun
 	for _, run := range runs {
-		if run.Status == domain.ReviewRunLaunching && elapsed(now, launchingSince(run)) >= e.supervisor.config.LaunchTimeout {
+		if run.Status == domain.ReviewRunLaunching && e.elapsed(now, launchingSince(run)) >= e.runs.config.LaunchTimeout {
 			hung = append(hung, run)
 		}
 	}
 	return e.failRuns(ctx, hung, domain.ReviewFailureNeverStarted, errors.New("reviewer launch did not finish within the launch timeout"))
 }
 
-// supervisorDecision is what the supervisor does with one run on one pass.
-type supervisorDecision struct {
+// runDecision is what the reducer does with one run on one pass.
+type runDecision struct {
 	to        domain.ReviewRunStatus
 	patch     domain.ReviewRunPatch
 	interrupt bool
 }
 
-// evaluateSessionLocked applies the supervisor's transition rules to one
-// worker's active runs. The caller holds the worker lock. It reports whether
-// any run moved.
+// evaluateSessionLocked applies the run lifecycle rules to one worker's
+// active runs, probing each reviewer itself. The caller holds the worker lock.
+// It reports whether any run moved.
 func (e *Engine) evaluateSessionLocked(ctx stdctx.Context, workerID domain.SessionID) (bool, error) {
+	return e.evaluateSessionWith(ctx, workerID, nil)
+}
+
+// evaluateSessionWith is evaluateSessionLocked with the reaper's probe answers
+// already in hand; a reviewer missing from observed is probed directly.
+func (e *Engine) evaluateSessionWith(ctx stdctx.Context, workerID domain.SessionID, observed map[string]reviewerProbe) (bool, error) {
 	runs, err := e.store.ListActiveReviewRunsBySession(ctx, workerID)
 	if err != nil || len(runs) == 0 {
 		return false, err
@@ -370,7 +467,10 @@ func (e *Engine) evaluateSessionLocked(ctx stdctx.Context, workerID domain.Sessi
 		return false, err
 	}
 	lookup := newReviewLookup(reviews)
-	probes := map[string]reviewerProbe{}
+	probes := make(map[string]reviewerProbe, len(observed))
+	for id, probe := range observed {
+		probes[id] = probe
+	}
 	now := e.clock()
 	changed := false
 	exited := map[string]domain.Review{}
@@ -471,10 +571,10 @@ func reviewerProbeHandle(review domain.Review) string {
 	}
 }
 
-func (e *Engine) decide(ctx stdctx.Context, run domain.ReviewRun, review domain.Review, now time.Time, probes map[string]reviewerProbe) (supervisorDecision, error) {
-	cfg := e.supervisor.config
-	fail := func(reason domain.ReviewFailureReason, interrupt bool) supervisorDecision {
-		return supervisorDecision{to: domain.ReviewRunFailed, patch: domain.ReviewRunPatch{FailureReason: reason, EndedAt: &now}, interrupt: interrupt}
+func (e *Engine) decide(ctx stdctx.Context, run domain.ReviewRun, review domain.Review, now time.Time, probes map[string]reviewerProbe) (runDecision, error) {
+	cfg := e.runs.config
+	fail := func(reason domain.ReviewFailureReason, interrupt bool) runDecision {
+		return runDecision{to: domain.ReviewRunFailed, patch: domain.ReviewRunPatch{FailureReason: reason, EndedAt: &now}, interrupt: interrupt}
 	}
 	switch run.Status {
 	case domain.ReviewRunQueued:
@@ -482,7 +582,7 @@ func (e *Engine) decide(ctx stdctx.Context, run domain.ReviewRun, review domain.
 		// worker's lock; one still queued here was left by a call that is gone.
 		return fail(domain.ReviewFailureLaunchFailed, false), nil
 	case domain.ReviewRunLaunching:
-		if elapsed(now, launchingSince(run)) >= cfg.LaunchTimeout {
+		if e.elapsed(now, launchingSince(run)) >= cfg.LaunchTimeout {
 			return fail(domain.ReviewFailureNeverStarted, true), nil
 		}
 		if review.ReviewerHandleID != "" {
@@ -490,36 +590,36 @@ func (e *Engine) decide(ctx stdctx.Context, run domain.ReviewRun, review domain.
 				return fail(domain.ReviewFailureExitedDuringLaunch, false), nil
 			}
 		}
-		return supervisorDecision{}, nil
+		return runDecision{}, nil
 	case domain.ReviewRunRunning:
 		if probe := e.probeReviewer(ctx, review, probes); probe.known && !probe.alive {
 			return fail(domain.ReviewFailureProcessExited, false), nil
 		}
 		started := startedSince(run)
-		if elapsed(now, started) >= cfg.MaxDuration {
+		if e.elapsed(now, started) >= cfg.MaxDuration {
 			return fail(domain.ReviewFailureTimedOut, true), nil
 		}
 		if !e.tracksActivity(review) {
-			return supervisorDecision{}, nil
+			return runDecision{}, nil
 		}
 		if run.FirstActivityAt == nil {
-			if elapsed(now, started) >= cfg.FirstActivityWindow {
+			if e.elapsed(now, started) >= cfg.FirstActivityWindow {
 				return fail(domain.ReviewFailureNeverStarted, true), nil
 			}
-			return supervisorDecision{}, nil
+			return runDecision{}, nil
 		}
 		if review.ReviewerActivityState == domain.ActivityIdle {
 			idleSince := e.activitySince(review, domain.ActivityIdle, now)
 			if idleSince.Before(*run.FirstActivityAt) {
 				idleSince = *run.FirstActivityAt
 			}
-			if elapsed(now, idleSince) >= cfg.IdleGrace {
+			if e.elapsed(now, idleSince) >= cfg.IdleGrace {
 				return fail(domain.ReviewFailureTurnEndedWithoutSubmit, false), nil
 			}
 		}
-		return supervisorDecision{}, nil
+		return runDecision{}, nil
 	case domain.ReviewRunCancelling:
-		confirmed := supervisorDecision{to: domain.ReviewRunCancelled, patch: domain.ReviewRunPatch{EndedAt: &now}}
+		confirmed := runDecision{to: domain.ReviewRunCancelled, patch: domain.ReviewRunPatch{EndedAt: &now}}
 		if probe := e.probeReviewer(ctx, review, probes); probe.known && !probe.alive {
 			return confirmed, nil
 		}
@@ -530,21 +630,21 @@ func (e *Engine) decide(ctx stdctx.Context, run domain.ReviewRun, review domain.
 		if e.tracksActivity(review) && e.turnStoppedSince(review, requested) {
 			return confirmed, nil
 		}
-		if elapsed(now, requested) < cfg.CancelTimeout {
-			return supervisorDecision{}, nil
+		if e.elapsed(now, requested) < cfg.CancelTimeout {
+			return runDecision{}, nil
 		}
 		return e.forceKill(ctx, run, review, now, probes)
 	default:
-		return supervisorDecision{}, nil
+		return runDecision{}, nil
 	}
 }
 
 // turnStoppedSince reports whether the reviewer reported it stopped working
 // after the cancel was requested.
 func (e *Engine) turnStoppedSince(review domain.Review, requested time.Time) bool {
-	e.supervisor.mu.Lock()
-	defer e.supervisor.mu.Unlock()
-	mark, ok := e.supervisor.activity[review.ID]
+	e.runs.mu.Lock()
+	defer e.runs.mu.Unlock()
+	mark, ok := e.runs.activity[review.ID]
 	if !ok || mark.launchID != review.ReviewerLaunchID || mark.at.Before(requested) {
 		return false
 	}
@@ -554,10 +654,10 @@ func (e *Engine) turnStoppedSince(review domain.Review, requested time.Time) boo
 // forceKill destroys a reviewer that ignored its interrupt for longer than
 // the cancel timeout. The run is cancelled when the kill is confirmed and
 // failed with cancel_unconfirmed otherwise.
-func (e *Engine) forceKill(ctx stdctx.Context, run domain.ReviewRun, review domain.Review, now time.Time, probes map[string]reviewerProbe) (supervisorDecision, error) {
-	unconfirmed := supervisorDecision{to: domain.ReviewRunFailed, patch: domain.ReviewRunPatch{FailureReason: domain.ReviewFailureCancelUnconfirmed, EndedAt: &now}}
+func (e *Engine) forceKill(ctx stdctx.Context, run domain.ReviewRun, review domain.Review, now time.Time, probes map[string]reviewerProbe) (runDecision, error) {
+	unconfirmed := runDecision{to: domain.ReviewRunFailed, patch: domain.ReviewRunPatch{FailureReason: domain.ReviewFailureCancelUnconfirmed, EndedAt: &now}}
 	if review.ReviewerHandleID == "" {
-		return supervisorDecision{to: domain.ReviewRunCancelled, patch: domain.ReviewRunPatch{EndedAt: &now}}, nil
+		return runDecision{to: domain.ReviewRunCancelled, patch: domain.ReviewRunPatch{EndedAt: &now}}, nil
 	}
 	if err := e.launcher.Destroy(ctx, review.ReviewerHandleID); err != nil {
 		slog.Default().WarnContext(ctx, "force-kill reviewer after cancel timeout", "run", run.ID, "review", review.ID, "err", err)
@@ -568,18 +668,34 @@ func (e *Engine) forceKill(ctx stdctx.Context, run domain.ReviewRun, review doma
 		return unconfirmed, nil
 	}
 	if err := e.store.ClearReviewerHandleByHarness(ctx, run.SessionID, review.Harness); err != nil {
-		return supervisorDecision{}, err
+		return runDecision{}, err
 	}
-	return supervisorDecision{to: domain.ReviewRunCancelled, patch: domain.ReviewRunPatch{EndedAt: &now}}, nil
+	return runDecision{to: domain.ReviewRunCancelled, patch: domain.ReviewRunPatch{EndedAt: &now}}, nil
 }
 
-// elapsed is how long ago since was. An unknown (zero) reference time counts
-// as no time at all: a run is never failed on a clock it does not have.
-func elapsed(now, since time.Time) time.Duration {
+// elapsed is how long ago since was, not counting time the daemon did not
+// observe (the machine slept). An unknown (zero) reference time counts as no
+// time at all: a run is never failed on a clock it does not have.
+func (e *Engine) elapsed(now, since time.Time) time.Duration {
 	if since.IsZero() {
 		return 0
 	}
-	return now.Sub(since)
+	d := now.Sub(since)
+	e.runs.mu.Lock()
+	defer e.runs.mu.Unlock()
+	for _, gap := range e.runs.gaps {
+		from, to := gap.from, gap.to
+		if from.Before(since) {
+			from = since
+		}
+		if to.After(now) {
+			to = now
+		}
+		if to.After(from) {
+			d -= to.Sub(from)
+		}
+	}
+	return d
 }
 
 // reviewLookup finds the reviewer row serving a run. Legacy runs predate
@@ -631,42 +747,22 @@ func startedSince(run domain.ReviewRun) time.Time {
 	return launchingSince(run)
 }
 
-// SweepActiveRunsAfterRestart settles every run the previous daemon left
-// active. It runs once at startup, after RecoverChatReviewers and before the
-// supervisor. A terminal reviewer whose exact launch is still alive is kept
-// for the supervisor; every other active run fails with daemon_restarted and
-// its reviewer handle is destroyed, which reaps an orphaned process tree.
-func (e *Engine) SweepActiveRunsAfterRestart(ctx stdctx.Context) error {
-	runs, err := e.store.ListActiveReviewRuns(ctx)
-	if err != nil {
-		return err
-	}
-	bySession := map[domain.SessionID][]domain.ReviewRun{}
-	for _, run := range runs {
-		bySession[run.SessionID] = append(bySession[run.SessionID], run)
-	}
-	sessions := make([]domain.SessionID, 0, len(bySession))
-	for id := range bySession {
-		sessions = append(sessions, id)
-	}
-	sort.Slice(sessions, func(i, j int) bool { return sessions[i] < sessions[j] })
-	var errs []error
-	for _, workerID := range sessions {
-		unlock := e.lockWorker(workerID)
-		errs = append(errs, e.sweepSessionLocked(ctx, workerID, bySession[workerID]))
-		unlock()
-	}
-	return errors.Join(errs...)
-}
-
-func (e *Engine) sweepSessionLocked(ctx stdctx.Context, workerID domain.SessionID, runs []domain.ReviewRun) error {
+// sweepSessionLocked is the boot pass for one worker: it settles the runs a
+// previous daemon left active. A terminal reviewer whose exact launch is
+// still alive keeps its runs; every other active run fails with
+// daemon_restarted and its reviewer handle is destroyed, which reaps an
+// orphaned process tree. observed holds the reaper's probe answers.
+func (e *Engine) sweepSessionLocked(ctx stdctx.Context, workerID domain.SessionID, runs []domain.ReviewRun, observed map[string]reviewerProbe) error {
 	reviews, err := e.store.ListReviewsBySession(ctx, workerID)
 	if err != nil {
 		return err
 	}
 	lookup := newReviewLookup(reviews)
 	now := e.clock()
-	probes := map[string]reviewerProbe{}
+	probes := make(map[string]reviewerProbe, len(observed))
+	for id, probe := range observed {
+		probes[id] = probe
+	}
 	kept := map[string]bool{}
 	orphaned := map[string]domain.Review{}
 	var errs []error
@@ -704,7 +800,7 @@ func (e *Engine) sweepSessionLocked(ctx stdctx.Context, workerID domain.SessionI
 	return errors.Join(errs...)
 }
 
-// readoptable reports whether the supervisor can keep owning a run across a
+// readoptable reports whether a run can keep its reviewer across a
 // daemon restart. Runs that never reached a reviewer cannot be: their
 // trigger call died with the daemon. A Chat run survives when
 // RecoverChatReviewers kept its controller; a terminal run when the exact

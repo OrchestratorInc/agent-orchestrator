@@ -181,7 +181,7 @@ SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, 
 FROM review_run WHERE session_id = ? AND status IN ('queued', 'launching', 'running', 'cancelling') ORDER BY created_at DESC;
 
 -- name: ListActiveReviewRuns :many
--- Every active run across the daemon, for the run supervisor and startup sweep.
+-- Every active run across the daemon, for the reaper-driven run lifecycle.
 SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source, failure_reason, cancelled_by, launch_id, launching_at, started_at, first_activity_at, cancel_requested_at, ended_at
 FROM review_run WHERE status IN ('queued', 'launching', 'running', 'cancelling') ORDER BY created_at ASC, id ASC;
 
