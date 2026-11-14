@@ -116,12 +116,13 @@ func (c *commandContext) switchSession(ctx context.Context, cmd *cobra.Command, 
 }
 
 func (c *commandContext) sendAfterSwitch(ctx context.Context, id, message string) error {
-	for attempt := 1; ; attempt++ {
+	deadline := time.Now().Add(switchSendRetryWindow)
+	for {
 		err := c.sendMessage(ctx, sendOptions{session: id, message: message})
 		var responseErr apiResponseError
 		starting := errors.As(err, &responseErr) &&
 			(responseErr.ErrorBody.Code == "SESSION_COMPOSER_BUSY" || responseErr.ErrorBody.Code == "SESSION_STARTUP_PENDING")
-		if !starting || attempt == switchSendAttempts {
+		if !starting || !time.Now().Add(switchSendRetryInterval).Before(deadline) {
 			return err
 		}
 		c.deps.Sleep(switchSendRetryInterval)
@@ -132,6 +133,6 @@ func (c *commandContext) sendAfterSwitch(ctx context.Context, id, message string
 }
 
 const (
-	switchSendAttempts      = 15
+	switchSendRetryWindow   = 30 * time.Second
 	switchSendRetryInterval = 2 * time.Second
 )
