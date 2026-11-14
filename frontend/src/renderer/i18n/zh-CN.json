@@ -3539,6 +3539,7 @@
 	"chat.draft.retryMessage": "安全重试",
 	"chat.draft.clearMessageFailed": "内容已被接受，但无法清除本地草稿。请在离开前重试清除；Orchestrator 不会再次发送。",
 	"chat.draft.recordMessageFailed": "无法在本地记录接受结果。请使用相同的投递 ID 安全重试以确认结果。",
+	"chat.draft.recordMessageSuperseded": "消息已发送，但其本地记录已被替换或清除，因此无法更新。无需重新发送。",
 	"chat.draft.abandonFailed": "无法清除本地记录，因此无法放弃恢复。不会自动重新发送任何内容。",
 	"chat.draft.abandonedSteer": "已放弃恢复。之前的内容可能已投递；再次发送可能导致重复。",
 	"chat.draft.readAttachmentFailed": "无法读取已保存的附件。已保留您的草稿。",

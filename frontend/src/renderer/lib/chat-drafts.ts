@@ -178,6 +178,17 @@ export type DraftStorage = Pick<Storage, "getItem" | "setItem" | "removeItem">;
 
 export type DraftWriteResult = { ok: true; draft: ChatSessionDraft } | { ok: false; draft: ChatSessionDraft };
 
+/**
+ * Why a draft cannot be used: "storage" may clear up on its own, while
+ * "superseded" means a newer incarnation owns the session or the record no longer
+ * holds what the caller expected, so repeating the operation cannot succeed.
+ */
+export type ChatDraftUnavailableReason = "storage" | "superseded";
+
+export type ChatComposerAcceptanceResult =
+	| { ok: true; draft: ChatSessionDraft }
+	| { ok: false; reason: ChatDraftUnavailableReason; draft: ChatSessionDraft };
+
 export type DraftClearResult =
 	| { ok: true; cleared: boolean; draft: ChatSessionDraft }
 	| { ok: false; cleared: false; draft: ChatSessionDraft };
@@ -880,7 +891,9 @@ function isChatSessionDraft(value: unknown, scope: ChatDraftScope): value is Cha
 	);
 }
 
-type DraftReadResult = { ok: true; draft: ChatSessionDraft } | { ok: false; draft: ChatSessionDraft };
+type DraftReadResult =
+	| { ok: true; draft: ChatSessionDraft }
+	| { ok: false; reason: ChatDraftUnavailableReason; draft: ChatSessionDraft };
 
 export function loadChatSessionDraft(
 	scopeInput: ChatDraftScopeInput,
@@ -888,20 +901,22 @@ export function loadChatSessionDraft(
 ): DraftReadResult {
 	const scope = normalizeScope(scopeInput);
 	const empty = emptyDraft(scope);
-	if (!scope.sessionId || !scope.incarnation || !storage) return { ok: false, draft: empty };
+	if (!scope.sessionId || !scope.incarnation || !storage) return { ok: false, reason: "storage", draft: empty };
 	const leaseRead = readScopeLease(scope.sessionId, storage);
-	if (!leaseRead.ok) return { ok: false, draft: empty };
+	if (!leaseRead.ok) return { ok: false, reason: "storage", draft: empty };
 	if (
 		leaseRead.lease &&
 		(leaseRead.lease.incarnation !== scope.incarnation || leaseRead.lease.state !== "active")
 	) {
-		return { ok: false, draft: empty };
+		// This incarnation's own unfinished activation can still complete.
+		const reason = leaseRead.lease.incarnation === scope.incarnation ? "storage" : "superseded";
+		return { ok: false, reason, draft: empty };
 	}
 	let raw: string | null;
 	try {
 		raw = storage.getItem(storageKey(scope.sessionId));
 	} catch {
-		return { ok: false, draft: empty };
+		return { ok: false, reason: "storage", draft: empty };
 	}
 	if (!raw) return { ok: true, draft: empty };
 	let parsed: unknown;
@@ -918,7 +933,7 @@ export function loadChatSessionDraft(
 		(parsed as { sessionId?: unknown }).sessionId === scope.sessionId &&
 		"incarnation" in parsed &&
 		(parsed as { incarnation?: unknown }).incarnation !== scope.incarnation
-	) return { ok: false, draft: empty };
+	) return { ok: false, reason: "superseded", draft: empty };
  if (parsed && typeof parsed === "object" && "schemaVersion" in parsed && parsed.schemaVersion === 2) parsed = { ...parsed, schemaVersion: CHAT_DRAFT_SCHEMA_VERSION };
  return {
   ok: true,
@@ -1101,16 +1116,16 @@ export function markChatComposerDeliveryAccepted(
 	clientMessageId: string,
 	revision: number,
 	storage: DraftStorage | undefined = rendererStorage(),
-): DraftWriteResult {
+): ChatComposerAcceptanceResult {
 	const loaded = loadChatSessionDraft(scope, storage);
+	if (!loaded.ok) return loaded;
 	const delivery = loaded.draft.composer.delivery;
 	if (
-		!loaded.ok ||
 		!delivery ||
 		delivery.clientMessageId !== clientMessageId ||
 		delivery.revision !== revision
 	) {
-		return { ok: false, draft: loaded.draft };
+		return { ok: false, reason: "superseded", draft: loaded.draft };
 	}
 	if (delivery.state === "accepted") return { ok: true, draft: loaded.draft };
 	const result = persistDraftProven(
@@ -1123,7 +1138,7 @@ export function markChatComposerDeliveryAccepted(
 		},
 		storage,
 	);
-	return result.ok ? result : { ok: false, draft: loaded.draft };
+	return result.ok ? result : { ok: false, reason: "storage", draft: loaded.draft };
 }
 
 /**

@@ -3557,6 +3557,7 @@
 	"chat.draft.retryMessage": "安全に再試行",
 	"chat.draft.clearMessageFailed": "内容は受け付けられましたが、ローカルの下書きを削除できませんでした。離れる前に削除を再試行してください。Orchestrator は再送信しません。",
 	"chat.draft.recordMessageFailed": "受け付け結果をローカルに記録できませんでした。同じ配信 ID で安全に再試行して結果を確認してください。",
+	"chat.draft.recordMessageSuperseded": "メッセージは送信されましたが、ローカルの記録がすでに置き換えられたか削除されていたため、更新できませんでした。再送信は不要です。",
 	"chat.draft.abandonFailed": "ローカルの記録を削除できないため、復元を中止できませんでした。自動的に再送信されることはありません。",
 	"chat.draft.abandonedSteer": "復元を中止しました。以前の内容はすでに配信された可能性があります。再送信すると重複する場合があります。",
 	"chat.draft.readAttachmentFailed": "保存済みの添付ファイルを読み取れませんでした。下書きは保持されています。",

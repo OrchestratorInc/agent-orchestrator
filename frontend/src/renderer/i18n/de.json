@@ -3557,6 +3557,7 @@
 	"chat.draft.retryMessage": "Sicher erneut versuchen",
 	"chat.draft.clearMessageFailed": "Der Inhalt wurde angenommen, aber der lokale Entwurf konnte nicht gelöscht werden. Versuchen Sie das Löschen vor dem Verlassen erneut; Orchestrator sendet ihn nicht noch einmal.",
 	"chat.draft.recordMessageFailed": "Die Annahme konnte nicht lokal gespeichert werden. Versuchen Sie es mit derselben Zustellungs-ID erneut, um sie abzugleichen.",
+	"chat.draft.recordMessageSuperseded": "Die Nachricht wurde gesendet, aber ihr lokaler Eintrag war bereits ersetzt oder gelöscht und konnte daher nicht aktualisiert werden. Erneutes Senden ist nicht nötig.",
 	"chat.draft.abandonFailed": "Die Wiederherstellung konnte nicht abgebrochen werden, da der lokale Eintrag nicht gelöscht werden konnte. Es wird nichts automatisch erneut gesendet.",
 	"chat.draft.abandonedSteer": "Die Wiederherstellung wurde abgebrochen. Der vorherige Inhalt wurde möglicherweise bereits zugestellt; erneutes Senden kann zu einer doppelten Zustellung führen.",
 	"chat.draft.readAttachmentFailed": "Der gespeicherte Anhang konnte nicht gelesen werden. Ihr Entwurf wurde behalten.",
