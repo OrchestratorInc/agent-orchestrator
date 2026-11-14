@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../api/schema";
@@ -123,18 +123,34 @@ export function ReviewerPicker({
 		...(next.effort ? { effort: next.effort } : {}),
 	});
 	// A picked model or mode is saved by name, even the catalog default, so it holds
-	// over a project-level choice; "Use agent model" is the way back. The effort is
-	// kept only when the new pick offers it (an empty id is the catalog default).
+	// over a project-level choice; "Use agent model" is the way back.
 	const pickModel = (id: string) => {
-		const kept = effort && catalogModel(catalog, id || defaultID)?.efforts?.includes(effort) ? effort : "";
+		if (disabled) return;
+		// Check the effort against the model the run will use: an empty id inherits
+		// the project's reviewer model, and only then the catalog default.
+		const target = catalogModel(catalog, id || (isMode ? inherited.mode : inherited.model) || defaultID);
+		const offers = (level: string) => Boolean(target?.efforts?.includes(level));
+		let kept = effort && offers(effort) ? effort : "";
+		// An empty effort inherits the project's. If the new model does not offer
+		// that level, name the model's own default so the run gets a level it can use.
+		if (!kept && inheritedEffort && target?.efforts && !offers(inheritedEffort) && target.defaultEffort && offers(target.defaultEffort)) {
+			kept = target.defaultEffort;
+		}
 		save({ model: isMode ? "" : id, mode: isMode ? id : "", effort: kept });
 	};
-	const pickEffort = (level: string) => save({ model, mode, effort: level });
+	const pickEffort = (level: string) => {
+		if (!disabled) save({ model, mode, effort: level });
+	};
 	// Picking the reviewer already saved changes nothing: saving it again would
 	// drop its model, effort, and hidden settings.
 	const pickAgent = (next: string) => {
-		if (next !== value) onAgentChange(next);
+		if (!disabled && next !== value) onAgentChange(next);
 	};
+	// The lock (a review running, auto-review on, a save in flight) also shuts a
+	// menu that is already open, so it cannot start a second change.
+	useEffect(() => {
+		if (disabled) setOpen(false);
+	}, [disabled]);
 
 	const defaultHarnessLabel = ranked.find((agent) => agent.id === defaultHarness)?.label || agentLabel(defaultHarness);
 	const modelRow = (row: { id: string; label: string; unavailableReason?: string }, optionId?: string, searchActive?: boolean) => (
@@ -160,7 +176,7 @@ export function ReviewerPicker({
 	);
 
 	return (
-		<OptionMenu open={open} onOpenChange={setOpen} modal={false}>
+		<OptionMenu open={open} onOpenChange={(next) => setOpen(next && !disabled)} modal={false}>
 			<OptionMenuTrigger
 				variant="ghost"
 				ref={management.triggerRef}
