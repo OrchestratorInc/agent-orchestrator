@@ -313,8 +313,8 @@ func TestGetAgentHooksInstallsClineHooks(t *testing.T) {
 			if !strings.Contains(content, "hooks cline "+spec.Subcommand) {
 				t.Fatalf("%s missing ps1 forward arguments %q:\n%s", spec.Event, "hooks cline "+spec.Subcommand, content)
 			}
-		} else if !strings.Contains(content, clineHookCommandPrefix+spec.Subcommand) {
-			t.Fatalf("%s missing forward command %q:\n%s", spec.Event, clineHookCommandPrefix+spec.Subcommand, content)
+		} else if !strings.Contains(content, clineHookArgumentsPrefix+spec.Subcommand) {
+			t.Fatalf("%s missing forward command %q:\n%s", spec.Event, clineHookArgumentsPrefix+spec.Subcommand, content)
 		}
 		info, err := os.Stat(scriptPath)
 		if err != nil {
@@ -706,10 +706,11 @@ func TestClineHookScriptNameIsPlatformAware(t *testing.T) {
 }
 
 func TestRenderBashClineHookScript(t *testing.T) {
-	got := renderBashClineHookScript("session-start")
+	got := renderBashClineHookScript("session-start", "ao", ports.WorkspaceHookConfig{})
 	want := "#!/usr/bin/env bash\n" +
 		clineHookMarker + "\n" +
-		clineHookCommandPrefix + "session-start || true\n" +
+		"AO_DATA_DIR='' AO_REVIEW_SESSION_ID='' AO_REVIEW_WORKER_SESSION_ID='' " +
+		"AO_RUNTIME_LAUNCH_ID='' AO_RUN_FILE='' AO_SESSION_ID='' 'ao' hooks cline session-start || true\n" +
 		`echo '{"cancel": false}'` + "\n"
 	if got != want {
 		t.Fatalf("bash hook script\nwant: %q\n got: %q", want, got)
@@ -717,9 +718,9 @@ func TestRenderBashClineHookScript(t *testing.T) {
 }
 
 func TestRenderPowerShellClineHookScript(t *testing.T) {
-	got := renderPowerShellClineHookScript("session-start")
-	if !strings.HasPrefix(got, clineHookMarker+"\n") {
-		t.Fatalf("ps1 hook script must start with marker comment:\n%s", got)
+	got := renderPowerShellClineHookScript("session-start", "ao", ports.WorkspaceHookConfig{})
+	if !strings.HasPrefix(got, "\ufeff"+clineHookMarker+"\n") {
+		t.Fatalf("ps1 hook script must start with UTF-8 BOM and marker comment:\n%s", got)
 	}
 	if strings.Contains(got, "#!/usr/bin/env bash") {
 		t.Fatalf("ps1 hook script must not carry a bash shebang:\n%s", got)
@@ -736,15 +737,15 @@ func TestRenderPowerShellClineHookScript(t *testing.T) {
 }
 
 func TestRenderClineHookScriptFollowsPlatform(t *testing.T) {
-	got := renderClineHookScript("stop")
+	got := renderClineHookScript("stop", "ao", ports.WorkspaceHookConfig{})
 	if runtime.GOOS == "windows" {
-		want := renderPowerShellClineHookScript("stop")
+		want := renderPowerShellClineHookScript("stop", "ao", ports.WorkspaceHookConfig{})
 		if got != want {
 			t.Fatalf("windows render diverged from ps1 renderer")
 		}
 		return
 	}
-	want := renderBashClineHookScript("stop")
+	want := renderBashClineHookScript("stop", "ao", ports.WorkspaceHookConfig{})
 	if got != want {
 		t.Fatalf("unix render diverged from bash renderer")
 	}
