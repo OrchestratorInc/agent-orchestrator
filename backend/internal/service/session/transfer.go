@@ -24,6 +24,7 @@ type transferCommander interface {
 	ReceiveTransfer(ctx context.Context, projectID domain.ProjectID, t domain.SessionTransfer, prompt string) (domain.SessionRecord, error)
 	CommitTransfer(ctx context.Context, id domain.SessionID, transferID string, dest domain.SessionTransferDestination) (domain.SessionMovedTo, error)
 	SessionMovedTo(ctx context.Context, id domain.SessionID) (domain.SessionMovedTo, bool, error)
+	ProjectOrchestrator(ctx context.Context, project domain.ProjectID) (domain.SessionID, bool, error)
 }
 
 // SetRemoteHandoffNote late-binds the note a moved session starts from when
@@ -139,7 +140,11 @@ func (s *Service) ReceiveTransfer(ctx context.Context, projectID domain.ProjectI
 	if err != nil {
 		return domain.Session{}, false, nil, err
 	}
-	rec, err := tc.ReceiveTransfer(ctx, projectID, t, transferResumeNote(t))
+	orchestrator, _, err := tc.ProjectOrchestrator(ctx, projectID)
+	if err != nil {
+		return domain.Session{}, false, nil, err
+	}
+	rec, err := tc.ReceiveTransfer(ctx, projectID, t, transferResumeNote(t, orchestrator))
 	if err != nil {
 		return domain.Session{}, false, nil, transferError(err)
 	}
@@ -154,7 +159,8 @@ func (s *Service) ReceiveTransfer(ctx context.Context, projectID domain.ProjectI
 }
 
 // transferResumeNote is the first turn of a resumed moved conversation.
-func transferResumeNote(t domain.SessionTransfer) string {
+// orchestrator is this project's live orchestrator, empty when it has none.
+func transferResumeNote(t domain.SessionTransfer, orchestrator domain.SessionID) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "This session just moved to another computer from %s.", t.Source.Label)
 	b.WriteString(" File paths in this conversation were updated to this computer's worktree.")
@@ -165,6 +171,11 @@ func transferResumeNote(t domain.SessionTransfer) string {
 	b.WriteString(" came with it; check `git status` before relying on earlier output.")
 	if len(t.PullRequests) > 0 {
 		fmt.Fprintf(&b, " This session now owns %s.", strings.Join(t.PullRequests, ", "))
+	}
+	if orchestrator != "" {
+		fmt.Fprintf(&b, " You now report to the orchestrator %s on this computer; the one on %s cannot be reached from here.", orchestrator, t.Source.Label)
+	} else {
+		fmt.Fprintf(&b, " This project has no orchestrator on this computer, and the one on %s cannot be reached from here.", t.Source.Label)
 	}
 	b.WriteString(" Reply with one line saying you are ready, then wait for the user.")
 	return b.String()

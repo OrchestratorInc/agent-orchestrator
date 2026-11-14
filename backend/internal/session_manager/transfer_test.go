@@ -60,3 +60,30 @@ func TestSweepTransfersDropsStaleUploadsSooner(t *testing.T) {
 		t.Fatalf("prepared transfer swept before seven days: %v", err)
 	}
 }
+
+func TestArrivedWorkerIsAnnouncedToTheOrchestrator(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["web-1"] = pastStartupGate(domain.SessionRecord{ID: "web-1", ProjectID: "web", Kind: domain.KindOrchestrator, Harness: domain.HarnessClaudeCode})
+	msg := &fakeMessenger{}
+	m := New(Deps{Store: st, Messenger: msg})
+	m.runBackground = func(work func()) { work() }
+	transfer := domain.SessionTransfer{
+		Source: domain.SessionTransferSource{Label: "MacBook A", SessionID: "web-3"}, Branch: "feat/x",
+		DisplayName: "Fix login", IssueID: "42", PullRequests: []string{"#12"},
+	}
+
+	m.tellOrchestratorAboutArrival(context.Background(), domain.SessionRecord{ID: "web-9", ProjectID: "web"}, transfer)
+	if len(msg.msgs) != 1 {
+		t.Fatalf("messages = %d, want 1", len(msg.msgs))
+	}
+	for _, want := range []string{"Worker web-9 moved here from MacBook A, where it was session web-3.", "Task: Fix login.", "Branch: feat/x.", "Issue: 42.", "Pull requests: #12.", "Do not respawn its work."} {
+		if !strings.Contains(msg.msgs[0], want) {
+			t.Fatalf("note missing %q:\n%s", want, msg.msgs[0])
+		}
+	}
+
+	m.tellOrchestratorAboutArrival(context.Background(), domain.SessionRecord{ID: "api-9", ProjectID: "api"}, transfer)
+	if len(msg.msgs) != 1 {
+		t.Fatalf("a project without an orchestrator was messaged: %v", msg.msgs)
+	}
+}
