@@ -5,6 +5,7 @@ import { agentLabel } from "../lib/agent-options";
 import { isCloudHarnessConnected } from "../lib/cloud-agents";
 import type { WorkspaceSession } from "../types/workspace";
 import { useCloudCp } from "./useCloudCp";
+import { useCloudMeUserId } from "./useCloudMeUserId";
 import { useCloudOffering } from "./useCloudOffering";
 import { useProviderConnections } from "./useProviderConnections";
 import { interfaceTransitionIsActive, useSessionInterfaceTransition } from "./useSessionInterfaceTransition";
@@ -19,6 +20,16 @@ export function agentSwitchTarget(transition: unknown): string | undefined {
 }
 
 /**
+ * Whether the signed-in person started this Cloud session. Only its creator may
+ * switch its agent or cancel that switch: the new agent runs on their login
+ * for it, and the control plane refuses anyone else, an org admin included.
+ */
+export function useIsCloudSessionCreator(session: WorkspaceSession | undefined): boolean {
+	const meUserId = useCloudMeUserId(Boolean(session?.cloud));
+	return Boolean(meUserId && session?.cloud?.createdByUserId === meUserId);
+}
+
+/**
  * Switching a Cloud session's agent: the agents its picker offers and the
  * switch itself, the session's interface transition with a target harness. The
  * control plane lists the agents it can switch to (`/me` agentSwitchHarnesses);
@@ -29,6 +40,7 @@ export function agentSwitchTarget(transition: unknown): string | undefined {
  * idle, so a drain would wait out its window and fail: as a switch from a
  * Cloud terminal to Chat does, the switch reads the agent's latest activity
  * and stops an idle terminal directly, and refuses while the agent works.
+ * Only the session's creator is offered the switch; anyone else sees it run.
  */
 export function useCloudAgentSwitch(session: WorkspaceSession | undefined) {
 	const orgId = session?.cloud?.orgId;
@@ -38,6 +50,7 @@ export function useCloudAgentSwitch(session: WorkspaceSession | undefined) {
 	const transitions = useSessionInterfaceTransition(orgId ? session?.id : undefined, orgId ? { orgId } : undefined);
 	const mode: "chat" | "tui" = session?.mode === "chat" ? "chat" : "tui";
 	const provider = session?.provider;
+	const creator = useIsCloudSessionCreator(orgId ? session : undefined);
 	// A test's offering (or a partial one) may leave the lists out: none can switch.
 	const agentSwitchHarnesses = offering.agentSwitchHarnesses ?? [];
 	const chatHarnesses = offering.chatHarnesses ?? [];
@@ -54,7 +67,7 @@ export function useCloudAgentSwitch(session: WorkspaceSession | undefined) {
 	const switching = transitions.starting || Boolean(running);
 	return {
 		/** The session can switch to another agent here. */
-		available: Boolean(orgId && session?.isTerminated !== true && agents.some((agent) => agent.id !== provider)),
+		available: Boolean(orgId && creator && session?.isTerminated !== true && agents.some((agent) => agent.id !== provider)),
 		agents,
 		/** An agent switch (or any switch) is starting or running. */
 		switching,

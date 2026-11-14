@@ -39,10 +39,11 @@ const cloudMocks = vi.hoisted(() => ({
 	chatProps: vi.fn(),
 }));
 // The control plane's base URL and attachment limit, for the tests that attach files.
-const cloudSetup = vi.hoisted(() => ({ baseUrl: "", maxAttachmentBytes: undefined as number | undefined, features: [] as string[], agentSwitchHarnesses: [] as string[] }));
+const cloudSetup = vi.hoisted(() => ({ baseUrl: "", maxAttachmentBytes: undefined as number | undefined, features: [] as string[], agentSwitchHarnesses: [] as string[], meUserId: "user-1" }));
 vi.mock("../../hooks/useCloudCp", () => ({
 	useCloudCp: () => ({ ready: true, client: cloudMocks, baseUrl: cloudSetup.baseUrl, userId: "user-1" }),
 }));
+vi.mock("../../hooks/useCloudMeUserId", () => ({ useCloudMeUserId: () => cloudSetup.meUserId }));
 vi.mock("../../hooks/useCloudOffering", () => ({
 	useCloudOffering: () => ({
 		features: [...(cloudSetup.maxAttachmentBytes === undefined ? [] : ["attachments"]), ...cloudSetup.features],
@@ -108,10 +109,11 @@ describe("CloudSessionChatSurface", () => {
 		cloudSetup.maxAttachmentBytes = undefined;
 		cloudSetup.features = [];
 		cloudSetup.agentSwitchHarnesses = [];
+		cloudSetup.meUserId = "user-1";
 	});
 
 	describe("switching the session's agent", () => {
-		const cloudSession = { ...session, cloud: { orgId: "org-1" } };
+		const cloudSession = { ...session, cloud: { orgId: "org-1", createdByUserId: "user-1" } };
 		const transition = {
 			id: "transition-1", sessionId: session.id, sourceMode: "chat", targetMode: "chat", policy: "drain", phase: "requested",
 			sourceHarness: "codex", targetHarness: "claude-code", createdAt: session.updatedAt, updatedAt: session.updatedAt,
@@ -148,6 +150,17 @@ describe("CloudSessionChatSurface", () => {
 			cloudSetup.agentSwitchHarnesses = [];
 			renderSurface();
 			await waitFor(() => expect(cloudMocks.chatProps).toHaveBeenCalled());
+			expect(cloudMocks.chatProps.mock.lastCall?.[0].agentSwitch).toMatchObject({ agents: [{ id: "codex" }], disabled: true });
+		});
+
+		// The new agent runs on the creator's login for it, and the control plane
+		// refuses anyone else (403): a member sees the session's agent, no switch.
+		it("offers no switch to a member who did not start the session", async () => {
+			cloudSetup.meUserId = "user-2";
+			renderSurface();
+			// Once the person's logins are in, the creator would be offered Claude Code and Cursor.
+			await waitFor(() => expect(cloudMocks.listUserProviderConnections).toHaveBeenCalled());
+			await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
 			expect(cloudMocks.chatProps.mock.lastCall?.[0].agentSwitch).toMatchObject({ agents: [{ id: "codex" }], disabled: true });
 		});
 
