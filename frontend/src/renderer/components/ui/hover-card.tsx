@@ -3,6 +3,7 @@ import {
 	createContext,
 	useCallback,
 	useContext,
+	useEffect,
 	useLayoutEffect,
 	useMemo,
 	useRef,
@@ -17,7 +18,7 @@ import { cn } from "../../lib/utils";
 /**
  * A card closes the moment what it describes is acted on or goes away: its
  * trigger is clicked, a link on it is followed, the route changes, the window
- * loses focus, or the trigger stops being laid out (a chat kept alive in a
+ * loses focus, what is around it scrolls, or the trigger stops being laid out (a chat kept alive in a
  * hidden <Activity>, display: none, or removed). Without a laid-out trigger,
  * Floating UI would place the card at the window's top-left corner.
  */
@@ -127,6 +128,19 @@ function HoverCard({
 			openCards.delete(dismiss);
 		};
 	}, [dismiss, open]);
+	// Radix closes a card only on pointer leave, and a scroll moves the trigger
+	// out from under a pointer that stays put: in a chat that auto-scrolls while
+	// it streams, the card never got a leave event and stayed open over the
+	// timeline. Scrolling inside the card keeps it open.
+	useEffect(() => {
+		if (!open) return;
+		const onScroll = (event: Event) => {
+			if (event.target instanceof Element && event.target.closest("[data-slot=hover-card-content]")) return;
+			close();
+		};
+		window.addEventListener("scroll", onScroll, { capture: true, passive: true });
+		return () => window.removeEventListener("scroll", onScroll, { capture: true });
+	}, [close, open]);
 	const context = useMemo(() => ({ dismiss, close, allowReopen, trigger: triggerRef }), [allowReopen, close, dismiss]);
 	return (
 		<HoverCardDismissContext.Provider value={context}>
