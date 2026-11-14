@@ -1028,6 +1028,17 @@ describe("project actions", () => {
 		expect(byId(items).get("project-action:archive")?.state).toBe("1");
 	});
 
+	it("names Cloud project removal as a delete, like the sidebar", () => {
+		const cloud = { ...workspaces()[0]!, kind: CLOUD_PROJECT_KIND } as WorkspaceSummary;
+		expect(byId(buildProjectActions(cloud, ctx)).get("project-action:remove")?.title).toBe("Delete project");
+		expect(byId(buildProjectActions(workspaces()[0]!, ctx)).get("project-action:remove")?.title).toBe("Remove project");
+	});
+
+	it("leaves out remove for a project shared from another organization", () => {
+		const shared = { ...workspaces()[0]!, kind: CLOUD_PROJECT_KIND, shared: { byName: "Acme" } } as WorkspaceSummary;
+		expect(buildProjectActions(shared, ctx).map((item) => item.id)).not.toContain("project-action:remove");
+	});
+
 	it("leaves out board, settings and remove for Scratchpad, and pin when it can't pin", () => {
 		const scratch: WorkspaceSummary = { id: STANDALONE_WORKSPACE_ID, name: "Scratchpad", path: "", type: "main", sessions: [] };
 		const ids = buildProjectActions(scratch, { ...ctx, canPin: false }).map((item) => item.id);
