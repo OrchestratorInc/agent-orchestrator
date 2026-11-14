@@ -1283,6 +1283,14 @@ export const CommandPalette = memo(function CommandPalette() {
 									event.preventDefault();
 									requestDismiss("pop");
 								}
+								// ← at the start of the field goes back out of a nested list, as → went in.
+								if (event.key === "ArrowLeft" && !event.shiftKey && !event.metaKey && !event.altKey && !event.ctrlKey
+									&& viewRef.current.mode !== "root"
+									&& event.currentTarget.selectionStart === 0 && event.currentTarget.selectionEnd === 0) {
+									event.preventDefault();
+									event.stopPropagation();
+									requestDismiss("pop");
+								}
 							}}
 						/>
 						{notices.length > 0 && (
