@@ -2649,6 +2649,31 @@ func TestPRObservation_MergeConflictNudgesAgent(t *testing.T) {
 	}
 }
 
+// TestPRObservation_CISwitchOffSilencesMergeConflict: the "Automatically fix
+// CI failures" switch also covers merge conflicts, so a session reviewing
+// someone else's PR with it off is never told to rebase that PR.
+func TestPRObservation_CISwitchOffSilencesMergeConflict(t *testing.T) {
+	m, st, msg := newManager()
+	st.sessions["mer-1"] = working("mer-1")
+	st.prPolicies["pr1"] = false
+	o := ports.PRObservation{Fetched: true, URL: "pr1", Mergeability: domain.MergeConflicting}
+	if err := m.ApplyPRObservation(ctx, "mer-1", o); err != nil {
+		t.Fatal(err)
+	}
+	if len(msg.msgs) != 0 {
+		t.Fatalf("CI switch is off; want no merge-conflict nudge, got %v", msg.msgs)
+	}
+
+	// Turning the switch back on (taking the PR over) brings the nudge back.
+	st.prPolicies["pr1"] = true
+	if err := m.ApplyPRObservation(ctx, "mer-1", o); err != nil {
+		t.Fatal(err)
+	}
+	if len(msg.msgs) != 1 || !strings.Contains(msg.msgs[0], "merge conflicts") {
+		t.Fatalf("want merge-conflict nudge after the switch is back on, got %v", msg.msgs)
+	}
+}
+
 // TestPRObservation_MergeConflictReArmsAfterConflictClears is the regression
 // test for #4528: AO notified on the first conflict but never again, because
 // the "merge-conflict:<url>" = "conflicting" signature sendOnce persists was

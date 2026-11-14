@@ -129,14 +129,17 @@ func TestEmbeddedSpawnGuidanceListsOpenCodeV2(t *testing.T) {
 	}
 }
 
-func TestEmbeddedReviewGuidanceSeparatesExternalReviewFromOwnership(t *testing.T) {
+func TestEmbeddedReviewGuidanceUsesReviewClaims(t *testing.T) {
 	for _, tc := range []struct {
 		path string
 		want string
 	}{
-		{"using-ao/commands/review.md", "normal review-only worker without claiming or attaching the target PR"},
-		{"using-ao/commands/spawn.md", "Spawn a normal worker to review someone else's PR without taking ownership"},
-		{"using-ao/commands/session.md", "Reviewing someone else's PR"},
+		{"using-ao/commands/review.md", "ao spawn --claim-pr <pr-ref> --no-takeover --review"},
+		{"using-ao/commands/review.md", "ao session claim-pr <pr-ref> --review=false"},
+		{"using-ao/commands/spawn.md", `--name "review-pr-88" --claim-pr 88 --no-takeover --review`},
+		{"using-ao/commands/session.md", "ao session claim-pr 88 --no-takeover --review"},
+		{"using-ao/commands/session.md", "ao session claim-pr 88 --review=false"},
+		{"using-ao/commands/session.md", "do not commit, push, rebase, or otherwise change it unless the user explicitly asks"},
 	} {
 		body, err := files.ReadFile(tc.path)
 		if err != nil {
@@ -147,8 +150,8 @@ func TestEmbeddedReviewGuidanceSeparatesExternalReviewFromOwnership(t *testing.T
 		}
 	}
 	spawn, _ := files.ReadFile("using-ao/commands/spawn.md")
-	if strings.Contains(string(spawn), `--name "review-pr-88" --claim-pr`) {
-		t.Fatal("spawn guidance still claims the review target")
+	if strings.Contains(string(spawn), "Do not claim or attach the PR") {
+		t.Fatal("spawn guidance still tells reviewers not to claim the PR")
 	}
 }
 

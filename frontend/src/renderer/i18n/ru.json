@@ -909,7 +909,7 @@
 	"inspector.artifacts": "Артефакты ({{count}})",
 	"inspector.branch": "Ветка",
 	"inspector.ci.autoInject": "Автоматически исправлять ошибки CI",
-	"inspector.ci.autoInjectDescription": "Отправляет ошибки CI воркеру для PR этой сессии.",
+	"inspector.ci.autoInjectDescription": "Отправляет ошибки CI и конфликты слияния воркеру для PR этой сессии.",
 	"inspector.ci.autoInjectError": "Не удалось обновить автоматическую передачу ошибок CI ({{status}})",
 	"inspector.ci.notInjected": "Ошибки CI не переданы",
 	"inspector.browser": "Браузер",

@@ -130,6 +130,7 @@ Important flags include:
 | `--issue <id>` | Associate a tracker issue. |
 | `--claim-pr <ref>` | Claim an existing pull request after spawning. |
 | `--no-takeover` | Refuse a PR already owned by another active session. |
+| `--review` | Claim the PR to review it, not work on it: automatic CI and review-comment fixing and native auto-review are turned off first. Implies `--no-takeover`. Requires `--claim-pr`. |
 | `--skip-agent-check` | Skip only the CLI-side install/auth preflight. |
 
 Orchestrator chooses a project in this order: `--project`, `AO_PROJECT_ID`, the project for `AO_SESSION_ID`, then the closest registered project containing the current directory. Before spawning, Orchestrator refreshes the selected agent's readiness unless you use `--skip-agent-check`. Readiness is advisory.
@@ -147,7 +148,7 @@ Orchestrator chooses a project in this order: `--project`, `AO_PROJECT_ID`, the 
 | `ao session rename <id> <name>` | Change its display name. The project orchestrator cannot be renamed. |
 | `ao session cleanup` | Reclaim eligible terminated workspaces; supports `--dry-run`. Workspaces already released are not listed again. |
 | `ao session delete <id>` | Permanently delete a terminated session and its AO history once its worktree is cleaned up; `--cleanup` cleans it up first, never forced. Branches, PRs and agent account usage totals are kept. |
-| `ao session claim-pr [<session-id>] <pr-ref>` | Attach an existing PR; omitting the session uses `AO_SESSION_ID`. |
+| `ao session claim-pr [<session-id>] <pr-ref>` | Attach an existing PR; omitting the session uses `AO_SESSION_ID`. `--review` claims it to review: automatic CI and review-comment fixing and native auto-review are turned off first, and it never takes the PR from another active session. `--review=false` turns fixing back on to take it over. |
 
 Most lookup commands accept `--project` to disambiguate a session ID.
 

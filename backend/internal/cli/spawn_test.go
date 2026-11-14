@@ -139,6 +139,72 @@ func TestSpawnClaimPRWiring(t *testing.T) {
 	}
 }
 
+// TestSpawnReviewTurnsSwitchesOffBeforeClaim: a reviewer spawned with
+// --review must have every switch off before the PR is claimed, so the
+// claimed PR's CI failures and review comments never reach the agent and the
+// native reviewer never starts on it. --review alone also implies --no-takeover.
+func TestSpawnReviewTurnsSwitchesOffBeforeClaim(t *testing.T) {
+	cfg := setConfigEnv(t)
+	var requests []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		appendPrimaryRequest(&requests, r)
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/projects/demo":
+			_, _ = io.WriteString(w, `{"status":"ok","project":{"id":"demo","name":"Demo","path":"/repo/demo","repo":"https://github.com/aoagents/agent-orchestrator","defaultBranch":"main"}}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/agents/readiness/ensure":
+			_, _ = io.WriteString(w, authorizedAgentsJSON("codex"))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/sessions":
+			_, _ = io.WriteString(w, `{"session":{"id":"demo-9","status":"idle"}}`)
+		case r.Method == http.MethodPatch && r.URL.Path == "/api/v1/sessions/demo-9/auto-inject-ci":
+			var req sessionAutoInjectCIRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.AutoInjectCI {
+				t.Errorf("auto-inject-ci request = %#v err=%v, want off", req, err)
+			}
+			_, _ = io.WriteString(w, `{"ok":true}`)
+		case r.Method == http.MethodPatch && r.URL.Path == "/api/v1/sessions/demo-9/auto-inject-review":
+			var req sessionAutoInjectReviewRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.AutoInjectReview {
+				t.Errorf("auto-inject-review request = %#v err=%v, want off", req, err)
+			}
+			_, _ = io.WriteString(w, `{"ok":true}`)
+		case r.Method == http.MethodPut && r.URL.Path == "/api/v1/sessions/demo-9/auto-review":
+			var req sessionAutoReviewRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Enabled {
+				t.Errorf("auto-review request = %#v err=%v, want off", req, err)
+			}
+			_, _ = io.WriteString(w, `{"session":{"id":"demo-9","status":"idle"}}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/sessions/demo-9/pr/claim":
+			var req claimPRRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.AllowTakeover {
+				t.Errorf("claim request = %#v err=%v, want allowTakeover false (--review implies --no-takeover)", req, err)
+			}
+			_, _ = io.WriteString(w, `{"ok":true,"sessionId":"demo-9","prs":[{"url":"https://github.com/aoagents/agent-orchestrator/pull/142","number":142,"state":"open","ci":"failing","review":"review_required","mergeability":"mergeable","reviewComments":false,"updatedAt":"2026-06-04T12:00:00Z"}],"branchChanged":false,"takenOverFrom":[]}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	writeRunFileFor(t, cfg, srv)
+
+	_, errOut, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "spawn", "--project", "demo", "--agent", "codex", "--name", "review-pr-142", "--claim-pr", "142", "--review")
+	if err != nil {
+		t.Fatalf("spawn --review failed: %v stderr=%s", err, errOut)
+	}
+	want := []string{
+		"GET /api/v1/projects/demo",
+		"POST /api/v1/agents/readiness/ensure",
+		"POST /api/v1/sessions",
+		"PATCH /api/v1/sessions/demo-9/auto-inject-ci",
+		"PATCH /api/v1/sessions/demo-9/auto-inject-review",
+		"PUT /api/v1/sessions/demo-9/auto-review",
+		"POST /api/v1/sessions/demo-9/pr/claim",
+	}
+	if !reflect.DeepEqual(requests, want) {
+		t.Fatalf("requests=%#v want %#v", requests, want)
+	}
+}
+
 // TestSpawnClaimPR_Draft covers #4171: `ao spawn --claim-pr` on a draft PR must
 // keep the spawned session instead of rolling it back with PR_NOT_OPEN.
 func TestSpawnClaimPR_Draft(t *testing.T) {
@@ -273,6 +339,13 @@ func TestSpawnClaimPRFailureRollsBackSession(t *testing.T) {
 func TestSpawnNoTakeoverRequiresClaimPR(t *testing.T) {
 	_, _, err := executeCLI(t, Deps{}, "spawn", "--project", "demo", "--name", "worker", "--no-takeover")
 	if err == nil || ExitCode(err) != 2 || !strings.Contains(err.Error(), "--no-takeover requires --claim-pr") {
+		t.Fatalf("err=%v exit=%d", err, ExitCode(err))
+	}
+}
+
+func TestSpawnReviewRequiresClaimPR(t *testing.T) {
+	_, _, err := executeCLI(t, Deps{}, "spawn", "--project", "demo", "--name", "worker", "--review")
+	if err == nil || ExitCode(err) != 2 || !strings.Contains(err.Error(), "--review requires --claim-pr") {
 		t.Fatalf("err=%v exit=%d", err, ExitCode(err))
 	}
 }

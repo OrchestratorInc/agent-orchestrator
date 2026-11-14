@@ -37,6 +37,7 @@ type spawnOptions struct {
 	account         string
 	claimPR         string
 	noTakeover      bool
+	review          bool
 	skipAgentCheck  bool
 	trackerProvider string
 }
@@ -96,6 +97,9 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 			}
 			if opts.noTakeover && opts.claimPR == "" {
 				return usageError{fmt.Errorf("--no-takeover requires --claim-pr")}
+			}
+			if opts.review && opts.claimPR == "" {
+				return usageError{fmt.Errorf("--review requires --claim-pr")}
 			}
 			name := strings.TrimSpace(opts.name)
 			if name == "" {
@@ -212,10 +216,21 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 				return err
 			}
 			res.Session = started
+			if opts.review {
+				// A review claim turns every switch off before the claim, so the
+				// claimed PR's CI failures, merge conflicts and review comments
+				// never reach the agent and the native reviewer never starts on it.
+				if err := ctx.setSessionReview(cmd.Context(), res.Session.ID, true); err != nil {
+					if killErr := ctx.rollbackSpawnedSession(cmd.Context(), res.Session.ID); killErr != nil {
+						return fmt.Errorf("failed to turn off automatic fixing: %w; rollback of session %s failed: %w", err, res.Session.ID, killErr)
+					}
+					return fmt.Errorf("failed to turn off automatic fixing: %w; rolled back session %s", err, res.Session.ID)
+				}
+			}
 			claimed := ""
 			var claim claimPRResponse
 			if opts.claimPR != "" {
-				if err := ctx.postJSON(cmd.Context(), "sessions/"+url.PathEscape(res.Session.ID)+"/pr/claim", claimPRRequest{PR: claimRef, AllowTakeover: !opts.noTakeover}, &claim); err != nil {
+				if err := ctx.postJSON(cmd.Context(), "sessions/"+url.PathEscape(res.Session.ID)+"/pr/claim", claimPRRequest{PR: claimRef, AllowTakeover: !opts.noTakeover && !opts.review}, &claim); err != nil {
 					if killErr := ctx.rollbackSpawnedSession(cmd.Context(), res.Session.ID); killErr != nil {
 						return fmt.Errorf("failed to claim PR %s: %w; rollback of session %s failed: %w", opts.claimPR, err, res.Session.ID, killErr)
 					}
@@ -273,6 +288,7 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 	f.StringVar(&opts.name, "name", "", "Display name shown in the sidebar (required, max 100 characters)")
 	f.StringVar(&opts.claimPR, "claim-pr", "", "Claim PR ownership metadata only for the spawned session; does not check out the PR branch")
 	f.BoolVar(&opts.noTakeover, "no-takeover", false, "Refuse if another active session owns the claimed PR (requires --claim-pr)")
+	f.BoolVar(&opts.review, "review", false, "Claim the PR to review it, not work on it: start with automatic CI and review-comment fixing and native auto-review off; implies --no-takeover (requires --claim-pr)")
 	f.BoolVar(&opts.skipAgentCheck, "skip-agent-check", false, "Skip CLI readiness warnings (the daemon still validates launch readiness)")
 	return cmd
 }

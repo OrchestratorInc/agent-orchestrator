@@ -914,7 +914,7 @@
 	"inspector.artifacts": "Artefacts ({{count}})",
 	"inspector.branch": "Branche",
 	"inspector.ci.autoInject": "Automatically fix CI failures",
-	"inspector.ci.autoInjectDescription": "Envoie les échecs CI des pull requests de cette session à l’agent worker.",
+	"inspector.ci.autoInjectDescription": "Envoie les échecs CI et les conflits de fusion des pull requests de cette session à l’agent worker.",
 	"inspector.ci.autoInjectError": "Impossible de mettre à jour l’injection automatique de la CI ({{status}})",
 	"inspector.ci.notInjected": "Échecs CI non injectés",
 	"inspector.browser": "Navigateur",
