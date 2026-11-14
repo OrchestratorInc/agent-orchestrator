@@ -139,6 +139,14 @@ func TestProviderSwitchPublishesApproximateBranch(t *testing.T) {
 func TestProviderSwitchFailureRestoresSourceController(t *testing.T) {
 	h, _, driver := newEditHarness(t, false)
 	ctx := context.Background()
+	conversation, err := h.st.ConversationForSession(ctx, testSession)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reroute := domain.ConversationModelReroute{FromModel: "gpt-selected", ToModel: "gpt-served", At: time.Now().UTC()}
+	if err := h.st.RecordModelReroute(ctx, conversation.ID, reroute); err != nil {
+		t.Fatal(err)
+	}
 	before, err := h.svc.SetTurnSettings(ctx, testSession, domain.ConversationSettings{
 		ApprovalMode: domain.PermissionModeAcceptEdits,
 	})
@@ -147,9 +155,10 @@ func TestProviderSwitchFailureRestoresSourceController(t *testing.T) {
 	}
 	driver.startErr = errProviderSwitchTarget
 
-	err = h.svc.SwitchProvider(ctx, testSession, domain.ProviderSwitchRequest{
-		TargetHarness: domain.HarnessClaudeCode, Model: "claude-foreign-model", Effort: "max",
-	})
+	request := domain.ProviderSwitchRequest{
+		TargetHarness: domain.HarnessClaudeCode, Model: "claude-foreign-model", Effort: "max", IdempotencyKey: "failed-switch",
+	}
+	err = h.svc.SwitchProvider(ctx, testSession, request)
 	if err == nil || !strings.Contains(err.Error(), "start target provider") {
 		t.Fatalf("SwitchProvider error = %v, want target-start failure", err)
 	}
@@ -164,6 +173,9 @@ func TestProviderSwitchFailureRestoresSourceController(t *testing.T) {
 	if got.Model != before.Model || got.ReasoningEffort != before.ReasoningEffort || got.ApprovalMode != domain.PermissionModeAcceptEdits {
 		t.Fatalf("settings after a failed switch = %+v, want the source's %+v", got, before)
 	}
+	if got := snapshot.Conversation.ModelReroute; got == nil || *got != reroute {
+		t.Fatalf("model reroute after a failed switch = %+v, want the source's %+v", got, reroute)
+	}
 	// The restored source runs with the mode it had, not the one it was launched with.
 	driver.mu.Lock()
 	resumed := driver.resumeCalls[len(driver.resumeCalls)-1]
@@ -173,6 +185,73 @@ func TestProviderSwitchFailureRestoresSourceController(t *testing.T) {
 	}
 	if controller, err := h.svc.Controller(testSession); err != nil || controller.Settings().ApprovalMode != domain.PermissionModeAcceptEdits {
 		t.Fatalf("restored controller settings = %+v, %v; want accept-edits", controller.Settings(), err)
+	}
+	if err := h.svc.SwitchProvider(ctx, testSession, request); err == nil || !strings.Contains(err.Error(), "start target provider") {
+		t.Fatalf("replayed failed switch = %v, want target-start failure", err)
+	}
+	conversation, err = h.st.ConversationForSession(ctx, testSession)
+	if err != nil {
+		t.Fatal(err)
+	}
+	switchActivities := func() []domain.ConversationActivity {
+		t.Helper()
+		snapshot, err := h.st.LoadConversationSnapshot(ctx, conversation.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var activities []domain.ConversationActivity
+		for _, activity := range snapshot.Activities {
+			if activity.RequestID == request.IdempotencyKey {
+				activities = append(activities, activity)
+			}
+		}
+		return activities
+	}
+	if activities := switchActivities(); len(activities) != 0 {
+		t.Fatalf("failed switch replay recorded activities = %+v, want none", activities)
+	}
+}
+
+func TestProviderSwitchFromClaudeToCodexClearsPreviousModelReroute(t *testing.T) {
+	h, _, driver := newEditHarness(t, false)
+	ctx := context.Background()
+	if err := h.svc.SwitchProvider(ctx, testSession, domain.ProviderSwitchRequest{
+		TargetHarness: domain.HarnessClaudeCode, Model: "opus",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	driver.fresh.emit(ports.ChatEvent{
+		Kind: ports.ChatEventModelRerouted,
+		Reroute: &ports.ChatModelReroute{
+			FromModel: "opus", ToModel: "claude-opus-5-5", Reason: "resolved model alias",
+		},
+	})
+	h.awaitSnapshot(t, func(snapshot store.ConversationSnapshot) bool {
+		return snapshot.Conversation.ModelReroute != nil && countActivities(snapshot, domain.ActivityKindSystem) == 2
+	})
+	if err := h.svc.SwitchProvider(ctx, testSession, domain.ProviderSwitchRequest{
+		TargetHarness: domain.HarnessCodex,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := h.svc.Snapshot(ctx, testSession)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Harness != domain.HarnessCodex || snapshot.Conversation.Settings.Model != "" {
+		t.Fatalf("switched harness = %q, settings = %+v; want Codex on its default model", snapshot.Harness, snapshot.Conversation.Settings)
+	}
+	if got := snapshot.Conversation.ModelReroute; got != nil {
+		t.Fatalf("model reroute after switching to Codex = %+v; want no Claude model override", got)
+	}
+	foundHistory := false
+	for _, activity := range snapshot.Activities {
+		if activity.Summary == "Provider answered with claude-opus-5-5 instead of opus" {
+			foundHistory = true
+		}
+	}
+	if !foundHistory {
+		t.Fatal("switching providers removed the historical model reroute activity")
 	}
 }
 
@@ -346,6 +425,7 @@ func TestProviderSwitchTargetPermissionMode(t *testing.T) {
 	}{
 		{"under the chat's mode", domain.HarnessClaudeCode, "", "", ports.PermissionModeBypassPermissions},
 		{"default when it refuses the chat's", domain.HarnessKimi, ports.PermissionModeBypassPermissions, "", ports.PermissionModeDefault},
+		{"stale auto pick", domain.HarnessKimi, ports.PermissionModeAuto, domain.PermissionModeAuto, ports.PermissionModeDefault},
 		{"the mode picked for it", domain.HarnessClaudeCode, "", domain.PermissionModeAcceptEdits, ports.PermissionModeAcceptEdits},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

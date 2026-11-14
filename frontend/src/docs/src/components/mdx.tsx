@@ -2,6 +2,8 @@ import Link from "next/link";
 import defaultMdxComponents from "fumadocs-ui/mdx";
 import { Children, cloneElement, isValidElement, type ComponentPropsWithoutRef, type ReactElement, type ReactNode } from "react";
 import type { MDXComponents } from "mdx/types";
+import type { CodeBlockProps } from "fumadocs-ui/components/codeblock";
+import { LocalizedCodeBlock } from "./code-block";
 import { Tab, Tabs } from "./docs-tabs";
 
 function textOf(node: ReactNode): string {
@@ -242,12 +244,12 @@ export function PlatformSupport({
 }
 
 export function InstallDownloads() {
-  const release = "https://github.com/Untrivial-ai/agent-orchestrator/releases/latest/download";
+  const release = "https://github.com/OrchestratorInc/agent-orchestrator/releases/latest/download";
   const downloads = [
-    { platform: "macOS Apple silicon", assets: [["Disk image", "darwin-arm64.dmg"], ["Zip", "darwin-arm64.zip"]] },
-    { platform: "macOS Intel", assets: [["Disk image", "darwin-x64.dmg"], ["Zip", "darwin-x64.zip"]] },
-    { platform: "Windows x64", assets: [["Installer", "win32-x64.exe"]] },
-    { platform: "Linux x64", assets: [["AppImage", "linux-x64.AppImage"], ["Debian / Ubuntu", "linux-x64.deb"], ["Fedora / RHEL", "linux-x64.rpm"]] },
+    { platform: "macOS Apple silicon", assets: [["Disk image", "Orchestrator-darwin-arm64.dmg"], ["Zip", "agent-orchestrator-darwin-arm64.zip"]] },
+    { platform: "macOS Intel", assets: [["Disk image", "Orchestrator-darwin-x64.dmg"], ["Zip", "agent-orchestrator-darwin-x64.zip"]] },
+    { platform: "Windows x64", assets: [["Installer", "agent-orchestrator-win32-x64.exe"]] },
+    { platform: "Linux x64", assets: [["AppImage", "agent-orchestrator-linux-x64.AppImage"], ["Debian / Ubuntu", "agent-orchestrator-linux-x64.deb"], ["Fedora / RHEL", "agent-orchestrator-linux-x64.rpm"]] },
   ];
 
   return (
@@ -266,7 +268,7 @@ export function InstallDownloads() {
                   {assets.map(([label, asset], index) => (
                     <span key={asset}>
                       {index > 0 && <span aria-hidden="true"> · </span>}
-                      <a href={`${release}/agent-orchestrator-${asset}`}>{label}</a>
+                      <a href={`${release}/${asset}`}>{label}</a>
                     </span>
                   ))}
                 </div>
@@ -282,6 +284,7 @@ export function InstallDownloads() {
 export function getMDXComponents(components?: MDXComponents) {
   return {
     ...defaultMdxComponents,
+    pre: (props) => <LocalizedCodeBlock {...(props as CodeBlockProps)} />,
     h2: (props) => <Heading level={2} {...props} />,
     h3: (props) => <Heading level={3} {...props} />,
     h4: (props) => <Heading level={4} {...props} />,

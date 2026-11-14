@@ -34,11 +34,15 @@ var migrationsFS embed.FS
 
 // pragmas are applied on every connection open. WAL + NORMAL lets readers run
 // concurrently with the writer; busy_timeout absorbs brief writer contention;
-// foreign_keys enforces the cascades and the CDC triggers' lookups.
+// foreign_keys enforces the cascades and the CDC triggers' lookups;
+// journal_size_limit (32 MiB, per connection) makes the writer cut the -wal file
+// back to that size when it resets the log, instead of leaving it at its
+// high-water mark until the last connection closes.
 const pragmas = "?_pragma=journal_mode(WAL)" +
 	"&_pragma=busy_timeout(5000)" +
 	"&_pragma=foreign_keys(ON)" +
-	"&_pragma=synchronous(NORMAL)"
+	"&_pragma=synchronous(NORMAL)" +
+	"&_pragma=journal_size_limit(33554432)"
 
 const readOnlyPragmas = "?mode=ro" +
 	"&_pragma=busy_timeout(5000)" +
@@ -107,7 +111,7 @@ func checkLegacyDatabasePath(dataDir string) error {
 		return fmt.Errorf("inspect legacy database: %w", readErr)
 	}
 	if n == len(header) && string(header[:]) == "SQLite format 3\x00" {
-		return fmt.Errorf("legacy SQLite path parsing stored data at %q; refusing to create an empty database at %q: stop AO and recover the legacy database explicitly before retrying", legacy, intended)
+		return fmt.Errorf("legacy SQLite path parsing stored data at %q; refusing to create an empty database at %q: stop Orchestrator and recover the legacy database explicitly before retrying", legacy, intended)
 	}
 	return nil
 }
@@ -142,16 +146,46 @@ func Open(dataDir string) (*Store, error) {
 		_ = writeDB.Close()
 		return nil, err
 	}
-
-	readDB, err := sql.Open("sqlite", dsn)
+	store, err := withSearchIndex(dataDir, dsn, writeDB)
 	if err != nil {
 		_ = writeDB.Close()
+		return nil, err
+	}
+	return store, nil
+}
+
+// withSearchIndex opens the reader pool beside an open, migrated writer, then
+// the optional session search index (search_db.go).
+//
+// The index never decides whether the store opens: one that cannot be opened
+// is recorded on the store (SessionSearchUnavailable) and search stays off,
+// while every other read and write works as usual.
+func withSearchIndex(dataDir, dsn string, writeDB *sql.DB) (*Store, error) {
+	readDB, err := sql.Open("sqlite", dsn)
+	if err != nil {
 		return nil, fmt.Errorf("open sqlite reader: %w", err)
 	}
 	readDB.SetMaxOpenConns(maxReaders)
 	readDB.SetMaxIdleConns(maxReaders)
+	store := sqlitestore.NewStore(writeDB, readDB)
 
-	return sqlitestore.NewStore(writeDB, readDB), nil
+	if sessionSearchSwitchedOff() {
+		store.SetSearchUnavailable(errSessionSearchOff)
+		return store, nil
+	}
+	searchDB, reset, err := openSearchWriter(dataDir, writeDB)
+	if err != nil {
+		store.SetSearchUnavailable(fmt.Errorf("open session search index: %w", err))
+		return store, nil
+	}
+	searchReaders, err := openSearchReaders(dataDir, dsn)
+	if err != nil {
+		_ = searchDB.Close()
+		store.SetSearchUnavailable(fmt.Errorf("open session search readers: %w", err))
+		return store, nil
+	}
+	store.SetSearchIndex(searchDB, searchReaders, reset)
+	return store, nil
 }
 
 // OpenReadOnly opens an existing SQLite database under dataDir without creating
@@ -278,15 +312,12 @@ func OpenPreMigrated(dataDir string) (*Store, error) {
 		)
 	}
 
-	readDB, err := sql.Open("sqlite", dsn)
+	store, err := withSearchIndex(dataDir, dsn, writeDB)
 	if err != nil {
 		_ = writeDB.Close()
-		return nil, fmt.Errorf("open sqlite reader: %w", err)
+		return nil, err
 	}
-	readDB.SetMaxOpenConns(maxReaders)
-	readDB.SetMaxIdleConns(maxReaders)
-
-	return sqlitestore.NewStore(writeDB, readDB), nil
+	return store, nil
 }
 
 func migrate(db *sql.DB) error {
@@ -317,6 +348,9 @@ func migrate(db *sql.DB) error {
 	}
 	if err := repairRenumberedUsageLimitMigrationHistory(db); err != nil {
 		return fmt.Errorf("repair renumbered usage-limit migration history: %w", err)
+	}
+	if err := repairRenumberedComputerUseMigrationHistory(db); err != nil {
+		return fmt.Errorf("repair renumbered computer-use migration history: %w", err)
 	}
 	if err := prepareCancelledConversationTurnsMigration(db); err != nil {
 		return fmt.Errorf("prepare cancelled conversation-turn migration: %w", err)
@@ -365,6 +399,37 @@ func migrate(db *sql.DB) error {
 		return fmt.Errorf("run migrations: %w", err)
 	}
 	return reconcileSchema(db)
+}
+
+const (
+	computerUseBranchMigrationVersion int64 = 20261021135126673
+	computerUseMigrationVersion       int64 = 20261023123504180
+)
+
+// repairRenumberedComputerUseMigrationHistory keeps development databases that
+// ran this branch before its app_settings.computer_use migration moved from
+// 20261021135126673 to 20261023123504180, after main's migrations. Such a
+// database has the column and a receipt under the old number; the receipt
+// moves to the new number so goose does not add the column twice.
+func repairRenumberedComputerUseMigrationHistory(db *sql.DB) error {
+	var gooseTable int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'goose_db_version'`).Scan(&gooseTable); err != nil {
+		return err
+	}
+	if gooseTable == 0 {
+		return nil
+	}
+	var column int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('app_settings') WHERE name = 'computer_use'`).Scan(&column); err != nil {
+		return err
+	}
+	if column == 0 {
+		return nil
+	}
+	_, err := db.Exec(`UPDATE goose_db_version SET version_id = ?
+WHERE version_id = ? AND NOT EXISTS (SELECT 1 FROM goose_db_version WHERE version_id = ?)`,
+		computerUseMigrationVersion, computerUseBranchMigrationVersion, computerUseMigrationVersion)
+	return err
 }
 
 const (
@@ -1622,6 +1687,19 @@ SELECT (SELECT COUNT(*) FROM sqlite_master
 	if kimiUsageShape == 2 {
 		return nil
 	}
+	var openUsageShape int
+	if err := db.QueryRow(`
+SELECT (SELECT COUNT(*) FROM sqlite_master
+        WHERE type = 'table' AND name = 'usage_bindings'
+          AND instr(COALESCE(sql, ''), 'trim(harness)') > 0)
+     + (SELECT COUNT(*) FROM sqlite_master
+        WHERE type = 'table' AND name = 'usage_sources'
+          AND instr(COALESCE(sql, ''), 'trim(kind)') > 0)`).Scan(&openUsageShape); err != nil {
+		return err
+	}
+	if openUsageShape == 2 {
+		return nil
+	}
 
 	_, err := db.Exec(`DELETE FROM goose_db_version WHERE version_id = 117`)
 	return err
@@ -2029,6 +2107,10 @@ BEGIN
 	// recorded by those builds without changing existing output values.
 	{version: 195, table: "sessions", column: "requested_output",
 		addDDL: `ALTER TABLE sessions ADD COLUMN requested_output TEXT NOT NULL DEFAULT ''`},
+	// 0199_conversation_message_continuation.sql. Fork builds recorded 199 for
+	// another migration first, and generated message reads select this column.
+	{version: 199, table: "conversation_messages", column: "continuation",
+		addDDL: `ALTER TABLE conversation_messages ADD COLUMN continuation INTEGER NOT NULL DEFAULT 0 CHECK (continuation IN (0, 1))`},
 }
 
 // reconcileSchema verifies that the columns in schemaRepairs physically exist
@@ -2072,7 +2154,7 @@ func reconcileSchema(db *sql.DB) error {
 		return fmt.Errorf("schema verification: inspect session revision fence: %w", err)
 	}
 	if revisionColumn > 0 && revisionTrigger != 1 {
-		return errors.New("schema verification: sessions_revision_update trigger is missing; restore the session revision trigger before starting AO")
+		return errors.New("schema verification: sessions_revision_update trigger is missing; restore the session revision trigger before starting Orchestrator")
 	}
 	return nil
 }
@@ -2111,6 +2193,7 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 	).Scan(&schema); err != nil {
 		return fmt.Errorf("schema verification: inspect sessions harness constraint: %w", err)
 	}
+	needsNativeAssistant := !strings.Contains(schema, "'hermes'")
 	needsMuse := !strings.Contains(schema, "'muse'")
 	needsKimchi := !strings.Contains(schema, "'kimchi'")
 	needsPrimeAgent := !strings.Contains(schema, "'prime-agent'")
@@ -2124,11 +2207,28 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 	needsMemcode := !strings.Contains(schema, "'memcode'")
 	needsCommandCode := !strings.Contains(schema, "'command-code'")
 	needsNeovate := !strings.Contains(schema, "'neovate'")
-	if !needsMuse && !needsKimchi && !needsPrimeAgent && !needsOMP && !needsGemini && !needsUnreal && !needsCodewhale && !needsMiMo && !needsDeepSeek && !needsOpenHands && !needsCommandCode && !needsNeovate && !needsMemcode {
+	if !needsNativeAssistant && !needsNeovate && !needsMemcode && !needsMuse && !needsKimchi && !needsPrimeAgent && !needsOMP && !needsGemini && !needsUnreal && !needsCodewhale && !needsMiMo && !needsDeepSeek && !needsOpenHands && !needsCommandCode {
 		return nil
 	}
 	if _, err := db.Exec(`PRAGMA writable_schema = ON`); err != nil {
 		return fmt.Errorf("schema repair: enable writable_schema for sessions harness constraint: %w", err)
+	}
+	if !needsNativeAssistant {
+		// Older constraints need exact historical repairs. Temporarily remove
+		// Hermes wherever it appears before the final fake entry, apply those
+		// repairs, then append Hermes below without removing later harnesses.
+		if _, err := db.Exec(`UPDATE sqlite_master SET sql = replace(sql, '''hermes'', ', '') WHERE type = 'table' AND name = 'sessions'`); err != nil {
+			return fmt.Errorf("schema repair: normalize Hermes constraint: %w", err)
+		}
+		needsNativeAssistant = true
+	}
+	if !needsNeovate {
+		// Neovate is also added after the exact historical repairs, so normalize
+		// it the same way as Hermes and append it again below.
+		if _, err := db.Exec(`UPDATE sqlite_master SET sql = replace(sql, '''neovate'', ', '') WHERE type = 'table' AND name = 'sessions'`); err != nil {
+			return fmt.Errorf("schema repair: normalize Neovate constraint: %w", err)
+		}
+		needsNeovate = true
 	}
 	type replacement struct {
 		old string
@@ -2231,9 +2331,6 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 	if needsCodewhale {
 		repairs = append(repairs, replacement{"'fake'))", "'codewhale', 'fake'))"})
 	}
-	if needsNeovate {
-		repairs = append(repairs, replacement{"'fake'))", "'neovate', 'fake'))"})
-	}
 	if needsCommandCode {
 		// Migration 0194 rewrites the constraint by anchoring on the retained
 		// 'fake' fixture harness, for the same reason as DeepSeek above. A
@@ -2241,8 +2338,15 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 		// without Command Code, so anchor there instead of enumerating shapes.
 		repairs = append(repairs, replacement{"'fake'))", "'command-code', 'fake'))"})
 	}
+	// Add the new harness only after exact historical variants are repaired.
+	if needsNativeAssistant {
+		repairs = append(repairs, replacement{"'fake'))", "'hermes', 'fake'))"})
+	}
 	if needsMemcode {
 		repairs = append(repairs, replacement{"'fake'))", "'memcode', 'fake'))"})
+	}
+	if needsNeovate {
+		repairs = append(repairs, replacement{"'fake'))", "'neovate', 'fake'))"})
 	}
 	for _, r := range repairs {
 		if _, err := db.Exec(
@@ -2301,6 +2405,9 @@ WHERE type = 'table' AND name = 'sessions'`,
 	}
 	if !strings.Contains(schema, "'memcode'") {
 		return fmt.Errorf("schema repair: sessions harness constraint is missing Memcode and did not match known pre-Memcode schema")
+	}
+	if !strings.Contains(schema, "'hermes'") {
+		return fmt.Errorf("schema repair: sessions harness constraint is missing hermes")
 	}
 	return nil
 }

@@ -31,7 +31,7 @@ function abortError(reason: unknown): unknown {
  * aborting only abandons the proxied call renderer-side — matching fetch's
  * observable contract (reject with the abort reason) without cancellation.
  */
-async function raceAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+export async function raceAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
 	return await new Promise<T>((resolve, reject) => {
 		const onAbort = (): void => {
 			reject(abortError(signal.reason));

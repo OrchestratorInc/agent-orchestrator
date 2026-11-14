@@ -1,7 +1,7 @@
 # ao spawn
 
 Spawn a worker or orchestrator agent session in a registered project, or a standalone worker session that is not tied to a project.
-Standalone sessions run in an AO-managed directory. Register a project first with `ao project add` for project-scoped sessions.
+Standalone sessions run in an Orchestrator-managed directory. Register a project first with `ao project add` for project-scoped sessions.
 
 ## Syntax
 
@@ -19,12 +19,14 @@ ao spawn [flags]
 | `--harness string` | Agent harness to use (see list below) | Project `worker.agent`; required if the project has none |
 | `--issue string` | Issue id to associate with the session | - |
 | `--model string` | Agent model override for this session only; overrides project/role config | - |
+| `--effort string` | Reasoning effort override for this session only (for example `low`, `medium`, `high`); overrides project/role config | - |
+| `--account string` | Claude Code or Codex account id to start on (from `ao account ls`); the account must be signed in | The agent's default account |
 | `--name string` | Display name shown in the sidebar (max 100 characters) | Required |
-| `--mode chat\|tui` | Initial session interface; Chat requires harness support | Daemon default, otherwise Terminal UI |
+| `--mode chat\|tui` | Initial session interface; Chat requires harness support (including Grok Build via native ACP) | Daemon default, otherwise Terminal UI |
 | `--output artifact` | Ask the worker for a file in its artifact directory instead of a PR | Ordinary task |
 | `--no-takeover` | Refuse if another active session owns the claimed PR (requires `--claim-pr`) | - |
 | `--project string` | Project id to spawn the session in | Optional when `--standalone` is used; defaults to `AO_PROJECT_ID` or the current repo's registered project |
-| `--standalone` | Spawn a projectless worker session in an AO-managed directory | Disabled when `--project` is set |
+| `--standalone` | Spawn a projectless worker session in an Orchestrator-managed directory | Disabled when `--project` is set |
 | `--prompt string` | Initial prompt for the agent | - |
 | `--skip-agent-check` | Skip CLI readiness warnings; the daemon still validates launch readiness | - |
 | `--tracker-provider string` | Issue tracker provider: `github` or `gitlab` | `github` |

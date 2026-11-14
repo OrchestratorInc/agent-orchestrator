@@ -11,7 +11,7 @@ import (
 )
 
 // HostTrustWarning documents that Auggie permissions remain user-controlled.
-const HostTrustWarning = "experimental user-approved reviewer: Auggie uses the user's granular CLI permission configuration rather than an AO-enforced sandbox"
+const HostTrustWarning = "experimental user-approved reviewer: Auggie uses the user's granular CLI permission configuration rather than an Orchestrator-enforced sandbox"
 
 // Reviewer builds Auggie's reviewer command.
 type Reviewer struct {

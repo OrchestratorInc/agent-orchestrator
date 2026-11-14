@@ -24,7 +24,7 @@ The current daemon registers the following capabilities. Availability still depe
 | `codex` | Yes | Yes | Yes |
 | `opencode` | Yes | Yes | Yes |
 | `opencode-v2` | Yes | Yes | Yes |
-| `grok` | Yes | — | Yes |
+| `grok` | Yes | Yes | Yes |
 | `cursor` | Yes | Yes | Yes |
 | `qwen` | Yes | Yes | — |
 | `gemini` | Yes | — | — |
@@ -41,6 +41,7 @@ The current daemon registers the following capabilities. Availability still depe
 | `continue` | Yes | — | — |
 | `devin` | Yes | — | Yes |
 | `omp` | Yes | Yes | — |
+| `hermes` | Yes | Yes | — |
 | `cline` | Yes | — | Yes |
 | `kiro` | Yes | — | Yes |
 | `kilocode` | Yes | — | Yes |
@@ -86,12 +87,14 @@ Unreal Agent is Chat-only; the other worker adapters provide a terminal interfac
 | `opencode` | Native ACP (OpenCode 1) |
 | `opencode-v2` | Native ACP (OpenCode 2) |
 | `droid` | Native ACP |
+| `grok` | Native ACP (`grok agent stdio`) |
 | `kimi` | Native ACP |
 | `kimchi` | Native ACP |
 | `pi` | Separately installed ACP adapter; explicit bypass permissions required |
 | `cursor` | Native ACP |
 | `omp` | Native ACP |
 | `qwen` | Native ACP |
+| `hermes` | Native ACP (`hermes acp`) |
 | `unreal-agent` | Built into Orchestrator |
 | `deepseek-harness` | Native ACP (`dsh --profile acp`) |
 | `command-code` | Native ACP (`cmd acp`) |
@@ -104,18 +107,33 @@ Chat registration does not imply interface handoff support. Use the switch actio
 
 ## Choosing and configuring a harness
 
+Grok Build Chat uses the installed `grok agent stdio` and its existing cached
+login. Model and reasoning effort come from the live ACP session. Default
+permissions surface tool approvals in Chat. Auto enables Grok's native command
+reviewer through ACP metadata; only bypass-permissions launches Grok with
+`--always-approve`. Standing instructions are passed as native system rules.
+Accept-edits is unsupported, and changing permissions on a running Grok Chat
+requires restarting it. Native session history is loaded when the session is
+reopened. Restart existing Grok Chat providers after updating to apply these
+session-creation settings.
+
+Grok Chat does not yet support tool-free background tasks. Automatic task naming
+uses the prompt-derived fallback because the driver refuses launches that cannot
+enforce disabled native tools.
+
 ```bash
 ao spawn --project my-app --name auth-fix --agent claude-code --mode chat
 ```
 
-To make Codex the default worker, use `ao project set-config my-app --worker-agent codex`. It replaces the full config, even when you use a focused flag, so read the [full-config warning](/configuration/projects#update-from-the-cli) before running it.
+To make Codex the default worker, use `ao project set-config my-app --worker-agent codex`. It changes only the worker agent and keeps the rest of the project config.
 
-`--agent` and `--harness` are aliases. The CLI's project-config mirror also omits `effort`: `ao project get --json` cannot show it, and a CLI configuration replacement drops existing effort values. Use Project Settings in the desktop app or the daemon API to preserve or change effort. Use `ao project set-config --help` for supported fields.
+`--agent` and `--harness` are aliases. Use `ao project set-config --help` for supported fields.
 
 <Cards>
 	<Card title="Claude Code" description="Terminal UI and structured Chat." href="/plugins/agents/claude-code" />
 	<Card title="Codex" description="Terminal UI and native app-server Chat." href="/plugins/agents/codex" />
 	<Card title="OpenCode" description="Terminal UI and native ACP Chat." href="/plugins/agents/opencode" />
 	<Card title="Cursor" description="Terminal UI and native ACP Chat." href="/plugins/agents/cursor" />
+	<Card title="Hermes" description="Terminal UI and native ACP Chat." href="/plugins/agents/hermes" />
 	<Card title="Aider" description="Built-in terminal harness." href="/plugins/agents/aider" />
 </Cards>

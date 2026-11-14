@@ -1,7 +1,8 @@
 import createClient from "openapi-fetch";
 import type { paths } from "../../api/schema";
 import { aoBridge } from "./bridge";
-import { apiClient } from "./api-client";
+import { apiClient, reportingFetch } from "./api-client";
+import { markApiError, withApiErrorOwnership } from "./reported-errors";
 import { LOCAL_HOST, type HostId } from "./hosts";
 
 type ConnectedHost = { hostId: HostId; label: string; url: string; base: string };
@@ -44,10 +45,14 @@ export function labelForHost(hostId: HostId): string | undefined {
 export function clientForHost(hostId: HostId) {
 	if (hostId === LOCAL_HOST) throw new Error("local is not a remote host");
 	const host = hosts.get(hostId);
-	if (!host) throw new Error(`Host ${hostId} is not connected`);
+	if (!host) {
+		const error = new Error(`Host ${hostId} is not connected`);
+		markApiError(error);
+		throw error;
+	}
 	let client = clients.get(hostId);
 	if (!client) {
-		client = createClient<paths>({ baseUrl: host.base });
+		client = withApiErrorOwnership(createClient<paths>({ baseUrl: host.base, fetch: reportingFetch }));
 		clients.set(hostId, client);
 	}
 	return client;

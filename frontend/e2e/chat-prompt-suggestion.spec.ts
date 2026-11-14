@@ -88,18 +88,47 @@ test("Tab inserts the suggested next message for editing, and Enter sends the ed
 	await expect.poll(() => sent).toEqual([`${prompt} Include the fix in this PR.`]);
 });
 
-test("typing dismisses the whole-message suggestion without accepting it @T0", async ({ page }) => {
+test("typing hides the suggestion and clearing the draft restores it for Tab acceptance @T0", async ({ page }) => {
 	const { composer, sent, suggestion } = await openChat(page);
 	await expect(suggestion).toHaveText(prompt);
-	await composer.pressSequentially("My own next message");
-	await expect(composer).toHaveText("My own next message");
+	for (const draft of ["My own next message", "Another draft"]) {
+		await composer.pressSequentially(draft);
+		await expect(composer).toHaveText(draft);
+		await expect(suggestion).toBeHidden();
+		// Use editor keyboard commands so Lexical owns both selection and deletion.
+		await composer.press("ControlOrMeta+a");
+		await composer.press("Backspace");
+		await expect(composer).toHaveText("");
+		await expect(suggestion).toHaveText(prompt);
+		await expect(suggestion).toBeVisible();
+		expect(sent).toEqual([]);
+	}
+	await composer.press("Tab");
+	await expect(composer).toHaveText(prompt);
 	await expect(suggestion).toBeHidden();
-	// Use editor keyboard commands so Lexical owns both the selection and deletion.
-	// fill("") selects DOM text, then sends Delete, which can race reconciliation.
+	expect(sent).toEqual([]);
+});
+
+test("clearing Tab-accepted text restores the same suggestion until Escape dismisses it @T0", async ({ page }) => {
+	const { composer, sent, suggestion } = await openChat(page);
+	await expect(suggestion).toHaveText(prompt);
+	for (let attempt = 0; attempt < 2; attempt++) {
+		await composer.press("Tab");
+		await expect(composer).toHaveText(prompt);
+		await expect(suggestion).toBeHidden();
+		await composer.press("ControlOrMeta+a");
+		await composer.press("Backspace");
+		await expect(composer).toHaveText("");
+		await expect(suggestion).toHaveText(prompt);
+		await expect(suggestion).toBeVisible();
+	}
+	await composer.press("Escape");
+	await expect(suggestion).toBeHidden();
+	await composer.pressSequentially("Another draft");
 	await composer.press("ControlOrMeta+a");
 	await composer.press("Backspace");
-	await expect(suggestion).toBeHidden();
 	await expect(composer).toHaveText("");
+	await expect(suggestion).toBeHidden();
 	expect(sent).toEqual([]);
 });
 

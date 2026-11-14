@@ -24,6 +24,14 @@ import (
 // poll errors other than context.Canceled are logged via logger with name as a
 // prefix, e.g. name="scm observer" -> "scm observer: initial poll failed".
 func StartPollLoop(ctx context.Context, tick time.Duration, poll func(context.Context) error, logger *slog.Logger, name string) <-chan struct{} {
+	return StartTriggeredPollLoop(ctx, tick, nil, poll, logger, name)
+}
+
+// StartTriggeredPollLoop is StartPollLoop that also polls as soon as trigger
+// receives, so a caller that knows the provider just changed need not wait for
+// the next tick. A trigger arriving mid-poll runs one more poll right after it.
+// A nil trigger never fires.
+func StartTriggeredPollLoop(ctx context.Context, tick time.Duration, trigger <-chan struct{}, poll func(context.Context) error, logger *slog.Logger, name string) <-chan struct{} {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -40,9 +48,10 @@ func StartPollLoop(ctx context.Context, tick time.Duration, poll func(context.Co
 			case <-ctx.Done():
 				return
 			case <-t.C:
-				if err := poll(ctx); err != nil && !errors.Is(err, context.Canceled) {
-					logger.Error(name+": poll failed", "err", err)
-				}
+			case <-trigger:
+			}
+			if err := poll(ctx); err != nil && !errors.Is(err, context.Canceled) {
+				logger.Error(name+": poll failed", "err", err)
 			}
 		}
 	}()

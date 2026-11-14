@@ -18,10 +18,10 @@ func usageSession(project, harness, model string, at time.Time) domain.SessionRe
 }
 
 // stampedModels returns each stamped model ID and its last-used time.
-func stampedModels(t *testing.T, svc *Service, project string) map[string]time.Time {
+func stampedModels(t *testing.T, svc *Service) map[string]time.Time {
 	t.Helper()
 	catalog := ports.AgentModelCatalog{Models: []ports.AgentModelInfo{{ID: "fable"}, {ID: "opus"}, {ID: "haiku"}}}
-	got := svc.withModelUsage(context.Background(), "claude-code", project, catalog)
+	got := svc.withModelUsage(context.Background(), "claude-code", catalog)
 	if len(got.Models) != 3 || got.Models[0].ID != "fable" || got.Models[2].ID != "haiku" {
 		t.Fatalf("catalog order changed: %+v", got.Models)
 	}
@@ -36,39 +36,37 @@ func stampedModels(t *testing.T, svc *Service, project string) map[string]time.T
 
 func TestWithModelUsageStampsTheLatestSessionOfEachModelRunByThisAgent(t *testing.T) {
 	now := time.Now().UTC()
-	svc := newService(nil, nil, nil, nil)
+	svc := newService(nil, nil, nil)
 	svc.sessions = fakeSessionUsageLookup{records: []domain.SessionRecord{
 		usageSession("p1", "claude-code", "opus", now.Add(-2*time.Hour)),
 		usageSession("p1", "claude-code", "opus", now.Add(-10*time.Minute)),
 		usageSession("p1", "codex", "haiku", now),
 	}}
 
-	if got := stampedModels(t, svc, "p1"); len(got) != 1 || !got["opus"].Equal(now.Add(-10*time.Minute)) {
+	if got := stampedModels(t, svc); len(got) != 1 || !got["opus"].Equal(now.Add(-10*time.Minute)) {
 		t.Fatalf("stamps = %v, want only opus at its latest session", got)
 	}
 }
 
-func TestWithModelUsagePrefersProjectHistoryAndFallsBackToTheAgent(t *testing.T) {
+func TestWithModelUsageUsesHistoryFromEveryProject(t *testing.T) {
 	now := time.Now().UTC()
-	svc := newService(nil, nil, nil, nil)
+	svc := newService(nil, nil, nil)
 	svc.sessions = fakeSessionUsageLookup{records: []domain.SessionRecord{
 		usageSession("p1", "claude-code", "opus", now.Add(-time.Hour)),
 		usageSession("p2", "claude-code", "fable", now.Add(-time.Minute)),
 	}}
 
-	if got := stampedModels(t, svc, "p1"); len(got) != 1 || got["opus"].IsZero() {
-		t.Fatalf("project stamps = %v, want only the project's own model", got)
-	}
-	if got := stampedModels(t, svc, "p3"); len(got) != 2 {
-		t.Fatalf("new project stamps = %v, want the agent-wide history", got)
+	// The catalog is device-wide, so its recency hint is too.
+	if got := stampedModels(t, svc); len(got) != 2 || got["opus"].IsZero() || got["fable"].IsZero() {
+		t.Fatalf("stamps = %v, want both projects' models", got)
 	}
 }
 
 func TestWithModelUsageDegradesToTheCatalogWhenHistoryIsUnavailable(t *testing.T) {
-	svc := newService(nil, nil, nil, nil)
+	svc := newService(nil, nil, nil)
 	svc.sessions = fakeSessionUsageLookup{err: errors.New("db unavailable")}
 
-	if got := stampedModels(t, svc, "p1"); len(got) != 0 {
+	if got := stampedModels(t, svc); len(got) != 0 {
 		t.Fatalf("stamps = %v, want none", got)
 	}
 }

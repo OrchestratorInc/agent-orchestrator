@@ -1,10 +1,15 @@
 package controllers_test
 
 import (
+	"compress/gzip"
+	"compress/zlib"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -15,12 +20,111 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/attachmentstore"
+	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd"
+	"github.com/aoagents/agent-orchestrator/backend/internal/mobilebridge"
 	previewutil "github.com/aoagents/agent-orchestrator/backend/internal/preview"
 	"github.com/aoagents/agent-orchestrator/backend/internal/renderpage"
 )
+
+func TestArtifactFileRemoteCompressionPreservesRangesAndValidators(t *testing.T) {
+	body := `{"values":[` + strings.Repeat(`"scratch",`, 100) + `"last"]}`
+	local, _ := artifactFileServer(t, map[string]string{"data.json": body})
+	remote := httpd.NewMobileLAN(local.Config.Handler, "h_scratch", 0, nil, nil)
+	remote.SetPasswordHash(mobilebridge.HashPassword("test-password"))
+	port, err := remote.StartLoopback(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = remote.Stop(context.Background()) })
+	transport := &http.Transport{DisableCompression: true}
+	t.Cleanup(transport.CloseIdleConnections)
+	client := &http.Client{Transport: transport, Timeout: 3 * time.Second}
+	url := fmt.Sprintf("http://127.0.0.1:%d/api/v1/sessions/ao-1/artifact-files/data.json", port)
+	identity, _ := getArtifactFile(t, local, "data.json", "")
+	strongETag := identity.Header.Get("ETag")
+	if !strings.HasPrefix(strongETag, `"`) {
+		t.Fatalf("fixture ETag=%q, want a strong validator", strongETag)
+	}
+	for _, tc := range []struct {
+		name, accept, byteRange, ifRange, ifNoneMatch string
+		status                                        int
+		encoding, etag, contentRange, wantBody        string
+	}{
+		{"identity", "identity", "", "", "", 200, "", strongETag, "", body},
+		{"gzip", "gzip", "", "", "", 200, "gzip", "W/" + strongETag, "", body},
+		{"deflate", "deflate", "", "", "", 200, "deflate", "W/" + strongETag, "", body},
+		{"gzip_range", "gzip", "bytes=0-99", "", "", 206, "", strongETag, fmt.Sprintf("bytes 0-99/%d", len(body)), body[:100]},
+		{"deflate_range", "deflate", "bytes=0-99", "", "", 206, "", strongETag, fmt.Sprintf("bytes 0-99/%d", len(body)), body[:100]},
+		{"matching_if_range", "gzip", "bytes=0-99", strongETag, "", 206, "", strongETag, fmt.Sprintf("bytes 0-99/%d", len(body)), body[:100]},
+		{"mismatched_if_range", "gzip", "bytes=0-99", `"stale"`, "", 200, "", strongETag, "", body},
+		{"weak_if_range", "deflate", "bytes=0-99", "W/" + strongETag, "", 200, "", strongETag, "", body},
+		{"weak_revalidation", "gzip", "", "", "W/" + strongETag, 304, "", "W/" + strongETag, "", ""},
+		{"deflate_revalidation", "deflate", "", "", "W/" + strongETag, 304, "", "W/" + strongETag, "", ""},
+		{"strong_revalidation", "gzip", "", "", strongETag, 304, "", "W/" + strongETag, "", ""},
+		{"list_revalidation", "gzip", "", "", `"stale", W/` + strongETag, 304, "", "W/" + strongETag, "", ""},
+		{"wildcard_revalidation", "gzip", "", "", "*", 304, "", "W/" + strongETag, "", ""},
+		{"identity_revalidation", "identity", "", "", "W/" + strongETag, 304, "", strongETag, "", ""},
+		{"rejected_compression_revalidation", "gzip;q=0, deflate;q=0", "", "", "W/" + strongETag, 304, "", strongETag, "", ""},
+		{"range_revalidation", "gzip", "bytes=0-99", "", "W/" + strongETag, 304, "", strongETag, "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req, err := http.NewRequest(http.MethodGet, url, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.Header.Set("Authorization", "Bearer test-password")
+			req.Header.Set("Accept-Encoding", tc.accept)
+			req.Header.Set("Range", tc.byteRange)
+			req.Header.Set("If-Range", tc.ifRange)
+			req.Header.Set("If-None-Match", tc.ifNoneMatch)
+			response, err := client.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer response.Body.Close()
+			if response.StatusCode != tc.status {
+				t.Fatalf("status=%d, want %d", response.StatusCode, tc.status)
+			}
+			for name, want := range map[string]string{"Content-Encoding": tc.encoding, "ETag": tc.etag, "Content-Range": tc.contentRange} {
+				if got := response.Header.Get(name); got != want {
+					t.Errorf("%s=%q, want %q", name, got, want)
+				}
+			}
+			if !strings.Contains(strings.ToLower(strings.Join(response.Header.Values("Vary"), ",")), "accept-encoding") {
+				t.Errorf("Vary=%q, missing Accept-Encoding", response.Header.Values("Vary"))
+			}
+			if tc.status == http.StatusPartialContent && response.ContentLength != 100 {
+				t.Errorf("partial Content-Length=%d, want100", response.ContentLength)
+			}
+			var decoded io.Reader = response.Body
+			switch tc.encoding {
+			case "gzip":
+				reader, err := gzip.NewReader(response.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer reader.Close()
+				decoded = reader
+			case "deflate":
+				reader, err := zlib.NewReader(response.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer reader.Close()
+				decoded = reader
+			}
+			got, err := io.ReadAll(decoded)
+			if err != nil || string(got) != tc.wantBody {
+				t.Fatalf("file body changed: bytes=%d err=%v", len(got), err)
+			}
+		})
+	}
+}
 
 // artifactFileServer serves session ao-1 with the given artifact files.
 func artifactFileServer(t *testing.T, files map[string]string) (*httptest.Server, string) {
@@ -265,6 +369,20 @@ func TestDeleteArtifactFileRemovesAListedFile(t *testing.T) {
 	}
 }
 
+func TestDeleteArtifactFileDeletesItsVersions(t *testing.T) {
+	srv, fake, dir := artifactVersionServer(t)
+
+	if status := deleteArtifactFile(t, srv, "plan.md"); status != http.StatusOK {
+		t.Fatalf("status = %d, want 200", status)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "plan.md")); !os.IsNotExist(err) {
+		t.Fatalf("plan.md still exists: %v", err)
+	}
+	if len(fake.versions) != 0 {
+		t.Fatalf("versions after delete = %+v, want none", fake.versions)
+	}
+}
+
 func TestDeleteArtifactFileRefusesAnythingButAListedRegularFile(t *testing.T) {
 	outside := filepath.Join(t.TempDir(), "outside.md")
 	if err := os.WriteFile(outside, []byte("outside"), 0o600); err != nil {
@@ -284,6 +402,73 @@ func TestDeleteArtifactFileRefusesAnythingButAListedRegularFile(t *testing.T) {
 		if _, err := os.Stat(file); err != nil {
 			t.Errorf("%s was removed: %v", file, err)
 		}
+	}
+}
+
+// artifactRegistrationServer serves a session listing plan.md and returns its
+// fake service, which the registration routes call.
+func artifactRegistrationServer(t *testing.T) (*httptest.Server, *fakeSessionService) {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "plan.md"), []byte("plan"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	svc := newFakeSessionService()
+	s := svc.sessions["ao-1"]
+	s.Metadata.ArtifactDir = dir
+	s.ArtifactFiles = []domain.SessionArtifactFile{{Path: "plan.md", Name: "plan.md"}}
+	svc.sessions["ao-1"] = s
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	srv := httptest.NewServer(httpd.NewRouterWithControl(config.Config{}, log, nil, httpd.APIDeps{Sessions: svc}, httpd.ControlDeps{}))
+	t.Cleanup(srv.Close)
+	return srv, svc
+}
+
+func TestRegisterArtifacts(t *testing.T) {
+	srv, fake := artifactRegistrationServer(t)
+	post := func(body string) (*http.Response, string) {
+		t.Helper()
+		resp, err := http.Post(srv.URL+"/api/v1/sessions/ao-1/artifact-registrations", "application/json", strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		raw, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp, string(raw)
+	}
+	resp, body := post(`{"paths":["plan.md"]}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, body %s", resp.StatusCode, body)
+	}
+	var got struct {
+		Registered     []string `json:"registered"`
+		OtherFiles     int      `json:"otherFiles"`
+		OtherRootFiles []string `json:"otherRootFiles"`
+	}
+	if err := json.Unmarshal([]byte(body), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Registered) != 1 || got.Registered[0] != "plan.md" || got.OtherFiles != 2 || len(got.OtherRootFiles) != 1 {
+		t.Fatalf("response = %+v", got)
+	}
+	if len(fake.artifactsRegistered) != 1 {
+		t.Fatalf("registered = %v", fake.artifactsRegistered)
+	}
+	if resp, _ := post(`{"paths":[]}`); resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("empty paths status = %d, want 400", resp.StatusCode)
+	}
+}
+
+func TestDeleteArtifactFileForgetsItsRegistration(t *testing.T) {
+	srv, fake := artifactRegistrationServer(t)
+	if status := deleteArtifactFile(t, srv, "plan.md"); status != http.StatusOK {
+		t.Fatalf("status = %d, want 200", status)
+	}
+	if len(fake.artifactsUnregistered) != 1 || fake.artifactsUnregistered[0] != "plan.md" {
+		t.Fatalf("unregistered = %v", fake.artifactsUnregistered)
 	}
 }
 

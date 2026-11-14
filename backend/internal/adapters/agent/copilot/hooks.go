@@ -193,7 +193,7 @@ func installCopilotAgent(workspacePath, sessionID, inlinePrompt, promptFile stri
 func copilotAgentProfile(agentName, sessionID, systemPrompt string) string {
 	return "---\n" +
 		"name: " + agentName + "\n" +
-		"description: Agent Orchestrator role profile for AO session " + strings.TrimSpace(sessionID) + ". Use for all work in this session.\n" +
+		"description: Orchestrator role profile for session " + strings.TrimSpace(sessionID) + ". Use for all work in this session.\n" +
 		"target: github-copilot\n" +
 		"---\n\n" +
 		hookutil.CopilotAgentProfileSentinel + "\n\n" +

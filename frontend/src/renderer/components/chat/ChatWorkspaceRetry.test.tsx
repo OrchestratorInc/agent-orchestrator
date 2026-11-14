@@ -7,18 +7,14 @@
  * turn, and the turn id that reaches the daemon is the one that was clicked.
  */
 
-import { render as rtlRender, screen } from "@testing-library/react";
+import { act, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { ChatWorkspace } from "./ChatWorkspace";
 import { chatFixture } from "../../lib/chat-fixture";
 import type { ConversationItem, ConversationSnapshot } from "../../types/conversation";
-import { TooltipProvider } from "../ui/tooltip";
-
-function render(ui: ReactElement) {
-	return rtlRender(<TooltipProvider>{ui}</TooltipProvider>);
-}
+import { renderChat as render } from "../../test/render-chat";
+import { useUiStore } from "../../stores/ui-store";
 
 /** A conversation with one failed turn and nothing in flight. */
 function failedSnapshot(): ConversationSnapshot {
@@ -179,6 +175,79 @@ describe("ChatWorkspace retry", () => {
 		expect(screen.queryByRole("button", { name: "Resume" })).toBeNull();
 	});
 
+	it("asks the other owner to close it before retrying", async () => {
+		const retry = vi.fn();
+		render(
+			<ChatWorkspace
+				snapshot={{ ...chatFixture, controller: { state: "stopped" } }}
+				onResumeAgent={retry}
+				resumeError="Reworded by the daemon"
+				resumeOpenElsewhere
+			/>,
+		);
+		expect(screen.getByText("This is open elsewhere")).toBeVisible();
+		expect(screen.getByText("Close it there to continue here. Codex can keep a closed chat for a while. Orchestrator checks again every 30 seconds.")).toBeVisible();
+		const button = screen.getByRole("button", { name: /^Retry$/ });
+		expect(button).toBeEnabled();
+		expect(screen.queryByRole("button", { name: "Resume agent" })).not.toBeInTheDocument();
+		await userEvent.click(button);
+		expect(retry).toHaveBeenCalledTimes(1);
+	});
+
+	it("reads open elsewhere from the flag, not the message text", () => {
+		render(
+			<ChatWorkspace
+				snapshot={{ ...chatFixture, controller: { state: "stopped" } }}
+				onResumeAgent={vi.fn()}
+				resumeError="this is open elsewhere; close it there to continue here"
+				resumeOpenElsewhere={false}
+			/>,
+		);
+		expect(screen.queryByText("This is open elsewhere")).not.toBeInTheDocument();
+		expect(screen.getByText("this is open elsewhere; close it there to continue here")).toBeVisible();
+	});
+
+	it("stops checking once the agent is running again", () => {
+		vi.useFakeTimers();
+		try {
+			const retry = vi.fn();
+			render(
+				<ChatWorkspace
+					snapshot={{ ...chatFixture, controller: { state: "ready" } }}
+					onResumeAgent={retry}
+					resumeError="this is open elsewhere; close it there to continue here"
+					resumeOpenElsewhere
+				/>,
+			);
+			act(() => vi.advanceTimersByTime(60_000));
+			expect(retry).not.toHaveBeenCalled();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("keeps checking while another app holds the chat", () => {
+		vi.useFakeTimers();
+		try {
+			const retry = vi.fn();
+			render(
+				<ChatWorkspace
+					snapshot={{ ...chatFixture, harness: "claude-code", controller: { state: "stopped" } }}
+					onResumeAgent={retry}
+					resumeError="this is open elsewhere; close it there to continue here"
+					resumeOpenElsewhere
+				/>,
+			);
+			expect(screen.getByText("Close it there to continue here. Orchestrator checks again every 30 seconds.")).toBeVisible();
+			act(() => vi.advanceTimersByTime(29_000));
+			expect(retry).not.toHaveBeenCalled();
+			act(() => vi.advanceTimersByTime(1_000));
+			return Promise.resolve().then(() => expect(retry).toHaveBeenCalledTimes(1));
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("offers a retry on the failed turn and reports the clicked turn", async () => {
 		const onRetryTurn = vi.fn();
 		render(<ChatWorkspace snapshot={failedSnapshot()} retryControl={{ retry: onRetryTurn }} />);
@@ -190,6 +259,47 @@ describe("ChatWorkspace retry", () => {
 
 		// The failed turn in the fixture is turn-1; the daemon must be given AO's
 		// own turn id, which is what the snapshot exposes.
+		expect(onRetryTurn).toHaveBeenCalledWith("turn-1");
+	});
+
+	it("opens DeepSeek setup on the session host for a typed missing-key failure", async () => {
+		const snapshot = failedSnapshot();
+		snapshot.harness = "deepseek-harness";
+		snapshot.turns[0]!.failureCode = "provider_key_missing";
+		render(<ChatWorkspace snapshot={snapshot} remoteHostId="host-a" retryControl={{ retry: vi.fn() }} />);
+
+		await userEvent.click(screen.getByRole("button", { name: "Set up DeepSeek" }));
+		expect(useUiStore.getState().settingsModal).toMatchObject({
+			scope: "global", section: "harness", focusAgentId: "deepseek-harness",
+			hostId: "host-a", harnessView: "local", startLogin: true,
+		});
+		useUiStore.getState().closeSettings();
+	});
+
+	it.each([1, 2])("keeps one retry for a failed turn after %i steers", async (steerCount) => {
+		const snapshot = failedSnapshot();
+		const createdAt = snapshot.turns[0]!.requestedAt;
+		snapshot.items = [...snapshot.items];
+		for (let index = 0; index < steerCount; index += 1) {
+			snapshot.items.push({
+				kind: "activity",
+				id: `steer-${index}`,
+				turnId: "turn-1",
+				sequence: ++snapshot.latestSequence,
+				revision: 0,
+				activityKind: "system",
+				status: "completed",
+				summary: "Only run the unit tests",
+				detail: { event: "steer", text: "Only run the unit tests", origin: "human" },
+				createdAt,
+			});
+		}
+		const onRetryTurn = vi.fn();
+		render(<ChatWorkspace snapshot={snapshot} retryControl={{ retry: onRetryTurn }} />);
+
+		const retries = screen.getAllByRole("button", { name: "Retry this turn" });
+		expect(retries).toHaveLength(1);
+		await userEvent.click(retries[0]!);
 		expect(onRetryTurn).toHaveBeenCalledWith("turn-1");
 	});
 

@@ -10,8 +10,10 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/caller"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/runfile"
 )
@@ -39,11 +41,11 @@ type apiResponseError struct {
 	ErrorBody  apiError
 }
 
-var errDaemonUnavailable = errors.New("AO daemon unavailable")
+var errDaemonUnavailable = errors.New("the Orchestrator daemon is unavailable")
 
 // errDaemonNotRunning distinguishes a missing/stale run file from transport
 // failures so hooks can keep expected restart noise out of the agent's stderr.
-var errDaemonNotRunning = errors.New("AO daemon is not running")
+var errDaemonNotRunning = errors.New("the Orchestrator daemon is not running")
 
 // daemonUnavailableError keeps the established user-facing diagnostics while
 // giving the few idempotent CLI operations that can safely retry a typed signal.
@@ -173,10 +175,10 @@ func (c *commandContext) doJSONPathWithHeadersAndTimeout(
 		return err
 	}
 	if info == nil {
-		return daemonUnavailableError{message: "AO daemon is not running — start it with `ao start`", cause: errDaemonNotRunning}
+		return daemonUnavailableError{message: "Orchestrator daemon is not running — start it with `ao start`", cause: errDaemonNotRunning}
 	}
 	if !c.deps.ProcessAlive(info.PID) {
-		return daemonUnavailableError{message: fmt.Sprintf("AO daemon is not running (stale run-file at %s) — start it with `ao start`", cfg.RunFilePath), cause: errDaemonNotRunning}
+		return daemonUnavailableError{message: fmt.Sprintf("Orchestrator daemon is not running (stale run-file at %s) — start it with `ao start`", cfg.RunFilePath), cause: errDaemonNotRunning}
 	}
 
 	var reader io.Reader = http.NoBody
@@ -197,6 +199,9 @@ func (c *commandContext) doJSONPathWithHeadersAndTimeout(
 	}
 	for name, value := range headers {
 		req.Header.Set(name, value)
+	}
+	if callerID := callerSession(); callerID != "" {
+		req.Header.Set(caller.Header, callerID)
 	}
 	if sideID := os.Getenv("AO_SIDE_CONVERSATION_ID"); sideID != "" {
 		req.Header.Set("X-AO-Side-Conversation", sideID)
@@ -265,4 +270,14 @@ func (c *commandContext) doJSONPathWithHeadersAndTimeout(
 		return fmt.Errorf("decode response: %w", err)
 	}
 	return nil
+}
+
+// callerSession is the agent session running this command, so the daemon can
+// file the action it takes under that agent's running turn. A shell the user
+// opened in the session's terminal tab has none.
+func callerSession() string {
+	if os.Getenv(caller.ShellTerminalEnv) != "" {
+		return ""
+	}
+	return strings.TrimSpace(os.Getenv("AO_SESSION_ID"))
 }

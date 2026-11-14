@@ -8,7 +8,9 @@ import { build } from "vite";
 const require = createRequire(import.meta.url);
 const electron = require("electron");
 const frontendRoot = path.resolve(import.meta.dirname, "..");
-const outputDirectory = await mkdtemp(path.join(os.tmpdir(), "ao-browser-postcondition-"));
+const outputRoot = path.join(os.homedir(), ".ao", "dev", "browser-integration");
+await mkdir(outputRoot, { recursive: true });
+const outputDirectory = await mkdtemp(path.join(outputRoot, "postcondition-"));
 const entry = path.join(frontendRoot, "src", "main", "browser-action-postconditions.integration.ts");
 const fixture = path.join(frontendRoot, "test", "fixtures", "browser-action-postconditions", "guarded-navigation.html");
 
@@ -51,6 +53,7 @@ try {
 	await build({
 		configFile: false,
 		logLevel: "error",
+		ssr: { noExternal: ["ws"] },
 		build: {
 			emptyOutDir: true,
 			outDir: outputDirectory,

@@ -1,11 +1,18 @@
 import * as Dialog from "@radix-ui/react-dialog";
-import { ChevronLeft, Folder, Link2, LoaderCircle, X } from "lucide-react";
-import { AnimatePresence, motion } from "motion/react";
+import { ChevronLeft, Folder, Link2, LoaderCircle } from "@/components/app-icons";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import type { components } from "../../api/schema";
+import type { CloneProgress } from "../hooks/usePreparedClone";
+import type { MessageKey } from "../i18n/messages";
+import { apiErrorMessage } from "../lib/api-client";
 import { aoBridge } from "../lib/bridge";
 import { isMacPlatform, isWindowsPlatform } from "../lib/platform";
+import { AnimatedStepBody, FirstRunGitHubStep, type GitHubState, FirstRunSources, FirstRunWelcome, NO_GITHUB_STATE, WithGitHubState } from "./FirstRunSteps";
+import { GitHubRepoPicker } from "./GitHubRepoPicker";
 import { Button } from "./ui/button";
+import { CloseButton } from "./ui/close-button";
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
 
@@ -18,15 +25,31 @@ export type CloneRepositorySelection = CloneRepositoryDetails & {
 	targetPath: string;
 };
 
+type CloneDestination = components["schemas"]["CloneDestination"];
+type DestinationCheck =
+	| { kind: "idle" }
+	| { kind: "checking"; key: string }
+	| { kind: "ready"; key: string; destination: CloneDestination }
+	| { kind: "error"; key: string; message: string };
+
 export const LAST_CLONE_DESTINATION_KEY = "ao.clone.lastDestinationParent";
 
 export default function CloneRepositoryDialog({
+	firstRun = false,
+	onOpenLocalFolder,
+	onStartStandaloneAgent,
+	cloning = false,
 	disabled,
 	error,
 	onBack,
 	onChange,
 	onClose,
 	onContinue,
+	onCheckDestination,
+	onUseExisting,
+	onCancel,
+	activity = null,
+	progress = null,
 	onError,
 	onChooseRemoteDestination,
 	open,
@@ -35,12 +58,22 @@ export default function CloneRepositoryDialog({
 	existingProjectPaths = [],
 	value,
 }: {
+	firstRun?: boolean;
+	onOpenLocalFolder?: () => void;
+	onStartStandaloneAgent?: () => void;
+	cloning?: boolean;
 	disabled: boolean;
 	error: string | null;
 	onBack: () => void;
 	onChange: (value: CloneRepositoryDetails) => void;
 	onClose: () => void;
 	onContinue: (selection: CloneRepositorySelection) => void;
+	onCheckDestination: (input: CloneRepositoryDetails, signal: AbortSignal) => Promise<CloneDestination>;
+	onUseExisting: (path: string) => void;
+	onCancel: () => void;
+	activity?: "cloning" | "validating" | null;
+	/** The git step the running clone last reported. */
+	progress?: CloneProgress | null;
 	onError?: (message: string) => void;
 	onChooseRemoteDestination?: () => void;
 	open: boolean;
@@ -52,7 +85,9 @@ export default function CloneRepositoryDialog({
 }) {
 	const { t } = useTranslation();
 	const [submitted, setSubmitted] = useState(false);
-	const [repositoryCheck, setRepositoryCheck] = useState<"idle" | "checking" | "valid" | "invalid" | "unchecked">("idle");
+	const [destinationCheck, setDestinationCheck] = useState<DestinationCheck>({ kind: "idle" });
+	const [checkAttempt, setCheckAttempt] = useState(0);
+	const [elapsed, setElapsed] = useState(0);
 	const repositoryCheckRequest = useRef(0);
 	const destinationPickerRequest = useRef(0);
 	const shakeFrame = useRef<number | null>(null);
@@ -61,6 +96,7 @@ export default function CloneRepositoryDialog({
 	const [choosingDestination, setChoosingDestination] = useState(false);
 	const [repositoryFieldTouched, setRepositoryFieldTouched] = useState(false);
 	const [shake, setShake] = useState(false);
+	const [firstRunStep, setFirstRunStep] = useState<"welcome" | "github" | "sources" | "clone">(firstRun ? "welcome" : "clone");
 	const [destinationPickerError, setDestinationPickerError] = useState<string | null>(null);
 	const repositoryName = repositoryNameFromGitUrl(value.remoteUrl);
 	const repositoryAvatar = repositoryAvatarFromGitUrl(value.remoteUrl);
@@ -73,21 +109,19 @@ export default function CloneRepositoryDialog({
 		targetPath && existingProjectPaths.some((path) => sameProjectPath(path, targetPath)),
 	);
 	const urlError = hasRemoteUrl && !repositoryName ? t("createProject.cloneInvalidUrl") : null;
-	const repositoryAccessError = repositoryName && repositoryCheck === "invalid"
-		? t("createProject.cloneRepositoryUnavailable", {
-				defaultValue: "This isn't a repository or you don't have access",
-			})
-		: null;
+	const checkKey = JSON.stringify([value.remoteUrl.trim(), value.destinationParent.trim()]);
+	const currentCheck = "key" in destinationCheck && destinationCheck.key === checkKey ? destinationCheck : null;
+	const destination = currentCheck?.kind === "ready" ? currentCheck.destination : null;
 	const duplicateError = repositoryName && projectExists ? t("createProject.cloneProjectExists") : null;
 	const deferredRepositoryError = urlError ?? duplicateError;
-	const inlineRepositoryError = repositoryAccessError ?? (
+	const inlineRepositoryError = (
 		repositoryFieldTouched || submitted ? deferredRepositoryError : null
 	);
 	const parentError = error === inlineRepositoryError ? null : error;
 	const destinationError = submitted && !hasDestination ? t("createProject.cloneDestinationRequired") : null;
 	const canContinue = Boolean(
 		repositoryName &&
-		(repositoryCheck === "valid" || (remote && repositoryCheck === "unchecked")) &&
+		destination && !destination.exists &&
 		hasDestination &&
 		!projectExists &&
 		!disabled &&
@@ -120,7 +154,7 @@ export default function CloneRepositoryDialog({
 		repositoryCheckRequest.current += 1;
 		destinationPickerRequest.current += 1;
 		setSubmitted(false);
-		setRepositoryCheck("idle");
+		setDestinationCheck({ kind: "idle" });
 		setChoosingDestination(false);
 		setRepositoryFieldTouched(false);
 		setDestinationPickerError(null);
@@ -148,27 +182,30 @@ export default function CloneRepositoryDialog({
 
 	useEffect(() => {
 		const requestId = ++repositoryCheckRequest.current;
-		if (!open || !repositoryName) {
-			setRepositoryCheck("idle");
-			return;
-		}
-		// Host access is not checked until clone/prepare; do not label it validated.
-		if (remote) {
-			setRepositoryCheck("unchecked");
-			return;
-		}
-		setRepositoryCheck("checking");
+		if (!open || !repositoryName || !hasDestination || activity) return;
+		const controller = new AbortController();
+		setDestinationCheck({ kind: "checking", key: checkKey });
 		const timer = window.setTimeout(() => {
-			void aoBridge.app.checkGitRepository(value.remoteUrl.trim()).then((exists) => {
-				if (requestId !== repositoryCheckRequest.current) return;
-				setRepositoryCheck(exists ? "valid" : "invalid");
-			}).catch(() => {
-				if (requestId !== repositoryCheckRequest.current) return;
-				setRepositoryCheck("invalid");
+			void onCheckDestination({ remoteUrl: value.remoteUrl.trim(), destinationParent: value.destinationParent.trim() }, controller.signal).then((destination) => {
+				if (requestId === repositoryCheckRequest.current) setDestinationCheck({ kind: "ready", key: checkKey, destination });
+			}).catch((err: unknown) => {
+				if (controller.signal.aborted || requestId !== repositoryCheckRequest.current) return;
+				setDestinationCheck({ kind: "error", key: checkKey, message: apiErrorMessage(err, t("createProject.cloneCheckFailed")) });
 			});
 		}, 300);
-		return () => window.clearTimeout(timer);
-	}, [open, remote, repositoryName, value.remoteUrl]);
+		return () => {
+			window.clearTimeout(timer);
+			controller.abort();
+		};
+	}, [open, repositoryName, hasDestination, checkKey, checkAttempt, onCheckDestination, activity, t]);
+
+	useEffect(() => {
+		setElapsed(0);
+		if (!activity) return;
+		const started = Date.now();
+		const timer = window.setInterval(() => setElapsed(Math.floor((Date.now() - started) / 1000)), 1000);
+		return () => window.clearInterval(timer);
+	}, [activity]);
 
 	const chooseDestination = async () => {
 		if (remote) {
@@ -181,7 +218,7 @@ export default function CloneRepositoryDialog({
 		try {
 			const selected = await aoBridge.app.chooseDirectory({
 				title: t("createProject.cloneChooseDestination"),
-				defaultPath: "~/ao/projects",
+				...(value.destinationParent ? { defaultPath: value.destinationParent } : {}),
 			});
 			if (requestId !== destinationPickerRequest.current) return;
 			if (!selected) return;
@@ -223,44 +260,76 @@ export default function CloneRepositoryDialog({
 		}
 		onContinue({
 			...value,
-			remoteUrl: value.remoteUrl.trim(),
+			remoteUrl: destination?.remoteUrl ?? value.remoteUrl.trim(),
 			destinationParent: value.destinationParent.trim(),
 			targetPath,
 		});
 	};
 
 	return (
-		<Dialog.Root open={open} onOpenChange={(next) => !next && !disabled && onClose()}>
+		<Dialog.Root open={open} onOpenChange={(next) => !next && !disabled && !firstRun && onClose()}>
 			<Dialog.Portal>
-				<Dialog.Content className={`fixed left-1/2 top-1/2 z-overlay flex max-h-[min(640px,calc(100svh-24px))] w-[min(560px,calc(100vw-24px))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-lg border border-border bg-popover p-0 text-popover-foreground shadow-xl data-[state=open]:animate-modal-in data-[state=closed]:animate-modal-out motion-reduce:animate-none ${shake || externalShake ? "modal-shake" : ""}`}>
+				<Dialog.Content onEscapeKeyDown={firstRun ? (event) => event.preventDefault() : undefined} onInteractOutside={firstRun ? (event) => event.preventDefault() : undefined} className={`fixed left-1/2 top-1/2 z-overlay flex max-h-[min(640px,calc(100svh-24px))] w-[min(560px,calc(100vw-24px))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-lg border border-(--color-border-overlay) bg-popover p-0 text-popover-foreground shadow-(--shadow-popover) data-[state=open]:animate-modal-in data-[state=closed]:animate-modal-out motion-reduce:animate-none ${shake || externalShake ? "modal-shake" : ""}`}>
+					{(() => {
+						const render = (gh: GitHubState) => {
+						const showRepoPicker = firstRun && gh.hasGitHub;
+						// Setup is offered only once the user reaches something git-related.
+						const gate = (run: () => void) => {
+							if (gh.needsSetup) setFirstRunStep("github");
+							else run();
+						};
+						const stepContent = (<>
+					{firstRun && firstRunStep === "welcome" ? (
+						<FirstRunWelcome disabled={disabled} onNext={() => setFirstRunStep("sources")} />
+					) : null}
+					{firstRun && firstRunStep === "github" ? <FirstRunGitHubStep
+						onBack={() => setFirstRunStep("sources")}
+						onClose={onClose}
+						onDone={() => setFirstRunStep("clone")}
+					/> : null}
+					{firstRun && firstRunStep === "sources" ? (
+						<FirstRunSources
+							disabled={disabled}
+							gh={gh}
+							onBack={() => setFirstRunStep("welcome")}
+							onClose={onClose}
+							onPickRepo={(remoteUrl) => {
+								onChange({ ...value, remoteUrl });
+								setFirstRunStep("clone");
+							}}
+							onSubmitUrl={(remoteUrl) => {
+								onChange({ ...value, remoteUrl });
+								gate(() => setFirstRunStep("clone"));
+							}}
+							onOpenLocalFolder={onOpenLocalFolder}
+							onStartStandaloneAgent={onStartStandaloneAgent}
+						/>
+					) : null}
+					{!firstRun || firstRunStep === "clone" ? <>
 					<div className="relative flex shrink-0 items-center gap-3 px-4 pt-3">
 						<Button
 							type="button"
-							variant="outline"
+							variant="secondary"
 							size="icon"
 							aria-label={t("createProject.cloneBack")}
 							disabled={disabled || choosingDestination}
-							onClick={onBack}
+							onClick={firstRun ? () => setFirstRunStep("sources") : onBack}
 						>
 							<ChevronLeft className="size-4" aria-hidden="true" />
 						</Button>
 						<div className="min-w-0 flex-1 pr-8">
-							<Dialog.Title className="text-balance text-[18px] font-semibold text-[var(--color-text-import-title)]">
-								{t("createProject.cloneTitle")}
+							<Dialog.Title className="text-[18px] text-balance font-semibold text-[var(--color-text-import-title)]">
+								{firstRun ? t("firstRun.startProject") : t("createProject.cloneTitle")}
 							</Dialog.Title>
-							<Dialog.Description className="sr-only">
-								{t(remote ? "remote.cloneDescription" : "createProject.cloneDescription")}
+							<Dialog.Description className={firstRun ? "mt-1 text-[13px] leading-5 text-muted-foreground" : "sr-only"}>
+								{firstRun ? t("firstRun.description") : t(remote ? "remote.cloneDescription" : "createProject.cloneDescription")}
 							</Dialog.Description>
 						</div>
-						<button
-							type="button"
-							className="settings-close-button"
+						<CloseButton
 							aria-label={t("createProject.cloneClose")}
 							disabled={disabled || choosingDestination}
 							onClick={onClose}
-						>
-							<X className="size-4" aria-hidden="true" />
-						</button>
+						/>
 					</div>
 
 					<form className="min-h-0 overflow-y-auto" onSubmit={submit}>
@@ -274,13 +343,13 @@ export default function CloneRepositoryDialog({
 							<div className="space-y-2">
 								<div className="relative">
 									<Label htmlFor="cloneRepositoryUrl" className="text-[13px] font-semibold text-[var(--color-text-import-title)]">
-										{t("createProject.cloneRepositoryUrl")}
+										{showRepoPicker ? t("firstRun.pickRepo") : t("createProject.cloneRepositoryUrl")}
 									</Label>
 									<AnimatePresence initial={false}>
 										{inlineRepositoryError ? (
 											<motion.p
 												id="cloneRepositoryUrlError"
-												key={urlError ? "repository-url-error" : repositoryAccessError ? "repository-access-error" : "duplicate-project-error"}
+												key={urlError ? "repository-url-error" : "duplicate-project-error"}
 												initial={{ opacity: 0, filter: "blur(2px)" }}
 												animate={{ opacity: 1, filter: "blur(0px)" }}
 												exit={{ opacity: 0, filter: "blur(2px)" }}
@@ -293,15 +362,17 @@ export default function CloneRepositoryDialog({
 										) : null}
 									</AnimatePresence>
 								</div>
-								<div className="relative">
+								{showRepoPicker ? (
+									<GitHubRepoPicker disabled={disabled} value={value.remoteUrl} onChange={(remoteUrl) => onChange({ ...value, remoteUrl })} />
+								) : <div className="relative">
 									<Input
 										id="cloneRepositoryUrl"
 										autoFocus
 										autoCapitalize="none"
 										autoComplete="off"
 										aria-describedby={`cloneRepositoryUrlHelp${inlineRepositoryError ? " cloneRepositoryUrlError" : ""}`}
-										aria-invalid={urlError || repositoryAccessError || duplicateError ? true : undefined}
-										className="bg-[var(--color-bg-import-card)] pl-10 pr-10 font-mono text-[13px]"
+										aria-invalid={urlError || duplicateError ? true : undefined}
+										className={`bg-[var(--color-bg-import-card)] pl-10 pr-10 text-[13px] ${firstRun ? "" : "font-mono"}`}
 										disabled={disabled}
 										placeholder={t("createProject.cloneRepositoryUrlPlaceholder")}
 										spellCheck={false}
@@ -309,11 +380,11 @@ export default function CloneRepositoryDialog({
 										onChange={(event) => onChange({ ...value, remoteUrl: event.target.value })}
 										onBlur={() => setRepositoryFieldTouched(true)}
 									/>
-									{repositoryCheck === "checking" ? (
-										<LoaderCircle className="pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 animate-spin text-muted-foreground" aria-label={t("createProject.cloneCheckingRepository", { defaultValue: "Checking repository" })} />
+									{currentCheck?.kind === "checking" ? (
+										<LoaderCircle className="pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 animate-spin text-muted-foreground" aria-label={t("createProject.cloneCheckingRepository", { defaultValue: "Checking destination" })} />
 									) : null}
 									<RepositoryOwnerIcon owner={repositoryAvatar?.owner ?? null} avatarUrl={repositoryAvatar?.url ?? null} />
-								</div>
+								</div>}
 								<span id="cloneRepositoryUrlHelp" className="sr-only">
 									{t("createProject.cloneRepositoryUrlHelp")}
 								</span>
@@ -328,7 +399,7 @@ export default function CloneRepositoryDialog({
 										<Folder className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-[var(--color-text-import-muted)]" aria-hidden="true" />
 										<Input
 											id="cloneDestination"
-											className="border-transparent bg-transparent pl-10 font-mono text-[13px]"
+											className={`border-transparent bg-transparent pl-10 text-[13px] ${firstRun ? "" : "font-mono"}`}
 											aria-describedby={`cloneDestinationHelp${destinationError ? " cloneDestinationError" : ""}`}
 											aria-invalid={Boolean(destinationError)}
 											disabled={disabled || choosingDestination}
@@ -340,21 +411,37 @@ export default function CloneRepositoryDialog({
 											onChange={(event) => onChange({ ...value, destinationParent: event.target.value })}
 										/>
 									</div>
-									<button
+									<Button
 										aria-label={t("createProject.cloneChooseDestination")}
-										className="flex h-full shrink-0 items-center border-l border-border/60 px-4 text-foreground outline-none transition-colors hover:bg-foreground/10 focus-visible:bg-foreground/10 disabled:pointer-events-none disabled:opacity-50"
+										variant="ghost"
+										size="none"
+										className="h-full rounded-none border-0 border-l border-border/60 px-4"
 										disabled={disabled || choosingDestination}
 										type="button"
 										onClick={() => void chooseDestination()}
 									>
 										{t("createProject.cloneChoose")}
-									</button>
+									</Button>
 								</div>
 								<p id="cloneDestinationHelp" className="text-pretty text-[12px] leading-5 text-[var(--color-text-import-muted)]">
-									{targetPath
-										? t("createProject.cloneDestinationTarget", { path: targetPath })
-										: t("createProject.cloneDestinationHelp")}
+									{cloning && targetPath
+										? t("createProject.cloneDestinationInProgress", { path: targetPath })
+										: targetPath
+											? t("createProject.cloneDestinationTarget", { path: targetPath })
+											: t("createProject.cloneDestinationHelp")}
 								</p>
+								{currentCheck?.kind === "error" ? (
+									<div role="alert" className="space-y-2 text-[12px] text-destructive">
+										<p>{currentCheck.message}</p>
+										<Button type="button" variant="secondary" disabled={disabled} onClick={() => setCheckAttempt((attempt) => attempt + 1)}>{t("createProject.retry")}</Button>
+									</div>
+								) : null}
+								{destination?.exists ? (
+									<div className="space-y-2 text-[12px]" role="status">
+										<p>{t("createProject.cloneDestinationConflict", { path: destination.path })}</p>
+										{destination.canUseExisting ? <Button type="button" variant="secondary" disabled={disabled} onClick={() => onUseExisting(destination.path)}>{t("createProject.cloneUseExisting")}</Button> : null}
+									</div>
+								) : null}
 								{destinationError ? (
 									<p id="cloneDestinationError" className="text-pretty text-[12px] leading-5 text-destructive" role="alert">
 										{destinationError}
@@ -364,17 +451,82 @@ export default function CloneRepositoryDialog({
 
 						</div>
 
+						{activity ? <CloneActivityRow activity={activity} elapsed={elapsed} progress={progress} /> : null}
 						<div className="flex shrink-0 justify-end gap-2 px-4 pb-4 pt-3">
 							<div className="flex items-center justify-end gap-3">
+								{activity === "cloning" ? <Button type="button" variant="secondary" onClick={onCancel}>{t("createProject.cloneCancel")}</Button> : null}
 								<Button type="submit" variant="primary" disabled={!canContinue}>
-									{t("createProject.cloneContinue")}
+									{cloning && !activity ? <><LoaderCircle className="size-4 animate-spin" aria-hidden="true" />{t("createProject.cloning")}</> : t(activity ? "createProject.cloneWorking" : error ? "createProject.retry" : "createProject.cloneContinue")}
 								</Button>
 							</div>
 						</div>
 					</form>
+					</> : null}
+						</>);
+						return firstRun ? <AnimatedStepBody>{stepContent}</AnimatedStepBody> : stepContent;
+						};
+						return firstRun ? <WithGitHubState>{render}</WithGitHubState> : render(NO_GITHUB_STATE);
+					})()}
 				</Dialog.Content>
 			</Dialog.Portal>
 		</Dialog.Root>
+	);
+}
+
+const clonePhaseKeys: Record<CloneProgress["phase"], MessageKey> = {
+	enumerating_objects: "createProject.clonePhaseEnumeratingObjects",
+	counting_objects: "createProject.clonePhaseCountingObjects",
+	compressing_objects: "createProject.clonePhaseCompressingObjects",
+	receiving_objects: "createProject.clonePhaseReceivingObjects",
+	resolving_deltas: "createProject.clonePhaseResolvingDeltas",
+	updating_files: "createProject.clonePhaseUpdatingFiles",
+	filtering_content: "createProject.clonePhaseFilteringContent",
+	retrying: "createProject.clonePhaseRetrying",
+};
+
+/**
+ * One line naming the step the clone is on. A new step rises in as the last
+ * one drifts up and fades away; git's percent and the timer tick in place
+ * within a step.
+ */
+function CloneActivityRow({
+	activity,
+	elapsed,
+	progress,
+}: {
+	activity: "cloning" | "validating";
+	elapsed: number;
+	progress: CloneProgress | null;
+}) {
+	const { t } = useTranslation();
+	const reducedMotion = useReducedMotion();
+	const phase = activity === "cloning" ? progress?.phase : undefined;
+	const step = activity === "validating" ? "validating" : phase ? `${phase}:${progress?.attempt ?? 1}` : "cloning";
+	const percent = phase ? progress?.percent : null;
+	const label = activity === "validating"
+		? t("createProject.cloneVerifying", { seconds: elapsed })
+		: !phase
+			? t("createProject.cloneInProgress", { seconds: elapsed })
+			: percent == null
+				? t("createProject.cloneStep", { step: t(clonePhaseKeys[phase]), seconds: elapsed })
+				: t("createProject.cloneStepPercent", { step: t(clonePhaseKeys[phase]), percent, seconds: elapsed });
+	return (
+		<div className="flex items-center gap-2 px-4 pt-3 text-[12px] leading-5 text-muted-foreground" role="status" aria-live="polite">
+			<LoaderCircle className="size-4 shrink-0 animate-spin" aria-hidden="true" />
+			<span className="relative block h-5 min-w-0 flex-1 overflow-hidden">
+				<AnimatePresence initial={false}>
+					<motion.span
+						key={step}
+						className="chat-working-shimmer absolute inset-x-0 top-0 truncate tabular-nums"
+						initial={reducedMotion ? false : { opacity: 0, y: "100%" }}
+						animate={{ opacity: 1, y: 0, transition: { duration: reducedMotion ? 0 : 0.24, ease: "easeOut" } }}
+						exit={reducedMotion ? { opacity: 0, transition: { duration: 0 } } : { opacity: 0, y: "-100%", transition: { duration: 0.2, ease: "easeIn" } }}
+					>
+						{label}
+					</motion.span>
+				</AnimatePresence>
+			</span>
+		</div>
 	);
 }
 

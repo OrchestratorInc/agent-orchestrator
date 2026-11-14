@@ -6,7 +6,9 @@ package controllers
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"sync"
 
 	"github.com/go-chi/chi/v5"
 
@@ -28,13 +30,34 @@ func (c *ProjectsController) Register(r chi.Router) {
 	r.Post("/projects", c.add)
 	r.Post("/projects/clone", c.clone)
 	r.Post("/projects/clone/prepare", c.prepareClone)
+	r.Post("/projects/clone/prepare/stream", c.prepareCloneStream)
+	r.Post("/projects/clone/check", c.checkCloneDestination)
 	r.Post("/projects/clone/cleanup", c.cleanupPreparedClone)
 	r.Post("/projects/initialize", c.initialize)
 	r.Get("/projects/{id}", c.get)
 	r.Put("/projects/{id}", c.updateSettings)
 	r.Put("/projects/{id}/config", c.setConfig)
 	r.Patch("/projects/{id}/permissions", c.setPermissions)
+	r.Delete("/projects/{id}/permissions", c.forgetPermissions)
 	r.Delete("/projects/{id}", c.remove)
+}
+
+func (c *ProjectsController) checkCloneDestination(w http.ResponseWriter, r *http.Request) {
+	if c.Mgr == nil {
+		apispec.NotImplemented(w, r, "POST", "/api/v1/projects/clone/check")
+		return
+	}
+	var in projectsvc.CloneInput
+	if err := decodeJSONStrict(r, &in); err != nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
+		return
+	}
+	result, err := c.Mgr.CheckCloneDestination(r.Context(), in)
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, result)
 }
 
 func (c *ProjectsController) prepareClone(w http.ResponseWriter, r *http.Request) {
@@ -53,6 +76,61 @@ func (c *ProjectsController) prepareClone(w http.ResponseWriter, r *http.Request
 		return
 	}
 	envelope.WriteJSON(w, http.StatusOK, result)
+}
+
+// prepareCloneStream runs the same clone as prepareClone and reports each git
+// step as a server-sent event while it runs, so a long clone can show what it
+// is doing. The final event carries the result or the error envelope.
+func (c *ProjectsController) prepareCloneStream(w http.ResponseWriter, r *http.Request) {
+	if c.Mgr == nil {
+		apispec.NotImplemented(w, r, "POST", "/api/v1/projects/clone/prepare/stream")
+		return
+	}
+	var in projectsvc.CloneInput
+	if err := decodeJSONStrict(r, &in); err != nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
+		return
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		envelope.WriteAPIError(w, r, http.StatusInternalServerError, "internal", "SSE_UNSUPPORTED", "Streaming is not supported by this server", nil)
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
+
+	// Progress is reported from git's stderr reader; the lock keeps a late
+	// report from interleaving with, or following, the final event.
+	var mu sync.Mutex
+	done := false
+	send := func(event ClonePrepareStreamEvent, final bool) {
+		mu.Lock()
+		defer mu.Unlock()
+		if done {
+			return
+		}
+		done = final
+		data, err := json.Marshal(event)
+		if err != nil {
+			return
+		}
+		if _, err := fmt.Fprintf(w, "data: %s\n\n", data); err != nil {
+			return
+		}
+		flusher.Flush()
+	}
+	result, err := c.Mgr.PrepareCloneWithProgress(r.Context(), in, func(progress projectsvc.CloneProgress) {
+		send(ClonePrepareStreamEvent{Progress: &progress}, false)
+	})
+	if err != nil {
+		apiErr := envelope.StreamError(r, err)
+		send(ClonePrepareStreamEvent{Error: &apiErr}, true)
+		return
+	}
+	send(ClonePrepareStreamEvent{Result: &result}, true)
 }
 
 func (c *ProjectsController) cleanupPreparedClone(w http.ResponseWriter, r *http.Request) {
@@ -236,6 +314,19 @@ func (c *ProjectsController) setPermissions(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	p, err := c.Mgr.SetPermissions(r.Context(), projectID(r), in)
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, ProjectResponse{Project: p})
+}
+
+func (c *ProjectsController) forgetPermissions(w http.ResponseWriter, r *http.Request) {
+	if c.Mgr == nil {
+		apispec.NotImplemented(w, r, "DELETE", "/api/v1/projects/{id}/permissions")
+		return
+	}
+	p, err := c.Mgr.ForgetPermissions(r.Context(), projectID(r))
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return

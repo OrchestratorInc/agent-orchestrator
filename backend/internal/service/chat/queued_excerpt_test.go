@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -14,6 +15,38 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/store"
 )
+
+func TestCapturedExcerptSurvivesQueueAndSourceDeletion(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	active, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "active", ClientMessageID: "active"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := ports.ChatExcerptReference{ConversationID: h.ctrl.ConversationID(), MessageID: "deleted-source", Revision: 12, Text: "selected\n\tcode", Snapshot: &domain.ChatExcerptSnapshot{Version: 1, RawText: "**selected**\n\tcode", CaptureMode: "exact"}}
+	msg := ports.ChatUserMessage{Text: "explain", ClientMessageID: "snapshot-queue", Excerpts: []ports.ChatExcerptReference{ref}}
+	turn, err := h.svc.Send(ctx, testSession, msg)
+	if err != nil || turn.State != domain.TurnStateQueued {
+		t.Fatalf("queue = %+v, %v", turn, err)
+	}
+	if duplicate, err := h.svc.Send(ctx, testSession, msg); err != nil || duplicate.ID != "" {
+		t.Fatalf("duplicate = %+v, %v", duplicate, err)
+	}
+	changed := *ref.Snapshot
+	changed.RawText = "different raw source"
+	msg.Excerpts[0].Snapshot = &changed
+	if _, err := h.svc.Send(ctx, testSession, msg); !errors.Is(err, domain.ErrClientMessageConflict) {
+		t.Fatalf("conflict = %v", err)
+	}
+	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: active.ProviderTurnID, TurnState: domain.TurnStateCompleted})
+	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		return turnStateByText(t, s)["explain"] == domain.TurnStateRunning
+	})
+	sent := h.conv.sentMessages()
+	if len(sent) != 2 || !strings.Contains(sent[1].Text, ref.Text) || !strings.Contains(sent[1].Text, ref.Snapshot.RawText) {
+		t.Fatalf("delivery = %+v", sent)
+	}
+}
 
 // Keep queue writes and settlement real while simulating source changes after
 // the excerpt has been accepted. The invalid case simulates a malformed stored
@@ -56,23 +89,31 @@ func (s *changedExcerptStore) TurnByID(ctx context.Context, id string) (domain.C
 	return turn, err
 }
 
-func (s *changedExcerptStore) NextQueuedTurn(ctx context.Context, id string) (domain.QueuedTurn, error) {
-	queued, err := s.Store.NextQueuedTurn(ctx, id)
-	if err != nil || !s.changed.Load() || s.mode != "invalid" || queued.DeliveryContentJSON == "" {
-		return queued, err
+func (s *changedExcerptStore) ListQueuedBatch(ctx context.Context, id string, limit int) ([]domain.QueuedTurn, error) {
+	batch, err := s.Store.ListQueuedBatch(ctx, id, limit)
+	if err != nil || !s.changed.Load() || s.mode != "invalid" {
+		return batch, err
 	}
-	var content []ports.ChatContent
-	if err := json.Unmarshal([]byte(queued.DeliveryContentJSON), &content); err != nil {
-		return queued, err
-	}
-	for i := range content {
-		if content[i].Excerpt != nil {
-			content[i].Excerpt.Reference.ConversationID = "another-conversation"
+	for j := range batch {
+		if batch[j].DeliveryContentJSON == "" {
+			continue
+		}
+		var content []ports.ChatContent
+		if err := json.Unmarshal([]byte(batch[j].DeliveryContentJSON), &content); err != nil {
+			return batch, err
+		}
+		for i := range content {
+			if content[i].Excerpt != nil {
+				content[i].Excerpt.Reference.ConversationID = "another-conversation"
+			}
+		}
+		encoded, err := json.Marshal(content)
+		batch[j].DeliveryContentJSON = string(encoded)
+		if err != nil {
+			return batch, err
 		}
 	}
-	encoded, err := json.Marshal(content)
-	queued.DeliveryContentJSON = string(encoded)
-	return queued, err
+	return batch, nil
 }
 
 func TestQueuedExcerptValidationFailureContinuesDrain(t *testing.T) {
@@ -123,40 +164,41 @@ func TestQueuedExcerptValidationFailureContinuesDrain(t *testing.T) {
 				states := turnStateByText(t, s)
 				return states["stale excerpt"] == domain.TurnStateFailed && states["next valid"] == domain.TurnStateRunning
 			})
-			if turnStateByText(t, snapshot)["last valid"] != domain.TurnStateQueued {
-				t.Fatal("drain dispatched more than one valid turn")
+			// Typed messages take one turn each, so the last one waits its turn.
+			if state := turnStateByText(t, snapshot)["last valid"]; state != domain.TurnStateQueued {
+				t.Fatalf("last valid = %s, want queued behind next valid", state)
 			}
 			for _, turn := range snapshot.Turns {
-				if turn.ID == stale.ID && turn.ErrorMessage != "chat excerpt is stale" {
+				if turn.ID == stale.ID && !strings.Contains(turn.ErrorMessage, "chat excerpt") {
 					t.Fatalf("failure reason = %q", turn.ErrorMessage)
 				}
 			}
 			h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted,
 				ProviderTurnID: "provider-turn-3", TurnState: domain.TurnStateCompleted})
-			h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
-				return turnStateByText(t, s)["last valid"] == domain.TurnStateRunning
-			})
-			h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted,
-				ProviderTurnID: "provider-turn-4", TurnState: domain.TurnStateCompleted})
 			snapshot = h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
-				return turnStateByText(t, s)["last valid"] == domain.TurnStateCompleted
+				states := turnStateByText(t, s)
+				return states["next valid"] == domain.TurnStateCompleted && states["last valid"] == domain.TurnStateRunning
 			})
 			if turnStateByText(t, snapshot)["stale excerpt"] != domain.TurnStateFailed {
 				t.Fatal("later drains retried the stale turn")
 			}
-			if got := h.conv.sentTexts(); !reflect.DeepEqual(got, []string{"seed", "active", "next valid", "last valid"}) {
+			if got := h.conv.sentTexts(); len(got) != 4 || !reflect.DeepEqual(got[2:], []string{"next valid", "last valid"}) {
 				t.Fatalf("provider sends = %v", got)
 			}
 		})
 	}
 }
 
-func TestQueuedProviderDispatchFailureStopsDrain(t *testing.T) {
+func TestQueuedProviderDispatchFailureFailsClaimedBatchOnce(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
-	for _, text := range []string{"active", "provider failure", "still queued"} {
+	for i, text := range []string{"active", "provider failure", "still queued"} {
+		origin := domain.MessageOriginAutomation
+		if i == 0 {
+			origin = domain.MessageOriginHuman
+		}
 		if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
-			Text: text, ClientMessageID: text, Origin: domain.MessageOriginHuman,
+			Text: text, ClientMessageID: text, Origin: origin,
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -169,8 +211,8 @@ func TestQueuedProviderDispatchFailureStopsDrain(t *testing.T) {
 	snapshot := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
 		return turnStateByText(t, s)["provider failure"] == domain.TurnStateFailed
 	})
-	if turnStateByText(t, snapshot)["still queued"] != domain.TurnStateQueued {
-		t.Fatal("provider failure settled an unrelated queued message")
+	if turnStateByText(t, snapshot)["still queued"] != domain.TurnStateFailed {
+		t.Fatal("provider failure did not preserve the second batch member as failed")
 	}
 	if got := h.conv.sendCallCount(); got != 2 {
 		t.Fatalf("provider calls = %d, want initial send and one failed dispatch", got)

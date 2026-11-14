@@ -46,6 +46,50 @@ func TestSetTurnAutoResumeRefusalPreservesConsumedConsent(t *testing.T) {
 	}
 }
 
+// ACP history replays a failed turn without its error. The live refusal is what
+// classifies a usage limit, so the replay must not erase it.
+func TestSettleTurnReplayKeepsUsageLimitRefusal(t *testing.T) {
+	ctx := context.Background()
+	s, session, conversation := seededChatConversation(t)
+	appendBranchPrompt(t, s, session, conversation, "generation-root", "limited", "finish this task")
+	if err := s.BindTurnToProvider(ctx, "turn-limited", "provider-limited", testNow); err != nil {
+		t.Fatal(err)
+	}
+	const refusal = "You've hit your session limit · resets 12pm (Asia/Calcutta)"
+	if err := s.SettleTurn(ctx, conversation.ID, "provider-limited", domain.TurnStateFailed, refusal, testNow); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SettleTurn(ctx, conversation.ID, "provider-limited", domain.TurnStateFailed, "", testNow.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	source, err := s.TurnByID(ctx, "turn-limited")
+	if err != nil || source.ErrorMessage != refusal || source.UsageLimit == nil || source.UsageLimit.ResetsAt == nil {
+		t.Fatalf("replay erased the usage-limit refusal: %+v, %v", source, err)
+	}
+}
+
+// A resumed Codex thread replays a turn the dead controller left in progress as
+// interrupted, with no error. Nobody interrupted it, so the failure must stay.
+func TestSettleTurnInterruptedReplayKeepsStoredFailure(t *testing.T) {
+	ctx := context.Background()
+	s, session, conversation := seededChatConversation(t)
+	appendBranchPrompt(t, s, session, conversation, "generation-root", "crashed", "finish this task")
+	if err := s.BindTurnToProvider(ctx, "turn-crashed", "provider-crashed", testNow); err != nil {
+		t.Fatal(err)
+	}
+	const reason = "controller ended before the turn completed"
+	if err := s.SettleTurn(ctx, conversation.ID, "provider-crashed", domain.TurnStateFailed, reason, testNow); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SettleTurn(ctx, conversation.ID, "provider-crashed", domain.TurnStateInterrupted, "", testNow.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	turn, err := s.TurnByID(ctx, "turn-crashed")
+	if err != nil || turn.State != domain.TurnStateFailed || turn.ErrorMessage != reason {
+		t.Fatalf("interrupted replay replaced the stored failure: %+v, %v", turn, err)
+	}
+}
+
 func TestAppendAutoResumeRetryRequiresDueConsent(t *testing.T) {
 	for _, state := range []string{"due", "future", "cancelled", "changed account", "failed insert"} {
 		t.Run(state, func(t *testing.T) {

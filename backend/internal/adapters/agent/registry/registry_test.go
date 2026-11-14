@@ -83,6 +83,9 @@ func TestGetAgentHooksFootprintIsGitignored(t *testing.T) {
 			if ha.Harness == "kimi" {
 				cfg.Env = map[string]string{"KIMI_CODE_HOME": filepath.Join(cfg.DataDir, "kimi")}
 			}
+			if ha.Harness == "hermes" {
+				cfg.Env = map[string]string{"HERMES_HOME": t.TempDir()}
+			}
 			ensureAgentBinary(t, string(ha.Harness))
 			if err := ha.Agent.GetAgentHooks(context.Background(), cfg); err != nil {
 				t.Fatalf("GetAgentHooks: %v", err)

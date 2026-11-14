@@ -16,9 +16,11 @@ var mergeHeadSHAPattern = regexp.MustCompile(`^[0-9a-fA-F]{40}$`)
 
 var _ ports.SCMMerger = (*Provider)(nil)
 
-// MergePullRequest performs a GitLab squash merge guarded by the reviewed head
-// SHA. GitLab's sha query parameter is a compare-and-swap precondition: if the
-// live head has advanced, GitLab responds 409 and the merge is rejected.
+// MergePullRequest performs a GitLab merge guarded by the reviewed head SHA.
+// GitLab's sha query parameter is a compare-and-swap precondition: if the live
+// head has advanced, GitLab responds 409 and the merge is rejected. Squash maps
+// to squash=true and merge to squash=false (the project's configured merge
+// method); GitLab has no single-call rebase merge, so rebase is unsupported.
 func (p *Provider) MergePullRequest(ctx context.Context, request ports.SCMMergeRequest) (ports.SCMMergeResult, error) {
 	if p == nil || p.client == nil {
 		return ports.SCMMergeResult{}, fmt.Errorf("gitlab scm: merge provider is not configured")
@@ -29,7 +31,15 @@ func (p *Provider) MergePullRequest(ctx context.Context, request ports.SCMMergeR
 	if strings.TrimSpace(request.PR.Repo.Owner) == "" || strings.TrimSpace(request.PR.Repo.Name) == "" {
 		return ports.SCMMergeResult{}, fmt.Errorf("gitlab scm: invalid repository owner/name")
 	}
-	if request.Method != ports.SCMMergeSquash {
+	var squash string
+	switch request.Method {
+	case ports.SCMMergeSquash:
+		squash = "true"
+	case ports.SCMMergeMerge:
+		squash = "false"
+	case ports.SCMMergeRebase:
+		return ports.SCMMergeResult{}, fmt.Errorf("%w: gitlab merge method %q", ports.ErrSCMUnsupported, request.Method)
+	default:
 		return ports.SCMMergeResult{}, fmt.Errorf("gitlab scm: unsupported merge method %q", request.Method)
 	}
 	expectedHead := strings.TrimSpace(request.ExpectedHeadSHA)
@@ -46,7 +56,7 @@ func (p *Provider) MergePullRequest(ctx context.Context, request ports.SCMMergeR
 		projectPath(request.PR.Repo.Owner, request.PR.Repo.Name), request.PR.Number)
 	q := url.Values{}
 	q.Set("sha", expectedHead)
-	q.Set("squash", "true")
+	q.Set("squash", squash)
 
 	resp, err := client.doMERGE(ctx, path, q, nil)
 	if err != nil {
