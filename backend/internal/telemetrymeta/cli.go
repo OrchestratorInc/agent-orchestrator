@@ -107,6 +107,8 @@ var legacyActorlessUserCLICommands = map[string]struct{}{
 	"ao browser drag":                           {},
 	"ao browser errors":                         {},
 	"ao browser fill":                           {},
+	"ao browser fill-secret":                    {},
+	"ao browser login":                          {},
 	"ao browser focus":                          {},
 	"ao browser frame":                          {},
 	"ao browser get":                            {},

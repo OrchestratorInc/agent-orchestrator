@@ -22,7 +22,12 @@ var actions = map[string]struct{}{
 	"network-status": {}, "network-list": {}, "network-stop": {}, "network-clear": {},
 	"console": {}, "errors": {}, "frame": {}, "dialog": {},
 	"devtools-open": {}, "devtools-close": {}, "target": {},
+	"fill-secret": {}, "login": {},
 }
+
+// credentialActions type vault secrets into the page. The browser runtime that
+// shows the page resolves the secret itself; only an item id travels here.
+var credentialActions = map[string]struct{}{"fill-secret": {}, "login": {}}
 
 type sessionReader interface {
 	Get(ctx context.Context, id domain.SessionID) (domain.Session, error)
@@ -99,7 +104,8 @@ func (s *Service) Execute(
 	args map[string]interface{},
 ) (browserruntime.Result, string, error) {
 	action = strings.ToLower(strings.TrimSpace(action))
-	if err := s.authorize(ctx, sessionID, capability); err != nil {
+	session, err := s.authorizedSession(ctx, sessionID, capability)
+	if err != nil {
 		return browserruntime.Result{}, action, err
 	}
 	if _, ok := actions[action]; !ok {
@@ -114,6 +120,30 @@ func (s *Service) Execute(
 		return result, action, err
 	}
 	target := s.targetFor(sessionID)
+	if _, ok := credentialActions[action]; ok {
+		if target == TargetChrome {
+			return browserruntime.Result{}, action, apierr.Invalid(
+				"BROWSER_VAULT_CHROME_UNSUPPORTED",
+				"Saved credentials fill only in the Orchestrator Browser panel for now",
+				nil,
+			)
+		}
+		if session.ProjectID == "" {
+			return browserruntime.Result{}, action, apierr.Invalid(
+				"BROWSER_VAULT_UNAVAILABLE",
+				"Saved credentials need a session that belongs to a project",
+				nil,
+			)
+		}
+		// The project scopes which credentials may fill. It comes from the
+		// session record, never from the caller.
+		stamped := make(map[string]interface{}, len(args)+1)
+		for key, value := range args {
+			stamped[key] = value
+		}
+		stamped["projectId"] = string(session.ProjectID)
+		args = stamped
+	}
 	if target == TargetChrome {
 		// Chrome mode acts with the user's real identity; keep an audit line
 		// per command (never arguments, which can hold typed text).
@@ -182,19 +212,24 @@ func (l Lifecycle) DestroySession(ctx context.Context, sessionID domain.SessionI
 }
 
 func (s *Service) authorize(ctx context.Context, sessionID domain.SessionID, capability string) error {
+	_, err := s.authorizedSession(ctx, sessionID, capability)
+	return err
+}
+
+func (s *Service) authorizedSession(ctx context.Context, sessionID domain.SessionID, capability string) (domain.Session, error) {
 	session, err := s.sessions.Get(ctx, sessionID)
 	if err != nil {
-		return err
+		return domain.Session{}, err
 	}
 	if session.IsTerminated {
-		return apierr.Conflict("SESSION_TERMINATED", "Session is terminated", nil)
+		return domain.Session{}, apierr.Conflict("SESSION_TERMINATED", "Session is terminated", nil)
 	}
 	if s.authority == nil || !s.authority.Valid(
 		sessionID,
 		strings.TrimSpace(capability),
 		session.Metadata.BrowserCapabilityVerifier,
 	) {
-		return apierr.Forbidden("BROWSER_CAPABILITY_INVALID", "Browser capability is invalid")
+		return domain.Session{}, apierr.Forbidden("BROWSER_CAPABILITY_INVALID", "Browser capability is invalid")
 	}
-	return nil
+	return session, nil
 }

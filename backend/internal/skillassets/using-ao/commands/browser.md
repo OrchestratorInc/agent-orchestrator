@@ -100,6 +100,8 @@ ao browser click <ref> [--human] [--json]
 ao browser dblclick <ref> [--json]
 ao browser focus <ref> [--json]
 ao browser fill <ref> <text> [--json]
+ao browser login [--item <id>] [--json]
+ao browser fill-secret <ref> --item <id> [--field username|password|totp | --totp] [--json]
 ao browser type <ref> <text> [--json]
 ao browser press <key> [--json]
 ao browser hover <ref> [--json]
@@ -218,6 +220,28 @@ instead, omit the path and explicitly combine `--base64` with `--json`.
 
 `ao browser open` requires an explicit HTTP(S) URL or hostname. It does not
 silently search the web and does not allow `file://` or local filesystem paths.
+
+## Signing in with saved credentials
+
+Never ask the user to paste a password or code into the chat, and never type one
+with `fill`/`type`. The user saves sites in Settings > Passwords; use them with:
+
+```bash
+ao browser open https://app.example.com/login
+ao browser login                 # types username + password; on a 2FA page, the TOTP code
+ao browser click e7              # submit the form yourself
+```
+
+`login` fills only on an exact origin match (scheme, host and port) and only in
+this project. When several saved credentials match it lists their ids; rerun
+with `--item <id>`. For a field `login` cannot find, use
+`ao browser fill-secret <ref> --item <id> [--field username|--totp]`.
+
+Output only ever shows `••••`. Filled passwords and codes are also masked in
+later `snapshot`, `get value`, console and network output. The first fill per
+site waits for the user to approve it in the desktop app; if they decline, the
+command fails, so ask them in chat instead of retrying. Saved credentials work
+in the Browser panel only, not in Chrome mode yet.
 
 ## Chrome mode: the user's own Chrome
 
