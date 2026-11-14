@@ -144,7 +144,9 @@ export function HarnessAccountTab({ details, hostId, cloud, authWorkflowActive, 
 		{/* With accounts listed, the CLI's own login is a row there, not a card of its own. */}
 		{(isInstalled || rowAuthWorkflow) && !accountProvider ? <HarnessDetailGroup title={t("settings.harness.account")}>
 			{!loginPanel && <HarnessDetailRow
-				label={authBusy && rowAuthWorkflow ? t(rowAuthWorkflow.action === "logout" ? "settings.harness.logoutInProgress" : "settings.harness.loginInProgress") : details.authSummary}
+				label={authBusy && rowAuthWorkflow ? t(rowAuthWorkflow.action === "logout" ? "settings.harness.logoutInProgress" : "settings.harness.loginInProgress")
+					: !authBusy && (details.authStatus === "authorized" || details.renewsOnRun) ? <span className="inline-flex items-center gap-1.5"><Check className="size-3.5 shrink-0 text-success" aria-hidden="true" />{details.authSummary}</span>
+					: details.authSummary}
 				description={authBusy ? undefined : details.accountDescription}
 			>
 				{accountAction}

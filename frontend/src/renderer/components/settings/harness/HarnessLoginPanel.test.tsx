@@ -40,8 +40,9 @@ describe("HarnessLoginPanel", () => {
 	it("saves a provider key through the masked Account form and labels its device scope", async () => {
 		const user = userEvent.setup();
 		const onVerify = vi.fn().mockResolvedValue("configured");
+		const onClose = vi.fn();
 		vi.mocked(startAgentUILogin).mockResolvedValue({ ...snapshot, agentId: "goose", method: "env_OPENAI_API_KEY", status: "succeeded", loginUrl: undefined, deviceCode: undefined });
-		render(<HarnessLoginPanel agentId="goose" methods={[{ id: "env_OPENAI_API_KEY", label: "OpenAI API key", secret: true }]} providerKeys={[unsavedKey("OPENAI_API_KEY")]} onVerify={onVerify} onClose={vi.fn()} onTerminal={vi.fn()} />);
+		render(<HarnessLoginPanel agentId="goose" methods={[{ id: "env_OPENAI_API_KEY", label: "OpenAI API key", secret: true }]} providerKeys={[unsavedKey("OPENAI_API_KEY")]} onVerify={onVerify} onClose={onClose} onTerminal={vi.fn()} />);
 		expect(screen.getByRole("button", { name: "OpenAI API key" })).toHaveAccessibleDescription("Not set");
 		expect(screen.getByText("AO passes these keys to the agent sessions it starts.")).toBeVisible();
 		const input = screen.getByLabelText("API key");
@@ -51,7 +52,8 @@ describe("HarnessLoginPanel", () => {
 		// The device choice shown beside the key is always sent explicitly.
 		expect(startAgentUILogin).toHaveBeenCalledWith("goose", "env_OPENAI_API_KEY", "test-secret", undefined, undefined, false);
 		await waitFor(() => expect(onVerify).toHaveBeenCalledWith("env_OPENAI_API_KEY"));
-		expect(screen.getByRole("button", { name: "Done" })).toBeVisible();
+		await waitFor(() => expect(onClose).toHaveBeenCalled());
+		expect(screen.queryByRole("button", { name: "Done" })).toBeNull();
 	});
 	it("waits for the saved keys before saving one, and offers a retry when they fail to load", async () => {
 		const user = userEvent.setup();
@@ -246,12 +248,14 @@ describe("HarnessLoginPanel", () => {
 		const user = userEvent.setup();
 		const native: AgentLoginSnapshot = { ...snapshot, agentId: "goose", method: "native", nativePrompt: "waiting", loginUrl: undefined, deviceCode: undefined };
 		const onVerify = vi.fn().mockResolvedValue(true);
+		const onClose = vi.fn();
 		vi.mocked(startAgentUILogin).mockResolvedValue(native);
-		render(<HarnessLoginPanel agentId="goose" methods={[{ id: "native", label: "Native sign-in", secret: false }]} onVerify={onVerify} onClose={vi.fn()} onTerminal={vi.fn()} />);
+		render(<HarnessLoginPanel agentId="goose" methods={[{ id: "native", label: "Native sign-in", secret: false }]} onVerify={onVerify} onClose={onClose} onTerminal={vi.fn()} />);
 		await user.click(await screen.findByRole("button", { name: "Check sign-in" }));
 		await waitFor(() => expect(cancelAgentUILogin).toHaveBeenCalledWith("goose", "login-1", undefined));
 		expect(onVerify).toHaveBeenCalledTimes(1);
-		expect(screen.getByRole("button", { name: "Done" })).toBeVisible();
+		await waitFor(() => expect(onClose).toHaveBeenCalled());
+		expect(screen.queryByRole("button", { name: "Done" })).toBeNull();
 	});
 
 	// Gemini, Hermes and MiMo Code can only report their own credentials as
@@ -470,7 +474,7 @@ describe("HarnessLoginPanel", () => {
 
 	it("masks the API key, clears it on submit, and verifies native completion", async () => {
 		vi.mocked(startAgentUILogin).mockResolvedValue({ ...snapshot, method: "api_key", loginUrl: undefined, deviceCode: undefined, status: "succeeded" });
-		const { user, onVerify } = setup();
+		const { user, onVerify, onClose } = setup();
 		await user.click(screen.getByRole("button", { name: "OpenAI API key" }));
 		expect(startAgentUILogin).not.toHaveBeenCalled();
 		const input = screen.getByLabelText("API key");
@@ -480,6 +484,9 @@ describe("HarnessLoginPanel", () => {
 		expect(startAgentUILogin).toHaveBeenCalledWith("codex", "api_key", "test-secret", undefined);
 		await waitFor(() => expect(onVerify).toHaveBeenCalledTimes(1));
 		expect(await screen.findByText("Connected")).toBeVisible();
+		// A verified sign-in closes itself; there is no Done step.
+		await waitFor(() => expect(onClose).toHaveBeenCalled());
+		expect(screen.queryByRole("button", { name: "Done" })).toBeNull();
 		expect(document.body).not.toHaveTextContent("test-secret");
 	});
 

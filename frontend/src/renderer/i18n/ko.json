@@ -4398,7 +4398,6 @@
 	"settings.harness.loginUi.openBrowser": "로그인 페이지 열기",
 	"settings.harness.loginUi.terminal": "터미널 로그인 열기",
 	"settings.harness.loginUi.cancel": "취소",
-	"settings.harness.loginUi.done": "완료",
 	"settings.harness.loginUi.hints.claude": "Claude 구독을 사용합니다.",
 	"settings.harness.loginUi.hints.browser": "ChatGPT 계정을 사용합니다.",
 	"settings.harness.loginUi.hints.console": "Anthropic Console 계정으로 로그인합니다.",

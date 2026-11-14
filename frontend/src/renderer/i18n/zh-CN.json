@@ -4380,7 +4380,6 @@
 	"settings.harness.loginUi.openBrowser": "打开登录页面",
 	"settings.harness.loginUi.terminal": "打开终端登录",
 	"settings.harness.loginUi.cancel": "取消",
-	"settings.harness.loginUi.done": "完成",
 	"settings.harness.loginUi.hints.claude": "使用你的 Claude 订阅。",
 	"settings.harness.loginUi.hints.browser": "使用你的 ChatGPT 账户。",
 	"settings.harness.loginUi.hints.console": "使用 Anthropic Console 账户登录。",

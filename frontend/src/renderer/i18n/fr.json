@@ -4500,7 +4500,6 @@
 	"settings.harness.loginUi.openBrowser": "Ouvrir la page de connexion",
 	"settings.harness.loginUi.terminal": "Se connecter dans le terminal",
 	"settings.harness.loginUi.cancel": "Annuler",
-	"settings.harness.loginUi.done": "Terminé",
 	"settings.harness.loginUi.hints.claude": "Utilisez votre abonnement Claude.",
 	"settings.harness.loginUi.hints.browser": "Utilisez votre compte ChatGPT.",
 	"settings.harness.loginUi.hints.console": "Connectez-vous avec un compte Anthropic Console.",

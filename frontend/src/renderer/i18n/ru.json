@@ -4607,7 +4607,6 @@
 	"settings.harness.loginUi.openBrowser": "Открыть страницу входа",
 	"settings.harness.loginUi.terminal": "Открыть вход через терминал",
 	"settings.harness.loginUi.cancel": "Отмена",
-	"settings.harness.loginUi.done": "Готово",
 	"settings.harness.loginUi.hints.claude": "Используйте свою подписку Claude.",
 	"settings.harness.loginUi.hints.browser": "Используйте свой аккаунт ChatGPT.",
 	"settings.harness.loginUi.hints.console": "Войдите с аккаунтом Anthropic Console.",
