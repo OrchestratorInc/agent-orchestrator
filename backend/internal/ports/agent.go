@@ -10,6 +10,10 @@ import (
 )
 
 var (
+	// ErrAgentRestoreUnsupported means native history cannot be restored.
+	ErrAgentRestoreUnsupported = errors.New("agent restore unsupported")
+	// ErrAgentInputRejected means the adapter refused unsafe or unsupported input.
+	ErrAgentInputRejected = errors.New("agent input rejected")
 	// ErrUnsupportedEffort reports a value the selected model did not advertise.
 	ErrUnsupportedEffort = errors.New("unsupported model effort")
 	// ErrModelCapabilitiesUnavailable reports tuning that cannot be validated safely.

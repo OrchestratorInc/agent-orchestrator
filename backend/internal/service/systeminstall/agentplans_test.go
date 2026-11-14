@@ -125,8 +125,8 @@ func TestAgentPlansCoverEveryHarnessOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(plans) != 38 {
-		t.Fatalf("got %d plans, want 38", len(plans))
+	if len(plans) != 39 {
+		t.Fatalf("got %d plans, want 39", len(plans))
 	}
 	seen := make(map[string]bool, len(plans))
 	for _, plan := range plans {
@@ -322,6 +322,7 @@ func TestAgentPlanSelectsAvailableFallback(t *testing.T) {
 		{"copilot winget", "windows", TargetCopilot, []string{"winget", "npm"}, "winget", "winget install -e --id GitHub.Copilot --silent --accept-package-agreements --accept-source-agreements --disable-interactivity"},
 		{"vibe pipx", "linux", TargetVibe, []string{"pipx"}, "pipx", "pipx install mistral-vibe"},
 		{"openhands uv", "windows", TargetOpenHands, []string{"uv"}, "uv", "uv tool install openhands"},
+		{"openjarvis uv", "darwin", TargetOpenJarvis, []string{"uv"}, "uv", "uv tool install OpenJarvis[inference-cloud,inference-google]==1.0.4"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

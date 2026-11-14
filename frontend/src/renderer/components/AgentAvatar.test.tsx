@@ -14,6 +14,15 @@ function themeSources(name: string) {
 }
 
 describe("AgentAvatar", () => {
+	it("renders the openjarvis brand asset", () => {
+		render(<AgentAvatar provider="openjarvis" />);
+
+		expect(screen.getByRole("img", { name: "openjarvis" })).toHaveAttribute(
+			"src",
+			expect.stringContaining("openjarvis.png"),
+		);
+	});
+
 	it("renders the bundled Memcode mark", () => {
 		render(<AgentAvatar provider="memcode" />);
 		expect(screen.getByRole("img", { name: "memcode" })).toHaveAttribute("src", memcodeLogo);

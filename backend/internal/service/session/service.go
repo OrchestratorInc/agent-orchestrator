@@ -2097,6 +2097,10 @@ func mapSessionError(err error) error {
 			"The agent could not resume its saved conversation. Your Orchestrator history is still available.", nil)
 	case errors.Is(err, ports.ErrAgentAuthRequired):
 		return apierr.Conflict("AGENT_AUTH_REQUIRED", "The agent is installed but the project credential was rejected", nil)
+	case errors.Is(err, ports.ErrAgentRestoreUnsupported):
+		return apierr.Conflict("AGENT_RESTORE_UNSUPPORTED", err.Error(), nil)
+	case errors.Is(err, ports.ErrAgentInputRejected):
+		return apierr.Conflict("AGENT_INPUT_REJECTED", err.Error(), nil)
 	case errors.Is(err, ports.ErrUnsupportedEffort):
 		return apierr.Invalid("UNSUPPORTED_EFFORT", err.Error(), nil)
 	case errors.Is(err, ports.ErrModelCapabilitiesUnavailable):
