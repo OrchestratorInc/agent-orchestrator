@@ -1,3 +1,4 @@
+import { X } from "@/components/app-icons";
 import type { ButtonHTMLAttributes, MouseEvent as ReactMouseEvent, ReactNode, Ref } from "react";
 import { cn } from "../lib/utils";
 import { Pressable } from "./ui/pressable";
@@ -38,9 +39,34 @@ export const terminalTabActionClassName =
 export const terminalTabRenameInputClassName =
 	"absolute -left-1 -top-0.5 h-[calc(100%+4px)] w-[calc(100%+8px)] rounded-xs bg-background px-1 text-control leading-none text-foreground outline-none ring-1 ring-accent";
 
-// One chrome for every tab in the session pane strip: the session itself,
-// reviewer, shells and files. Members only supply an icon, a label and the
-// control that replaces the icon on hover, so they cannot drift apart.
+/**
+ * A tab's ghost close button, for the frame's `action` slot: over the icon on
+ * hover (`actionPosition="icon"`), or at the tab's end (`"end"`, pinned to show
+ * at rest). The click stays off the tab, so closing never selects it first.
+ */
+export function TabCloseButton({ label, onClose }: { label: string; onClose: () => void }) {
+	return (
+		<Pressable
+			aria-label={label}
+			className={terminalTabActionClassName}
+			onClick={(event) => {
+				event.stopPropagation();
+				onClose();
+			}}
+			onDoubleClick={(event) => event.stopPropagation()}
+			type="button"
+		>
+			<X aria-hidden="true" className="size-icon-sm" />
+		</Pressable>
+	);
+}
+
+// One chrome for every tab strip: the session pane strip (the session itself,
+// reviewer, shells and files), the Browser panel's pages and the side chats.
+// Members only supply an icon, a label and the control that replaces the icon
+// on hover, so they cannot drift apart. The floating bar's look (pills,
+// dividers) is styles.css's, keyed on data-terminal-tab-frame; a strip other
+// than the session's marks its tab list with data-tab-strip for its dividers.
 export function TerminalTabFrame({
 	active,
 	wide = false,
