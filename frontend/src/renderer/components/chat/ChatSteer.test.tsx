@@ -923,6 +923,30 @@ describe("ChatWorkspace steering", () => {
 		expect(carried.compareDocumentPosition(answer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 	});
 
+	it("draws a message drained behind an earlier queued report before the reply to it", () => {
+		const at = (second: number) => `2026-08-11T10:00:${String(second).padStart(2, "0")}Z`;
+		render(
+			<ChatWorkspace
+				sessionRole="orchestrator"
+				snapshot={{
+					...chatFixture,
+					latestSequence: 13,
+					turns: [{ id: "leader", state: "running", providerTurnId: "provider-leader", requestedAt: at(0), startedAt: at(2) }],
+					items: [
+						{ kind: "message", id: "report", turnId: "leader", sequence: 10, revision: 0, role: "user", origin: "automation", text: "Reports since your previous turn:\n\n- worker-1 (Fix login) [ready]: PR is green", streaming: false, createdAt: at(0) },
+						{ kind: "message", id: "human", turnId: "follower", sequence: 11, revision: 0, role: "user", origin: "human", text: "also check this bug", streaming: false, createdAt: at(1) },
+						{ kind: "message", id: "answer", turnId: "leader", sequence: 12, revision: 0, role: "assistant", origin: "provider", text: "Looking at the bug now.", streaming: false, createdAt: at(3) },
+						{ kind: "message", id: "later", turnId: "leader", sequence: 13, revision: 0, role: "assistant", origin: "provider", text: "Found it.", streaming: false, createdAt: at(4) },
+					],
+					batchedDeliveries: [{ turnId: "follower", deliveredWithTurnId: "leader" }],
+				}}
+			/>,
+		);
+		const human = screen.getByText("also check this bug");
+		expect(human.compareDocumentPosition(screen.getByText("Looking at the bug now.")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+		expect(human.compareDocumentPosition(screen.getByText("Found it.")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+	});
+
 	it("draws carried turns in the order the steer sent them, not the order they were queued", () => {
 		const at = (second: number) => `2026-08-11T10:00:${String(second).padStart(2, "0")}Z`;
 		render(
