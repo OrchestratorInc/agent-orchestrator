@@ -20,6 +20,7 @@
 	"dictation.upgrade.exploreDetail": "모든 로컬 모델을 둘러보고 검색하세요.",
 	"dictation.upgrade.allowAccess": "macOS에서 묻으면 접근을 허용하세요…",
 	"dictation.upgrade.ready": "음성 입력이 준비되었습니다",
+	"dictation.upgrade.downloading": "{{model}}을(를) 다운로드하는 중입니다. 완료되면 음성 입력을 사용할 수 있습니다.",
 	"settings.dictation": "음성 입력",
 	"dictation.sounds": "소리 재생",
 	"dictation.soundsDescription": "받아쓰기가 시작되고 끝날 때 짧은 클릭음을 냅니다.",

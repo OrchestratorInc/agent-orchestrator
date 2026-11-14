@@ -20,6 +20,7 @@
 	"dictation.upgrade.exploreDetail": "浏览并搜索所有本地模型。",
 	"dictation.upgrade.allowAccess": "macOS 询问时请允许访问…",
 	"dictation.upgrade.ready": "听写已就绪",
+	"dictation.upgrade.downloading": "正在下载 {{model}}。完成后即可使用听写。",
 	"settings.dictation": "语音输入",
 	"dictation.sounds": "播放提示音",
 	"dictation.soundsDescription": "听写开始和结束时播放短促的点击声。",

@@ -1,7 +1,4 @@
-import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { cn } from "../../lib/utils";
-import { ProgressRing } from "../ui/progress-ring";
 
 /** The bar alone. It only ever fills: the daemon's progress runs from start to finish and never goes back. */
 export function DictationProgressBar({ fraction, label }: { fraction: number; label: string }) {
@@ -41,28 +38,5 @@ export function DictationProgress({ stage, fraction }: { stage: string; fraction
 			</div>
 			<DictationProgressBar fraction={fraction} label={stage} />
 		</div>
-	);
-}
-
-/**
- * The update indicator's look: a glyph inside a hairline ring that fills with
- * the download. The ring is sized by the caller's width and height.
- */
-export function DictationRingGlyph({
-	fraction,
-	icon,
-	className,
-	iconClass = "[&_svg]:size-3",
-}: {
-	fraction: number;
-	icon: ReactNode;
-	className?: string;
-	iconClass?: string;
-}) {
-	return (
-		<span className={cn("relative grid place-items-center text-logo-accent", className)}>
-			<ProgressRing className="absolute inset-0 size-full" percent={Math.min(1, Math.max(0, fraction)) * 100} />
-			<span className={cn("grid place-items-center [&_svg]:stroke-[2.5]", iconClass)}>{icon}</span>
-		</span>
 	);
 }
