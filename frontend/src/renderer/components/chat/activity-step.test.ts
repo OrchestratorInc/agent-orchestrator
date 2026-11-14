@@ -331,6 +331,24 @@ describe("Orchestrator CLI", () => {
 		expect(isOrchestratorPlumbing(commandActivity({ detail: { command: "ao preview README.md" } }))).toBe(false);
 		expect(isOrchestratorPlumbing(toolActivity("Read", "read", { file_path: "/w/app/README.md" }))).toBe(false);
 	});
+
+	it("updates guide visibility when a command or its status changes", () => {
+		const activity = commandActivity({ detail: { command: "ao browser --help" } });
+		expect(isOrchestratorPlumbing(activity)).toBe(true);
+		expect(isOrchestratorPlumbing(activity)).toBe(true);
+		for (const status of ["failed", "cancelled"] as const) {
+			activity.status = status;
+			expect(isOrchestratorPlumbing(activity)).toBe(false);
+		}
+		activity.status = "running";
+		expect(isOrchestratorPlumbing(activity)).toBe(true);
+		activity.detail = { command: "ao preview README.md" };
+		expect(isOrchestratorPlumbing(activity)).toBe(false);
+		expect(isOrchestratorPlumbing(activity)).toBe(false);
+		activity.detail.command = "ao session --help";
+		expect(isOrchestratorPlumbing(activity)).toBe(true);
+		expect(isOrchestratorPlumbing(commandActivity({ id: activity.id, detail: { command: "npm test" } }))).toBe(false);
+	});
 });
 
 describe("program checks", () => {

@@ -624,6 +624,9 @@ function ghStep(args: string[]): CommandStep {
 	return { done: "Ran", live: "Running", target: ["gh", area, action].filter(Boolean).join(" "), icon: "git" };
 }
 
+// Reuse command classification while an activity remains loaded, without retaining discarded history.
+const guideCommandChecks = new WeakMap<ConversationActivity, { command: string; hidden: boolean }>();
+
 /**
  * A step the agent takes only to learn how to drive Orchestrator: reading the
  * guides that ship with it, or `ao … --help`. It is not work on the user's task,
@@ -640,9 +643,17 @@ export function isOrchestratorPlumbing(activity: ConversationActivity): boolean 
 		return typeof path === "string" && isOrchestratorGuide(path);
 	}
 	if (activity.activityKind !== "command" || !detail?.command) return false;
+	const cached = guideCommandChecks.get(activity);
+	if (cached?.command === detail.command) return cached.hidden;
+	const hidden = isPlumbingCommand(detail.command);
+	guideCommandChecks.set(activity, { command: detail.command, hidden });
+	return hidden;
+}
+
+function isPlumbingCommand(command: string): boolean {
 	// Every stage counts, piped ones too: `cat SKILL.md | cat > copy.md` writes a file.
 	let stages = 0;
-	for (const line of logicalLines(detail.command)) {
+	for (const line of logicalLines(command)) {
 		let words: Word[] = [];
 		for (const word of [...tokenize(line), { text: ";", operator: true } as Word]) {
 			if (!word.operator || word.text === ")") {

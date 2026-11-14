@@ -15,7 +15,7 @@ import type { Element, ElementContent, Root } from "hast";
  *     see them as plain strings;
  *   - any failure leaves the tree untouched, so the reply still renders.
  */
-const MAX_BLOCK_CHARS = 4000;
+const MAX_BLOCK_CHARS = 1000;
 const SKIP = new Set(["pre", "code"]);
 const SEGMENTER = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
