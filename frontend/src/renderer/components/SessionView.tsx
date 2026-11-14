@@ -631,12 +631,12 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const importBlock = useImportedAgentBlock(session, hostId);
 	const openedSession = useRef({ key: uiSessionId, checked: false });
 	const autoResume = useMutation({
-		mutationKey: ["resume-agent", "local", sessionId],
-		mutationFn: resumeAgentOnOpen,
+		mutationKey: ["resume-agent", hostId ?? "local", sessionId],
+		mutationFn: (id: string) => resumeAgentOnOpen(id, hostId),
 		onSettled: async (_data, _error, id) => {
 			await Promise.all([
 				refreshWorkspaces(),
-				queryClient.invalidateQueries({ queryKey: conversationQueryKey(id) }),
+				queryClient.invalidateQueries({ queryKey: conversationQueryKey(id, hostId) }),
 			]);
 		},
 	});
@@ -647,14 +647,14 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// already-resumed session no longer flashes "Resuming agent…" while the
 	// workspace query catches up with the new activity state.
 	const quietResume = (autoResume.variables === sessionId && autoResume.isPending) ||
-		(!usesPreviewWorkspaceData && !hostId && canResumeAgent(session, resumeStatus.transition) &&
+		(!usesPreviewWorkspaceData && canResumeAgent(session, resumeStatus.transition) &&
 		!resumeStatus.statusError && !importBlock.block && (openedSession.current.key !== uiSessionId || !openedSession.current.checked));
 	const resumeOnOpen = autoResume.mutate;
 	// This session's background resume failed; the chat shows why.
-	const autoResumeFailed = !hostId && autoResume.variables === sessionId && autoResume.isError;
+	const autoResumeFailed = autoResume.variables === sessionId && autoResume.isError;
 	useEffect(() => {
 		if (openedSession.current.key !== uiSessionId) openedSession.current = { key: uiSessionId, checked: false };
-		if (usesPreviewWorkspaceData || hostId || session?.cloud || !session || daemonStatus.state !== "ready" ||
+		if (usesPreviewWorkspaceData || session?.cloud || !session || (hostId ? !remoteBase || remoteSessionQuery.isFetching : daemonStatus.state !== "ready") ||
 			(session.statusReadiness && session.statusReadiness !== "ready") || openedSession.current.checked) return;
 		if (!session.needsResume && !sessionAgentExited(session)) {
 			openedSession.current.checked = true;
@@ -664,9 +664,9 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		// One attempt per route opening; a failed resume or a later agent exit
 		// stays stopped rather than entering an automatic restart loop.
 		openedSession.current.checked = true;
-		if (session.needsResume) trackImportFirstOpen(session.provider, resumeAgentOnOpen(session.id));
+		if (session.needsResume) trackImportFirstOpen(session.provider, resumeAgentOnOpen(session.id, hostId));
 		resumeOnOpen(session.id);
-	}, [canResume, daemonStatus.state, hostId, importBlock.block, importBlock.checking, resumeOnOpen, session, uiSessionId]);
+	}, [canResume, daemonStatus.state, hostId, importBlock.block, importBlock.checking, remoteBase, remoteSessionQuery.isFetching, resumeOnOpen, session, uiSessionId]);
 	const previewBaselineRef = useRef<{ sessionId: string; key: string } | null>(null);
 	const revealedBrowserCommandsRef = useRef<{ sessionId: string; commands: Set<string> }>({ sessionId: uiSessionId, commands: new Set() });
 	const sessionSplitRef = useRef<HTMLDivElement | null>(null);
@@ -2871,7 +2871,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 
 	return (
 		<div className="relative flex h-full min-h-0 flex-col bg-background text-foreground" data-testid="session-detail">
-			{!hostId && !session?.cloud && session?.mode !== "chat" && sessionAgentExited(session) && autoResume.variables === sessionId && autoResume.isError ? (
+			{!session?.cloud && session?.mode !== "chat" && sessionAgentExited(session) && autoResume.variables === sessionId && autoResume.isError ? (
 				<p className="px-4 py-2 text-xs text-error" role="alert">
 					{apiErrorMessage(autoResume.error)}
 				</p>

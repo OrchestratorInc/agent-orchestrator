@@ -32,25 +32,25 @@ export function resumeOpenElsewhere(error: unknown): boolean {
 }
 
 /**
- * Resume a local session's stopped agent, sharing one request per session.
- * Hovering a session starts it early; opening the session then joins the same
- * request instead of being refused as a second resume.
+ * Resume a session's stopped agent on its own host, sharing one request per
+ * session. Hovering a session starts it early; opening the session then joins
+ * the same request instead of being refused as a second resume.
  */
-export function resumeAgentOnOpen(sessionId: string): Promise<void> {
-	return resumeOnce(sessionId, async () => {
-		const { error, response } = await clientForSessionHost().POST("/api/v1/sessions/{sessionId}/resume-agent", {
+export function resumeAgentOnOpen(sessionId: string, hostId?: string): Promise<void> {
+	return resumeOnce(hostId ? `${hostId}:${sessionId}` : sessionId, async () => {
+		const { error, response } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/resume-agent", {
 			params: { path: { sessionId } },
 		});
 		if (error) throw resumeAgentError(error, response.status);
 	});
 }
 
-/** Run one resume per local session; later callers join the request in flight. */
-export function resumeOnce(sessionId: string, run: () => Promise<void>): Promise<void> {
-	const existing = resumesInFlight.get(sessionId);
+/** Run one resume per key; later callers join the request in flight. */
+export function resumeOnce(key: string, run: () => Promise<void>): Promise<void> {
+	const existing = resumesInFlight.get(key);
 	if (existing) return existing;
-	const request = run().finally(() => resumesInFlight.delete(sessionId));
-	resumesInFlight.set(sessionId, request);
+	const request = run().finally(() => resumesInFlight.delete(key));
+	resumesInFlight.set(key, request);
 	return request;
 }
 
