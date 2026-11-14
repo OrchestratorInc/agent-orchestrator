@@ -64,7 +64,7 @@ func TestMastraFormer213LedgerRestoresCanonicalStaleBinarySchema(t *testing.T) {
 }
 
 func TestMastraMigrationRoundTripFromCurrentMain(t *testing.T) {
-	const baseline int64 = 20261022172135175
+	const baseline int64 = 20261114072016988
 	db := openMigratedDatabaseCopy(t, baseline)
 	var before string
 	if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE name='sessions'`).Scan(&before); err != nil {
@@ -75,7 +75,7 @@ func TestMastraMigrationRoundTripFromCurrentMain(t *testing.T) {
 	}
 	mustExec(t, db, `INSERT INTO projects(id,path,registered_at) VALUES ('mastra-updown','/tmp/mastra-updown',CURRENT_TIMESTAMP)`)
 	insert := `INSERT INTO sessions(id,project_id,num,harness,created_at,updated_at,activity_last_at) VALUES (?,'mastra-updown',?,?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)`
-	upTo(t, db, 20261023182047274)
+	upTo(t, db, 20261114174310512)
 	mustExec(t, db, insert, "native", 1, "mastra-code")
 	mustExec(t, db, insert, "main-hermes", 2, "hermes")
 	if _, err := db.Exec(insert, "unknown", 3, "unknown-mastra"); err == nil {
