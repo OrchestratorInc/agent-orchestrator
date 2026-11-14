@@ -2217,6 +2217,16 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 		}
 		needsNativeAssistant = true
 	}
+	if !needsPool {
+		// The Pool migration widens any constraint ending in 'fake', so a
+		// database that skipped an earlier harness migration can carry Pool
+		// inside a historical variant. Set it aside like Hermes so the exact
+		// repairs below still match, then append it after them.
+		if _, err := db.Exec(`UPDATE sqlite_master SET sql = replace(sql, '''pool'', ', '') WHERE type = 'table' AND name = 'sessions'`); err != nil {
+			return fmt.Errorf("schema repair: normalize Pool constraint: %w", err)
+		}
+		needsPool = true
+	}
 	type replacement struct {
 		old string
 		new string
