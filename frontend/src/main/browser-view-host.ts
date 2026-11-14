@@ -369,6 +369,8 @@ type BrowserWebContents = Pick<
   closeDevTools?: () => void;
   close?: () => void;
   isFocused?: () => boolean;
+  isCurrentlyAudible?: () => boolean;
+  getOSProcessId?: () => number;
   session?: Pick<
     Session,
     | "on"
@@ -521,6 +523,21 @@ export type BrowserViewHostOptions = {
   // Test hook: how long a tab's initial about:blank load may take before
   // awaiting callers get a typed failure instead of hanging forever.
   entryReadyTimeoutMs?: number;
+  // Whether the session's agent is working. Such a session keeps its hidden
+  // tabs. Without this, or when it fails, no hidden tab is ever closed.
+  isAgentWorking?: (sessionId: string) => Promise<boolean>;
+  // A hidden session's tabs were closed to free memory, or rebuilt.
+  onHiddenTabs?: (event: BrowserHiddenTabsEvent) => void;
+};
+
+export type BrowserHiddenTabsEvent = {
+  kind: "discarded" | "restored";
+  sessionId: string;
+  tabs: number;
+  // Renderer processes of the closed tabs. Empty for "restored".
+  osProcessIds: number[];
+  // Whether the session's panel was ever on screen.
+  panelShown: boolean;
 };
 
 export type BrowserViewHost = {
@@ -648,9 +665,26 @@ type BrowserEntry = {
   faviconOrigin?: string;
 };
 
+// agentTab and viewer: an agent tab's binding and, until it is first shown,
+// its viewer (BrowserEntry). They are kept as is: its address says nothing
+// while its host is away.
+type SavedBrowserTab = { tabId: string; url?: string; agentTab?: string; viewer?: string };
+
 type BrowserSessionEntry = {
   sessionId: string;
   viewId: string;
+  // When the person or the agent last used this browser.
+  lastUsedAt: number;
+  // Set while the session's views are closed to free memory (discardSession):
+  // what restoreSession rebuilds, and what the panel shows until then.
+  discarded?: {
+    tabs: SavedBrowserTab[];
+    activeTabId: string;
+    nextTabNumber: number;
+    tabsState: BrowserTabsState & { untrustedExternalContent: true };
+    navState: BrowserNavState;
+  };
+  restoring?: Promise<void>;
   profileId: BrowserProfileId | null;
   profilePartition: string;
   tabs: Map<string, BrowserEntry>;
@@ -791,6 +825,16 @@ const MAX_NETWORK_REQUESTS = 200;
 // Keep a bounded, metadata-only history for explicit errors queries. Browser
 // failures must never be pushed into an agent's live conversation on their own.
 const MAX_BROWSER_SIGNALS = MAX_NETWORK_REQUESTS;
+// Tabs kept live in sessions whose panel is not on screen. Past this, the
+// least recently used hidden session's tabs are closed (discardSession) and
+// rebuilt from their URLs on next use.
+const MAX_HIDDEN_LIVE_TABS = 3;
+// A hidden session keeps its tabs this long after its last browser use.
+// agent-browser's own daemon exits after the same idle time.
+const HIDDEN_DISCARD_IDLE_MS = 5 * 60_000;
+// When every hidden session past the idle time is held (a working agent, a
+// phone watching), look again after this long.
+const HIDDEN_DISCARD_RECHECK_MS = 60_000;
 const MAX_BROWSER_SIGNAL_BYTES = 16 * 1024;
 const FAVICON_SIZE = 32;
 const MAX_FAVICON_BYTES = 256 * 1024;
@@ -1045,6 +1089,7 @@ export function createBrowserViewHost(
       0,
       session.agentBrowserCommands + (active ? 1 : -1),
     );
+    session.lastUsedAt = Date.now();
     if (!active) wakeIfIdle(session);
     shellWebContents.send("browser:agentActivity", {
       viewId: session.viewId,
@@ -1479,6 +1524,7 @@ export function createBrowserViewHost(
       activateTab(session, tabId, false);
       if (syncNativeOnActivate) queueNativeActiveTabSync(session);
     }
+    scheduleHiddenTabCap();
     return entry;
   };
 
@@ -1495,6 +1541,7 @@ export function createBrowserViewHost(
       session = {
         sessionId,
         viewId,
+        lastUsedAt: Date.now(),
         profileId,
         // Temporary workers still use a persist: partition: Electron's built-in
         // PDF viewer does not reliably render in in-memory partitions, while AO
@@ -1602,10 +1649,12 @@ export function createBrowserViewHost(
     operation: () => Promise<T>,
   ): Promise<T> => {
     session.browserOperations += 1;
+    session.lastUsedAt = Date.now();
     try {
       return await operation();
     } finally {
       session.browserOperations = Math.max(0, session.browserOperations - 1);
+      session.lastUsedAt = Date.now();
       wakeIfIdle(session);
     }
   };
@@ -2215,6 +2264,7 @@ export function createBrowserViewHost(
     session: BrowserSessionEntry,
     url?: string,
   ): Promise<BrowserTabsState> => {
+    if (session.discarded || session.restoring) await restoreSession(session);
     if (!options.agentBrowserRuntime) {
       await openTab(session, url, true);
       return listTabs(session);
@@ -2303,6 +2353,7 @@ export function createBrowserViewHost(
     session: BrowserSessionEntry,
     tabId: string,
   ): Promise<BrowserTabsState> => {
+    if (session.discarded || session.restoring) await restoreSession(session);
     if (!session.tabs.has(tabId)) return listTabs(session);
     const entry = session.tabs.get(tabId)!;
     const wasActive = session.activeTabId === tabId;
@@ -2758,9 +2809,11 @@ export function createBrowserViewHost(
     session.zoomFactor = effectiveZoomFactor;
     if (!visible) {
       session.bounds = OFFSCREEN_BOUNDS;
+      if (session.visible) session.lastUsedAt = Date.now();
       session.visible = false;
       if (!session.profileSwitching && session.tabs.size > 0)
         applySessionBounds(session, activeEntry(session));
+      scheduleHiddenTabCap();
       // Hiding the native surface (blank tab, transient measure) must not drop
       // the browser shortcut target — the panel chrome is still the context.
       forgetNativeFocus(viewId);
@@ -2781,6 +2834,9 @@ export function createBrowserViewHost(
         height: session.bounds.height,
       };
     }
+    session.lastUsedAt = Date.now();
+    if (session.discarded && !session.profileSwitching)
+      void restoreSession(session).catch(() => undefined);
     // A profile replacement may temporarily have no active tab. Keep accepting
     // renderer geometry during that interval; rebuilt tabs receive the latest
     // bounds instead of a stale pre-switch viewport.
@@ -2804,6 +2860,7 @@ export function createBrowserViewHost(
         "Browser target is unavailable",
       );
     assertProfileStable(session);
+    if (session.discarded || session.restoring) await restoreSession(session);
     return withBrowserOperation(session, async () => {
       if (!session.tabs.size) {
         const entry = await openTab(session, url, true);
@@ -2874,6 +2931,7 @@ export function createBrowserViewHost(
         "Browser target is unavailable",
       );
     assertProfileStable(session);
+    if (session.discarded || session.restoring) await restoreSession(session);
     session.livePreviewPending = false;
     return withBrowserOperation(session, async () => {
       if (!session.tabs.size) return emptyNavState(viewId);
@@ -3045,11 +3103,6 @@ export function createBrowserViewHost(
     entry.view.webContents.close?.();
   };
 
-  // agentTab and viewer: an agent tab's binding and, until it is first shown,
-  // its viewer (BrowserEntry). They are kept as is: its address says nothing
-  // while its host is away.
-  type SavedBrowserTab = { tabId: string; url?: string; agentTab?: string; viewer?: string };
-
   const disposeSessionTabs = (session: BrowserSessionEntry): void => {
     for (const entry of session.tabs.values()) {
       tabsByWebContentsId.delete(entry.view.webContents.id);
@@ -3087,6 +3140,8 @@ export function createBrowserViewHost(
     activeTabId: string,
     nextTabNumber: number,
     assertCurrentSession: () => void,
+    // Load the active tab's page before the others.
+    activeFirst = false,
   ): Promise<void> => {
     assertCurrentSession();
     session.activeTabId = "";
@@ -3116,7 +3171,10 @@ export function createBrowserViewHost(
       ? activeTabId
       : tabs[0]!.tabId;
     activateTab(session, nextActiveTabId, false);
-    for (const saved of tabs) {
+    const loadOrder = activeFirst
+      ? [...tabs].sort((a, b) => Number(b.tabId === nextActiveTabId) - Number(a.tabId === nextActiveTabId))
+      : tabs;
+    for (const saved of loadOrder) {
       if (!saved.url) continue;
       const entry = session.tabs.get(saved.tabId);
       if (!entry) continue;
@@ -3141,6 +3199,175 @@ export function createBrowserViewHost(
     // as active. Preserve that distinction so the next agent command selects
     // the right target.
     session.nativeActiveTabId = tabs.find((tab) => tab.agentTab === undefined)?.tabId;
+  };
+
+  // Whether a hidden session's views may be closed to free memory.
+  const canDiscard = (session: BrowserSessionEntry, now: number): boolean =>
+    !session.discarded &&
+    session.tabs.size > 0 &&
+    !session.visible &&
+    !session.live &&
+    !session.devtools &&
+    !session.profileSwitching &&
+    !session.profileReplacing &&
+    isBrowserIdle(session) &&
+    now - session.lastUsedAt >= HIDDEN_DISCARD_IDLE_MS &&
+    [...session.tabs.values()].every(
+      (tab) =>
+        // An agent tab's viewer is how a remote agent's pages reach the panel.
+        tab.agentTab === undefined &&
+        !tab.networkCapture &&
+        !tab.annotationEnabled &&
+        ![...tab.annotationSessions.values()].some(
+          ({ session: saved }) =>
+            saved.annotations.length > 0 || saved.screenshots.length > 0 || saved.draft,
+        ) &&
+        !tab.pendingNavigation &&
+        !tab.view.webContents.isLoading() &&
+        tab.view.webContents.isCurrentlyAudible?.() !== true,
+    );
+
+  // Closes a hidden session's views and keeps what restoreSession needs. Runs
+  // on the session's native queue: a command in flight finishes first, and
+  // the next one waits for agent-browser to close.
+  const discardSession = (session: BrowserSessionEntry): Promise<boolean> =>
+    queueNativeOperation(session, async () => {
+      if (entries.get(session.viewId) !== session || !canDiscard(session, Date.now()))
+        return false;
+      const active = session.tabs.get(session.activeTabId);
+      options.onHiddenTabs?.({
+        kind: "discarded",
+        sessionId: session.sessionId,
+        tabs: session.tabs.size,
+        osProcessIds: [
+          ...new Set(
+            [...session.tabs.values()].flatMap(
+              (tab) => tab.view.webContents.getOSProcessId?.() ?? [],
+            ),
+          ),
+        ],
+        panelShown: session.lastVisibleSize !== undefined,
+      });
+      session.discarded = {
+        tabs: savedTabsForSession(session),
+        activeTabId: session.activeTabId,
+        nextTabNumber: session.nextTabNumber,
+        tabsState: listTabs(session),
+        navState: active ? readNavState(active) : emptyNavState(session.viewId),
+      };
+      // As in a profile switch: a closing view must not report its tab closed.
+      session.profileReplacing = true;
+      try {
+        unregisterBrowserSignalWatcher(session);
+        disposeSessionTabs(session);
+      } finally {
+        session.profileReplacing = false;
+      }
+      forgetNativeFocus(session.viewId);
+      await options.agentBrowserRuntime?.closeSession(session.sessionId);
+      return true;
+    });
+
+  // Rebuilds a discarded session's tabs. The tabs exist again when this
+  // returns; the promise settles once their pages have loaded.
+  const restoreSession = (session: BrowserSessionEntry): Promise<void> => {
+    const saved = session.discarded;
+    if (!saved) return session.restoring ?? Promise.resolve();
+    session.discarded = undefined;
+    session.lastUsedAt = Date.now();
+    const restoring = rebuildSessionTabs(
+      session,
+      saved.tabs,
+      saved.activeTabId,
+      saved.nextTabNumber,
+      () => {
+        if (entries.get(session.viewId) !== session)
+          throw browserError(
+            "BROWSER_TARGET_UNAVAILABLE",
+            "Browser target is no longer available",
+          );
+      },
+      true,
+    )
+      .then(() => {
+        registerBrowserSignalWatcher(session);
+        pushTabsState(options, session);
+        if (session.tabs.size) pushNavState(options, activeEntry(session));
+        options.onHiddenTabs?.({
+          kind: "restored",
+          sessionId: session.sessionId,
+          tabs: session.tabs.size,
+          osProcessIds: [],
+          panelShown: session.lastVisibleSize !== undefined,
+        });
+      })
+      .catch((error: unknown) => {
+        // No view could be made: keep the tabs for the next attempt.
+        if (entries.get(session.viewId) === session && session.tabs.size === 0)
+          session.discarded = saved;
+        throw error;
+      })
+      .finally(() => {
+        if (session.restoring === restoring) session.restoring = undefined;
+      });
+    session.restoring = restoring;
+    return restoring;
+  };
+
+  let hiddenTabCapTimer: ReturnType<typeof setTimeout> | undefined;
+  let enforcingHiddenTabCap = false;
+  const hiddenLiveSessions = (): BrowserSessionEntry[] =>
+    [...entries.values()].filter((session) => !session.visible && session.tabs.size > 0);
+  const overHiddenTabCap = (sessions: BrowserSessionEntry[]): boolean =>
+    sessions.reduce((count, session) => count + session.tabs.size, 0) > MAX_HIDDEN_LIVE_TABS;
+
+  // While the cap is exceeded, one timer waits for the next hidden session to
+  // reach its idle time. recheck: nothing could be closed just now.
+  function scheduleHiddenTabCap(recheck = false): void {
+    if (!options.isAgentWorking || hiddenTabCapTimer !== undefined || disposePromise) return;
+    const hidden = hiddenLiveSessions();
+    if (!overHiddenTabCap(hidden)) return;
+    const now = Date.now();
+    const waits = hidden.map((session) => session.lastUsedAt + HIDDEN_DISCARD_IDLE_MS - now);
+    // A session already past its idle time can go now, unless it was just
+    // found held: then wait for the next session's time, or look again later.
+    const overdue = waits.some((wait) => wait <= 0);
+    const delay =
+      overdue && !recheck
+        ? 0
+        : Math.min(...waits.filter((wait) => wait > 0), ...(overdue ? [HIDDEN_DISCARD_RECHECK_MS] : []));
+    hiddenTabCapTimer = setTimeout(() => {
+      hiddenTabCapTimer = undefined;
+      void enforceHiddenTabCap();
+    }, delay);
+    hiddenTabCapTimer.unref?.();
+  }
+
+  // Closes the least recently used hidden sessions until the cap holds or no
+  // session may go.
+  const enforceHiddenTabCap = async (): Promise<void> => {
+    const isAgentWorking = options.isAgentWorking;
+    if (!isAgentWorking || enforcingHiddenTabCap) return;
+    enforcingHiddenTabCap = true;
+    // Sessions that stay in this pass: a working agent, or a change since the check.
+    const kept = new Set<BrowserSessionEntry>();
+    try {
+      while (!disposePromise) {
+        const hidden = hiddenLiveSessions();
+        if (!overHiddenTabCap(hidden)) return;
+        const now = Date.now();
+        const [candidate] = hidden
+          .filter((session) => !kept.has(session) && canDiscard(session, now))
+          .sort((a, b) => a.lastUsedAt - b.lastUsedAt);
+        if (!candidate) return;
+        const working = await isAgentWorking(candidate.sessionId).catch(() => true);
+        if (working || !(await discardSession(candidate).catch(() => false)))
+          kept.add(candidate);
+      }
+    } finally {
+      enforcingHiddenTabCap = false;
+      scheduleHiddenTabCap(true);
+    }
   };
 
   const switchProfile = async (
@@ -3217,6 +3444,9 @@ export function createBrowserViewHost(
       }
     };
     try {
+      // A discarded session's tabs come back first: the switch below saves
+      // and rebuilds whatever tabs the session has.
+      if (session.discarded || session.restoring) await restoreSession(session);
       // A confirmed human switch outranks in-flight browser work. Setting
       // profileSwitching above already refuses new agent commands; let the ones
       // in flight finish. Page loads can stay pending for as long as a slow page
@@ -3351,9 +3581,9 @@ export function createBrowserViewHost(
     const session = entries.get(viewId);
     if (!session) return null;
     return {
-      hasNavigated: [...session.tabs.values()].some(
-        (entry) => !isBlankBrowserEntry(entry),
-      ),
+      hasNavigated:
+        [...session.tabs.values()].some((entry) => !isBlankBrowserEntry(entry)) ||
+        Boolean(session.discarded?.tabs.some((tab) => tab.url)),
       // Renderer page loads do not block: switchProfile stops them itself.
       agentActive: session.agentBrowserCommands > 0 || session.profileSwitching,
     };
@@ -3645,7 +3875,8 @@ export function createBrowserViewHost(
     );
     pushDevToolsState(session);
     pushProfileState(session);
-    return session.tabs.size ? pushNavState(options, activeEntry(session)) : emptyNavState(session.viewId);
+    if (session.tabs.size) return pushNavState(options, activeEntry(session));
+    return session.discarded?.navState ?? emptyNavState(session.viewId);
   });
   on("browser:setBounds", (event, input: BrowserBoundsInput) => {
     if (!input || !isRendererOwned(event, input.viewId)) return;
@@ -3886,6 +4117,7 @@ export function createBrowserViewHost(
     if (!session || !isRendererOwned(event, input.viewId))
       return emptyTabsState(input.viewId);
     assertProfileStable(session);
+    void restoreSession(session).catch(() => undefined);
     return queueNativeOperation(session, async () => {
       activateTab(session, input.tabId);
       if (session.tabs.get(input.tabId)?.agentTab === undefined)
@@ -3933,6 +4165,7 @@ export function createBrowserViewHost(
     if (!session || !isRendererOwned(event, input.viewId))
       return emptyTabsState(input.viewId);
     assertProfileStable(session);
+    if (session.discarded || session.restoring) await restoreSession(session);
     let url = input.url;
     if (url) {
       const normalized = normalizeBrowserURL(url);
@@ -4118,6 +4351,7 @@ export function createBrowserViewHost(
 	async function startLiveStream(sessionId: string, streamId: number, sink: BrowserLiveSink): Promise<BrowserLiveState> {
 		if (!Number.isSafeInteger(streamId) || streamId <= 0) throw browserError("INVALID_ARGUMENT", "streamId is invalid");
 		const session = await ensureSessionReady(sessionId);
+		if (session.discarded || session.restoring) await restoreSession(session);
 		if (session.live) await stopLiveCapture(session);
 		session.live = { streamId, sink };
 		// Report an empty browser immediately, even before a hidden renderer
@@ -4313,6 +4547,7 @@ export function createBrowserViewHost(
           "Browser profile switching is in progress",
         );
       }
+      if (session.discarded || session.restoring) await restoreSession(session);
       if (!session.tabs.size && action === "tabs") return agentTabsResult(session);
       const commandId = randomUUID();
       setAgentBrowserActivity(session, action, true, commandId, "started");
@@ -4954,6 +5189,8 @@ export function createBrowserViewHost(
       if (disposePromise) return disposePromise;
       disposePromise = (async () => {
         ipcDisposers.splice(0).forEach((dispose) => dispose());
+        if (hiddenTabCapTimer !== undefined) clearTimeout(hiddenTabCapTimer);
+        hiddenTabCapTimer = undefined;
         options.browserDownloadManager?.dispose();
         for (const viewId of [...entries.keys()]) {
           destroy(viewId);
@@ -5677,6 +5914,9 @@ function listTabs(
   session: BrowserSessionEntry,
   change?: BrowserTabsState["change"],
 ): BrowserTabsState & { untrustedExternalContent: true } {
+  // A discarded session still lists the tabs it will rebuild.
+  if (session.discarded)
+    return { ...session.discarded.tabsState, ...(change ? { change } : {}) };
   return {
     viewId: session.viewId,
     activeTabId: session.activeTabId,

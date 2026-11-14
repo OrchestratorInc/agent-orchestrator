@@ -1,6 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { net } from "electron";
 import {
+	type BrowserHiddenTabsEvent,
 	type BrowserNavState,
 	type BrowserRect,
 	type BrowserTabsState,
@@ -1223,7 +1224,11 @@ function setupTabHost(
 	loadURLHook?: (viewIndex: number, url: string) => Promise<void>,
 	browserHistoryStore?: BrowserHistoryStore,
 	clearBrowserProfileData = vi.fn(async (_partition: string) => undefined),
-	overrides?: { entryReadyTimeoutMs?: number },
+	overrides?: {
+		entryReadyTimeoutMs?: number;
+		isAgentWorking?: (sessionId: string) => Promise<boolean>;
+		onHiddenTabs?: (event: BrowserHiddenTabsEvent) => void;
+	},
 	prepareBrowserPartition?: (partition: string) => void,
 ) {
 	const constructorOptions: Array<{
@@ -1454,6 +1459,8 @@ function setupTabHost(
 		clearBrowserProfileData,
 		prepareBrowserPartition,
 		entryReadyTimeoutMs: overrides?.entryReadyTimeoutMs,
+		isAgentWorking: overrides?.isAgentWorking,
+		onHiddenTabs: overrides?.onHiddenTabs,
 		onNativeViewAdded,
 		onTabCloseFailure,
 		// Kept only as a regression tripwire: the removed auto-send path used
@@ -6655,5 +6662,138 @@ describe("browser human pointer and annotated screenshots", () => {
 		expect(runtime.screenshot).toHaveBeenNthCalledWith(2, "sess-1", expect.anything(), undefined, { annotate: true });
 		expect(plain).toMatchObject({ width: 1, height: 1 });
 		expect(annotated).toMatchObject({ annotations: [{ number: 1, ref: "e1", role: "button", name: "Save" }] });
+	});
+});
+
+describe("hidden tab cap", () => {
+	const IDLE_MS = 5 * 60_000;
+	const page = (sessionId: string) => `http://localhost:3000/${sessionId}`;
+	const shown = { revision: 1, rect: { x: 24, y: 32, width: 640, height: 420 }, visible: true };
+
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	// Four sessions, each with one page in a tab whose panel is not on screen.
+	async function fourHiddenSessions(store?: BrowserProfileStore, working: string[] = []) {
+		vi.useFakeTimers();
+		const isAgentWorking = vi.fn(async (sessionId: string) => working.includes(sessionId));
+		const onHiddenTabs = vi.fn();
+		const lab = setupTabHost(store, false, undefined, undefined, undefined, { isAgentWorking, onHiddenTabs });
+		const viewIds: string[] = [];
+		for (const sessionId of ["s1", "s2", "s3", "s4"]) {
+			const nav = (await lab.invoke("browser:ensure", sessionId, false)) as BrowserNavState;
+			await lab.invoke("browser:navigate", { viewId: nav.viewId, url: page(sessionId) });
+			viewIds.push(nav.viewId);
+			await vi.advanceTimersByTimeAsync(1_000);
+		}
+		const closed = () => lab.views.map((view) => view.webContents.close.mock.calls.length > 0);
+		return { ...lab, isAgentWorking, onHiddenTabs, viewIds, closed };
+	}
+
+	it("closes the least recently used hidden session after five idle minutes and keeps listing its tabs", async () => {
+		const { clearBrowserProfileData, closed, invoke, onHiddenTabs, runtime, viewIds, views } = await fourHiddenSessions();
+		await vi.advanceTimersByTimeAsync(IDLE_MS - 5_000);
+		expect(closed()).toEqual([false, false, false, false]);
+
+		await vi.advanceTimersByTimeAsync(5_000);
+		expect(closed()).toEqual([true, false, false, false]);
+		expect(runtime.closeSession).toHaveBeenCalledWith("s1");
+		expect(clearBrowserProfileData).not.toHaveBeenCalled();
+		expect(onHiddenTabs).toHaveBeenCalledWith(
+			expect.objectContaining({ kind: "discarded", sessionId: "s1", tabs: 1, panelShown: false }),
+		);
+
+		expect(await invoke("browser:getTabs", viewIds[0])).toMatchObject({
+			activeTabId: "t1",
+			tabs: [{ id: "t1", url: page("s1"), active: true }],
+		});
+		expect(await invoke("browser:ensure", "s1", false)).toMatchObject({ url: page("s1") });
+		expect(views).toHaveLength(4);
+	});
+
+	it("rebuilds the tabs in the same partition when the panel is shown", async () => {
+		const { constructorOptions, emit, invoke, onHiddenTabs, viewIds, views } = await fourHiddenSessions();
+		await vi.advanceTimersByTimeAsync(IDLE_MS);
+
+		emit("browser:setBounds", { viewId: viewIds[0], ...shown });
+		await vi.advanceTimersByTimeAsync(0);
+		expect(views).toHaveLength(5);
+		expect(constructorOptions[4]!.webPreferences.partition).toBe(constructorOptions[0]!.webPreferences.partition);
+		expect(views[4]!.webContents.loadURL).toHaveBeenCalledWith(page("s1"));
+		expect(views[4]!.setBounds).toHaveBeenCalledWith(shown.rect);
+		expect(await invoke("browser:getTabs", viewIds[0])).toMatchObject({
+			activeTabId: "t1",
+			tabs: [{ id: "t1", url: page("s1"), active: true }],
+		});
+		expect(onHiddenTabs).toHaveBeenCalledWith(expect.objectContaining({ kind: "restored", sessionId: "s1", tabs: 1 }));
+	});
+
+	it("rebuilds once and loads the page before an agent command runs", async () => {
+		const { emit, host, viewIds, views } = await fourHiddenSessions();
+		await vi.advanceTimersByTimeAsync(IDLE_MS);
+
+		emit("browser:setBounds", { viewId: viewIds[0], ...shown });
+		const url = await host.execute("s1", "get", { property: "url" });
+		expect(url).toMatchObject({ value: page("s1") });
+		expect(views).toHaveLength(5);
+	});
+
+	it.each<[string, (lab: Awaited<ReturnType<typeof fourHiddenSessions>>) => unknown]>([
+		["its panel is on screen", ({ emit, viewIds }) => emit("browser:setBounds", { viewId: viewIds[0], ...shown })],
+		["DevTools is open", ({ invoke, viewIds }) => invoke("browser:devtools", { viewId: viewIds[0], operation: "open" })],
+		["it holds a network capture", ({ host }) => host.execute("s1", "network-start", { durationSeconds: 30 })],
+		["annotation mode is on", ({ invoke, viewIds }) => invoke("browser:annotation:setMode", { viewId: viewIds[0], enabled: true })],
+		["a tab is playing audio", ({ views }) => Object.assign(views[0]!.webContents, { isCurrentlyAudible: () => true })],
+	])("keeps a session while %s", async (_name, hold) => {
+		const lab = await fourHiddenSessions();
+		await hold(lab);
+		// Only s1 reaches the idle time: the others are used just before it.
+		await vi.advanceTimersByTimeAsync(IDLE_MS - 10_000);
+		for (const sessionId of ["s2", "s3", "s4"]) await lab.host.execute(sessionId, "tabs");
+		await vi.advanceTimersByTimeAsync(20_000);
+		expect(lab.closed()).toEqual([false, false, false, false]);
+	});
+
+	it("keeps a session whose agent is working and closes the next one", async () => {
+		const { closed, isAgentWorking } = await fourHiddenSessions(undefined, ["s1"]);
+		await vi.advanceTimersByTimeAsync(IDLE_MS + 5_000);
+		expect(isAgentWorking).toHaveBeenCalledWith("s1");
+		expect(closed()).toEqual([false, true, false, false]);
+	});
+
+	it("keeps a session used in the last five minutes and closes the next one", async () => {
+		const { closed, host } = await fourHiddenSessions();
+		await vi.advanceTimersByTimeAsync(IDLE_MS - 60_000);
+		await host.execute("s1", "tabs");
+		await vi.advanceTimersByTimeAsync(65_000);
+		expect(closed()).toEqual([false, true, false, false]);
+	});
+
+	it("builds no view and clears the temporary partition when a discarded session ends", async () => {
+		const { clearBrowserProfileData, constructorOptions, emit, viewIds, views } = await fourHiddenSessions();
+		await vi.advanceTimersByTimeAsync(IDLE_MS);
+
+		emit("browser:destroy", viewIds[0]);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(views).toHaveLength(4);
+		expect(clearBrowserProfileData).toHaveBeenCalledWith(constructorOptions[0]!.webPreferences.partition);
+	});
+
+	it("carries a discarded session's tabs through a profile switch", async () => {
+		const profile: BrowserProfile = {
+			id: "22222222-2222-4222-8222-222222222222",
+			name: "Work",
+			createdAt: "2026-01-01T00:00:00.000Z",
+			updatedAt: "2026-01-01T00:00:00.000Z",
+		};
+		const { host, invoke, viewIds } = await fourHiddenSessions(fakeBrowserProfileStore(profile, { s1: profile.id }));
+		await vi.advanceTimersByTimeAsync(IDLE_MS);
+
+		await host.switchProfile(viewIds[0]!, null);
+		expect(await invoke("browser:getTabs", viewIds[0])).toMatchObject({
+			activeTabId: "t1",
+			tabs: [{ id: "t1", url: page("s1"), active: true }],
+		});
 	});
 });
