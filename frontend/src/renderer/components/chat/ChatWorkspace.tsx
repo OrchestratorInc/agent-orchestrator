@@ -53,6 +53,7 @@ import { Archive, ArrowDown, Columns2, FlaskConical, ListTodo, Loader2, Notebook
 import { AnimatePresence, motion, Reorder, useReducedMotion } from "motion/react";
 import { useTranslation } from "react-i18next";
 import { ChatSelectionActions } from "./ChatSelectionActions";
+import { ChatAnnotationMarkers, DraftAnnotationMarkers, numberedReferences } from "./ChatAnnotationMarkers";
 import { selectionRangesEqual } from "../../lib/selection-toolbar";
 import { useScrollFollow } from "../../hooks/useScrollFollow";
 import {
@@ -82,6 +83,7 @@ import {
 	chatDraftScopeKey,
 	chatQueuedAttachmentScopeKey,
 	readChatSessionDraft,
+	getChatComposerMutation,
 	subscribeChatDraftRuntime,
 	writeChatInlineEdit,
 	writeChatExcerptReferences,
@@ -3127,6 +3129,8 @@ export function Timeline({
 	onAddToSideChat,
 	checkingSideChatAvailability,
 	onAddToChat,
+	annotations,
+	onAnnotationsChange,
 	onForeignAnnotation,
 	annotationNavigationRef,
 	snapshot: sourceSnapshot,
@@ -3176,6 +3180,8 @@ export function Timeline({
 	checkingSideChatAvailability?: boolean;
 	/** Replaces the default "Add to chat" (write to this draft scope's composer). */
 	onAddToChat?: (excerpt: ChatDraftExcerptReference) => void | Promise<void>;
+	annotations?: readonly ChatDraftExcerptReference[];
+	onAnnotationsChange?: (annotations: ChatDraftExcerptReference[]) => void | Promise<void>;
 	/** Handles annotations whose source is another conversation. */
 	onForeignAnnotation?: (annotation: { text: string; snapshot?: ChatExcerptSnapshot; messageId?: string; revision?: number; conversationId?: string }) => void;
 	annotationNavigationRef: MutableRefObject<((annotation: { text: string; snapshot?: ChatExcerptSnapshot; messageId?: string; revision?: number; activitySequence?: number }) => void) | null>;
@@ -3367,11 +3373,14 @@ export function Timeline({
 		range: Range;
 	} | null>(null);
 	const clearSelectionAction = useCallback(() => setSelectionAction(null), []);
+	const selectionComment = useRef("");
+	const [editingAnnotation, setEditingAnnotation] = useState<{ excerpt: ChatDraftExcerptReference; range: Range } | null>(null);
+	const closeEditingAnnotation = useCallback(() => setEditingAnnotation(null), []);
 	const selectionActionRef = useRef(selectionAction);
 	selectionActionRef.current = selectionAction;
 	const dismissedSelection = useRef<typeof selectionAction>(null);
 	const dismissedEscapePress = useRef(false);
-	useEffect(() => { dismissedSelection.current = null; clearSelectionAction(); }, [snapshot.conversationId, clearSelectionAction]);
+	useEffect(() => { dismissedSelection.current = null; clearSelectionAction(); closeEditingAnnotation(); }, [snapshot.conversationId, clearSelectionAction, closeEditingAnnotation]);
 	const [annotationTarget, setAnnotationTarget] = useState<{ text: string; snapshot?: ChatExcerptSnapshot; messageId?: string; revision?: number; activitySequence?: number }>();
 	const [annotationNavigationError, setAnnotationNavigationError] = useState<string>();
 	const annotationHighlightCleanup = useRef<(() => void) | undefined>(undefined);
@@ -3459,12 +3468,13 @@ export function Timeline({
 		inlineEditPending || (acceptedEditClearFailed && !durableInlineEditDelivery);
 
 	const captureTranscriptSelection = useCallback((event?: Event) => {
-		if ((event?.target as Element | null)?.closest?.("[data-chat-selection-actions]")) return;
+		if ((event?.target as Element | null)?.closest?.("[data-chat-selection-actions], [data-chat-annotation-marker]")) return;
 		if (event instanceof KeyboardEvent && !/^(Arrow(Up|Down|Left|Right)|Home|End|PageUp|PageDown|Shift)$/i.test(event.key) &&
 			!((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "a")) return;
 		const selection = window.getSelection();
+		if (event?.type === "pointerup") setEditingAnnotation(null);
 		if (!excerptsEnabled || !selection || selection.isCollapsed || selection.rangeCount === 0) {
-			setSelectionAction(null);
+			if (!selectionComment.current.trim()) setSelectionAction(null);
 			return;
 		}
 		const anchor = selection.anchorNode instanceof Element
@@ -3565,9 +3575,9 @@ export function Timeline({
 		};
 	}, [captureTranscriptSelection, clearSelectionAction, excerptsEnabled]);
 
-	const addSelectionToChat = useCallback(async () => {
+	const addSelectionToChat = useCallback(async (comment: string) => {
 		if (!selectionAction) return;
-		const excerpt = captureExcerptTurn(selectionAction.excerpt, snapshot);
+		const excerpt = { ...captureExcerptTurn(selectionAction.excerpt, snapshot), ...(comment ? { comment } : {}) };
 		if (onAddToChat) {
 			// A host with its own composer (a side chat) owns where references go.
 			await onAddToChat(excerpt);
@@ -3576,11 +3586,9 @@ export function Timeline({
 			return;
 		}
 		const composer = readChatSessionDraft(draftScope).composer;
-		// A pending delivery is cleared by revision on acceptance. Changing the
-		// draft now would keep the sent text and excerpts for a second send.
-		if (composer.delivery) throw new Error("chat.draft.excerptPendingDelivery");
+		if (getChatComposerMutation(draftScope).pending && !composer.delivery) throw new Error("chat.draft.excerptPendingDelivery");
 		const current = composer.excerpts ?? [];
-		const duplicate = current.some(
+		const duplicate = current.find(
 			(item) =>
 				item.messageId === selectionAction.excerpt.messageId &&
 				item.revision === selectionAction.excerpt.revision &&
@@ -3594,7 +3602,9 @@ export function Timeline({
 			return;
 		}
 		const order = Math.max(Date.now(), ...current.map(item => (item.order ?? 0) + 1), ...(composer.fileReferences ?? []).map(item => item.order + 1));
-		const next = duplicate ? current : [...current, { ...excerpt, order }];
+		const next = duplicate
+			? current.map((item) => (item === duplicate && comment ? { ...item, comment } : item))
+			: [...current, { ...excerpt, order }];
 		const sizeError = excerptSizeError(next);
 		if (sizeError) throw new Error(sizeError);
 		const result = writeChatExcerptReferences(draftScope, next);
@@ -3603,6 +3613,30 @@ export function Timeline({
 		setSelectionAction(null);
 		window.getSelection()?.removeAllRanges();
 	}, [draftScope, onAddToChat, selectionAction, snapshot]);
+	const rewriteAnnotation = useCallback(async (id: string, change: (item: ChatDraftExcerptReference) => ChatDraftExcerptReference | undefined) => {
+		const apply = (items: readonly ChatDraftExcerptReference[]) => items.flatMap((item) => {
+			if (item.id !== id) return [item];
+			const next = change(item);
+			return next ? [next] : [];
+		});
+		if (onAnnotationsChange) {
+			await onAnnotationsChange(apply(annotations ?? []));
+			setEditingAnnotation(null);
+			return;
+		}
+		const composer = readChatSessionDraft(draftScope).composer;
+		if (getChatComposerMutation(draftScope).pending && !composer.delivery) throw new Error("chat.draft.excerptPendingDelivery");
+		const result = writeChatExcerptReferences(draftScope, apply(composer.excerpts ?? []));
+		setDraftPersistenceError(result.ok ? undefined : "chat.draft.saveFailed");
+		if (!result.ok) throw new Error("chat.draft.excerptSaveFailed");
+		setEditingAnnotation(null);
+	}, [annotations, draftScope, onAnnotationsChange]);
+	const openAnnotation = useCallback((excerpt: ChatDraftExcerptReference, range: Range) => {
+		selectionComment.current = "";
+		setSelectionAction(null);
+		window.getSelection()?.removeAllRanges();
+		setEditingAnnotation((current) => (current?.excerpt.id === excerpt.id ? null : { excerpt, range }));
+	}, []);
 	const inlineEditRecoveryLabel = durableInlineEditDelivery
 		? durableInlineEditDelivery.state === "accepted"
 			? "chat.draft.clearEdit"
@@ -4133,6 +4167,7 @@ export function Timeline({
 					annotationId: excerpt.id, annotationOrder: excerpt.order,
 					type: "excerpt",
 					text: excerpt.text,
+					comment: excerpt.comment,
 					sourceConversationId: excerpt.conversationId,
 					sourceMessageId: excerpt.messageId,
 					sourceRevision: excerpt.revision, snapshot: excerpt.snapshot,
@@ -5260,8 +5295,19 @@ export function Timeline({
 		>
 			{find.bar}
 			{selectionAction ? <ChatSelectionActions key={selectionAction.excerpt.id} selection={selectionAction}
-				viewportRef={scroller} onInvalid={clearSelectionAction} onAdd={addSelectionToChat}
-				onSide={onAddToSideChat ? excerpt => onAddToSideChat(captureExcerptTurn(excerpt, snapshot)) : undefined} checkingSide={checkingSideChatAvailability} /> : null}
+				viewportRef={scroller} onInvalid={clearSelectionAction} onAdd={addSelectionToChat} commentRef={selectionComment}
+				onSide={onAddToSideChat ? excerpt => onAddToSideChat(captureExcerptTurn(excerpt, snapshot)) : undefined} checkingSide={checkingSideChatAvailability} /> :
+				editingAnnotation ? <ChatSelectionActions key={`edit-${editingAnnotation.excerpt.id}`} selection={editingAnnotation}
+					viewportRef={scroller} onInvalid={closeEditingAnnotation}
+					onAdd={(comment) => rewriteAnnotation(editingAnnotation.excerpt.id, (item) => ({ ...item, comment: comment || undefined }))}
+					onRemove={() => rewriteAnnotation(editingAnnotation.excerpt.id, () => undefined)} /> : null}
+			{!excerptsEnabled ? null : onAddToChat ? (
+				<ChatAnnotationMarkers markers={numberedReferences(annotations ?? [])} conversationId={snapshot.conversationId}
+					contentRef={scrollContent} viewportRef={scroller} activeId={editingAnnotation?.excerpt.id} onOpen={openAnnotation} />
+			) : (
+				<DraftAnnotationMarkers draftScope={draftScope} conversationId={snapshot.conversationId}
+					contentRef={scrollContent} viewportRef={scroller} activeId={editingAnnotation?.excerpt.id} onOpen={openAnnotation} />
+			)}
 			<div
 				ref={scrollerRef}
 				tabIndex={-1}

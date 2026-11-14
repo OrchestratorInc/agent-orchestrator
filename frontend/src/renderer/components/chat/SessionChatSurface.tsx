@@ -755,6 +755,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 							messageId: excerpt.messageId,
 							revision: excerpt.revision,
 							text: excerpt.text,
+							comment: excerpt.comment,
 						})),
 					};
 					// A new message replaces an earlier switch's failure.
