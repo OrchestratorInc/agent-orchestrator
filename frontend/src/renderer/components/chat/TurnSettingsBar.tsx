@@ -35,6 +35,7 @@ import { cn } from "../../lib/utils";
 import { effortDisplayLabel, EffortMenuItems, EffortPicker, formatEffortLabel } from "../settings/EffortPicker";
 import { agentModelDisplayLabel, claudeChoiceModel, isDefaultPlaceholderLabel, splitClaudeModels } from "../../lib/agent-model-choices";
 import { Switch } from "../ui/switch";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../ui/tooltip";
 import { Button, GHOST_PILL_CLASS } from "../ui/button";
 import { agentLabel } from "../../lib/agent-options";
 import { AgentModelPicker, AutoCompactRow, compactsEarly, ToggleRow, type AgentSwitchProps, type PickerSource } from "./AgentSwitchPicker";
@@ -256,6 +257,7 @@ export function TurnSettingsBar({
 		: modelLabel;
 	const grouped = partitionConfigOptions(displayConfigOptions, harness !== "agy");
 	const optionDisabled = Boolean(disabled || configPending || rememberPermissionsPending);
+	const settingsProblem = [error, rememberPermissionsError].filter(Boolean).join(" · ") || undefined;
 	const applyOption = (optionId: string, value: ChatConfigOptionValue) => {
 		if (!onChangeConfigOption) return;
 		const providerId = harness === "agy" && optionId === AGY_MODEL_EFFORT
@@ -548,6 +550,22 @@ export function TurnSettingsBar({
 							onChange={applyOption}
 						/>
 					) : null}
+
+					{/* In the row's free space beside the pickers, so an error never makes the composer taller.
+					    The icon always keeps its room, and the whole message opens on hover or keyboard focus. */}
+					{settingsProblem ? (
+						<TooltipProvider>
+							<Tooltip>
+								<TooltipTrigger asChild>
+									<p role="alert" tabIndex={0} className="ml-1 flex min-w-3.5 flex-1 cursor-default items-center gap-1.5 overflow-hidden text-xs text-destructive">
+										<TriangleAlert aria-hidden="true" className="size-3.5 shrink-0" />
+										<span className="min-w-0 truncate">{settingsProblem}</span>
+									</p>
+								</TooltipTrigger>
+								<TooltipContent side="top" className="max-w-80">{settingsProblem}</TooltipContent>
+							</Tooltip>
+						</TooltipProvider>
+					) : null}
 				</div>
 
 				{showRightDropdown || children || (unified && planOn) ? (
@@ -659,14 +677,6 @@ export function TurnSettingsBar({
 					</div>
 				) : null}
 			</div>
-			{rememberPermissionsError ? (
-				<p role="alert" className="px-1 text-xs text-destructive">{rememberPermissionsError}</p>
-			) : null}
-			{error ? (
-				<p role="alert" className="px-1 text-xs leading-snug text-destructive">
-					{error}
-				</p>
-			) : null}
 		</div>
 	);
 }
