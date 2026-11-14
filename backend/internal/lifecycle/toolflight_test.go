@@ -90,6 +90,119 @@ func TestToolPrecedence_ApprovedToolFailurePostAlsoClears(t *testing.T) {
 	}
 }
 
+func TestToolPrecedence_TwoOpenDialogsStayBlockedUntilBothToolsFinish(t *testing.T) {
+	// OpenCode forwards each ask's blocked tool id, so both dialogs are tracked
+	// as candidates. The newest ask must not retire the first: that tool
+	// finishing while the older dialog is still on screen would set the session
+	// active and let `ao send` type into the live dialog.
+	m, st, _ := newManager()
+	seedSignaled(st, "mer-1", domain.ActivityActive)
+
+	mustApply(t, m, "mer-1", sig(domain.ActivityActive, "pre-tool-use", "Bash", "call_1"))
+	mustApply(t, m, "mer-1", sig(domain.ActivityBlocked, "permission-blocked", "", "call_1"))
+	mustApply(t, m, "mer-1", sig(domain.ActivityActive, "pre-tool-use", "Read", "call_2"))
+	mustApply(t, m, "mer-1", sig(domain.ActivityBlocked, "permission-blocked", "", "call_2"))
+	if got := stateOf(st, "mer-1"); got != domain.ActivityBlocked {
+		t.Fatalf("setup: state = %q, want blocked", got)
+	}
+
+	mustApply(t, m, "mer-1", sig(domain.ActivityActive, "post-tool-use", "Read", "call_2"))
+	if got := stateOf(st, "mer-1"); got != domain.ActivityBlocked {
+		t.Fatalf("state after the newest dialog's tool finished = %q, want blocked while the first dialog remains", got)
+	}
+
+	mustApply(t, m, "mer-1", sig(domain.ActivityActive, "post-tool-use", "Bash", "call_1"))
+	if got := stateOf(st, "mer-1"); got != domain.ActivityActive {
+		t.Fatalf("state after every tracked dialog's tool finished = %q, want active", got)
+	}
+}
+
+func TestToolPrecedence_IdCorrelatedAskStillClearsOnItsOwnPost(t *testing.T) {
+	// The single-dialog case must keep the precise correlation the id enables:
+	// that exact tool's post lifts the block without waiting for the turn.
+	m, st, _ := newManager()
+	seedSignaled(st, "mer-1", domain.ActivityActive)
+
+	mustApply(t, m, "mer-1", sig(domain.ActivityActive, "pre-tool-use", "Bash", "call_1"))
+	mustApply(t, m, "mer-1", sig(domain.ActivityBlocked, "permission-blocked", "", "call_1"))
+
+	mustApply(t, m, "mer-1", sig(domain.ActivityActive, "post-tool-use", "Bash", "call_1"))
+	if got := stateOf(st, "mer-1"); got != domain.ActivityActive {
+		t.Fatalf("state after the blocked tool's post = %q, want active", got)
+	}
+}
+
+func TestToolPrecedence_NonOpenCodeAsksKeepReplaceSemantics(t *testing.T) {
+	// Accumulation is OpenCode-specific: its asks really are open at once and its
+	// plugin reports permission-resolved on the last reply. Every other harness
+	// keeps the snapshot semantics, so a dialog whose tool never posts (a denial
+	// that emits no post) cannot strand the session blocked past the next dialog.
+	m, st, _ := newManager()
+	seedSignaled(st, "mer-1", domain.ActivityActive)
+
+	// Dialog 1 is approved-but-denied: its tool never posts.
+	mustApply(t, m, "mer-1", sig(domain.ActivityActive, "pre-tool-use", "Bash", "toolu_1"))
+	mustApply(t, m, "mer-1", sig(domain.ActivityBlocked, "permission-request", "Bash", ""))
+	if got := stateOf(st, "mer-1"); got != domain.ActivityBlocked {
+		t.Fatalf("setup: state = %q, want blocked", got)
+	}
+
+	// Dialog 2 replaces the stale candidate, so its own post clears the block.
+	mustApply(t, m, "mer-1", sig(domain.ActivityActive, "pre-tool-use", "Read", "toolu_2"))
+	mustApply(t, m, "mer-1", sig(domain.ActivityBlocked, "permission-request", "Read", ""))
+	mustApply(t, m, "mer-1", sig(domain.ActivityActive, "post-tool-use", "Read", "toolu_2"))
+	if got := stateOf(st, "mer-1"); got != domain.ActivityActive {
+		t.Fatalf("state after the second dialog's tool posted = %q, want active (replace, not accumulate)", got)
+	}
+}
+
+func TestToolPrecedence_OpenCodeAsksStayBlockedAfterADeniedDialog(t *testing.T) {
+	// The OpenCode counterpart of the replace test: its asks accumulate, so a
+	// denied dialog (no post) keeps the block until the plugin's permission
+	// resolution or a turn boundary — never silently accepting sends while a
+	// dialog may still be on screen.
+	m, st, _ := newManager()
+	seedSignaled(st, "mer-1", domain.ActivityActive)
+
+	mustApply(t, m, "mer-1", sig(domain.ActivityActive, "pre-tool-use", "Bash", "call_1"))
+	mustApply(t, m, "mer-1", sig(domain.ActivityBlocked, "permission-blocked", "", "call_1"))
+	mustApply(t, m, "mer-1", sig(domain.ActivityActive, "pre-tool-use", "Read", "call_2"))
+	mustApply(t, m, "mer-1", sig(domain.ActivityBlocked, "permission-blocked", "", "call_2"))
+	mustApply(t, m, "mer-1", sig(domain.ActivityActive, "post-tool-use", "Read", "call_2"))
+	if got := stateOf(st, "mer-1"); got != domain.ActivityBlocked {
+		t.Fatalf("state after the second dialog's tool posted = %q, want blocked (the first dialog never posted)", got)
+	}
+
+	// The plugin reports permission-resolved when the LAST dialog closes.
+	mustApply(t, m, "mer-1", sig(domain.ActivityActive, "permission-resolved", "", ""))
+	if got := stateOf(st, "mer-1"); got != domain.ActivityActive {
+		t.Fatalf("state after the last dialog resolved = %q, want active", got)
+	}
+}
+
+func TestToolPrecedence_UncorrelatedAskFailsClosedUntilResolution(t *testing.T) {
+	// An ask carrying an id that matches nothing in flight (a child session's
+	// dialog, whose tool start is folded away) cannot be resolved by any post.
+	// It must fail closed: a tracked sibling's post may not release the block
+	// while that dialog is still on screen.
+	m, st, _ := newManager()
+	seedSignaled(st, "mer-1", domain.ActivityActive)
+
+	mustApply(t, m, "mer-1", sig(domain.ActivityActive, "pre-tool-use", "Bash", "call_root"))
+	mustApply(t, m, "mer-1", sig(domain.ActivityBlocked, "permission-blocked", "", "call_root"))
+	mustApply(t, m, "mer-1", sig(domain.ActivityBlocked, "permission-blocked", "", "call_child"))
+
+	mustApply(t, m, "mer-1", sig(domain.ActivityActive, "post-tool-use", "Bash", "call_root"))
+	if got := stateOf(st, "mer-1"); got != domain.ActivityBlocked {
+		t.Fatalf("state after the tracked tool posted = %q, want blocked (the child dialog is uncorrelated)", got)
+	}
+
+	mustApply(t, m, "mer-1", sig(domain.ActivityActive, "permission-resolved", "", ""))
+	if got := stateOf(st, "mer-1"); got != domain.ActivityActive {
+		t.Fatalf("state after resolution = %q, want active", got)
+	}
+}
+
 func TestToolPrecedence_CursorMatchingAfterClearsBlocked(t *testing.T) {
 	m, st, _ := newManager()
 	seedSignaled(st, "mer-1", domain.ActivityActive)

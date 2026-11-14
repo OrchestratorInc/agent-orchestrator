@@ -4,10 +4,19 @@
 // activity events:
 //   session.created                       -> `ao hooks opencode session-start`
 //   message.updated / message.part.updated -> `ao hooks opencode user-prompt-submit`
-//   tool.execute.before / tool.execute.after -> `ao hooks opencode active`
+//   tool.execute.before                  -> `ao hooks opencode pre-tool-use`
+//   tool.execute.after                   -> `ao hooks opencode post-tool-use`
+//   tool left open at the turn boundary  -> `ao hooks opencode post-tool-use-failure`
+//                                             (opencode 1 reports no post for a
+//                                              tool that threw, so the leftover
+//                                              call ids are closed as failed)
+//   child (subagent) tool activity       -> `ao hooks opencode active`
+//                                             (folded onto the parent id, with no
+//                                              call identity of its own)
 //   session.status (status.type == idle)   -> `ao hooks opencode stop`
 //                                             (carries the turn's final assistant text)
 //   permission.asked / question.asked      -> `ao hooks opencode permission-blocked`
+//                                             (carries the blocked `tool.callID`)
 //   last permission/question dialog closed -> `ao hooks opencode permission-resolved`
 //                                             (several dialogs can be open at once;
 //                                              the report waits for the last one)
@@ -54,6 +63,14 @@ export const aoActivity: Plugin = async ({ directory, client }) => {
   // never adopted as currentSessionID: AO treats the reported id as the native
   // session to restore, and a child id would resume the subagent conversation.
   const childSessions = new Set<string>()
+  // Root tool calls whose `tool.execute.after` has not arrived yet, mapped to
+  // the owning session and the tool name. OpenCode 1 fires no hook when a tool
+  // throws, so a failed tool reports no post and its step would stay "running"
+  // forever — the lifecycle closes a step only on a matching post, and `stop`
+  // only clears flights. The leftovers are closed as failures at the turn
+  // boundary. The owning session is kept with each call: a late idle event from
+  // a replaced session must never close or re-attribute another session's calls.
+  const toolsInFlight = new Map<string, { sessionID: string; toolName: string }>()
   // The model of the most recent assistant message, forwarded for context.
   let currentModel: string | null = null
   // AO fences each provider generation with AO_RUNTIME_LAUNCH_ID; carry it in
@@ -120,8 +137,32 @@ export const aoActivity: Plugin = async ({ directory, client }) => {
     }
   }
 
+  // Close the session's tool steps that never reported their post as failed.
+  // OpenCode 1 exposes no failure hook, so an after-hook that never fired means
+  // the tool threw (or the turn was interrupted): marking the step failed is
+  // accurate, and leaving it open is not — the lifecycle's step ring only closes
+  // on a matching post, so it would show "running" for the rest of the session.
+  // Only this session's calls are closed, and only they are dropped, so a stale
+  // event from a replaced session can neither close nor re-attribute another
+  // session's in-flight calls.
+  function failOpenTools(sessionID: string) {
+    for (const [callID, call] of toolsInFlight) {
+      if (call.sessionID !== sessionID) continue
+      toolsInFlight.delete(callID)
+      callHookSync("post-tool-use-failure", {
+        session_id: sessionID,
+        model: currentModel ?? "",
+        tool_name: call.toolName,
+        tool_use_id: callID,
+      })
+    }
+  }
+
   function switchedSession(sessionID: string): boolean {
     if (currentSessionID === sessionID) return false
+    // Close the replaced identity's open steps under the id they were reported
+    // with, so they can never be attributed to the incoming session.
+    if (currentSessionID) failOpenTools(currentSessionID)
     promptReports.clear()
     messageStore.clear()
     assistantMessages.clear()
@@ -242,6 +283,10 @@ export const aoActivity: Plugin = async ({ directory, client }) => {
             // A child finishing says nothing about the parent's turn — never
             // stop the parent on subagent completion.
             if (!sessionID || isChildSession(sessionID)) break
+            // The turn boundary is where a failed tool's step ends: OpenCode 1
+            // reports no post for a tool that threw. Close the leftovers first
+            // so the timeline is settled before the turn goes idle.
+            failOpenTools(sessionID)
             callHookSync("stop", { session_id: sessionID, model: currentModel ?? "", last_assistant_message: lastAssistantText })
             assistantMessages.clear()
             lastAssistantText = ""
@@ -253,11 +298,21 @@ export const aoActivity: Plugin = async ({ directory, client }) => {
 
           case "permission.asked":
           case "question.asked": {
-            const sessionID = reportSessionID((event as any).properties?.sessionID ?? currentSessionID)
+            const props = (event as any).properties
+            const sessionID = reportSessionID(props?.sessionID ?? currentSessionID)
             if (!sessionID) break
-            const ask = askID((event as any).properties) ?? `ask-${++askCounter}`
+            const ask = askID(props) ?? `ask-${++askCounter}`
             openAsks.add(ask)
-            callHookSync("permission-blocked", { session_id: sessionID, model: currentModel ?? "" })
+            // A permission ask names the blocked call in `properties.tool`, which
+            // carries only `messageID` and `callID`. Forwarding that id lets the
+            // lifecycle tie the dialog to the tool it is holding up and clear the
+            // block when that exact tool finishes, instead of waiting for the turn
+            // boundary. There is no tool name in the payload to forward with it.
+            callHookSync("permission-blocked", {
+              session_id: sessionID,
+              model: currentModel ?? "",
+              tool_use_id: props?.tool?.callID ?? "",
+            })
             break
           }
 
@@ -298,14 +353,43 @@ export const aoActivity: Plugin = async ({ directory, client }) => {
     "tool.execute.before": async (input) => {
       const sessionID = reportSessionID(input.sessionID)
       if (!sessionID) return
-      callHookSync("active", { session_id: sessionID, model: currentModel ?? "" })
+      // Subagent (child) tool traffic is folded to plain activity: its call id
+      // must never enter the parent's in-flight tool bookkeeping.
+      if (isChildSession(input.sessionID)) {
+        callHookSync("active", { session_id: sessionID, model: currentModel ?? "" })
+        return
+      }
+      const toolUseID = input.callID ?? ""
+      if (toolUseID) toolsInFlight.set(toolUseID, { sessionID, toolName: input.tool ?? "" })
+      // Never forward the tool arguments; only the identity AO correlates on.
+      callHookSync("pre-tool-use", {
+        session_id: sessionID,
+        model: currentModel ?? "",
+        tool_name: input.tool ?? "",
+        tool_use_id: toolUseID,
+      })
     },
-    "tool.execute.after": async (input) => {
-      // Tool completion is still activity; session.status(idle) owns the
-      // transition back to idle after the turn finishes.
+    "tool.execute.after": async (input, output) => {
+      // OpenCode 1 fires this only after a successful execution and exposes no
+      // failure hook, so a tool that threw reports no post at all; failOpenTools
+      // closes it as failed at the turn boundary.
       const sessionID = reportSessionID(input.sessionID)
       if (!sessionID) return
-      callHookSync("active", { session_id: sessionID, model: currentModel ?? "" })
+      if (isChildSession(input.sessionID)) {
+        callHookSync("active", { session_id: sessionID, model: currentModel ?? "" })
+        return
+      }
+      // A thrown subtask still fires this hook, with no output. Keep its call in
+      // flight and report nothing: the turn-boundary sweep closes it as failed.
+      if (output === undefined) return
+      const toolUseID = input.callID ?? ""
+      if (toolUseID) toolsInFlight.delete(toolUseID)
+      callHookSync("post-tool-use", {
+        session_id: sessionID,
+        model: currentModel ?? "",
+        tool_name: input.tool ?? "",
+        tool_use_id: toolUseID,
+      })
     },
   }
 }

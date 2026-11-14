@@ -945,6 +945,14 @@ retryProjection:
 		s = m.applyToolPrecedenceLocked(id, rec.Activity.State, s)
 	}
 	if !s.Valid && !metadataChanged {
+		// The state write was suppressed (a tool event while a dialog is open, or
+		// while the session is waiting on the user), but the tool really ran: the
+		// step ring must still see the event, or a step opened by a pre would
+		// never be closed by its post. No store write follows, so there is no
+		// projection to restore against.
+		if isToolUseEvent(s.Event) {
+			m.recordStepLocked(id, s, now)
+		}
 		m.mu.Unlock()
 		return nil
 	}
@@ -1118,14 +1126,15 @@ type toolFlight struct {
 	// inflight maps toolUseID -> toolName for pre-tool-use signals whose post
 	// has not arrived yet.
 	inflight map[string]string
-	// blockedCandidate is the tool-use id of the UNIQUE in-flight tool bearing
-	// the dialog's tool_name when it appeared — the tool whose post proves the
-	// dialog was answered. Empty when no in-flight tool matched, or when the
-	// match was ambiguous (two same-name tools in flight: the permission
-	// payload carries no tool_use_id to disambiguate, so a sibling's post must
-	// NOT be mistaken for the approval). Either way, empty means nothing
-	// tool-shaped may clear the block and it lifts only at a turn boundary.
-	blockedCandidate string
+	// blockedCandidates holds the tool-use id of EVERY in-flight tool currently
+	// holding an open dialog. Several dialogs can be open at once (a batch of
+	// bash calls, for example), and each ask adds its own id: tracking only the
+	// latest would let that tool's post release the block while an older dialog
+	// is still on screen, and keystrokes meant for the agent would then type
+	// into it. The block lifts when the last tracked tool's post arrives, at a
+	// turn boundary, or on a permission resolution. Nil means nothing
+	// tool-shaped may clear the block.
+	blockedCandidates map[string]struct{}
 	// cursorPending counts native Cursor permission dialogs by execution family
 	// and bounded tool name. Cursor does not provide tool-use ids, so a matching
 	// after-execution event can clear only its own key, and the session remains
@@ -1138,12 +1147,17 @@ func cloneToolFlight(flight *toolFlight) *toolFlight {
 		return nil
 	}
 	clone := &toolFlight{
-		inflight:         make(map[string]string, len(flight.inflight)),
-		blockedCandidate: flight.blockedCandidate,
-		cursorPending:    make(map[string]int, len(flight.cursorPending)),
+		inflight:      make(map[string]string, len(flight.inflight)),
+		cursorPending: make(map[string]int, len(flight.cursorPending)),
 	}
 	for id, name := range flight.inflight {
 		clone.inflight[id] = name
+	}
+	for id := range flight.blockedCandidates {
+		if clone.blockedCandidates == nil {
+			clone.blockedCandidates = make(map[string]struct{}, len(flight.blockedCandidates))
+		}
+		clone.blockedCandidates[id] = struct{}{}
 	}
 	for key, count := range flight.cursorPending {
 		clone.cursorPending[key] = count
@@ -1260,57 +1274,80 @@ func (m *Manager) applyToolPrecedenceLocked(id domain.SessionID, cur domain.Acti
 	case s.State == domain.ActivityBlocked:
 		if key, ok := cursorBeforeExecutionKey(s); ok {
 			f := ensure()
-			f.blockedCandidate = ""
+			f.blockedCandidates = nil
 			if f.cursorPending == nil {
 				f.cursorPending = map[string]int{}
 			}
 			f.cursorPending[key]++
 			return s
 		}
-		// Entering (or re-asserting) blocked: snapshot the dialog's identity.
-		// permission-request carries the blocking tool_name; the Notification
-		// duplicate does not and must not wipe an existing snapshot.
+		// Entering (or re-asserting) blocked: track the dialog's identity.
 		//
-		// The permission hook payload does not carry the blocking tool's
-		// tool_use_id (only its name), so we can only identify the blocking
-		// tool unambiguously when EXACTLY ONE in-flight tool bears that name.
-		// With two same-name tools in flight (a batch of Bash calls, one of
-		// them the one at the dialog), a sibling's post could otherwise clear
-		// a still-open dialog — the exact permission-bypass this change exists
-		// to prevent. So we correlate only in the unique case; otherwise no
-		// candidate is recorded and the block clears only at a turn boundary
-		// (fail-closed).
+		// OpenCode's plugin forwards the blocked call's tool_use_id, and OpenCode
+		// really can hold several dialogs at once (a batch of bash calls), so its
+		// asks accumulate: the block waits for the LAST of them, and liveness is
+		// preserved by the plugin's permission-resolved report on the last reply.
+		// Every other ask keeps the single-candidate snapshot this path always
+		// had — a fresh ask replaces the candidate — so a dialog whose tool never
+		// posts (a denial that emits no post, or a lost post) cannot strand a
+		// non-OpenCode session blocked past the next dialog.
+		//
+		// The permission payload of some adapters does not carry the blocking
+		// tool's tool_use_id (only its name), so the tool can only be identified
+		// unambiguously when EXACTLY ONE in-flight tool bears that name. With two
+		// same-name tools in flight, a sibling's post could otherwise clear a
+		// still-open dialog — the exact permission-bypass this change exists to
+		// prevent.
 		f := ensure()
 		f.cursorPending = nil
-		// Recompute only when this signal identifies a dialog. Claude can emit an
-		// identity-less Notification duplicate after permission-request; that
-		// duplicate must not erase the candidate captured by the first signal.
-		if s.ToolUseID != "" || s.ToolName != "" {
-			f.blockedCandidate = ""
-		}
+		accumulate := s.Event == "permission-blocked"
+		correlated := false
 		if s.ToolUseID != "" {
-			// If the blocking signal carries a tool_use_id that is in the
-			// inflight map, use it directly — this is more precise than a
-			// name match and handles adapters whose notification payloads
-			// use a different tool_name casing than their PreToolUse/PostToolUse
-			// payloads (e.g. Kimchi: "bash" in notification vs "Bash" in hooks).
+			// An id in the inflight map identifies the blocked tool directly —
+			// more precise than a name match, and it handles adapters whose
+			// payloads use a different tool_name casing than their hooks
+			// (e.g. Kimchi: "bash" in notifications vs "Bash" in hooks).
 			if _, ok := f.inflight[s.ToolUseID]; ok {
-				f.blockedCandidate = s.ToolUseID
+				if !accumulate {
+					f.blockedCandidates = nil
+				}
+				if f.blockedCandidates == nil {
+					f.blockedCandidates = map[string]struct{}{}
+				}
+				f.blockedCandidates[s.ToolUseID] = struct{}{}
+				correlated = true
 			}
 		}
-		if f.blockedCandidate == "" && s.ToolName != "" {
+		if !correlated && s.ToolName != "" {
+			matches, matchID := 0, ""
 			for useID, name := range f.inflight {
 				if name != s.ToolName {
 					continue
 				}
-				if f.blockedCandidate != "" {
-					// A second same-name tool: ambiguous, fail closed by
-					// leaving no candidate (only a turn boundary clears).
-					f.blockedCandidate = ""
+				matches, matchID = matches+1, useID
+				if matches > 1 {
 					break
 				}
-				f.blockedCandidate = useID
 			}
+			if matches == 1 {
+				if !accumulate {
+					f.blockedCandidates = nil
+				}
+				if f.blockedCandidates == nil {
+					f.blockedCandidates = map[string]struct{}{}
+				}
+				f.blockedCandidates[matchID] = struct{}{}
+				correlated = true
+			}
+		}
+		if !correlated && (s.ToolUseID != "" || s.ToolName != "") {
+			// A dialog carrying identity that matches nothing tracked — a child
+			// session's ask, or an ask whose tool was never seen — cannot be
+			// resolved by any post, so fail closed: no post clears this block and
+			// only a turn boundary (including a permission resolution) can. An
+			// identity-less Notification duplicate (Claude) carries neither field
+			// and leaves already-tracked candidates alone.
+			f.blockedCandidates = nil
 		}
 		return s
 
@@ -1335,12 +1372,19 @@ func (m *Manager) applyToolPrecedenceLocked(id domain.SessionID, cur domain.Acti
 					}
 					return suppressed
 				}
-				if isPostToolUseEvent(s.Event) && fl.blockedCandidate != "" && s.ToolUseID == fl.blockedCandidate {
-					// The single unambiguous blocking tool finished: the dialog was
-					// answered. Clear the candidate so a later dialog in the same turn
-					// starts from a clean slate.
-					fl.blockedCandidate = ""
-					return s
+				if _, tracked := fl.blockedCandidates[s.ToolUseID]; tracked && isPostToolUseEvent(s.Event) {
+					// One of the tracked blocking tools finished. The dialog was
+					// answered only when the LAST of them is done — an earlier
+					// dialog may still be on screen, and keystrokes meant for the
+					// agent would type into it.
+					delete(fl.blockedCandidates, s.ToolUseID)
+					if len(fl.blockedCandidates) == 0 {
+						// Start from a clean slate so a later dialog in the same
+						// turn begins fresh.
+						fl.blockedCandidates = nil
+						return s
+					}
+					return suppressed
 				}
 			}
 			// Subagent/sibling tool traffic (including a same-name sibling when

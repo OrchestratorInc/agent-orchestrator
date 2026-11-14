@@ -21,6 +21,8 @@ func DeriveActivityState(event string, _ []byte) (domain.ActivityState, bool) {
 		return domain.ActivityBlocked, true
 	case "permission-resolved":
 		return domain.ActivityActive, true
+	case "pre-tool-use", "post-tool-use", "post-tool-use-failure":
+		return domain.ActivityActive, true
 	default:
 		return "", false
 	}
