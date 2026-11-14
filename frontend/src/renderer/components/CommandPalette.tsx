@@ -51,6 +51,8 @@ import { previewDocumentThemeStyle } from "../lib/theme";
 import { renameCloudSession, renameSession } from "../lib/rename-session";
 import { runAppMenuAction } from "../hooks/useAppMenuCommand";
 import { useTerminateSession } from "../hooks/useTerminateSession";
+import { useProjectAvatars } from "../hooks/useProjectAvatars";
+import { ProjectIcon } from "./ProjectIcon";
 import { useStayAwake } from "../hooks/useStayAwake";
 import { useSessionSwitchStore } from "../stores/session-switch-store";
 import { RoundedInterfaceIcon } from "./SessionInterfaceSwitch";
@@ -206,8 +208,16 @@ export const CommandPalette = memo(function CommandPalette() {
 	}, [params.hostId, params.sessionId, workspaces]);
 	const currentSession = currentSessionContext?.session;
 	const currentProjectId = currentSession?.workspaceId ?? params.projectId;
-	// The Actions heading names the project they act on, once, rather than every row.
-	const currentProjectName = currentProjectId ? workspaces.find((workspace) => workspace.id === currentProjectId)?.name : undefined;
+	// The Actions heading is the project they act on, drawn as the sidebar draws it.
+	const currentProject = currentProjectId ? workspaces.find((workspace) => workspace.id === currentProjectId) : undefined;
+	const avatarProjects = useMemo(() => (currentProject ? [currentProject] : []), [currentProject]);
+	const headingAvatars = useProjectAvatars(avatarProjects);
+	const actionsHeading = currentProject ? (
+		<span className="inline-flex min-w-0 items-center gap-1.5">
+			<ProjectIcon avatarUrl={headingAvatars.get(currentProject.id)} className="size-icon-sm" expanded={false} name={currentProject.name} seed={currentProject.path || currentProject.id} />
+			<span className="truncate">{currentProject.name}</span>
+		</span>
+	) : undefined;
 	const currentWorkspace = useMemo(
 		() => currentSessionContext?.workspace ?? workspaces.find((workspace) =>
 			workspace.id === currentProjectId && (workspace.hostId ?? "") === (params.hostId ?? "")),
@@ -1257,7 +1267,7 @@ export const CommandPalette = memo(function CommandPalette() {
 										) : t("command.noResults")}
 							</CommandEmpty>
 							{groups.map((group) => (
-								<CommandGroup key={group.id} heading={(group.id === "current" && currentProjectName ? `${group.label} · ${currentProjectName}` : group.label) || undefined}>
+								<CommandGroup key={group.id} heading={(group.id === "current" && actionsHeading) || group.label || undefined}>
 									{group.items.map((item) => (
 										<PaletteRow
 											key={item.id}
