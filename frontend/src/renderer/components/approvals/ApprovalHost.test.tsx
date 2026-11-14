@@ -5,18 +5,29 @@ import type { PendingApproval } from "../../lib/approvals";
 
 const state = vi.hoisted(() => ({
 	pending: [] as PendingApproval[],
+	remote: [] as PendingApproval[],
 	routedSessionId: undefined as string | undefined,
+	routedHostId: undefined as string | undefined,
 	decide: vi.fn(async () => undefined),
 	navigate: vi.fn(),
 }));
 
 vi.mock("../../lib/approvals", () => ({
 	usePendingApprovals: () => ({ data: state.pending }),
+	useRemotePendingApprovals: () => state.remote,
 	decideApproval: state.decide,
 }));
 vi.mock("@tanstack/react-router", () => ({
 	useRouterState: ({ select }: { select: (s: unknown) => unknown }) =>
-		select({ matches: [{ params: state.routedSessionId ? { sessionId: state.routedSessionId } : {} }] }),
+		select({
+			matches: [
+				{
+					params: state.routedSessionId
+						? { sessionId: state.routedSessionId, ...(state.routedHostId ? { hostId: state.routedHostId } : {}) }
+						: {},
+				},
+			],
+		}),
 }));
 vi.mock("../../lib/navigate-to-session", () => ({ useNavigateToSession: () => state.navigate }));
 vi.mock("../../hooks/useWorkspaceQuery", () => ({
@@ -39,7 +50,9 @@ function renderWith(node: React.ReactNode) {
 describe("approval hosts", () => {
 	beforeEach(() => {
 		state.pending = [];
+		state.remote = [];
 		state.routedSessionId = undefined;
+		state.routedHostId = undefined;
 		state.decide.mockClear();
 		state.navigate.mockClear();
 	});
@@ -50,7 +63,7 @@ describe("approval hosts", () => {
 		expect(screen.getByTestId("approval-action")).toHaveTextContent("(a)");
 		expect(screen.getByText("+1 more")).toBeInTheDocument();
 		fireEvent.click(screen.getByRole("button", { name: "Allow once" }));
-		await waitFor(() => expect(state.decide).toHaveBeenCalledWith("a", "allow-once", expect.anything()));
+		await waitFor(() => expect(state.decide).toHaveBeenCalledWith("a", "allow-once", expect.anything(), undefined));
 	});
 
 	it("renders nothing for a session with no requests", () => {
@@ -66,7 +79,33 @@ describe("approval hosts", () => {
 		expect(screen.getByTestId("approval-action")).toHaveTextContent("(b)");
 		expect(screen.getByText(/Book flights/)).toBeInTheDocument();
 		fireEvent.click(screen.getByRole("button", { name: "Open session" }));
-		expect(state.navigate).toHaveBeenCalledWith("proj", "ao-2");
+		expect(state.navigate).toHaveBeenCalledWith("proj", "ao-2", undefined);
+	});
+
+	it("shows a self-hosted remote host's request app-wide and decides it on that host", async () => {
+		state.remote = [{ ...request("r", "ao-9"), hostId: "box-b" }];
+		state.routedSessionId = "ao-1";
+		renderWith(<GlobalApprovalCard />);
+		expect(screen.getByTestId("approval-action")).toHaveTextContent("(r)");
+		fireEvent.click(screen.getByRole("button", { name: /Deny/ }));
+		await waitFor(() => expect(state.decide).toHaveBeenCalledWith("r", "deny", expect.anything(), "box-b"));
+		fireEvent.click(screen.getByRole("button", { name: "Open session" }));
+		expect(state.navigate).toHaveBeenCalledWith(undefined, "ao-9", "box-b");
+	});
+
+	it("keeps a remote session's request in that session's dock, not the local one with the same id", () => {
+		state.pending = [request("local", "ao-9")];
+		state.remote = [{ ...request("r", "ao-9"), hostId: "box-b" }];
+		state.routedSessionId = "ao-9";
+		state.routedHostId = "box-b";
+		renderWith(<SessionApprovalDock sessionId="ao-9" hostId="box-b" />);
+		expect(screen.getByTestId("approval-action")).toHaveTextContent("(r)");
+		const { unmount } = renderWith(<GlobalApprovalCard />);
+		// The open remote session shows its own; the local one is elsewhere.
+		expect(screen.getAllByTestId("approval-action").map((node) => node.textContent)).toEqual(
+			expect.arrayContaining([expect.stringContaining("(local)")]),
+		);
+		unmount();
 	});
 
 	it("stays out of the way when the only request belongs to the open session", () => {

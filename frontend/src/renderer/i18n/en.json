@@ -4939,5 +4939,6 @@
 	"settings.approvals.log": "Recent decisions",
 	"settings.approvals.logEmpty": "No gated actions yet",
 	"settings.approvals.loadFailed": "Could not load approvals: {{message}}",
-	"browser.approvals.label": "Ask before acting"
+	"browser.approvals.label": "Ask before acting",
+	"approvals.category.script": "Page script"
 }

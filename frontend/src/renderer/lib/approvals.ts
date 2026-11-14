@@ -3,15 +3,20 @@
 // decisions, the per-session mode, remembered sites, and the audit log. The
 // daemon owns every decision; this module only reads and forwards the user's.
 
-import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
+import { useQueries, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
 import type { components } from "../../api/schema";
 import { apiErrorException } from "./api-error-exception";
 import { apiClient, eventStreamBaseUrl, getApiBaseUrl, hasTrustedApiBaseUrl, subscribeApiBaseUrl } from "./api-client";
+import { useConnectedHosts } from "../hooks/useHostConnection";
+import { clientForHost } from "./host-clients";
 import { usesPreviewWorkspaceData } from "./preview-mode";
 import { computeSseRetryDelayMs } from "./sse-backoff";
 
-export type PendingApproval = components["schemas"]["ApprovalPendingResponse"];
+export type PendingApproval = components["schemas"]["ApprovalPendingResponse"] & {
+	/** The remote host whose daemon holds the request; absent for this machine. */
+	hostId?: string;
+};
 export type ApprovalAuditEntry = components["schemas"]["ApprovalAuditEntryResponse"];
 export type ApprovalPolicy = components["schemas"]["ApprovalPolicyResponse"];
 export type ApprovalDecision = "allow-once" | "allow-site" | "deny";
@@ -20,6 +25,10 @@ export type ApprovalMode = ApprovalPolicy["mode"];
 export const pendingApprovalsQueryKey = ["approvals", "pending"] as const;
 export const approvalAuditQueryKey = (sessionId?: string) => ["approvals", "audit", sessionId ?? ""] as const;
 export const approvalPolicyQueryKey = (sessionId?: string) => ["approvals", "policy", sessionId ?? ""] as const;
+export const remotePendingApprovalsQueryKey = (hostId: string) => ["approvals", "pending", "host", hostId] as const;
+
+/** How often a connected remote host's pending requests are reread. */
+const REMOTE_POLL_MS = 2_000;
 
 const EVENTSOURCE_CLOSED = 2;
 
@@ -30,8 +39,14 @@ export async function fetchPendingApprovals(): Promise<PendingApproval[]> {
 	return data.pending;
 }
 
-export async function decideApproval(id: string, decision: ApprovalDecision, queryClient: QueryClient): Promise<void> {
-	const { error } = await apiClient.POST("/api/v1/approvals/{id}/decision", {
+export async function decideApproval(
+	id: string,
+	decision: ApprovalDecision,
+	queryClient: QueryClient,
+	hostId?: string,
+): Promise<void> {
+	const client = hostId ? clientForHost(hostId) : apiClient;
+	const { error } = await client.POST("/api/v1/approvals/{id}/decision", {
 		params: { path: { id } },
 		body: { decision },
 	});
@@ -165,4 +180,28 @@ export function useApprovalAudit(sessionId?: string) {
 
 export function useApprovalPolicy(sessionId?: string) {
 	return useQuery({ queryKey: approvalPolicyQueryKey(sessionId), queryFn: () => fetchApprovalPolicy(sessionId) });
+}
+
+async function fetchRemotePendingApprovals(hostId: string): Promise<PendingApproval[]> {
+	const { data, error } = await clientForHost(hostId).GET("/api/v1/approvals");
+	if (error || !data) throw apiErrorException(error, "Could not load approval requests");
+	return data.pending.map((request) => ({ ...request, hostId }));
+}
+
+/**
+ * Pending requests on connected remote hosts (self-hosted agent browsers).
+ * The app shell passes `live` once to poll them; other readers share the
+ * cache.
+ */
+export function useRemotePendingApprovals({ live = false }: { live?: boolean } = {}): PendingApproval[] {
+	const hosts = useConnectedHosts();
+	const results = useQueries({
+		queries: hosts.map((hostId) => ({
+			queryKey: remotePendingApprovalsQueryKey(hostId),
+			queryFn: () => fetchRemotePendingApprovals(hostId),
+			enabled: live && !usesPreviewWorkspaceData,
+			refetchInterval: live ? REMOTE_POLL_MS : (false as const),
+		})),
+	});
+	return results.flatMap((result) => result.data ?? []);
 }
