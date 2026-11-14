@@ -61,6 +61,23 @@ func TestWithSkillMetadataNamesListedSkillsFromTheirOwnFiles(t *testing.T) {
 	}
 }
 
+// The agent runs the project skill, so a same-named user skill's label must not
+// stand in for it when the project skill has no metadata of its own.
+func TestWithSkillMetadataKeepsAProjectSkillWithoutMetadataAsListed(t *testing.T) {
+	workspace, home := t.TempDir(), t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workspace, ".claude", "skills", "review"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeSkillMetadata(t, filepath.Join(home, ".claude", "skills"), "review",
+		"interface:\n  display_name: \"User Review\"\n  short_description: \"The user's review\"\n")
+
+	listed := []ports.ChatSkill{{Name: "review", DisplayName: "review", Description: "Project review", Source: "agent"}}
+	got := withSkillMetadata(listed, skillRoots(workspace, home))
+	if got[0] != listed[0] {
+		t.Errorf("skill = %+v, want it unchanged %+v", got[0], listed[0])
+	}
+}
+
 func TestSkillFolderNameRejectsPathsAndNamespaces(t *testing.T) {
 	for _, name := range []string{"", "..", "a/b", `a\b`, "plugin:skill", "skill:"} {
 		if folder, ok := skillFolderName(name); ok {

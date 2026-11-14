@@ -96,23 +96,34 @@ func skillFolderName(name string) (string, bool) {
 	return folder, true
 }
 
-// readSkillMetadata reads the first metadata file found for a skill folder.
+// readSkillMetadata reads the metadata of the skill folder the agent resolves:
+// the first root that holds it. That folder alone is read. A project skill with
+// no metadata file keeps its listed name rather than borrowing the label of a
+// same-named user skill the agent does not run.
 func readSkillMetadata(roots []string, folder string) (skillMetadataFile, bool) {
 	for _, root := range roots {
-		file, err := os.Open(filepath.Join(root, folder, "agents", "openai.yaml"))
-		if err != nil {
+		dir := filepath.Join(root, folder)
+		if info, err := os.Stat(dir); err != nil || !info.IsDir() {
 			continue
 		}
-		data, err := io.ReadAll(io.LimitReader(file, skillMetadataLimit))
-		_ = file.Close()
-		if err != nil {
-			continue
-		}
-		var meta skillMetadataFile
-		if yaml.Unmarshal(data, &meta) != nil {
-			continue
-		}
-		return meta, true
+		return readSkillMetadataFile(filepath.Join(dir, "agents", "openai.yaml"))
 	}
 	return skillMetadataFile{}, false
+}
+
+func readSkillMetadataFile(path string) (skillMetadataFile, bool) {
+	file, err := os.Open(path)
+	if err != nil {
+		return skillMetadataFile{}, false
+	}
+	defer func() { _ = file.Close() }()
+	data, err := io.ReadAll(io.LimitReader(file, skillMetadataLimit))
+	if err != nil {
+		return skillMetadataFile{}, false
+	}
+	var meta skillMetadataFile
+	if yaml.Unmarshal(data, &meta) != nil {
+		return skillMetadataFile{}, false
+	}
+	return meta, true
 }
