@@ -12,11 +12,31 @@ import { iconSize, touchTarget } from "../tokens";
 const ROLLBACK_SYMBOL = { ios: "arrow.uturn.backward", android: "undo" } as const;
 
 /**
+ * A turn's action row is this tall (the desktop's 28px row), and each control
+ * in it this square. The slop takes each touch out to the minimum target
+ * without growing the row, so the reply's foot stays short.
+ */
+export const TURN_ACTION_SIZE = 28;
+export const TURN_ACTION_SLOP = Math.ceil((touchTarget - TURN_ACTION_SIZE) / 2);
+
+/**
+ * One control in a turn's action row (copy, fork, roll back): every one the
+ * same square, given TURN_ACTION_SLOP as its hitSlop, so each reaches the same
+ * minimum target on either platform.
+ */
+export const turnActionControl = { width: TURN_ACTION_SIZE, height: TURN_ACTION_SIZE, borderRadius: TURN_ACTION_SIZE / 2, alignItems: "center", justifyContent: "center" } as const;
+
+/**
  * Makes the agent forget a settled turn and everything after it. That cannot be
  * undone, so the system's destructive confirmation asks first, the way Archive
  * does.
  */
-export function TurnRollbackButton({ turnId, onRollback }: { turnId: string; onRollback(turnId: string): Promise<number> }) {
+export function TurnRollbackButton({ turnId, onRollback, compact = false }: {
+	turnId: string;
+	onRollback(turnId: string): Promise<number>;
+	/** Sized for a turn's action row (TURN_ACTION_SIZE) rather than a line of its own. */
+	compact?: boolean;
+}) {
 	const t = useTheme();
 	const feedback = usePressFeedback("icon");
 	const [rollingBack, setRollingBack] = useState(false);
@@ -45,14 +65,16 @@ export function TurnRollbackButton({ turnId, onRollback }: { turnId: string; onR
 			accessibilityState={{ disabled: rollingBack, busy: rollingBack }}
 			disabled={rollingBack}
 			onPress={confirm}
+			hitSlop={compact ? TURN_ACTION_SLOP : undefined}
 			android_ripple={feedback.android_ripple}
-			style={({ pressed }) => [styles.rollback, pressed && feedback.pressed]}
+			style={({ pressed }) => [compact ? styles.compact : styles.rollback, pressed && feedback.pressed]}
 		>
-			{rollingBack ? <Spinner size={iconSize.sm} color={t.textTertiary} /> : <AppSymbol name={ROLLBACK_SYMBOL} size={iconSize.md} color={t.textTertiary} />}
+			{rollingBack ? <Spinner size={iconSize.sm} color={t.textTertiary} /> : <AppSymbol name={ROLLBACK_SYMBOL} size={compact ? iconSize.sm : iconSize.md} color={t.textTertiary} />}
 		</Pressable>
 	);
 }
 
 const styles = StyleSheet.create({
 	rollback: { width: touchTarget, height: touchTarget, alignItems: "center", justifyContent: "center" },
+	compact: turnActionControl,
 });

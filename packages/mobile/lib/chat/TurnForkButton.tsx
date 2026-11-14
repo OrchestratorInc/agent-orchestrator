@@ -7,6 +7,7 @@ import { usePressFeedback } from "../pressFeedback";
 import { Spinner } from "../Spinner";
 import { useTheme } from "../ThemeProvider";
 import { iconSize, touchTarget } from "../tokens";
+import { TURN_ACTION_SLOP, turnActionControl } from "./TurnRollbackButton";
 
 // "Fork", in each platform's own glyph for branching.
 const FORK_SYMBOL = { ios: "arrow.triangle.branch", android: "call_split" } as const;
@@ -16,7 +17,12 @@ const FORK_SYMBOL = { ios: "arrow.triangle.branch", android: "call_split" } as c
  * Nothing is lost, so it needs no confirmation. Shown only when the daemon
  * supports session forks.
  */
-export function TurnForkButton({ turnId, onFork }: { turnId: string; onFork(turnId: string): Promise<void> }) {
+export function TurnForkButton({ turnId, onFork, compact = false }: {
+	turnId: string;
+	onFork(turnId: string): Promise<void>;
+	/** Sized for a turn's action row (TURN_ACTION_SIZE) rather than a line of its own. */
+	compact?: boolean;
+}) {
 	const t = useTheme();
 	const feedback = usePressFeedback("icon");
 	const [forking, setForking] = useState(false);
@@ -35,14 +41,16 @@ export function TurnForkButton({ turnId, onFork }: { turnId: string; onFork(turn
 			accessibilityState={{ disabled: forking, busy: forking }}
 			disabled={forking}
 			onPress={fork}
+			hitSlop={compact ? TURN_ACTION_SLOP : undefined}
 			android_ripple={feedback.android_ripple}
-			style={({ pressed }) => [styles.fork, pressed && feedback.pressed]}
+			style={({ pressed }) => [compact ? styles.compact : styles.fork, pressed && feedback.pressed]}
 		>
-			{forking ? <Spinner size={iconSize.sm} color={t.textTertiary} /> : <AppSymbol name={FORK_SYMBOL} size={iconSize.md} color={t.textTertiary} />}
+			{forking ? <Spinner size={iconSize.sm} color={t.textTertiary} /> : <AppSymbol name={FORK_SYMBOL} size={compact ? iconSize.sm : iconSize.md} color={t.textTertiary} />}
 		</Pressable>
 	);
 }
 
 const styles = StyleSheet.create({
 	fork: { width: touchTarget, height: touchTarget, alignItems: "center", justifyContent: "center" },
+	compact: turnActionControl,
 });
