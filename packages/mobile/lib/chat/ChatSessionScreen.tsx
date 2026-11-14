@@ -63,7 +63,7 @@ import { space } from "../tokens";
 import { Button, EmptyState } from "../ui";
 import { backOr } from "../backNavigation";
 import { userFacingError, NOT_PAIRED_ACTION_COPY, RECONNECTING_ACTION_COPY } from "../connectionError";
-import { agentAccountLabel, agentAccountOptions, moveSessionAgentAccount, useAgentAccounts } from "../agentAccounts";
+import { agentAccountLabel, agentAccountOptions, moveSessionAgentAccount, useAgentAccounts, withoutSameLogins } from "../agentAccounts";
 import { useStillHere } from "../useStillHere";
 import { ARCHIVE_SESSION_CONFIRM } from "../worker-action-model";
 import { changedPathCount, fileRoute, filesRoute, FilesNavigationContext, type FilesNavigation } from "../files/navigation";
@@ -587,9 +587,10 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	// Reread the binding once a move settles: it commits at the end of the move.
 	const agentAccounts = useAgentAccounts(config, terminated ? undefined : headerHarness, session.id, accountMoving ? undefined : accountMove?.id);
 	const stillHere = useStillHere(`${currentHostId ?? ""}|${session.id}|${config ? JSON.stringify(config) : ""}`, () => navigation.isFocused?.() !== false);
-	const currentAccount = agentAccounts.accounts.find((account) => account.id === agentAccounts.current);
-	const menuAccountName = currentAccount ? agentAccountLabel(currentAccount, agentAccounts.accounts) : undefined;
-	const menuAccountCanMove = agentAccounts.accounts.some((account) => account.signedIn && account.id !== agentAccounts.current);
+	const shownAccounts = withoutSameLogins(agentAccounts.accounts, agentAccounts.current);
+	const currentAccount = shownAccounts.find((account) => account.id === agentAccounts.current);
+	const menuAccountName = currentAccount ? agentAccountLabel(currentAccount, shownAccounts) : undefined;
+	const menuAccountCanMove = shownAccounts.some((account) => account.signedIn && account.id !== agentAccounts.current);
 	const menuGroups = useMemo(() => menuReady ? conversationMenuGroups({
 		previewReady,
 		artifactCount: menuArtifactCount,
@@ -647,7 +648,9 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 				.then(() => interfaceSwitch.refresh())
 				.catch((cause) => Alert.alert("Couldn't switch account", userFacingError(cause)));
 			const here = stillHere();
-			const { accounts, current } = await agentAccounts.reload().catch(() => undefined) ?? agentAccounts;
+			const fresh = await agentAccounts.reload().catch(() => undefined) ?? agentAccounts;
+			const current = fresh.current;
+			const accounts = withoutSameLogins(fresh.accounts, current);
 			if (!here()) return;
 			void presentSheet({
 				kind: "account-picker",

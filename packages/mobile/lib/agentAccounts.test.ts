@@ -6,7 +6,7 @@ vi.mock("expo/fetch", () => ({ fetch: vi.fn() }));
 
 import { createElement } from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
-import { agentAccountLabel, agentAccountOptions, agentAccountProvider, getAgentAccounts, getSessionAgentAccount, moveSessionAgentAccount, useAgentAccounts } from "./agentAccounts";
+import { agentAccountLabel, agentAccountOptions, agentAccountProvider, getAgentAccounts, getSessionAgentAccount, moveSessionAgentAccount, useAgentAccounts, withoutSameLogins } from "./agentAccounts";
 import { delegateTask, spawnSession } from "./api";
 import type { ServerConfig } from "./config";
 
@@ -48,6 +48,17 @@ describe("agent accounts on mobile", () => {
 			{ id: "2", provider: "claude" as const, email: "a@x.dev", orgId: "bbbbbbbb-2222", orgName: "Acme" },
 		];
 		expect(sameName.map((account) => agentAccountLabel(account, sameName))).toEqual(["a@x.dev · Acme · aaaaaaaa", "a@x.dev · Acme · bbbbbbbb"]);
+	});
+
+	it("lists the CLI's login once when a saved account holds the same login", () => {
+		const cli = { id: "device-claude", provider: "claude" as const, device: true, email: "a@x.dev", sameLoginAs: "a", signedIn: true, default: false };
+		const a = { id: "a", provider: "claude" as const, email: "a@x.dev", signedIn: true, default: true };
+		const b = { id: "b", provider: "claude" as const, email: "b@x.dev", signedIn: true, default: false };
+		const titles = (keepId?: string) => agentAccountOptions(withoutSameLogins([cli, a, b], keepId)).map((option) => option.title);
+		expect(titles()).toEqual(["a@x.dev", "b@x.dev"]);
+		expect(titles("a")).toEqual(["a@x.dev", "b@x.dev"]);
+		expect(titles("device-claude")).toEqual(["a@x.dev · Claude Code CLI login", "a@x.dev", "b@x.dev"]);
+		expect(withoutSameLogins([cli, b]).map((account) => account.id)).toEqual(["device-claude", "b"]);
 	});
 
 	it("moves a session, stopping its turn only when asked", async () => {
