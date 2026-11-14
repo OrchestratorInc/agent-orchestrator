@@ -227,7 +227,10 @@ export default function FleetScreen() {
 	// The one machine every row is on, when it is a paired machine: the line under
 	// the title speaks for it, since a dot on every row would say the same thing.
 	// With several machines on the board their chips and rows carry the dots.
-	const lineHostId = selectedHost?.hostId ?? (!cloudSelected && !cloud && hostStates.length === 1 ? hostStates[0].hostId : undefined);
+	// A project filter puts every row on its machine even with All machines chosen;
+	// a Cloud project matches no paired machine and leaves the line to the phone.
+	const projectHostId = hostStates.some((host) => host.hostId === filteredProject?.hostId) ? filteredProject?.hostId : undefined;
+	const lineHostId = selectedHost?.hostId ?? projectHostId ?? (!cloudSelected && !cloud && hostStates.length === 1 ? hostStates[0].hostId : undefined);
 
 	// Inside the list rather than above it: the header is translucent and the page
 	// is laid out under it, so the list has to be the page's first view. Above the

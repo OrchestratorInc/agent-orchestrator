@@ -309,6 +309,19 @@ describe("Workers filter menu", () => {
 		expect(renderer.root.findAllByType(WorkerEnvironmentFilter)).toHaveLength(1);
 	});
 
+	// A project filter can put every row on one machine while All machines stays
+	// chosen; the line under the title then speaks for that machine.
+	it("points the freshness line at the filtered project's machine", () => {
+		fixtures.hostStates = [snapshot({ hostId: "mac", name: "Mac" }), snapshot({ hostId: "windows", name: "Windows" })];
+		fixtures.projects = [project("ao", "AO", "mac", "Mac"), project("game", "Game", "windows", "Windows")];
+		act(() => { renderer = create(<FleetScreen />); });
+		const line = () => renderer.root.findByType("FreshnessLine" as never);
+		expect(line().props.hostId).toBeUndefined();
+		choose(filterMenu(), "Game · Windows");
+		expect(selectedEnvironment()).toBe("All machines");
+		expect(line().props.hostId).toBe("windows");
+	});
+
 	it("scopes the project choices to the chosen machine and drops one it does not have", () => {
 		fixtures.projects = [project("ao", "AO", "mac", "Mac"), project("game", "Game", "windows", "Windows")];
 		act(() => { renderer = create(<FleetScreen />); });
