@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -726,6 +727,53 @@ func (p *nativeHistoryCheckpoint) retireSupersededLegacyFacts(sessionID domain.S
 	retire(&p.latestAssistantUpdate, p.latestAssistantUpdateAt, domain.MessageRoleAssistant, p.assistantMismatch)
 }
 
+// debugDumpHistoryReplay writes the failing high-water reconciliation state to
+// /tmp/ao-history-replay-dump.json so an unresolved ao_high_water mismatch can
+// be diagnosed from the live replay instead of inferred. Error-path only.
+func (p nativeHistoryCheckpoint) debugDumpHistoryReplay(
+	events []ports.ChatEvent,
+	mapped map[string]*nativeHistoryTurn,
+	boundaries map[string]nativeHistoryHighWater,
+) {
+	type ev struct {
+		Kind           string
+		ProviderTurnID string
+		ProviderItemID string
+		TurnState      string
+		Text           string
+	}
+	dumpEvents := make([]ev, 0, len(events))
+	for _, e := range events {
+		text := e.Text
+		if len(text) > 120 {
+			text = text[:120]
+		}
+		dumpEvents = append(dumpEvents, ev{Kind: string(e.Kind), ProviderTurnID: e.ProviderTurnID, ProviderItemID: e.ProviderItemID, TurnState: string(e.TurnState), Text: text})
+	}
+	mappedBy := make(map[string]string, len(mapped))
+	for replayTurnID, candidate := range mapped {
+		mappedBy[replayTurnID] = candidate.providerTurnID
+	}
+	boundaryBy := make(map[string]string, len(boundaries))
+	for turnID, b := range boundaries {
+		boundaryBy[turnID] = fmt.Sprintf("item=%q kind=%q text=%q activity=%q/%q summary=%q", b.providerItemID, b.kind, b.text, b.activityKind, b.activityStatus, b.summary)
+	}
+	// Best-effort diagnostic dump; failure to write is non-fatal.
+	_ = os.WriteFile("/tmp/ao-history-replay-dump.json", func() []byte { //nolint:gosec // hardcoded diagnostic dump path, not user input
+		b, _ := json.MarshalIndent(map[string]any{
+			"highWater":        fmt.Sprintf("turn=%q item=%q kind=%q text=%q activity=%q/%q", p.aoHighWater.providerTurnID, p.aoHighWater.providerItemID, p.aoHighWater.kind, p.aoHighWater.text, p.aoHighWater.activityKind, p.aoHighWater.activityStatus),
+			"boundaries":       boundaryBy,
+			"mappedTurns":      mappedBy,
+			"latestUserPrompt": p.latestUserPrompt,
+			"latestAssistant":  p.latestAssistantUpdate,
+			"providerTurnID":   p.providerTurnID,
+			"requireNewerTurn": p.requireNewerTurn,
+			"replayEvents":     dumpEvents,
+		}, "", "  ")
+		return b
+	}(), 0o644)
+}
+
 func (p nativeHistoryCheckpoint) mismatches(
 	events []ports.ChatEvent,
 	existingTurns []domain.ConversationTurn,
@@ -871,6 +919,7 @@ func (p nativeHistoryCheckpoint) mismatches(
 		}
 	}
 	if len(boundaries) > 0 {
+		p.debugDumpHistoryReplay(events, mappedTurns, boundaries)
 		return append(mismatches, ports.ChatHistoryMismatchAOHighWater)
 	}
 	if p.requireNewerTurn {
