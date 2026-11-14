@@ -46,6 +46,14 @@ export type FilesBackend = {
 	sendFeedback(sessionId: string, comments: FileAnnotationComment[], onSent?: (count: number) => void): Promise<number>;
 	/** Branches, commits and other views. Absent where only the worktree can be read (Orchestrator Cloud). */
 	git?: FilesGit;
+	/**
+	 * A machine's held backend only (see heldBackend): whether its connection is
+	 * verified now, and a wait for it. While it is not, what is on screen stays,
+	 * but a new request carrying the credential (a retry, a reload, a download, a
+	 * view mounted fresh) waits for it.
+	 */
+	verified?(): boolean;
+	whenVerified?(signal?: AbortSignal): Promise<void>;
 };
 
 export type FilesGit = {

@@ -28,6 +28,33 @@ describe("retained-stack host routes", () => {
 		expect(preview).toContain("authHeaders(shown.config)");
 	});
 
+	// Through a reconnect the page on screen keeps the old connection's headers,
+	// but nothing new goes out with them until the machine answers as itself.
+	it("reloads or mounts the app preview with its credential only on a verified connection", () => {
+		const preview = source("../app/preview/[id].tsx");
+		expect(preview).toContain("const appWaits = showingApp && !config && !appMounted.current;");
+		expect(preview).toContain(": appWaits ? <View style={styles.center}><EmptyState busy title=\"Connecting to this machine…\" /></View> : <View style={styles.appPane}>");
+		const reload = preview.slice(preview.indexOf("const reloadApp = useCallback"), preview.indexOf("}, [config]);"));
+		expect(reload.indexOf("if (!currentConfig.current) {")).toBeLessThan(reload.indexOf("web.current?.reload();"));
+		expect(reload).toContain("if (!config || !reloadWhenVerified.current) return;");
+		expect(preview).toContain("pullToRefreshEnabled={Boolean(config)}");
+	});
+
+	it("waits for a verified connection before an artifact or changed image loads afresh with the credential", () => {
+		const artifact = source("../app/artifact/[sessionId].tsx");
+		const body = artifact.slice(artifact.indexOf("function ArtifactBody("), artifact.indexOf("function NoPreview("));
+		expect(body.indexOf("const verified = useVerifiedOnMount(backend);")).toBeLessThan(body.indexOf("backend.webSource("));
+		const web = artifact.slice(artifact.indexOf("function ArtifactWeb("), artifact.indexOf("function ArtifactImage("));
+		expect(web).toContain("const verified = useVerifiedOnMount(backend);");
+		expect(web).toContain("afterVerified(backend, () => web.current?.reload(), retrying.current.signal);");
+		expect(web).not.toContain("setError(undefined); web.current?.reload();");
+		expect(artifact).toContain("const picture = verified && artifactViewKind(item) === \"image\"");
+		expect(source("./ArtifactPoster.tsx")).toContain("const picture = verified && reached && thumbnail");
+		const file = source("../app/files/[sessionId]/file.tsx");
+		expect(file).toContain("onPress={() => afterVerified(backend, () => setViewing(pane))}");
+		expect(file).toContain("if (!verified) return <View style={styles.center}><EmptyState busy title={`Opening ${name}…`} /></View>;");
+	});
+
 	it("requires the owning host for review detail, reviewer chat, and actions", () => {
 		for (const path of ["../app/review/[sessionId].tsx", "../app/reviewer/[reviewId].tsx", "../app/sheets/review-actions.tsx"]) {
 			const route = source(path);

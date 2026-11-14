@@ -11,6 +11,7 @@ import { userFacingError } from "../../../lib/connectionError";
 import { rowDividerWidth } from "../../../lib/divider";
 import { haptics } from "../../../lib/haptics";
 import { hostRouteMatches } from "../../../lib/hostRoute";
+import { afterVerified, useVerifiedOnMount } from "../../../lib/heldBackend";
 import { ImageViewer } from "../../../lib/ImageViewer";
 import { usePressFeedback } from "../../../lib/pressFeedback";
 import { useGlassBarInset } from "../../../lib/useHeaderOverlap";
@@ -433,7 +434,7 @@ function SessionFileContent() {
 		body = <View style={styles.center}><EmptyState icon="image" title={`No image preview for ${changesLabel(pick.changes)}`} message="Images are compared in All changes, a single commit, or another branch." /></View>;
 	} else if (detail && image && !imageSources.unavailable) {
 		body = imageSources.resolved
-			? <ImageCompare detail={detail} name={name} sources={imageSources} />
+			? <ImageCompare backend={backend} detail={detail} name={name} sources={imageSources} />
 			: <View style={styles.center}><EmptyState busy title={`Opening ${name}…`} /></View>;
 	} else if (detail && svg && effectiveMode === "file" && lines && !detail.binary) {
 		body = <ScrollView contentContainerStyle={styles.preview}><SvgXml xml={detail.content} width="100%" height={width} /></ScrollView>;
@@ -556,10 +557,15 @@ function useImageSources(backend: FilesBackend | null, sessionId: string, path: 
  * where it zooms. The daemon's images need the connection's Bearer header,
  * which React Native's Android image loader forwards only for an array source.
  */
-function ImageCompare({ detail, name, sources }: { detail: WorkspaceFileDetail; name: string; sources: { before?: ImageSide; after?: ImageSide } }) {
+function ImageCompare({ backend, detail, name, sources }: { backend: FilesBackend | null; detail: WorkspaceFileDetail; name: string; sources: { before?: ImageSide; after?: ImageSide } }) {
 	const styles = useThemedStyles(makeStyles);
 	const feedback = usePressFeedback("button", { foreground: true });
 	const [viewing, setViewing] = useState<{ label: string; source: ImageSide }>();
+	// The images load with the machine's credential: drawn afresh (or opened
+	// full screen) only once the machine has answered as itself, while what is
+	// already on screen stays through a reconnect (see heldBackend).
+	const verified = useVerifiedOnMount(backend);
+	if (!verified) return <View style={styles.center}><EmptyState busy title={`Opening ${name}…`} /></View>;
 	const panes = [
 		sources.before ? { label: detail.deleted ? "Deleted" : "Before", source: sources.before } : null,
 		sources.after ? { label: detail.status === "added" ? "Added" : sources.before ? "After" : statusLabel[detail.status], source: sources.after } : null,
@@ -573,7 +579,7 @@ function ImageCompare({ detail, name, sources }: { detail: WorkspaceFileDetail; 
 						accessibilityRole="imagebutton"
 						accessibilityLabel={`${pane.label} image`}
 						accessibilityHint="Opens it full screen to zoom"
-						onPress={() => setViewing(pane)}
+						onPress={() => afterVerified(backend, () => setViewing(pane))}
 						android_ripple={feedback.android_ripple}
 						style={({ pressed }) => [styles.imageFrame, pressed && feedback.pressed]}
 					>
