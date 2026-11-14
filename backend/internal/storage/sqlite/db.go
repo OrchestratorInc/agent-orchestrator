@@ -2217,6 +2217,14 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 		}
 		needsNativeAssistant = true
 	}
+	if !needsTau {
+		// The Tau migration also widens any constraint ending in 'fake', so
+		// normalize it the same way and append it again after Hermes.
+		if _, err := db.Exec(`UPDATE sqlite_master SET sql = replace(sql, '''tau'', ', '') WHERE type = 'table' AND name = 'sessions'`); err != nil {
+			return fmt.Errorf("schema repair: normalize Tau constraint: %w", err)
+		}
+		needsTau = true
+	}
 	type replacement struct {
 		old string
 		new string
