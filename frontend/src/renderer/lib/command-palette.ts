@@ -1055,19 +1055,32 @@ export function displayGroups(
 	const searchGroups = groupCommands(searched, t, searchGroupRows);
 	// Keep matches under their category headings (Cursor-style), including while typing.
 	if (!query.trim()) return [...groupCommands(capBlankGroups(visibleForQuery(local, query)), t), ...searchGroups];
-	const groups = groupCommands(visibleForQuery(local, query), t);
-	// The palette runs cmdk with shouldFilter:false and selects the first item in DOM
-	// order, so Enter follows category order. Rank categories by their best match to
-	// keep the highest-scoring hit — and therefore the Enter target — first.
-	const ranked = groups
-		.map((group, index) => ({
-			group,
-			index,
-			score: Math.max(...group.items.map((item) => matchScore(query, item))),
-		}))
-		.sort((a, b) => b.score - a.score || a.index - b.index)
-		.map((entry) => entry.group);
-	return [...ranked, ...searchGroups];
+	// A search lists actions and general commands first, then sessions, then
+	// projects and PRs. The palette highlights the best match wherever it sits.
+	const groups = groupCommands(visibleForQuery(local, query), t)
+		.sort((a, b) => searchGroupRank(a.id) - searchGroupRank(b.id));
+	return [...groups, ...searchGroups];
+}
+
+const SEARCH_GROUP_ORDER: CommandGroupId[] = ["current", "global", "settings", "attention", "sessions", "projects", "prs"];
+
+function searchGroupRank(id: string): number {
+	const rank = SEARCH_GROUP_ORDER.indexOf(id as CommandGroupId);
+	return rank === -1 ? SEARCH_GROUP_ORDER.length : rank;
+}
+
+/** The row Enter should run for a search: the best match, first on a tie. */
+export function bestMatch(items: readonly CommandItem[], query: string): CommandItem | undefined {
+	let best: CommandItem | undefined;
+	let bestScore = 0;
+	for (const item of items) {
+		const score = matchScore(query, item);
+		if (score > bestScore) {
+			best = item;
+			bestScore = score;
+		}
+	}
+	return best;
 }
 
 /**

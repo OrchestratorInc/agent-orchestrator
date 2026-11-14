@@ -20,6 +20,7 @@ import {
 	buildProjectActions,
 	buildSessionActions,
 	buildWorkspaceFileCommands,
+	bestMatch,
 	goToCommands,
 	findSubmenuEntries,
 	menuEntryCommands,
@@ -585,7 +586,8 @@ export const CommandPalette = memo(function CommandPalette() {
 	const value =
 		(visibleItems.some((item) => item.id === selectedValue && !item.disabled)
 			? selectedValue
-			: (visibleItems.find(autoSelectable) ?? (searchStale ? undefined : visibleItems[0]))?.id) ?? "";
+			: ((view.mode === "root" && query.trim() ? bestMatch(visibleItems.filter(autoSelectable), query) : undefined)
+				?? visibleItems.find(autoSelectable) ?? (searchStale ? undefined : visibleItems[0]))?.id) ?? "";
 
 	// Arrowing through Color theme previews each theme; leaving the list without
 	// picking one puts the saved theme back.

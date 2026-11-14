@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	buildCommands,
 	buildFileSessionCommands,
+	bestMatch,
 	buildProjectActions,
 	buildSessionActions,
 	findSubmenuEntries,
@@ -572,7 +573,7 @@ describe("result caps", () => {
 		expect(total).toBeLessThanOrEqual(MAX_SEARCH_RESULTS);
 	});
 
-	it("keeps search hits under category headings, best-matching category first", () => {
+	it("keeps search hits under category headings, sessions before projects, the best match picked", () => {
 		const workspaces: WorkspaceSummary[] = [
 			{
 				id: "alpha",
@@ -586,15 +587,14 @@ describe("result caps", () => {
 		const ids = groups.map((g) => g.id);
 		expect(ids).toContain("attention");
 		expect(ids).toContain("projects");
-		// Projects outranks its default position ahead of Needs attention because
-		// "alpha" is an exact project title but only a fuzzy hit on the session.
-		expect(ids.indexOf("projects")).toBeLessThan(ids.indexOf("attention"));
+		// A search lists sessions before projects; Enter still takes the best
+		// match, the exact project title.
+		expect(ids.indexOf("attention")).toBeLessThan(ids.indexOf("projects"));
+		expect(bestMatch(groups.flatMap((g) => g.items), "alpha")?.id).toBe("project:alpha");
 		expect(groups.find((g) => g.id === "attention")?.items.some((item) => item.id === "attention:s-attn")).toBe(
 			true,
 		);
-		// Enter targets the first item in render order, so that must be the top match.
 		const rendered = groups.flatMap((g) => g.items);
-		expect(rendered[0]?.id).toBe("project:alpha");
 		expect(rendered.length).toBeLessThanOrEqual(MAX_SEARCH_RESULTS);
 	});
 
@@ -613,13 +613,13 @@ describe("result caps", () => {
 		expect(groups.find((g) => g.id === "attention")?.items.map((item) => item.id)).toContain("attention:s-attn");
 	});
 
-	it("falls back to the default category order when categories match equally well", () => {
-		// "app" is the project title (1000) and a keyword-only hit (500) on the
-		// attention, session and PR rows, so those three keep their declared order.
+	it("lists general commands first, then sessions, then projects and PRs", () => {
+		// "app" is the project title and a weaker hit on General (Appearance) and the session rows.
 		const ids = displayGroups(buildCommands({ workspaces: workspaces() }), "app").map((g) => g.id);
-		expect(ids[0]).toBe("projects");
+		expect(ids[0]).toBe("global");
 		expect(ids.indexOf("attention")).toBeLessThan(ids.indexOf("sessions"));
-		expect(ids.indexOf("sessions")).toBeLessThan(ids.indexOf("prs"));
+		expect(ids.indexOf("sessions")).toBeLessThan(ids.indexOf("projects"));
+		expect(ids.indexOf("projects")).toBeLessThan(ids.indexOf("prs"));
 	});
 
 	it("keeps a lower-scoring attention match visible past the ordinary-result cap", () => {
