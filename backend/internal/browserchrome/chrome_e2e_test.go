@@ -289,7 +289,7 @@ func TestChromeE2E(t *testing.T) {
 	// macOS animates the minimize; wait for the page to see it.
 	hidden := extension(fmt.Sprintf(`(async () => {
 		const [g] = await chrome.tabGroups.query({ title: %q });
-		const [tab] = await chrome.tabs.query({ groupId: g.id, active: true });
+		const [tab] = await chrome.tabs.query({ groupId: g.id });
 		let visibility = "";
 		for (let i = 0; i < 60 && visibility !== "hidden"; i++) {
 			const [frame] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: () => document.visibilityState });
