@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { ScrollArea } from "radix-ui";
 import { useTranslation } from "react-i18next";
-import { ArrowDownUp, CalendarClock, ChevronDown, ChevronRight, Clock, Clock3, History, GitPullRequest, ListChecks, FileText, Filter, Pencil, Plus, Trash2, TriangleAlert } from "@/components/app-icons";
+import { ArrowDownUp, Bell, BellRing, CalendarClock, ChevronDown, ChevronRight, Clock, Clock3, Cloud, History, GitPullRequest, ListChecks, FileText, Filter, Pencil, Play, Plus, Trash2, TriangleAlert } from "@/components/app-icons";
 import { Button } from "./ui/button";
 import { CloseButton } from "./ui/close-button";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
@@ -43,11 +43,8 @@ import {
 } from "../lib/agent-select-options";
 import {
 	buildRRuleFromSchedule,
-	clampHourDraft,
-	clampMinuteDraft,
 	clampMonthDayDraft,
 	describeSchedule,
-	formatTimeDraft,
 	nowLocalHHMM,
 	parseHourMinute,
 	parseTimeValue,
@@ -66,6 +63,21 @@ import {
 	type Automation,
 	type CreateAutomationInput,
 } from "../hooks/useAutomations";
+import {
+	CLOUD_AUTOMATION_HARNESSES,
+	cloudAutomationErrorMessage,
+	cloudRunErrorMessage,
+	useCloudAutomationRuns,
+	useCloudAutomations,
+	useCreateCloudAutomation,
+	useDeleteCloudAutomation,
+	useRunCloudAutomationNow,
+	useSubscribeCloudAutomation,
+	useUpdateCloudAutomation,
+	type CloudAutomation,
+} from "../hooks/useCloudAutomations";
+import { useCloudOffering } from "../hooks/useCloudOffering";
+import { useProviderConnections } from "../hooks/useProviderConnections";
 import {
 	centeredOnboardingDialogClass,
 	onboardingAlertErrorClass,
@@ -95,9 +107,29 @@ function timestamp(value?: string) {
 	return value ? Date.parse(value) || 0 : 0;
 }
 
+/** One row of the list: an automation of this Mac's daemon, or one that runs in AO Cloud. */
+type ListedAutomation = {
+	key: string;
+	displayName: string;
+	enabled: boolean;
+	nextRunAt?: string;
+	createdAt: string;
+	projectId: string;
+	local?: Automation;
+	cloud?: CloudAutomation;
+};
+
+function listLocal(item: Automation): ListedAutomation {
+	return { key: `local:${item.id}`, displayName: item.displayName, enabled: item.enabled, nextRunAt: item.nextRunAt, createdAt: item.createdAt, projectId: item.projectId, local: item };
+}
+
+function listCloud(item: CloudAutomation): ListedAutomation {
+	return { key: `cloud:${item.id}`, displayName: item.displayName, enabled: item.enabled, nextRunAt: item.nextRunAt, createdAt: item.createdAt, projectId: item.projectId, cloud: item };
+}
+
 /** Orders the list: soonest next run first with paused ones last, by name, or newest first. */
-function sortAutomations(items: Automation[], order: SortOrder) {
-	const byName = (left: Automation, right: Automation) => left.displayName.localeCompare(right.displayName);
+function sortAutomations(items: ListedAutomation[], order: SortOrder) {
+	const byName = (left: ListedAutomation, right: ListedAutomation) => left.displayName.localeCompare(right.displayName);
 	return [...items].sort((left, right) => {
 		if (order === "name") return byName(left, right);
 		if (order === "created") return timestamp(right.createdAt) - timestamp(left.createdAt) || byName(left, right);
@@ -147,6 +179,16 @@ export function AutomationsView() {
 	const create = useCreateAutomation();
 	const update = useUpdateAutomation();
 	const remove = useDeleteAutomation();
+	const cloud = useCloudAutomations();
+	const chatHarnesses = useCloudOffering().chatHarnesses;
+	const providerConnections = useProviderConnections().data;
+	const connectedCloudHarnesses = useMemo(
+		() => providerConnections?.filter((connection) => connection.validationState === "valid").map((connection) => connection.provider),
+		[providerConnections],
+	);
+	const createCloud = useCreateCloudAutomation();
+	const updateCloud = useUpdateCloudAutomation();
+	const removeCloud = useDeleteCloudAutomation();
 	const [createOpen, setCreateOpen] = useState(false);
 	const [starter, setStarter] = useState<AutomationTemplateID>("custom");
 	const [search, setSearch] = useState("");
@@ -158,10 +200,12 @@ export function AutomationsView() {
 		setCreateOpen(true);
 	}
 	const [editTarget, setEditTarget] = useState<Automation | null>(null);
-	const [deleteTarget, setDeleteTarget] = useState<Automation | null>(null);
+	const [cloudEditTarget, setCloudEditTarget] = useState<CloudAutomation | null>(null);
+	const [deleteTarget, setDeleteTarget] = useState<ListedAutomation | null>(null);
 	const [expanded, setExpanded] = useState<string | null>(null);
 	const [actionError, setActionError] = useState<string | null>(null);
-	const automations = useMemo(() => query.data ?? [], [query.data]);
+	const cloudItems = cloud.available ? cloud.data : undefined;
+	const automations = useMemo(() => [...(query.data ?? []).map(listLocal), ...(cloudItems ?? []).map(listCloud)], [query.data, cloudItems]);
 	const projectName = (id: string) => workspaces.find((workspace) => workspace.id === id)?.name ?? id;
 	// Projects that own at least one automation, so the filter never offers an empty choice.
 	const projectOptions = [...new Set(automations.map((item) => item.projectId))].map((id) => ({ id, name: projectName(id) }));
@@ -192,6 +236,7 @@ export function AutomationsView() {
 					{actionError ? <p role="alert" className="mb-3 rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive">{actionError}</p> : null}
 					{query.isLoading ? <p role="status" className="px-3 py-8 text-center text-sm text-muted-foreground">{t("automations.loading")}</p> : null}
 					{query.error ? <p role="alert" className="text-sm text-destructive">{query.error.message}</p> : null}
+					{cloud.error ? <p role="alert" className="text-sm text-destructive">{cloudAutomationErrorMessage(cloud.error, t)}</p> : null}
 					{!query.isLoading && !query.error ? (
 						<section aria-labelledby="automation-templates">
 							<h2 id="automation-templates" className="text-control font-medium text-foreground">{t("automations.templates.title")}</h2>
@@ -274,9 +319,11 @@ export function AutomationsView() {
 							</div>
 							{visibleAutomations.length > 0 ? (
 								<div className="divide-y divide-border">
-									{visibleAutomations.map((item) => (
-										<AutomationRow key={item.id} item={item} projectName={projectName(item.projectId)} busy={update.isPending} expanded={expanded === item.id} onExpand={() => setExpanded(expanded === item.id ? null : item.id)} onEdit={() => setEditTarget(item)} onDelete={() => setDeleteTarget(item)} onToggle={async (enabled) => { setActionError(null); try { await update.mutateAsync({ id: item.id, body: { enabled } }); } catch (error) { setActionError(error instanceof Error ? error.message : t("automations.updateError")); } }} />
-									))}
+									{visibleAutomations.map((entry) => entry.cloud ? (
+										<CloudAutomationRow key={entry.key} item={entry.cloud} projectName={projectName(entry.projectId)} busy={updateCloud.isPending} expanded={expanded === entry.key} onExpand={() => setExpanded(expanded === entry.key ? null : entry.key)} onEdit={() => setCloudEditTarget(entry.cloud ?? null)} onDelete={() => setDeleteTarget(entry)} onError={setActionError} onToggle={async (enabled) => { setActionError(null); try { await updateCloud.mutateAsync({ id: entry.cloud!.id, body: { enabled } }); } catch (error) { setActionError(cloudAutomationErrorMessage(error, t) ?? t("automations.updateError")); } }} />
+									) : entry.local ? (
+										<AutomationRow key={entry.key} item={entry.local} projectName={projectName(entry.projectId)} busy={update.isPending} expanded={expanded === entry.key} onExpand={() => setExpanded(expanded === entry.key ? null : entry.key)} onEdit={() => setEditTarget(entry.local ?? null)} onDelete={() => setDeleteTarget(entry)} onToggle={async (enabled) => { setActionError(null); try { await update.mutateAsync({ id: entry.local!.id, body: { enabled } }); } catch (error) { setActionError(error instanceof Error ? error.message : t("automations.updateError")); } }} />
+									) : null)}
 								</div>
 							) : (
 								<div className="flex flex-col items-center gap-1 py-16 text-center">
@@ -293,9 +340,26 @@ export function AutomationsView() {
 				</ScrollArea.Scrollbar>
 			</main>
 			</ScrollArea.Root>
-			<AutomationFormDialog initialTemplateId={starter} open={createOpen} workspaces={workspaces} harnesses={harnesses} busy={create.isPending} error={create.error?.message ?? null} onOpenChange={setCreateOpen} onSubmit={async (input) => { await create.mutateAsync(input as CreateAutomationInput); setCreateOpen(false); }} />
-			<AutomationFormDialog open={Boolean(editTarget)} automation={editTarget ?? undefined} workspaces={workspaces} harnesses={harnesses} busy={update.isPending} error={update.error?.message ?? null} onOpenChange={(open) => { if (!open) setEditTarget(null); }} onSubmit={async (input) => { if (!editTarget) return; await update.mutateAsync({ id: editTarget.id, body: input }); setEditTarget(null); }} />
-			<ConfirmDialog open={Boolean(deleteTarget)} title={t("automations.delete.title")} description={t("automations.delete.description", { name: deleteTarget?.displayName })} confirmLabel={t("automations.delete.confirm")} destructive busy={remove.isPending} error={remove.error?.message ?? null} onOpenChange={(open) => { if (!open) setDeleteTarget(null); }} onConfirm={() => { if (!deleteTarget) return; remove.mutate(deleteTarget.id, { onSuccess: () => setDeleteTarget(null) }); }} />
+			<AutomationFormDialog initialTemplateId={starter} open={createOpen} workspaces={workspaces} harnesses={harnesses} cloudOrgId={cloud.available ? cloud.orgId : undefined} cloudHarnesses={chatHarnesses} connectedCloudHarnesses={connectedCloudHarnesses} busy={create.isPending || createCloud.isPending} error={create.error?.message ?? cloudAutomationErrorMessage(createCloud.error, t)} onOpenChange={(open) => { setCreateOpen(open); if (!open) createCloud.reset(); }} onSubmit={async ({ runsOn, ...input }) => {
+				if (runsOn === "cloud") {
+					// A cloud run is unattended: trusted mode, the default time limit.
+					await createCloud.mutateAsync({ projectId: input.projectId!, displayName: input.displayName, prompt: input.prompt, harness: input.harness as CloudAutomation["harness"], timezone: input.timezone!, rrule: input.rrule, mode: "trusted", maxRuntimeMinutes: 60, enabled: true });
+				} else {
+					await create.mutateAsync(input as CreateAutomationInput);
+				}
+				setCreateOpen(false);
+			}} />
+			<AutomationFormDialog open={Boolean(editTarget)} automation={editTarget ?? undefined} workspaces={workspaces} harnesses={harnesses} busy={update.isPending} error={update.error?.message ?? null} onOpenChange={(open) => { if (!open) setEditTarget(null); }} onSubmit={async ({ runsOn: _runsOn, ...input }) => { if (!editTarget) return; await update.mutateAsync({ id: editTarget.id, body: input }); setEditTarget(null); }} />
+			<AutomationFormDialog open={Boolean(cloudEditTarget)} cloudAutomation={cloudEditTarget ?? undefined} cloudOrgId={cloud.orgId} cloudHarnesses={chatHarnesses} connectedCloudHarnesses={connectedCloudHarnesses} workspaces={workspaces} harnesses={harnesses} busy={updateCloud.isPending} error={cloudAutomationErrorMessage(updateCloud.error, t)} onOpenChange={(open) => { if (!open) { setCloudEditTarget(null); updateCloud.reset(); } }} onSubmit={async (input) => {
+				if (!cloudEditTarget) return;
+				await updateCloud.mutateAsync({ id: cloudEditTarget.id, body: { displayName: input.displayName, prompt: input.prompt, ...(input.harness ? { harness: input.harness as CloudAutomation["harness"] } : {}), ...(input.rrule ? { rrule: input.rrule } : {}) } });
+				setCloudEditTarget(null);
+			}} />
+			<ConfirmDialog open={Boolean(deleteTarget)} title={t("automations.delete.title")} description={t("automations.delete.description", { name: deleteTarget?.displayName })} confirmLabel={t("automations.delete.confirm")} destructive busy={remove.isPending || removeCloud.isPending} error={deleteTarget?.cloud ? cloudAutomationErrorMessage(removeCloud.error, t) : remove.error?.message ?? null} onOpenChange={(open) => { if (!open) { setDeleteTarget(null); removeCloud.reset(); } }} onConfirm={() => {
+				if (!deleteTarget) return;
+				if (deleteTarget.cloud) removeCloud.mutate(deleteTarget.cloud.id, { onSuccess: () => setDeleteTarget(null) });
+				else if (deleteTarget.local) remove.mutate(deleteTarget.local.id, { onSuccess: () => setDeleteTarget(null) });
+			}} />
 		</div>
 	);
 }
@@ -413,8 +477,100 @@ function AutomationRow({ item, projectName, busy, expanded, onExpand, onEdit, on
 }
 
 
-type WorkspaceOption = { id: string; name: string; standaloneAgent?: boolean };
+/**
+ * An automation that runs in AO Cloud: the whole organization sees it and may
+ * run it now; only the person it runs as, its creator and admins change it.
+ */
+function CloudAutomationRow({ item, projectName, busy, expanded, onExpand, onEdit, onDelete, onToggle, onError }: { item: CloudAutomation; projectName: string; busy: boolean; expanded: boolean; onExpand: () => void; onEdit: () => void; onDelete: () => void; onToggle: (enabled: boolean) => Promise<void>; onError: (message: string | null) => void }) {
+	const runs = useCloudAutomationRuns(expanded ? item.id : null);
+	const runNow = useRunCloudAutomationNow();
+	const subscribe = useSubscribeCloudAutomation();
+	const navigate = useNavigate();
+	const { t, i18n } = useTranslation();
+	const reduceMotion = useReducedMotion();
+	const scheduleLabel = useScheduleLabel();
+	const historyId = `automation-history-cloud-${item.id}`;
+	const runAs = item.runAs.displayName || item.runAs.email || t("automations.cloud.runAsUnknown");
+	const latestError = item.latestRun ? cloudRunErrorMessage(item.latestRun, t) : undefined;
+	const running = item.latestRun ? ["pending", "starting", "running"].includes(item.latestRun.status) : false;
+	async function act(action: () => Promise<unknown>) {
+		onError(null);
+		try { await action(); } catch (error) { onError(cloudAutomationErrorMessage(error, t)); }
+	}
+	const subscribeLabel = t(item.subscribed ? "automations.cloud.unsubscribe" : "automations.cloud.subscribe", { name: item.displayName });
+	return <article className="group">
+		<div className={cn("flex items-center gap-3 rounded-md px-2 py-2.5", expanded ? "bg-interactive-hover" : "hover:bg-interactive-hover")}>
+			<Pressable className="flex min-w-0 flex-1 items-center gap-2.5 rounded-sm" aria-label={t(expanded ? "automations.runs.hide" : "automations.runs.show", { name: item.displayName })} aria-expanded={expanded} aria-controls={historyId} onClick={onExpand}>
+				<ChevronRight aria-hidden="true" className={cn("size-3.5 shrink-0 text-muted-foreground transition-transform duration-150 motion-reduce:transition-none", expanded && "rotate-90")} />
+				<div className="min-w-0">
+					<h2 className="flex min-w-0 items-center gap-1.5 text-control font-medium leading-5 text-foreground">
+						<span className="truncate">{item.displayName}</span>
+						<span className="flex shrink-0 items-center gap-1 text-caption font-normal text-muted-foreground"><Cloud aria-hidden="true" className="size-icon-xs" />{t("automations.cloud.badge")}</span>
+					</h2>
+					<p className="flex min-w-0 items-center gap-1.5 text-caption leading-5 text-muted-foreground">
+						<Clock aria-hidden="true" className="size-icon-xs shrink-0 text-passive" />
+						<span className="truncate">{scheduleLabel(item.rrule)}</span>
+						<span aria-hidden="true" className="text-passive">·</span>
+						<span className="truncate">{projectName}</span>
+						<span aria-hidden="true" className="text-passive">·</span>
+						<span className="truncate">{t("automations.cloud.runsAs", { name: runAs })}</span>
+					</p>
+				</div>
+			</Pressable>
+			<div className="hidden shrink-0 text-end text-caption leading-5 @lg:block">
+				<p className={cn("tabular-nums", item.enabled ? "text-foreground" : "text-muted-foreground")}>
+					{item.enabled ? t("automations.nextRunAt", { time: displayTime(item.nextRunAt, i18n.resolvedLanguage) }) : item.disabledReason || t("automations.paused")}
+				</p>
+				{item.latestRun ? <p className="text-muted-foreground">{t("automations.lastRun", { status: t(`automations.runStatus.${item.latestRun.status}`, { defaultValue: item.latestRun.status }) })}</p> : null}
+			</div>
+			<div className="flex shrink-0 items-center gap-1">
+				<Tooltip>
+					<TooltipTrigger asChild>
+						<Button variant="quiet" size="icon-sm" aria-label={t("automations.cloud.runNow.aria", { name: item.displayName })} disabled={running || runNow.isPending} onClick={() => void act(() => runNow.mutateAsync(item.id))}><Play className="size-3.5" /></Button>
+					</TooltipTrigger>
+					<TooltipContent side="bottom">{t(running ? "automations.cloud.runNow.running" : "automations.cloud.runNow")}</TooltipContent>
+				</Tooltip>
+				<Tooltip>
+					<TooltipTrigger asChild>
+						<Button variant="quiet" size="icon-sm" aria-label={subscribeLabel} aria-pressed={item.subscribed} disabled={subscribe.isPending} onClick={() => void act(() => subscribe.mutateAsync({ id: item.id, subscribed: !item.subscribed }))}>{item.subscribed ? <BellRing className="size-3.5" /> : <Bell className="size-3.5" />}</Button>
+					</TooltipTrigger>
+					<TooltipContent side="bottom">{t(item.subscribed ? "automations.cloud.unsubscribe.tooltip" : "automations.cloud.subscribe.tooltip")}</TooltipContent>
+				</Tooltip>
+				{item.canEdit ? <>
+					<Button variant="quiet" size="icon-sm" className="opacity-0 group-hover:opacity-100 group-focus-within:opacity-100" aria-label={t("automations.edit.aria", { name: item.displayName })} onClick={onEdit}><Pencil className="size-3.5" /></Button>
+					<Button variant="destructive-ghost" size="icon-sm" className="opacity-0 group-hover:opacity-100 group-focus-within:opacity-100" aria-label={t("automations.delete.aria", { name: item.displayName })} onClick={onDelete}><Trash2 className="size-3.5" /></Button>
+				</> : null}
+				<Switch checked={item.enabled} disabled={busy || !item.canEdit} aria-label={t(item.enabled ? "automations.disable" : "automations.enable", { name: item.displayName })} onCheckedChange={(checked) => void onToggle(checked)} />
+			</div>
+		</div>
+		{latestError ? <p role="alert" className="mx-2 mb-2 rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive">{latestError}</p> : null}
+		<AnimatePresence initial={false}>
+			{expanded ? <motion.div id={historyId} initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={{ duration: reduceMotion ? 0 : 0.18, ease: "easeOut" }} className="overflow-hidden">
+				<div className="px-2 pt-3 pb-4 pl-8">
+					<div className="mb-4 flex flex-wrap items-center gap-x-4 gap-y-1 text-caption text-muted-foreground">
+						<span className="@lg:hidden tabular-nums">{item.enabled ? t("automations.nextRunAt", { time: displayTime(item.nextRunAt, i18n.resolvedLanguage) }) : t("automations.paused")}</span>
+						<span>{t("automations.timezone", { timezone: item.timezone })}</span>
+						<span>{t("automations.agent")}: <span className="text-foreground">{item.harness}</span></span>
+						<span>{t("automations.cloud.branch")}: <span className="font-mono text-foreground">{item.branch}</span></span>
+					</div>
+					<p className="mb-1 text-caption font-medium text-muted-foreground">{t("automations.field.prompt")}</p>
+					<p className="mb-4 whitespace-pre-wrap text-xs leading-5 text-foreground">{item.prompt}</p>
+					<h3 className="mb-2 flex items-center gap-1.5 text-xs font-medium"><History className="size-3.5 text-muted-foreground" aria-hidden="true" />{t("automations.runs.title")}</h3>
+					{runs.isLoading ? <p role="status" className="text-xs text-muted-foreground">{t("automations.runs.loading")}</p> : runs.error ? <p role="alert" className="text-xs text-destructive">{cloudAutomationErrorMessage(runs.error, t)}</p> : runs.data?.length ? <div className="divide-y divide-border">{runs.data.map((run) => {
+						const runError = cloudRunErrorMessage(run, t);
+						return <div key={run.id} className="flex items-center justify-between gap-3 py-2 text-xs"><div><span className="font-medium">{t(`automations.runStatus.${run.status}`, { defaultValue: run.status })}</span><span className="ml-3 text-caption tabular-nums text-muted-foreground">{displayTime(run.scheduledFor, i18n.resolvedLanguage)}</span>{run.trigger === "manual" ? <span className="ml-3 text-caption text-muted-foreground">{t("automations.cloud.manual")}</span> : null}{runError ? <p className="mt-1 text-xs text-destructive">{runError}</p> : null}</div>{run.sessionId ? <Button variant="secondary" size="sm" onClick={() => void navigate({ to: "/sessions/$sessionId", params: { sessionId: run.sessionId! } })}>{t("automations.runs.openSession")}</Button> : null}</div>;
+					})}</div> : <p className="flex items-center gap-2 py-3 text-xs text-muted-foreground"><Clock3 className="size-3.5" aria-hidden="true" />{t("automations.runs.empty")}</p>}
+				</div>
+			</motion.div> : null}
+		</AnimatePresence>
+	</article>;
+}
+
+type WorkspaceOption = { id: string; name: string; standaloneAgent?: boolean; kind?: string; cloudOrgId?: string; shared?: unknown };
+type RunsOn = "local" | "cloud";
 type AutomationFormSubmit = {
+	/** Where the automation runs: this Mac's daemon, or AO Cloud. */
+	runsOn: RunsOn;
 	templateId?: AutomationTemplateID;
 	useCase?: AutomationUseCase;
 	projectId?: string;
@@ -432,6 +588,14 @@ type AutomationFormDialogProps = {
 	open: boolean;
 	initialTemplateId?: AutomationTemplateID;
 	automation?: Automation;
+	/** A cloud automation being edited. */
+	cloudAutomation?: CloudAutomation;
+	/** The organization whose cloud projects may run automations; unset when AO Cloud automations are not offered. */
+	cloudOrgId?: string;
+	/** Harnesses AO Cloud runs in Chat (`/me` chatHarnesses). */
+	cloudHarnesses?: string[];
+	/** Harnesses the user has a valid AO Cloud login for; unset while loading. */
+	connectedCloudHarnesses?: string[];
 	workspaces: WorkspaceOption[];
 	harnesses: AgentReadinessSnapshot[];
 	busy: boolean;
@@ -447,7 +611,8 @@ const AUTOMATION_FIELD_IDS: Record<AutomationField, string> = {
 	projectId: "automation-project",
 	name: "automation-name",
 	prompt: "automation-prompt",
-	time: "automation-time",
+	// Daily and weekly times are picked with the hour and minute fields.
+	time: "automation-hour",
 	hour: "automation-hour",
 	minute: "automation-minute",
 	monthDay: "automation-month-day",
@@ -457,6 +622,10 @@ function AutomationFormDialog({
 	open,
 	initialTemplateId = "custom",
 	automation,
+	cloudAutomation,
+	cloudOrgId,
+	cloudHarnesses,
+	connectedCloudHarnesses,
 	workspaces,
 	harnesses,
 	busy,
@@ -465,14 +634,17 @@ function AutomationFormDialog({
 	onSubmit,
 }: AutomationFormDialogProps) {
 	const { t } = useTranslation();
-	const editing = Boolean(automation);
-	const timezone = automation?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+	const edited = automation ?? cloudAutomation;
+	const editing = Boolean(edited);
+	const timezone = edited?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+	const [runsOn, setRunsOn] = useState<RunsOn>("local");
+	const isCloud = runsOn === "cloud";
 	const [projectId, setProjectId] = useState("");
-	const projectDefaults = useProjectWorkerDefaults(open ? (automation?.projectId || projectId) : "");
+	const projectDefaults = useProjectWorkerDefaults(open && !isCloud ? (automation?.projectId || projectId) : "");
 	const projectDefaultWorker = projectDefaults.harness;
 	const [name, setName] = useState("");
 	const [prompt, setPrompt] = useState("");
-	const templateId = automation?.templateId ?? initialTemplateId;
+	const templateId = automation?.templateId ?? (cloudAutomation ? "custom" : initialTemplateId);
 	const template = AUTOMATION_TEMPLATES.find((item) => item.id === templateId);
 	const [harness, setHarness] = useState("");
 	const [model, setModel] = useState("");
@@ -505,19 +677,20 @@ function AutomationFormDialog({
 
 	useEffect(() => {
 		if (!open) return;
-		if (!automation) void captureRendererEvent("ao.automations.create_opened");
-		setProjectId(automation?.projectId ?? "");
-		setName(automation?.displayName ?? "");
-		setPrompt(automation?.prompt ?? "");
-		setHarness(automation?.harness ?? "");
+		if (!edited) void captureRendererEvent("ao.automations.create_opened");
+		setRunsOn(cloudAutomation ? "cloud" : "local");
+		setProjectId(edited?.projectId ?? "");
+		setName(edited?.displayName ?? "");
+		setPrompt(edited?.prompt ?? "");
+		setHarness(edited?.harness ?? "");
 		setModel(automation?.model ?? "");
 		setMode(automation?.mode ?? "");
 		setEffort(automation?.effort ?? "");
 		setModelValid(true);
 		const defaultTime = nowLocalHHMM();
 		const [defaultHour, defaultMinute] = defaultTime.split(":");
-		const nextSchedule = automation
-			? scheduleFieldsFromRRule(automation.rrule)
+		const nextSchedule = edited
+			? scheduleFieldsFromRRule(edited.rrule)
 			: {
 					preset: "daily" as const,
 					time: defaultTime,
@@ -528,7 +701,7 @@ function AutomationFormDialog({
 					minute: defaultMinute,
 					legacyRaw: null,
 				};
-		const starter = !automation ? AUTOMATION_TEMPLATES.find((item) => item.id === initialTemplateId) : undefined;
+		const starter = !edited ? AUTOMATION_TEMPLATES.find((item) => item.id === initialTemplateId) : undefined;
 		if (starter) {
 			setName(t(`automations.template.${starter.id}`));
 			setPrompt(starter.prompt);
@@ -538,13 +711,24 @@ function AutomationFormDialog({
 		setValidationErrors({});
 	// Language changes must not discard edits to an open form.
 	// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [open, automation, initialTemplateId]);
+	}, [open, automation, cloudAutomation, initialTemplateId]);
 
 	// A Cloud standalone agent takes no session but its own, so it is no project for an automation.
-	const projectOptions = workspaces.filter((item) => !item.standaloneAgent).map((item) => ({ value: item.id, label: item.name }));
-	if (automation && !projectOptions.some((option) => option.value === automation.projectId)) {
-		projectOptions.unshift({ value: automation.projectId, label: automation.projectId });
+	// With AO Cloud automations offered, This Mac lists local projects and AO Cloud the organization's own cloud projects.
+	const projectOptions = workspaces
+		.filter((item) => !item.standaloneAgent && (isCloud
+			? item.kind === "cloud" && item.cloudOrgId === cloudOrgId && !item.shared
+			: !cloudOrgId || item.kind !== "cloud"))
+		.map((item) => ({ value: item.id, label: item.name }));
+	if (edited && !projectOptions.some((option) => option.value === edited.projectId)) {
+		projectOptions.unshift({ value: edited.projectId, label: edited.projectId });
 	}
+	const cloudHarnessOptions = CLOUD_AUTOMATION_HARNESSES
+		.filter((id) => !cloudHarnesses?.length || cloudHarnesses.includes(id))
+		// A run uses the login of the person it runs as, so offer only harnesses logged in to AO Cloud.
+		.filter((id) => !connectedCloudHarnesses || connectedCloudHarnesses.includes(id) || id === cloudAutomation?.harness)
+		.map((id) => ({ value: id, label: harnesses.find((agent) => agent.id === id)?.label ?? id }));
+	const cloudHarness = cloudHarnessOptions.some((option) => option.value === harness) ? harness : cloudHarnessOptions[0]?.value ?? "";
 	// Prefer an explicit choice, then the project's resolved worker, then the
 	// first ready harness so Model isn't stuck on "Select agent" before a
 	// project is picked.
@@ -555,7 +739,7 @@ function AutomationFormDialog({
 			fallbackAgents: [],
 		}).find(isReadyAgent)?.id ?? "";
 	const selectedHarness = harness || projectDefaultWorker || fallbackHarness;
-	const awaitingInheritedHarness = Boolean(automation && !automation.harness && !harness && !projectDefaults.loaded);
+	const awaitingInheritedHarness = Boolean(!isCloud && automation && !automation.harness && !harness && !projectDefaults.loaded);
 	// Match the daemon's base config plus overrides for a matching worker harness.
 	const inheritedWorker = !projectDefaults.worker?.agent || projectDefaults.worker.agent === selectedHarness ? projectDefaults.worker?.agentConfig : undefined;
 	const inheritedModel = inheritedWorker?.model || projectDefaults.agentConfig?.model || "";
@@ -589,7 +773,7 @@ function AutomationFormDialog({
 
 	async function submit(event: FormEvent) {
 		event.preventDefault();
-		if (!modelValid || awaitingInheritedHarness) return;
+		if (!isCloud && (!modelValid || awaitingInheritedHarness)) return;
 		const nextErrors: AutomationValidationErrors = {};
 		if (!editing && !projectId) nextErrors.projectId = t("automations.validation.project");
 		if (!name.trim()) nextErrors.name = t("automations.validation.name");
@@ -613,7 +797,7 @@ function AutomationFormDialog({
 			return;
 		}
 		const nextRRule = buildRRuleFromSchedule(schedule);
-		const scheduleChanged = !(editing && automation && initialSchedule && schedulesEqual(schedule, initialSchedule));
+		const scheduleChanged = !(editing && initialSchedule && schedulesEqual(schedule, initialSchedule));
 		const tuning = {
 			...(!editing || model !== (automation?.model ?? "") ? { model } : {}),
 			...(!editing || mode !== (automation?.mode ?? "") ? { mode } : {}),
@@ -628,7 +812,21 @@ function AutomationFormDialog({
 					prompt_length_bucket: automationPromptLengthBucket(prompt.trim()),
 				};
 		try {
+			if (isCloud) {
+				// A cloud automation runs the harness's default model in trusted mode.
+				await onSubmit({
+					runsOn: "cloud",
+					...(editing ? {} : { projectId, timezone }),
+					displayName: name,
+					prompt,
+					...(!editing || cloudHarness !== (cloudAutomation?.harness ?? "") ? { harness: cloudHarness } : {}),
+					...(scheduleChanged ? { rrule: nextRRule } : {}),
+				});
+				if (funnel) void captureRendererEvent("ao.renderer.automation_create_succeeded", funnel);
+				return;
+			}
 			await onSubmit({
+				runsOn: "local",
 				// Kind is not a form choice: automations are workers, and editing
 				// leaves the stored kind untouched.
 				...(editing ? {} : { projectId, timezone, templateId, useCase: template?.useCase ?? "unknown", kind: "worker" as const }),
@@ -674,6 +872,21 @@ function AutomationFormDialog({
 						<Field label={t("automations.field.name")} id={AUTOMATION_FIELD_IDS.name} error={validationErrors.name}>
 							<Input id={AUTOMATION_FIELD_IDS.name} required maxLength={120} value={name} aria-invalid={Boolean(validationErrors.name) || undefined} aria-describedby={validationErrors.name ? `${AUTOMATION_FIELD_IDS.name}-error` : undefined} onChange={(event) => { setName(event.target.value); if (event.target.value.trim()) clearValidationError("name"); }} />
 						</Field>
+						{cloudOrgId && !editing ? (
+							<Field label={t("automations.field.runsOn")}>
+								<AutomationSelect
+									label={t("automations.field.runsOn")}
+									value={runsOn}
+									disabled={busy}
+									onValueChange={(value) => { setRunsOn(value as RunsOn); setProjectId(""); setHarness(""); setModel(""); setMode(""); setEffort(""); setModelValid(true); clearValidationError("projectId"); }}
+									options={[
+										{ value: "local", label: t("automations.runsOn.local") },
+										{ value: "cloud", label: t("automations.runsOn.cloud") },
+									]}
+								/>
+								{isCloud ? <p className={onboardingFieldHintClass}>{t("automations.runsOn.cloudHint")}</p> : null}
+							</Field>
+						) : null}
 						<Field label={t("automations.field.project")} id={AUTOMATION_FIELD_IDS.projectId} error={validationErrors.projectId}>
 							<AutomationSelect
 								id={AUTOMATION_FIELD_IDS.projectId}
@@ -702,7 +915,20 @@ function AutomationFormDialog({
 							/>
 						</Field>
 						<div className="grid grid-cols-2 gap-3">
-							<RequiredAgentField
+							{isCloud ? (
+								<Field label={t("automations.agent")} id="automation-agent">
+									<AutomationSelect
+										id="automation-agent"
+										label={t("automations.agent")}
+										value={cloudHarness}
+										disabled={busy}
+										onValueChange={setHarness}
+										options={cloudHarnessOptions}
+										placeholder={t("automations.cloud.noConnectedAgent")}
+									/>
+									{cloudHarnessOptions.length === 0 ? <p className={onboardingFieldHintClass}>{t("automations.cloud.connectAgentHint")}</p> : null}
+								</Field>
+							) : <RequiredAgentField
 								id="automation-agent"
 								label={t("automations.agent")}
 								labelClassName={onboardingFormLabelClass}
@@ -714,8 +940,8 @@ function AutomationFormDialog({
 									setHarness(value);
 									setModel(""); setMode(""); setEffort(""); setModelValid(true);
 								}}
-							/>
-							{open ? (
+							/>}
+							{open && !isCloud ? (
 								<div className="flex min-w-0 flex-col justify-end gap-2" inert={busy || awaitingInheritedHarness} aria-busy={awaitingInheritedHarness}>
 									<AgentModelField
 										key={selectedHarness + ":" + projectId}
@@ -765,26 +991,12 @@ function AutomationFormDialog({
 								</Field>
 							) : null}
 							{schedule.preset === "daily" || schedule.preset === "weekly" ? (
-								<Field label={t("automations.field.localTime")} id={AUTOMATION_FIELD_IDS.time} error={validationErrors.time}>
-									<Input
-										id={AUTOMATION_FIELD_IDS.time}
-										type="text"
-										inputMode="numeric"
-										autoComplete="off"
-										spellCheck={false}
-										required
-										placeholder="09:00"
-										value={schedule.time}
-										aria-invalid={Boolean(validationErrors.time) || undefined}
-										aria-describedby={validationErrors.time ? `${AUTOMATION_FIELD_IDS.time}-error` : undefined}
-										className="tabular-nums"
-										onChange={(event) => {
-											const next = formatTimeDraft(event.target.value);
-											patchSchedule({ time: next });
-											if (parseTimeValue(next)) clearValidationError("time");
-										}}
-									/>
-								</Field>
+								<TimePickerFields
+									hour={schedule.time.split(":")[0] ?? ""}
+									minute={schedule.time.split(":")[1] ?? ""}
+									hourError={validationErrors.time}
+									onChange={(hour, minute) => { patchSchedule({ time: `${hour}:${minute}` }); clearValidationError("time"); }}
+								/>
 							) : null}
 						</div>
 						{schedule.preset === "custom" ? (
@@ -838,46 +1050,13 @@ function AutomationFormDialog({
 								) : (
 									<div aria-hidden="true" />
 								)}
-								<Field label={t("automations.field.hour")} id={AUTOMATION_FIELD_IDS.hour} error={validationErrors.hour}>
-									<Input
-										id={AUTOMATION_FIELD_IDS.hour}
-										inputMode="numeric"
-										autoComplete="off"
-										required
-										placeholder="09"
-										value={schedule.hour}
-										aria-invalid={Boolean(validationErrors.hour) || undefined}
-										className="tabular-nums"
-										onChange={(event) => {
-											const next = clampHourDraft(event.target.value);
-											patchSchedule({ hour: next });
-											if (parseHourMinute(next, schedule.minute)) {
-												clearValidationError("hour");
-												clearValidationError("minute");
-											}
-										}}
-									/>
-								</Field>
-								<Field label={t("automations.field.minute")} id={AUTOMATION_FIELD_IDS.minute} error={validationErrors.minute}>
-									<Input
-										id={AUTOMATION_FIELD_IDS.minute}
-										inputMode="numeric"
-										autoComplete="off"
-										required
-										placeholder="00"
-										value={schedule.minute}
-										aria-invalid={Boolean(validationErrors.minute) || undefined}
-										className="tabular-nums"
-										onChange={(event) => {
-											const next = clampMinuteDraft(event.target.value);
-											patchSchedule({ minute: next });
-											if (parseHourMinute(schedule.hour, next)) {
-												clearValidationError("hour");
-												clearValidationError("minute");
-											}
-										}}
-									/>
-								</Field>
+								<TimePickerFields
+									hour={schedule.hour}
+									minute={schedule.minute}
+									hourError={validationErrors.hour}
+									minuteError={validationErrors.minute}
+									onChange={(hour, minute) => { patchSchedule({ hour, minute }); clearValidationError("hour"); clearValidationError("minute"); }}
+								/>
 							</div>
 						) : null}
 						<p className={onboardingFieldHintClass}>{t("automations.timezone", { timezone })}</p>
@@ -889,13 +1068,34 @@ function AutomationFormDialog({
 						<Button type="button" variant="secondary" disabled={busy} onClick={() => onOpenChange(false)}>
 							{t("automations.cancel")}
 						</Button>
-						<Button type="submit" variant="primary" disabled={busy || !modelValid || awaitingInheritedHarness}>
+						<Button type="submit" variant="primary" disabled={busy || (!isCloud && (!modelValid || awaitingInheritedHarness))}>
 							{busy ? t(editing ? "automations.saving" : "automations.creating") : t(editing ? "automations.save" : "automations.create")}
 						</Button>
 					</div>
 				</form>
 			</DialogContent>
 		</Dialog>
+	);
+}
+
+const HOUR_OPTIONS = Array.from({ length: 24 }, (_, value) => String(value).padStart(2, "0")).map((value) => ({ value, label: value }));
+const MINUTE_OPTIONS = Array.from({ length: 60 }, (_, value) => String(value).padStart(2, "0")).map((value) => ({ value, label: value }));
+
+/** Hour (00-23) and minute (00-59) pickers; values are two-digit strings. */
+function TimePickerFields({ hour, minute, hourError, minuteError, onChange }: { hour: string; minute: string; hourError?: string; minuteError?: string; onChange: (hour: string, minute: string) => void }) {
+	const { t } = useTranslation();
+	const pad = (value: string) => (/^\d{1,2}$/.test(value.trim()) ? value.trim().padStart(2, "0") : "");
+	const hh = pad(hour);
+	const mm = pad(minute);
+	return (
+		<>
+			<Field label={t("automations.field.hour")} id={AUTOMATION_FIELD_IDS.hour} error={hourError}>
+				<AutomationSelect id={AUTOMATION_FIELD_IDS.hour} label={t("automations.field.hour")} placeholder="09" value={hh} invalid={Boolean(hourError)} onValueChange={(value) => onChange(value, mm || "00")} options={HOUR_OPTIONS} />
+			</Field>
+			<Field label={t("automations.field.minute")} id={AUTOMATION_FIELD_IDS.minute} error={minuteError}>
+				<AutomationSelect id={AUTOMATION_FIELD_IDS.minute} label={t("automations.field.minute")} placeholder="00" value={mm} invalid={Boolean(minuteError)} onValueChange={(value) => onChange(hh || "00", value)} options={MINUTE_OPTIONS} />
+			</Field>
+		</>
 	);
 }
 

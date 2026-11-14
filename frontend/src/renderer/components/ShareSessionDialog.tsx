@@ -24,7 +24,7 @@ import type {
 	CloudCpTeamMemberAccess,
 } from "../lib/cloud-cp";
 import { ConfirmDialog } from "./ConfirmDialog";
-import { AccessMenu, CapMenu } from "./share/AccessMenu";
+import { AccessMenu, CapMenu, ShareViewerOnlyContext } from "./share/AccessMenu";
 import { defaultCap, effectiveAccessText, listNames, roleLabel, type ShareModeCap, type ShareScope } from "./share/accessLabels";
 import { canCopy, CopyLinkButton } from "./share/CopyLinkButton";
 import { GeneralAccessCard } from "./share/GeneralAccessCard";
@@ -240,7 +240,7 @@ function widensToWrite(link: Pick<CloudCpShareLink, "role" | "modeCap"> | undefi
  * Without a session it shares the whole project only. SharePanel draws it in
  * the share dialog and in Project settings › Sharing.
  */
-function useShareController({ active: open, orgId, projectId, sessionId, teams, standaloneAgent = false }: {
+function useShareController({ active: open, orgId, projectId, sessionId, teams, standaloneAgent = false, viewOnly = false }: {
 	/** Whether the surface is showing; closing it forgets everything but the shares themselves. */
 	active: boolean;
 	orgId: string;
@@ -251,6 +251,8 @@ function useShareController({ active: open, orgId, projectId, sessionId, teams, 
 	teams: boolean;
 	/** A Cloud standalone agent: its owner's alone, so the workspace's people reach it only when added. */
 	standaloneAgent?: boolean;
+	/** An AO Cloud automation run's session: shared only to watch, with teams and by link. */
+	viewOnly?: boolean;
 }) {
 	const { t, i18n } = useTranslation();
 	const { client, baseUrl, ready } = useCloudCp();
@@ -278,6 +280,10 @@ function useShareController({ active: open, orgId, projectId, sessionId, teams, 
 	const [staged, setStaged] = useState<Recipient[]>([]);
 	const [stagedRole, setStagedRole] = useState<CloudCpShareRole>("viewer");
 	const [stagedCap, setStagedCap] = useState<ShareModeCap>("read-only");
+	// Its whole project shares as any other; only the session itself is view-only.
+	const viewerOnly = viewOnly && scope === "session";
+	const [viewOnlyRefusal, setViewOnlyRefusal] = useState<string | null>(null);
+	useEffect(() => setViewOnlyRefusal(null), [staged, scope]);
 	const [newTeamFor, setNewTeamFor] = useState<{ people: Recipient[]; name: string } | null>(null);
 	const [expiry, setExpiry] = useState<ShareExpiry>(DEFAULT_EXPIRY);
 	const [confirm, setConfirm] = useState<LinkConfirm | null>(null);
@@ -530,7 +536,13 @@ function useShareController({ active: open, orgId, projectId, sessionId, teams, 
 	}, [linkIds, view]);
 	const submitShare = () => {
 		if (!ready || staged.length === 0 || share.isPending) return;
-		const request: ShareRequest = { key: accessKey, scope, sessionId: scopeSession, recipients: staged, role: stagedRole, modeCap: stagedCap };
+		if (viewerOnly && staged.some((recipient) => recipient.kind === "person")) {
+			setViewOnlyRefusal(t("share.automationViewOnly.teamsOnly"));
+			return;
+		}
+		const request: ShareRequest = viewerOnly
+			? { key: accessKey, scope, sessionId: scopeSession, recipients: staged, role: "viewer", modeCap: "read-only" }
+			: { key: accessKey, scope, sessionId: scopeSession, recipients: staged, role: stagedRole, modeCap: stagedCap };
 		// Cleared before the request, so a second Enter has nothing to send.
 		resetStaging();
 		undoNotice.clearFailure();
@@ -671,10 +683,10 @@ function useShareController({ active: open, orgId, projectId, sessionId, teams, 
 	const staging = staged.length > 0;
 	const linkError = links.turnOn.error ?? links.turnOff.error ?? links.replace.error ?? links.copyNew.error ?? links.revoke.error ?? links.error;
 	const failure = share.error ?? update.error ?? stop.error ?? access.error;
-	const error = failure
+	const error = viewOnlyRefusal ?? (failure
 		? failure instanceof Error ? failure.message : String(failure)
 		: linkError ? linkErrorMessage(t, linkError)
-			: undoNotice.failed ? t("share.undoFailed") : null;
+			: undoNotice.failed ? t("share.undoFailed") : null);
 
 	// What Esc steps back out of before the surface closes: Link settings, then the confirm step.
 	const canStepBack = view === "settings" || staging;
@@ -700,7 +712,7 @@ function useShareController({ active: open, orgId, projectId, sessionId, teams, 
 	);
 
 	return {
-		orgId, projectId, projectOnly, standaloneAgent, scope, scopeSession, switchScope, view, openSettings, closeSettings, staging, canStepBack, stepBack, initialFocus,
+		orgId, projectId, projectOnly, standaloneAgent, viewerOnly, scope, scopeSession, switchScope, view, openSettings, closeSettings, staging, canStepBack, stepBack, initialFocus,
 		contentRef, fieldInputRef, copyButtonRef, backButtonRef, ready, peopleAvailable, error, locale: i18n.language,
 		staged, setStaged, stagedRole, setStagedRole, stagedCap, setStagedCap, share, unavailable, submitShare, cancelStaging, ownEntries, myEmail,
 		access, ordered, workspaceName, memberCount, solo, me, update, accessKey, stopEntry, undoNotice, links, restricted, turnOnLinks, askTurnOff, askChange,
@@ -717,7 +729,7 @@ type ShareController = ReturnType<typeof useShareController>;
  * settings and Close on top, the SharePanel, then Copy link beside Done.
  * Without a session it shares the whole project only.
  */
-export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessionId, sessionName, projectName, people: teams = true, standaloneAgent = false }: {
+export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessionId, sessionName, projectName, people: teams = true, standaloneAgent = false, viewOnly = false }: {
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
 	orgId: string;
@@ -732,9 +744,11 @@ export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessi
 	people?: boolean;
 	/** A Cloud standalone agent's session: its project is the agent, so there is no whole project to share instead. */
 	standaloneAgent?: boolean;
+	/** An AO Cloud automation run's session: shared only to watch, with teams and by link. */
+	viewOnly?: boolean;
 }) {
 	const { t } = useTranslation();
-	const share = useShareController({ active: open, orgId, projectId, sessionId, teams, standaloneAgent });
+	const share = useShareController({ active: open, orgId, projectId, sessionId, teams, standaloneAgent, viewOnly });
 	const restoreFocusOnClose = useRestoreFocusOnClose(open);
 	const { scope, view, staging, projectOnly } = share;
 	const title = scope === "project"
@@ -1110,8 +1124,9 @@ function SharePanel({ share: controller, layout }: { share: ShareController; lay
 	}
 
 	return (
-		<>
+		<ShareViewerOnlyContext.Provider value={controller.viewerOnly}>
 			<div className={cn(settingsDialogBodyClass, "gap-3.5 px-5 pt-4 pb-5")} data-share-panel={scope} data-share-layout="dialog">
+				{controller.viewerOnly && view === "main" ? <p className="-mt-1 text-xs leading-5 text-muted-foreground" data-share-view-only="">{t("share.automationViewOnly.notice")}</p> : null}
 				{view === "settings" ? (
 					<>
 						{linkSettings}
@@ -1155,7 +1170,7 @@ function SharePanel({ share: controller, layout }: { share: ShareController; lay
 				)}
 			</div>
 			{dialogs}
-		</>
+		</ShareViewerOnlyContext.Provider>
 	);
 }
 

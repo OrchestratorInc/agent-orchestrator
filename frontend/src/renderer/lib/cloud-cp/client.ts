@@ -56,6 +56,12 @@ import type {
 	CloudCpCue,
 	CloudCpCueDefinition,
 	CloudCpInvokeCueResult,
+	CloudCpAutomation,
+	CloudCpAutomationList,
+	CloudCpAutomationRun,
+	CloudCpAutomationRunList,
+	CloudCpCreateAutomationRequest,
+	CloudCpUpdateAutomationRequest,
 	CloudCpProviderConnectionResponse,
 	CloudCpProviderConnectionsResponse,
 	CloudCpGitHubReposResponse,
@@ -229,6 +235,17 @@ export interface CloudCpClient {
 	deleteProjectCue(orgId: string, cueId: string, options?: CloudCpRequestOptions): Promise<void>;
 	/** Runs a cue into a session: an agent cue is sent there; a command cue comes back to run in a new shell. */
 	invokeProjectCue(orgId: string, cueId: string, sessionId: string, options?: CloudCpMutationOptions): Promise<CloudCpInvokeCueResult>;
+	/** The organization's automations, newest first (offered when offering.features lists automations). */
+	listAutomations(orgId: string, query?: { projectId?: string; limit?: number; cursor?: string }, options?: CloudCpRequestOptions): Promise<CloudCpAutomationList>;
+	/** Saves an automation that runs as the caller, with their coding-agent credential. */
+	createAutomation(orgId: string, body: CloudCpCreateAutomationRequest, options?: CloudCpRequestOptions): Promise<{ automation: CloudCpAutomation }>;
+	/** Changes an automation; any change but enabled makes the caller the person it runs as. */
+	updateAutomation(orgId: string, automationId: string, body: CloudCpUpdateAutomationRequest, options?: CloudCpRequestOptions): Promise<{ automation: CloudCpAutomation }>;
+	deleteAutomation(orgId: string, automationId: string, options?: CloudCpRequestOptions): Promise<void>;
+	listAutomationRuns(orgId: string, automationId: string, query?: { limit?: number; cursor?: string }, options?: CloudCpRequestOptions): Promise<CloudCpAutomationRunList>;
+	/** Runs an automation now, as the caller. */
+	runAutomationNow(orgId: string, automationId: string, options?: CloudCpMutationOptions): Promise<{ run: CloudCpAutomationRun }>;
+	setAutomationSubscription(orgId: string, automationId: string, subscribed: boolean, options?: CloudCpRequestOptions): Promise<{ subscribed: boolean }>;
 	updateProject(
 		orgId: string,
 		projectId: string,
@@ -939,6 +956,29 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 				signal: o?.signal,
 				idempotencyKey: o?.idempotencyKey ?? newIdempotencyKey(),
 			}),
+		listAutomations: (orgId, query, o) =>
+			requestJson("GET", `/orgs/${seg(orgId)}/automations`, {
+				query: { projectId: query?.projectId, limit: query?.limit, cursor: query?.cursor },
+				signal: o?.signal,
+			}),
+		createAutomation: (orgId, body, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/automations`, { body, signal: o?.signal }),
+		updateAutomation: (orgId, automationId, body, o) =>
+			requestJson("PATCH", `/orgs/${seg(orgId)}/automations/${seg(automationId)}`, { body, signal: o?.signal }),
+		deleteAutomation: (orgId, automationId, o) =>
+			requestVoid("DELETE", `/orgs/${seg(orgId)}/automations/${seg(automationId)}`, { signal: o?.signal }),
+		listAutomationRuns: (orgId, automationId, query, o) =>
+			requestJson("GET", `/orgs/${seg(orgId)}/automations/${seg(automationId)}/runs`, {
+				query: { limit: query?.limit, cursor: query?.cursor },
+				signal: o?.signal,
+			}),
+		runAutomationNow: (orgId, automationId, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/automations/${seg(automationId)}/runs`, {
+				signal: o?.signal,
+				idempotencyKey: o?.idempotencyKey ?? newIdempotencyKey(),
+			}),
+		setAutomationSubscription: (orgId, automationId, subscribed, o) =>
+			requestJson(subscribed ? "PUT" : "DELETE", `/orgs/${seg(orgId)}/automations/${seg(automationId)}/subscription`, { signal: o?.signal }),
 		deleteProject: (orgId, projectId, o) =>
 			requestJson("DELETE", `/orgs/${seg(orgId)}/projects/${seg(projectId)}`, {
 				signal: o?.signal,

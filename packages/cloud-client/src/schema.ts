@@ -709,6 +709,88 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/orgs/{orgId}/automations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        /** @description The organization's automations, newest first, each with its latest run. Every member sees every automation of the organization's projects. Offered when offering.features lists automations; 404 otherwise. */
+        get: operations["listAutomations"];
+        put?: never;
+        /** @description Schedule a prompt for a project's worker to run in AO Cloud. It runs as the caller, with their personal coding-agent credential for the harness (agent_provider_required without one), and they are subscribed to its results. Refused with AUTOMATION_LIMIT_REACHED when the organization has as many as it may, and AUTOMATION_PROJECT_UNSUPPORTED for a standalone agent's project. */
+        post: operations["createAutomation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/automations/{automationId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                automationId: components["parameters"]["AutomationId"];
+            };
+            cookie?: never;
+        };
+        get: operations["getAutomation"];
+        put?: never;
+        post?: never;
+        /** @description Delete an automation and its run history. Its runs' sessions and artifacts stay. Allowed to whoever may edit it. */
+        delete: operations["deleteAutomation"];
+        options?: never;
+        head?: never;
+        /** @description Change an automation; omitted fields keep their values. Only the person it runs as, its creator and the organization's admins may (AUTOMATION_EDIT_FORBIDDEN). A change to anything but enabled makes the caller the person it runs as, and needs their credential for the harness. The next run is computed afresh, so turning an automation back on never runs the occurrences it missed. */
+        patch: operations["updateAutomation"];
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/automations/{automationId}/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                automationId: components["parameters"]["AutomationId"];
+            };
+            cookie?: never;
+        };
+        /** @description The automation's runs, newest occurrence first. */
+        get: operations["listAutomationRuns"];
+        put?: never;
+        /** @description Run the automation now, as the caller with their own credential for its harness. Any member may. Refused with AUTOMATION_RUN_ACTIVE while a run is in flight. The run starts within seconds; follow it in the run list. */
+        post: operations["runAutomationNow"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/automations/{automationId}/subscription": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                automationId: components["parameters"]["AutomationId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Be notified when the automation's runs finish or fail. */
+        put: operations["subscribeAutomation"];
+        post?: never;
+        delete: operations["unsubscribeAutomation"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/orgs/{orgId}/chat-search": {
         parameters: {
             query?: never;
@@ -3144,7 +3226,7 @@ export interface components {
              * @enum {string}
              */
             kind: "b2b" | "b2c" | "both" | "none";
-            /** @description The organization's product features (share lets it share sessions) and the deployment's own: attachments when the session attachment routes are on, queued-edit when a queued message can be edited (editQueuedMessage), queued-delete when a queued message can be deleted without stopping a started turn (deleteQueuedMessage). Empty when none apply. */
+            /** @description The organization's product features (share lets it share sessions) and the deployment's own: attachments when the session attachment routes are on, queued-edit when a queued message can be edited (editQueuedMessage), queued-delete when a queued message can be deleted without stopping a started turn (deleteQueuedMessage), automations when cloud automations can be scheduled (createAutomation). Empty when none apply. */
             features: string[];
             /**
              * Format: int64
@@ -3484,6 +3566,151 @@ export interface components {
             lastPolledAt?: string;
             /** @description Why the last poll failed; absent when it did not. */
             lastError?: string;
+        };
+        /**
+         * @description Harnesses an automation can run: those with a Chat controller, whose opening turn tells the control plane the run finished.
+         * @enum {string}
+         */
+        AutomationHarness: "claude-code" | "codex" | "cursor";
+        /** @enum {string} */
+        AutomationMode: "standard" | "trusted";
+        /**
+         * @description pending, starting and running are in flight. completed means the session's opening turn finished. skipped means it did not start: the previous run was still going (PREVIOUS_RUN_ACTIVE), or the organization or plan was full (the create-session refusal's code). timed_out means it reached maxRuntimeMinutes and its session was stopped.
+         * @enum {string}
+         */
+        AutomationRunStatus: "pending" | "starting" | "running" | "completed" | "failed" | "skipped" | "timed_out";
+        AutomationRun: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            automationId: string;
+            /**
+             * Format: date-time
+             * @description The occurrence it ran for; the moment it was asked for, for a manual run.
+             */
+            scheduledFor: string;
+            /** @enum {string} */
+            trigger: "schedule" | "manual";
+            /**
+             * Format: uuid
+             * @description Who asked for a manual run.
+             */
+            triggeredByUserId?: string;
+            status: components["schemas"]["AutomationRunStatus"];
+            /**
+             * Format: uuid
+             * @description The session it ran in, once started. Only the automation's latest run keeps its session open; earlier runs' sessions are deleted (and can be restored) when the next run starts.
+             */
+            sessionId?: string;
+            attemptCount: number;
+            /** Format: date-time */
+            startedAt?: string;
+            /** Format: date-time */
+            finishedAt?: string;
+            errorCode?: string;
+            errorMessage?: string;
+            /** Format: date-time */
+            createdAt: string;
+        };
+        /** @description A prompt a project's worker runs on a schedule in AO Cloud. Each run is one session, started as runAs. All runs share one branch and keep at most one open pull request per repository on it: a run updates the pull request an earlier run left open, and once that is merged or closed the next run moves to a new branch. Run sessions can be shared only to watch, with teams and by link. */
+        Automation: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            projectId: string;
+            displayName: string;
+            prompt: string;
+            harness: components["schemas"]["AutomationHarness"];
+            model?: string;
+            reasoningEffort?: string;
+            mode: components["schemas"]["AutomationMode"];
+            requestedOutput?: components["schemas"]["RequestedOutput"];
+            /** @description The canonical rule, with its DTSTART anchor. */
+            rrule: string;
+            /** @description The IANA timezone the rule runs in. */
+            timezone: string;
+            enabled: boolean;
+            /**
+             * Format: date-time
+             * @description Absent while disabled.
+             */
+            nextRunAt?: string;
+            maxRuntimeMinutes: number;
+            /** @description The branch its runs work on. */
+            branch: string;
+            /** @description Whose credential its scheduled runs use: whoever last changed what it does or when. */
+            runAs: {
+                /** Format: uuid */
+                userId: string;
+                email?: string;
+                displayName?: string;
+            };
+            /** Format: uuid */
+            createdByUserId?: string;
+            consecutiveFailures: number;
+            /** @description Why it was turned off automatically, such as after 5 runs in a row that did not finish. */
+            disabledReason?: string;
+            /** @description Whether the caller is notified of its runs. */
+            subscribed: boolean;
+            /** @description Whether the caller may change or delete it. */
+            canEdit: boolean;
+            latestRun?: components["schemas"]["AutomationRun"];
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        /** @description Exactly one of rrule and cron. Occurrences must be at least an hour apart. */
+        CreateAutomationInput: {
+            /** Format: uuid */
+            projectId: string;
+            displayName: string;
+            prompt: string;
+            harness: components["schemas"]["AutomationHarness"];
+            model?: string;
+            /** @enum {string} */
+            reasoningEffort?: "default" | "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+            /** @default trusted */
+            mode: components["schemas"]["AutomationMode"];
+            requestedOutput?: components["schemas"]["RequestedOutput"];
+            /** @description An RFC 5545 rule (FREQ=HOURLY or slower, no COUNT or UNTIL). */
+            rrule?: string;
+            /** @description "minute hour * * weekdays", the desktop presets' subset of cron; converted to a rule. */
+            cron?: string;
+            /** @description An IANA timezone, or UTC. */
+            timezone: string;
+            /** @default 60 */
+            maxRuntimeMinutes: number;
+            /** @default true */
+            enabled: boolean;
+        };
+        /** @description Fields to change. rrule or cron replaces the schedule; timezone alone moves the saved rule into the new zone. */
+        UpdateAutomationInput: {
+            displayName?: string;
+            prompt?: string;
+            harness?: components["schemas"]["AutomationHarness"];
+            model?: string;
+            /** @enum {string} */
+            reasoningEffort?: "default" | "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+            mode?: components["schemas"]["AutomationMode"];
+            /** @enum {string} */
+            requestedOutput?: "" | "artifact";
+            rrule?: string;
+            cron?: string;
+            timezone?: string;
+            maxRuntimeMinutes?: number;
+            enabled?: boolean;
+        };
+        AutomationList: {
+            items: components["schemas"]["Automation"][];
+            page: components["schemas"]["PageInfo"];
+        };
+        AutomationRunList: {
+            items: components["schemas"]["AutomationRun"][];
+            page: components["schemas"]["PageInfo"];
+        };
+        AutomationSubscription: {
+            subscribed: boolean;
         };
         /** @description One of a project's reusable quick actions, run into a session from the desktop's top bar. */
         Cue: {
@@ -4571,6 +4798,11 @@ export interface components {
             activeTurn?: components["schemas"]["Turn"];
             isTerminated: boolean;
             requestedOutput?: components["schemas"]["RequestedOutput"];
+            /**
+             * Format: uuid
+             * @description The automation run the session was started for. Such a session is shared only to watch (viewer access), with teams and by link; other shares are refused with AUTOMATION_SESSION_VIEW_ONLY.
+             */
+            automationRunId?: string;
             /**
              * Format: uuid
              * @description The person who started the session (for a spawned worker, its orchestrator's). Only they share its files as public links (shareSessionArtifact) and change them (saveSessionArtifact, restoreSessionArtifactVersion, deleteSessionArtifact); every other member of the organization sees them read-only. Omitted when none is on record.
@@ -5782,6 +6014,7 @@ export interface components {
         };
     };
     parameters: {
+        AutomationId: string;
         CueId: string;
         ReviewRunId: string;
         /** @description The machine's stable identity, `h_` followed by a UUID. */
@@ -7132,6 +7365,246 @@ export interface operations {
                         project: components["schemas"]["Project"];
                         session: components["schemas"]["Session"];
                     };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listAutomations: {
+        parameters: {
+            query?: {
+                projectId?: string;
+                limit?: components["parameters"]["Limit"];
+                cursor?: components["parameters"]["Cursor"];
+            };
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of automations. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutomationList"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    createAutomation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateAutomationInput"];
+            };
+        };
+        responses: {
+            /** @description Automation created. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        automation: components["schemas"]["Automation"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getAutomation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                automationId: components["parameters"]["AutomationId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The automation with its latest run. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        automation: components["schemas"]["Automation"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    deleteAutomation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                automationId: components["parameters"]["AutomationId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Automation deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    updateAutomation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                automationId: components["parameters"]["AutomationId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateAutomationInput"];
+            };
+        };
+        responses: {
+            /** @description Automation updated. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        automation: components["schemas"]["Automation"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listAutomationRuns: {
+        parameters: {
+            query?: {
+                limit?: components["parameters"]["Limit"];
+                cursor?: components["parameters"]["Cursor"];
+            };
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                automationId: components["parameters"]["AutomationId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of runs. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutomationRunList"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    runAutomationNow: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Reusing a key with the same command returns the original result.
+                 *     Reusing it with a different command returns an IDEMPOTENCY_CONFLICT.
+                 *      */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                automationId: components["parameters"]["AutomationId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Run queued. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        run: components["schemas"]["AutomationRun"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    subscribeAutomation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                automationId: components["parameters"]["AutomationId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Subscribed. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutomationSubscription"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    unsubscribeAutomation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                automationId: components["parameters"]["AutomationId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Unsubscribed. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutomationSubscription"];
                 };
             };
             default: components["responses"]["Error"];

@@ -2386,6 +2386,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 					sessionName={session.title}
 					projectName={sessionWorkspace?.name}
 					standaloneAgent={sessionWorkspace?.standaloneAgent}
+					viewOnly={Boolean(session.cloud.automationRunId)}
 				/>
 			) : null}
 			<SessionTopbarActions route={sessionTopbarRoute} />

@@ -549,6 +549,7 @@ export function toCloudWorkspaceSession(
 			coderWorkspaceUrl: session.coderWorkspaceUrl,
 			...(session.requestedBy ? { requestedBy: session.requestedBy } : {}),
 			...(session.createdByUserId ? { createdByUserId: session.createdByUserId } : {}),
+			...(session.automationRunId ? { automationRunId: session.automationRunId } : {}),
 		},
 		outputType: session.outputType,
 		requestedOutput: session.requestedOutput,

@@ -29,6 +29,30 @@ describe("Cloud control-plane interface transitions", () => {
 		expect(calls[3][0]).toContain("/orgs/org/sessions/session/chat/prompt-suggestion");
 		expect(JSON.parse(calls[3][1].body as string)).toEqual({ turnId: "t", messages: [{ role: "user", text: "Hi" }] });
 	});
+	it("routes cloud automations to their organization routes, a run now with an Idempotency-Key", async () => {
+		const fetchImpl = vi.fn().mockImplementation(async () => new Response(JSON.stringify({ items: [], page: { hasMore: false }, automation: {}, run: {}, subscribed: true }), { status: 200, headers: { "Content-Type": "application/json" } }));
+		const client = createCloudCpClient({ baseUrl: "https://cloud.example.test", getToken: async () => "token", fetchImpl });
+		await client.listAutomations("org", { projectId: "p1", limit: 100 });
+		await client.createAutomation("org", { projectId: "p1", displayName: "Debt", prompt: "List debt.", harness: "codex", rrule: "FREQ=DAILY;BYHOUR=9;BYMINUTE=0;BYSECOND=0", timezone: "Asia/Kolkata", mode: "trusted", maxRuntimeMinutes: 60, enabled: true });
+		await client.updateAutomation("org", "a1", { enabled: false });
+		await client.runAutomationNow("org", "a1", { idempotencyKey: "run-1" });
+		await client.setAutomationSubscription("org", "a1", false);
+		const calls = fetchImpl.mock.calls as Array<[string, RequestInit]>;
+		expect(calls[0][0]).toBe("https://cloud.example.test/api/cloud/v1/orgs/org/automations?projectId=p1&limit=100");
+		expect(calls[1][1].method).toBe("POST");
+		expect(JSON.parse(calls[1][1].body as string)).toMatchObject({ rrule: "FREQ=DAILY;BYHOUR=9;BYMINUTE=0;BYSECOND=0", timezone: "Asia/Kolkata" });
+		expect(calls[2]).toEqual([expect.stringContaining("/orgs/org/automations/a1"), expect.objectContaining({ method: "PATCH" })]);
+		expect(calls[3][0]).toContain("/orgs/org/automations/a1/runs");
+		expect(calls[3][1].method).toBe("POST");
+		expect(new Headers(calls[3][1].headers).get("Idempotency-Key")).toBe("run-1");
+		expect(calls[4]).toEqual([expect.stringContaining("/orgs/org/automations/a1/subscription"), expect.objectContaining({ method: "DELETE" })]);
+	});
+	it("gives a run now an Idempotency-Key when the caller names none", async () => {
+		const fetchImpl = vi.fn().mockResolvedValue(new Response(JSON.stringify({ run: {} }), { status: 202, headers: { "Content-Type": "application/json" } }));
+		const client = createCloudCpClient({ baseUrl: "https://cloud.example.test", getToken: async () => "token", fetchImpl });
+		await client.runAutomationNow("org", "a1");
+		expect(new Headers((fetchImpl.mock.calls[0]?.[1] as RequestInit).headers).get("Idempotency-Key")).toBeTruthy();
+	});
 	it("routes an ACP approval decision to the session request", async () => {
 		const fetchImpl = vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 202, headers: { "Content-Type": "application/json" } }));
 		const client = createCloudCpClient({ baseUrl: "https://cloud.example.test/api/cloud/v1", getToken: async () => "token", fetchImpl });

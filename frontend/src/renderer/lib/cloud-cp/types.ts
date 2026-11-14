@@ -245,7 +245,7 @@ export interface CloudCpProjectListQuery extends CloudCpListQuery {
 // Projects (`resource_handlers.go`)
 // ---------------------------------------------------------------------------
 
-import type { ProjectConfig, ProjectAgentConfig, ProjectSettingsInput, ProjectRoleConfig, ProjectReviewer, ProjectEnvironment, ProjectIntakeStatus, ProjectTrackerIntake, Cue, CueDefinitionInput, InvokeCueResult } from "../../../../../packages/cloud-client/src/types";
+import type { ProjectConfig, ProjectAgentConfig, ProjectSettingsInput, ProjectRoleConfig, ProjectReviewer, ProjectEnvironment, ProjectIntakeStatus, ProjectTrackerIntake, Cue, CueDefinitionInput, InvokeCueResult, Automation, AutomationRun, AutomationList, AutomationRunList, CreateAutomationInput, UpdateAutomationInput } from "../../../../../packages/cloud-client/src/types";
 
 export type CloudCpProjectAgentConfig = ProjectAgentConfig;
 /** A project's environment variables; `value` only for an owner or admin (`editable`). */
@@ -256,6 +256,13 @@ export type CloudCpProjectTrackerIntake = ProjectTrackerIntake;
 export type CloudCpCue = Cue;
 export type CloudCpCueDefinition = CueDefinitionInput;
 export type CloudCpInvokeCueResult = InvokeCueResult;
+/** A scheduled prompt a project's worker runs in AO Cloud (`automation_handlers.go`). */
+export type CloudCpAutomation = Automation;
+export type CloudCpAutomationRun = AutomationRun;
+export type CloudCpAutomationList = AutomationList;
+export type CloudCpAutomationRunList = AutomationRunList;
+export type CloudCpCreateAutomationRequest = CreateAutomationInput;
+export type CloudCpUpdateAutomationRequest = UpdateAutomationInput;
 export type CloudCpProjectRoleConfig = ProjectRoleConfig;
 export type CloudCpProjectReviewer = ProjectReviewer;
 /**
@@ -711,6 +718,8 @@ export interface CloudCpSession {
 	requestedBy?: CloudCpPersonRef;
 	/** The person who started the session; only they share its files as public links. Absent when none is on record. */
 	createdByUserId?: string;
+	/** The automation run the session was started for; such a session is shared only to watch, with teams and by link. */
+	automationRunId?: string;
 	/** What the session owns. Absent from older control planes. */
 	outputType?: "none" | "pr" | "artifact" | "pr_artifact";
 	/** How many committed artifact files the session has, while the deployment keeps artifacts. */
