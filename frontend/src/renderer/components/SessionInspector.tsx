@@ -1,5 +1,5 @@
 import { apiErrorException } from "../lib/api-error-exception";
-import { BrowserIcon } from "./icons";
+import { BrowserIcon, SubagentIcon } from "./icons";
 import { GitHubIcon } from "./GitHubIcon";
 import { artifactFileIcon } from "./artifact-file-icon";
 import { ArtifactShareMark } from "./ArtifactShareMark";
@@ -139,7 +139,7 @@ export type { InspectorView } from "@aoagents/product-ui";
 
 const VIEW_DEFS: {
 	id: InspectorView;
-	labelKey: "inspector.summary" | "inspector.reviewTab" | "inspector.browser" | "inspector.sideChat" | "inspector.files" | "artifacts.title";
+	labelKey: "inspector.summary" | "inspector.reviewTab" | "inspector.browser" | "inspector.sideChat" | "inspector.subagents" | "inspector.files" | "artifacts.title";
 	icon: ReactNode;
 }[] = [
 	{ id: "summary", labelKey: "inspector.summary", icon: <List /> },
@@ -147,6 +147,7 @@ const VIEW_DEFS: {
 	{ id: "reviews", labelKey: "inspector.reviewTab", icon: <CheckWaves /> },
 	{ id: "browser", labelKey: "inspector.browser", icon: <BrowserIcon aria-hidden="true" /> },
 	{ id: "sideChat", labelKey: "inspector.sideChat", icon: <Chat /> },
+	{ id: "subagents", labelKey: "inspector.subagents", icon: <SubagentIcon aria-hidden="true" /> },
 	{ id: "artifacts", labelKey: "artifacts.title", icon: <Package /> },
 ];
 
@@ -179,6 +180,7 @@ export const SessionInspector = memo(function SessionInspector({
 	filesView,
 	browserView,
 	sideChatView,
+	subagentsView,
 	view: viewProp,
 	onViewChange,
 }: {
@@ -202,6 +204,8 @@ export const SessionInspector = memo(function SessionInspector({
 	filesView?: ReactNode;
 	browserView?: BrowserViewModel;
 	sideChatView?: ReactNode;
+	/** The chat's Subagents panel; the tab shows only while the chat has subagents to list. */
+	subagentsView?: ReactNode;
 	/** Controlled active tab. Omit to let the inspector own its own selection. */
 	view?: InspectorView;
 	onViewChange?: (view: InspectorView) => void;
@@ -263,22 +267,30 @@ export const SessionInspector = memo(function SessionInspector({
 	// A persisted/controlled Reviews selection can outlive the last reviewable PR.
 	// Keep the shell on a real, visible tab instead of rendering an empty, unlabelled body.
 	const reviewsAvailable = reviewsTabVisible(session);
+	// The orchestrator's rail also offers its chat's Subagents panel while it lists any.
 	const availableViewDefs = orchestrator ? VIEW_DEFS.filter((entry) =>
-		entry.id === "summary" || entry.id === "browser" || (entry.id === "artifacts" && ((session?.artifactFiles?.length ?? 0) > 0 || artifactRequestPending)))
+		entry.id === "summary" || entry.id === "browser"
+		|| (entry.id === "subagents" && subagentsView !== undefined)
+		|| (entry.id === "artifacts" && ((session?.artifactFiles?.length ?? 0) > 0 || artifactRequestPending)))
 		: VIEW_DEFS.filter((entry) => (!hostId || entry.id !== "browser" || browserView) && (reviewsAvailable || entry.id !== "reviews")
 			// The host passes a side chat view only where side chats can run.
 			&& (entry.id !== "sideChat" || sideChatView !== undefined)
+			&& (entry.id !== "subagents" || subagentsView !== undefined)
 			// Artifacts shows whenever the session lists files, or while an artifact
 			// link waits for the list to refresh.
 			&& (entry.id !== "artifacts" || (session?.artifactFiles?.length ?? 0) > 0 || artifactRequestPending));
 	const view: InspectorView = availableViewDefs.some((entry) => entry.id === requestedView) ? requestedView : "summary";
 	const sessionLoaded = session !== undefined;
+	// The chat reports its subagents just after it mounts, so on the way back to a
+	// session the Subagents tab is briefly missing. Show Summary through that gap but
+	// keep the reader's choice, so the tab comes back selected.
+	const awaitingSubagents = requestedView === "subagents" && subagentsView === undefined;
 	useEffect(() => {
 		// Until the session loads, its tabs are unknown: keep the requested view.
-		if (view === requestedView || (!sessionLoaded && !orchestrator)) return;
+		if (view === requestedView || (!sessionLoaded && !orchestrator) || awaitingSubagents) return;
 		setInternalView(view);
 		onViewChange?.(view);
-	}, [onViewChange, orchestrator, requestedView, sessionLoaded, view]);
+	}, [awaitingSubagents, onViewChange, orchestrator, requestedView, sessionLoaded, view]);
 	const tabs = availableViewDefs.map((entry) => {
 		const label = t(entry.labelKey);
 		return {
@@ -302,6 +314,7 @@ export const SessionInspector = memo(function SessionInspector({
 		<div className="session-inspector contents">
 			<SessionInspectorShellView
 				sideChatView={sideChatView ?? <p className="p-4 text-xs text-muted-foreground">{t("sideChat.unavailable")}</p>}
+				subagentsView={subagentsView}
 				activeView={view}
 				ariaLabel={t("inspector.aria")}
 				artifactsView={

@@ -81,6 +81,18 @@ describe("SessionInspectorShellView", () => {
     expect(body).toHaveClass("p-0", "overflow-hidden");
     expect(body).not.toHaveClass("p-3", "pb-4", "overflow-y-auto");
   });
+  it("lets the Subagents panel own its scrolling, like side chat", () => {
+    const withSubagents = [...tabs, { id: "subagents" as const, icon: <svg />, label: "Subagents" }];
+    render(<SessionInspectorShellView
+      activeView="subagents" ariaLabel="Session inspector" browserPoppedOut={false}
+      subagentsView={<div data-testid="subagents-slot" />}
+      tabs={withSubagents} onViewChange={vi.fn()}
+    />);
+    const body = screen.getByTestId("subagents-slot").parentElement;
+    expect(body).toHaveClass("p-0", "overflow-hidden");
+    expect(body).not.toHaveClass("overflow-y-auto");
+    expect(screen.getByRole("tab", { name: "Subagents" })).toHaveAttribute("aria-selected", "true");
+  });
   it("makes summary and review details selectable but leaves the browser's drag chrome alone (#4268)", () => {
     const slots = { summaryView: <div data-testid="slot" />, reviewsView: <div data-testid="slot" />, browserView: <div data-testid="slot" /> };
     const { rerender } = render(<SessionInspectorShellView activeView="summary" ariaLabel="Session inspector" browserPoppedOut={false} tabs={tabs} onViewChange={vi.fn()} {...slots} />);

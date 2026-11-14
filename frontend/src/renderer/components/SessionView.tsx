@@ -607,6 +607,9 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const isInspectorOpen = useUiStore((state) => inspectorIsOpen(state.inspectorSessions, uiSessionId));
 	const [sideChatContainer, setSideChatContainer] = useState<HTMLDivElement | null>(null);
 	const sideChatsAvailable = useSideChatsAvailable(session, hostId);
+	const [subagentContainer, setSubagentContainer] = useState<HTMLDivElement | null>(null);
+	// The chat reports this while it lists any subagents; it clears it when it unmounts.
+	const subagentsAvailable = useUiStore((state) => Boolean(state.inspectorSessions[uiSessionId]?.subagentsAvailable));
 	const inspectorView = useUiStore((state) => state.inspectorSessions[uiSessionId]?.view ?? "summary");
 	const browserUnseen = useUiStore((state) => Boolean(state.inspectorSessions[uiSessionId]?.browserUnseen));
 	const setInspectorOpenForSession = useUiStore((state) => state.setInspectorOpen);
@@ -2646,6 +2649,13 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		terminated,
 	]);
 
+	// A subagent row opens its tab like any tab switch, so leaving the Browser canvas
+	// resizes the inspector to the utility width instead of snapping to it.
+	const revealSubagentsPanel = useCallback(() => {
+		transitionInspectorView("subagents");
+		setInspectorOpenForSession(uiSessionId, true);
+	}, [setInspectorOpenForSession, transitionInspectorView, uiSessionId]);
+
 	const revealBrowserPanel = useCallback(() => {
 		setBrowserContentRevealed(uiSessionId, true);
 		setBrowserUnseen(uiSessionId, false);
@@ -2971,6 +2981,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 								<>
 								<SessionChatSurface
 									sideChatContainer={sideChatContainer}
+									subagentContainer={subagentContainer}
+									onRevealSubagents={revealSubagentsPanel}
 									key={uiSessionId}
 									assetBaseUrl={remoteBase}
 									hostId={hostId}
@@ -3261,6 +3273,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 					>
 						<SessionInspector
 							sideChatView={sideChatsAvailable ? <div ref={setSideChatContainer} className="h-full min-h-0 flex-1" /> : undefined}
+							subagentsView={subagentsAvailable ? <div ref={setSubagentContainer} className="h-full min-h-0 flex-1" /> : undefined}
 							hostId={hostId}
 							orchestrator={browserOnly}
 							browserAnnotationQueue={inspectorView === "browser" ? browserAnnotationQueue : undefined}
