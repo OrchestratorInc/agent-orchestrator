@@ -1531,7 +1531,7 @@ func TestSend_WrapsCopilotOrchestratorMessageWithDelegationDirective(t *testing.
 		"AO ORCHESTRATOR DIRECTIVE",
 		"Do not implement code changes",
 		"ao spawn --project mer",
-		"After spawning or redirecting, report the worker session id and stop",
+		"After every requested task has a worker, report the worker session ids and stop",
 		"USER MESSAGE:\nmake the button red",
 	} {
 		if !strings.Contains(got, want) {
@@ -6397,8 +6397,9 @@ func TestSpawnWorker_SkipsTerminatedOrchestratorContact(t *testing.T) {
 func TestCopilotOrchestratorMessage_NewTaskNewWorkerUnlessNamed(t *testing.T) {
 	directive := copilotOrchestratorMessage("demo", "Give the follow-up to worker demo-3")
 	for _, want := range []string{
-		"if a worker already owns this task or its PR, use ao send to give that worker the follow-up",
-		"and give any new task to a new worker",
+		"if a running worker already owns this task or its PR, use ao send to give that worker the follow-up",
+		"If the owning worker has terminated, spawn a new worker and include a short handoff",
+		"Give any new task to a new worker",
 		"If the user message asks for a specific worker, use ao send to give the task to that worker. Otherwise",
 		"Give the follow-up to worker demo-3",
 		"After every requested task has a worker, report the worker session ids and stop",
