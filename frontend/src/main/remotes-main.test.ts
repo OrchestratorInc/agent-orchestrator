@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { computerName, registerRemotesIpc, remotesFilePath, type RemotesIpcDeps } from "./remotes-main";
 import { RemoteRegistry } from "./remote-registry";
 import { setPasswordCipher } from "./remotes-store";
-import { createLocalHostIdentity, type RemoteHealth } from "./remote-request";
+import { createLocalHostIdentity, IncompatibleRemoteVersionError, type RemoteHealth } from "./remote-request";
 import { ExpectedIpcError, installIpcErrorCapture, resetMainErrorCaptureForTests, setMainErrorSink } from "./main-error-capture";
 
 type Handler = (event: unknown, ...args: unknown[]) => Promise<unknown>;
@@ -123,7 +123,7 @@ describe("registerRemotesIpc", () => {
 		]);
 	});
 
-	it.each(["remotes:add", "remotes:update", "remotes:connect", "remotes:linkAccountHost", "remotes:previewUrl", "remotes:resolvePreviewUrl", "remotes:externalUrl"])("rejects direct self access through %s before credentials or proxies", async (channel) => {
+	it.each(["remotes:add", "remotes:update", "remotes:connect", "remotes:linkAccountHost", "remotes:previewUrl", "remotes:resolvePreviewUrl", "remotes:externalUrl", "remotes:hostUpdate", "remotes:startHostUpdate"])("rejects direct self access through %s before credentials or proxies", async (channel) => {
 		const file = await tempFile();
 		const original = await readFile(file, "utf8");
 		const probe = vi.fn(async () => "online" as const);
@@ -139,6 +139,28 @@ describe("registerRemotesIpc", () => {
 		expect(probe).not.toHaveBeenCalled();
 		expect(start).not.toHaveBeenCalled();
 		expect(await readFile(file, "utf8")).toBe(original);
+	});
+
+	it("reads and starts a host update with the saved credential, even across API versions", async () => {
+		const file = await tempFile();
+		const read = vi.fn(async () => ({ version: "0.14.10", supported: true, state: "idle" as const }));
+		const start = vi.fn(async () => ({ version: "0.14.10", supported: true, state: "updating" as const }));
+		let identity: (entry: unknown) => Promise<string> = async () => "h_workbox";
+		const ipc = fakeIpc();
+		registerRemotes(ipc.ipcMain, { file, registry: new RemoteRegistry(async () => { throw new Error("unused"); }), requireAccount: signedIn, identity: (entry) => identity(entry), hostUpdate: { read, start } });
+		await expect(ipc.invoke("remotes:hostUpdate", "http://192.0.2.1:1")).resolves.toMatchObject({ version: "0.14.10" });
+		expect(read).toHaveBeenCalledWith(expect.objectContaining({ hostId: "h_workbox", password: "old" }));
+
+		identity = async () => { throw new IncompatibleRemoteVersionError("h_workbox"); };
+		await expect(ipc.invoke("remotes:startHostUpdate", "http://192.0.2.1:1")).resolves.toMatchObject({ state: "updating" });
+		expect(start).toHaveBeenCalledOnce();
+
+		identity = async () => { throw new IncompatibleRemoteVersionError("h_imposter"); };
+		await expect(ipc.invoke("remotes:startHostUpdate", "http://192.0.2.1:1")).rejects.toThrow(/identity changed/);
+		identity = async () => { throw new Error("offline"); };
+		await expect(ipc.invoke("remotes:hostUpdate", "http://192.0.2.1:1")).resolves.toBeNull();
+		await expect(ipc.invoke("remotes:hostUpdate", "http://192.0.2.9:1")).rejects.toThrow(/does not belong/);
+		expect(start).toHaveBeenCalledOnce();
 	});
 
 	it("refuses an address that resolves to self under another saved host ID before authentication", async () => {

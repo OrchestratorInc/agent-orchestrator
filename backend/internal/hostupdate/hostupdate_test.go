@@ -1,0 +1,106 @@
+package hostupdate
+
+import (
+	"context"
+	"errors"
+	"slices"
+	"strings"
+	"testing"
+)
+
+func TestInstallRoot(t *testing.T) {
+	cases := map[string]string{
+		"/home/u/.ao/host/releases/20261115010203-42/resources/daemon/ao": "/home/u/.ao/host",
+		"/opt/ao/releases/r1/resources/daemon/ao":                         "/opt/ao",
+		"/tmp/.mount_ao/resources/daemon/ao":                              "",
+		"/home/u/.ao/host/current/resources/daemon/ao-dev":                "",
+	}
+	for exe, want := range cases {
+		if got := installRoot(exe); got != want {
+			t.Errorf("installRoot(%q) = %q, want %q", exe, got, want)
+		}
+	}
+}
+
+type fakeSystemd struct {
+	state string
+	log   string
+	calls [][]string
+}
+
+func (f *fakeSystemd) run(_ context.Context, name string, args ...string) ([]byte, error) {
+	f.calls = append(f.calls, append([]string{name}, args...))
+	switch name {
+	case "systemctl":
+		if args[1] == "show" {
+			return []byte(f.state + "\n"), nil
+		}
+		return nil, nil
+	case "journalctl":
+		return []byte(f.log), nil
+	}
+	return nil, nil
+}
+
+func updater(f *fakeSystemd, version string, env map[string]string) *Updater {
+	return &Updater{version: version, root: "/home/u/.ao/host", run: f.run, getenv: func(name string) string { return env[name] }}
+}
+
+func TestStatus(t *testing.T) {
+	ctx := context.Background()
+	if got := (&Updater{version: "0.15.0"}).Status(ctx); got.Supported || got.State != StateIdle || got.Version != "0.15.0" {
+		t.Fatalf("unsupported status = %+v", got)
+	}
+	for state, want := range map[string]State{"active": StateUpdating, "activating": StateUpdating, "inactive": StateIdle, "": StateIdle, "failed": StateFailed} {
+		f := &fakeSystemd{state: state, log: "Downloading Orchestrator release: v0.15.1\nRelease SHA-256 mismatch.\n"}
+		got := updater(f, "0.15.0", nil).Status(ctx)
+		if !got.Supported || got.State != want {
+			t.Errorf("state %q: got %+v, want %s", state, got, want)
+		}
+		if want == StateFailed && got.Error != "Release SHA-256 mismatch." {
+			t.Errorf("failed error = %q", got.Error)
+		}
+	}
+}
+
+func TestStart(t *testing.T) {
+	ctx := context.Background()
+	if err := (&Updater{}).Start(ctx); !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("unsupported start = %v", err)
+	}
+	if err := updater(&fakeSystemd{state: "active"}, "0.15.0", nil).Start(ctx); !errors.Is(err, ErrInProgress) {
+		t.Fatalf("running start = %v", err)
+	}
+
+	f := &fakeSystemd{state: "failed"}
+	env := map[string]string{"HOME": "/home/u", "PATH": "/usr/bin", "AO_PORT": "3011"}
+	if err := updater(f, "0.15.1-nightly.202611140625", env).Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(f.calls, func(call []string) bool {
+		return strings.Join(call, " ") == "systemctl --user reset-failed "+updateUnit
+	}) {
+		t.Errorf("failed unit was not reset: %v", f.calls)
+	}
+	run := f.calls[len(f.calls)-1]
+	if run[0] != "systemd-run" {
+		t.Fatalf("last call = %v", run)
+	}
+	for _, want := range []string{"--unit=" + updateUnit, "--setenv=PATH=/usr/bin", "--setenv=AO_PORT=3011", installerURL, "--upgrade", "--nightly"} {
+		if !slices.Contains(run, want) {
+			t.Errorf("systemd-run args missing %q: %v", want, run)
+		}
+	}
+	if slices.ContainsFunc(run, func(arg string) bool { return strings.HasPrefix(arg, "--setenv=AO_HOST_INSTALL_DIR=") }) {
+		t.Errorf("default install root passed explicitly: %v", run)
+	}
+
+	stable := &fakeSystemd{}
+	if err := (&Updater{version: "0.15.0", root: "/opt/ao", run: stable.run, getenv: func(name string) string { return env[name] }}).Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	run = stable.calls[len(stable.calls)-1]
+	if slices.Contains(run, "--nightly") || !slices.Contains(run, "--setenv=AO_HOST_INSTALL_DIR=/opt/ao") {
+		t.Errorf("stable custom-root args = %v", run)
+	}
+}

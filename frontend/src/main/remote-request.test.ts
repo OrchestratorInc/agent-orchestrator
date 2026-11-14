@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createLocalHostIdentity, IncompatibleRemoteVersionError, pairDevice, probeRemote, readAuthErrorCode, readRemoteIdentity } from "./remote-request";
+import { createLocalHostIdentity, IncompatibleRemoteVersionError, pairDevice, probeRemote, readAuthErrorCode, readHostUpdate, readRemoteIdentity, startHostUpdate } from "./remote-request";
 
 const entry = { label: "workbox", url: "http://192.0.2.1:3011", password: "pw" };
 
@@ -65,6 +65,23 @@ describe("readRemoteIdentity", () => {
 	it.each([undefined, 2])("rejects incompatible API version %s before using the credential", async (apiVersion) => {
 		await expect(readRemoteIdentity(entry, fakeFetch(200, { hostId: "h_workbox", apiVersion })))
 			.rejects.toBeInstanceOf(IncompatibleRemoteVersionError);
+	});
+});
+
+describe("host update", () => {
+	it("reads the host's version with the credential and treats an older host as unknown", async () => {
+		const doFetch = fakeFetch(200, { version: "0.14.10", supported: true, state: "failed", error: "Release SHA-256 mismatch." });
+		await expect(readHostUpdate({ ...entry, hostId: "h_workbox" }, doFetch)).resolves.toEqual({ version: "0.14.10", supported: true, state: "failed", error: "Release SHA-256 mismatch." });
+		const [url, init] = doFetch.mock.calls[0] as unknown as [string, RequestInit];
+		expect(url).toBe("http://192.0.2.1:3011/api/v1/remote-host/update");
+		expect(new Headers(init.headers).get("X-AO-Expected-Host-ID")).toBe("h_workbox");
+		expect(new Headers(init.headers).get("Authorization")).toMatch(/^Bearer /);
+		await expect(readHostUpdate(entry, fakeFetch(404, { code: "NOT_FOUND" }))).resolves.toBeNull();
+		await expect(readHostUpdate(entry, fakeFetch(200, { status: "ok" }))).resolves.toBeNull();
+	});
+	it("starts an update and surfaces the host's refusal", async () => {
+		await expect(startHostUpdate(entry, fakeFetch(202, { version: "0.14.10", supported: true, state: "updating" }))).resolves.toMatchObject({ state: "updating" });
+		await expect(startHostUpdate(entry, fakeFetch(409, { code: "HOST_UPDATE_UNSUPPORTED", message: "update Orchestrator on that computer" }))).rejects.toThrow("update Orchestrator on that computer");
 	});
 });
 

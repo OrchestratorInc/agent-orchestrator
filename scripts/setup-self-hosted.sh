@@ -3,27 +3,33 @@
 set -euo pipefail
 
 usage() {
-	printf '%s\n' 'Usage: setup-self-hosted.sh [--nightly | --bundle PATH] [--tunnel] [--install-only]'
+	printf '%s\n' 'Usage: setup-self-hosted.sh [--nightly | --bundle PATH] [--tunnel] [--install-only | --upgrade]'
 	printf '%s\n' 'Installs Orchestrator under ~/.ao/host, starts a user service, and links it to your Orchestrator account (or prints pairing details).'
 	printf '%s\n' 'Downloads stable by default; --nightly downloads the newest published nightly.'
+	printf '%s\n' '--upgrade replaces the release of an installed systemd host and restarts it, keeping its service, access and pairing.'
 }
 
 bundle=""
 nightly=false
 tunnel=false
 install_only=false
+upgrade=false
 while (($#)); do
 	case "$1" in
 		--nightly) nightly=true; shift ;;
 		--bundle) bundle="${2:?--bundle needs a path}"; shift 2 ;;
 		--tunnel) tunnel=true; shift ;;
 		--install-only) install_only=true; shift ;;
+		--upgrade) upgrade=true; shift ;;
 		-h|--help) usage; exit 0 ;;
 		*) usage >&2; exit 2 ;;
 	esac
 done
 if "$nightly" && [[ -n "$bundle" ]]; then
 	printf '%s\n' '--nightly cannot be combined with --bundle.' >&2; exit 2
+fi
+if "$upgrade" && { "$install_only" || "$tunnel"; }; then
+	printf '%s\n' '--upgrade cannot be combined with --install-only or --tunnel.' >&2; exit 2
 fi
 
 if [[ "$(id -u)" == 0 ]]; then
@@ -86,6 +92,9 @@ case "$platform:$arch" in
 	*) printf 'Unsupported host platform: %s/%s\n' "$platform" "$arch" >&2; exit 1 ;;
 esac
 command -v git >/dev/null || { printf '%s\n' 'git is required for Orchestrator projects and worktrees.' >&2; exit 1; }
+if "$upgrade" && { [[ "$platform" != Linux || ! -L "$host_root/current" || ! -x "$host_root/run-daemon.sh" ]] || [[ ! -f "$HOME/.config/systemd/user/ao-self-hosted.service" ]]; }; then
+	printf '%s\n' '--upgrade needs a host installed as a systemd service by this script.' >&2; exit 1
+fi
 
 if [[ -n "$bundle" ]]; then
 	[[ -f "$bundle" ]] || { printf 'Bundle not found: %s\n' "$bundle" >&2; exit 1; }
@@ -240,8 +249,9 @@ if "$install_only"; then
 	exit 0
 fi
 
-# A daemon launched by a service must see the same harness tools as this shell.
 runner="$host_root/run-daemon.sh"
+if ! "$upgrade"; then
+# A daemon launched by a service must see the same harness tools as this shell.
 service_path="$HOME/.local/bin:$HOME/.ao/bin:$host_root/current/resources/acp-runtime/node/bin:$PATH"
 printf '#!/usr/bin/env bash\nexport PATH=%q\n' "$service_path" > "$runner"
 for name in AO_DATA_DIR AO_RUN_FILE AO_PORT; do
@@ -251,8 +261,10 @@ for name in AO_DATA_DIR AO_RUN_FILE AO_PORT; do
 done
 printf 'exec %q daemon\n' "$host_root/current/resources/daemon/ao" >> "$runner"
 chmod 700 "$runner"
+fi
 
 if [[ "$platform" == Linux ]]; then
+	if ! "$upgrade"; then
 	unit_dir="$HOME/.config/systemd/user"
 	mkdir -p "$unit_dir"
 	escaped_runner="${runner//%/%%}"
@@ -263,6 +275,7 @@ if [[ "$platform" == Linux ]]; then
 		"$escaped_runner" > "$unit_dir/ao-self-hosted.service"
 	systemctl --user daemon-reload
 	systemctl --user enable ao-self-hosted.service
+	fi
 	restore_previous_service() {
 		if [[ -z "$previous_target" ]]; then
 			if ! systemctl --user disable --now ao-self-hosted.service; then
@@ -336,6 +349,12 @@ done
 	printf '%s\n' 'Orchestrator service did not become ready; inspect the service logs.' >&2
 	exit 1
 }
+if "$upgrade"; then
+	install_cli_link
+	prune_old_releases
+	printf 'Updated Orchestrator host to %s\n' "$("$host_root/current/resources/daemon/ao" version)"
+	exit 0
+fi
 
 args=(remote-host enable)
 "$tunnel" && args+=(--tunnel-only)

@@ -14,7 +14,7 @@ func mobileControlOriginMiddleware(allowedOrigins []string) func(http.Handler) h
 	allowed := exactAllowedOrigins(allowedOrigins)
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path != "/api/v1/mobile" && !strings.HasPrefix(r.URL.Path, "/api/v1/mobile/") {
+			if r.URL.Path != "/api/v1/mobile" && !strings.HasPrefix(r.URL.Path, "/api/v1/mobile/") && r.URL.Path != "/api/v1/remote-host/update" {
 				next.ServeHTTP(w, r)
 				return
 			}
