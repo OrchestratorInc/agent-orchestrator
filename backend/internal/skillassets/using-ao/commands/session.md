@@ -1,7 +1,7 @@
 # ao session
 
 Manage agent sessions: list, inspect, rename, kill, restore, exit or resume an
-agent, switch harnesses, clean up, and claim PRs.
+agent, switch harnesses, compact a chat's history, clean up, and claim PRs.
 
 ## In-app session links
 
@@ -189,6 +189,24 @@ ao session kill <id> [flags]
 ```bash
 # Kill session mer-3
 ao session kill mer-3
+```
+
+---
+
+### ao session compact
+
+Ask a chat session's agent to summarize its earlier history. Every turn re-sends the whole conversation, so compacting a long session makes each later turn smaller. The agent does the work as its own turn, and the result appears on the session's timeline. The session must be idle (`CHAT_COMPACTION_BUSY` otherwise), and agents that cannot compact refuse with `CHAT_COMPACTION_UNSUPPORTED`.
+
+**Syntax:**
+```
+ao session compact <id>
+```
+
+**Examples:**
+
+```bash
+# Compact worker mer-3 before giving it follow-up work
+ao session compact mer-3
 ```
 
 ---
