@@ -2,6 +2,7 @@ package store_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -31,7 +32,7 @@ func semanticDeliveryFixture(t *testing.T) (*sqlite.Store, domain.SessionID) {
 	return s, created.ID
 }
 
-func TestAcceptedDeliverySurvivesHumanPromptAndIsReplacedByNextDelivery(t *testing.T) {
+func TestAcceptedDeliveriesSurviveHumanPromptsAndLaterDeliveries(t *testing.T) {
 	s, sessionID := semanticDeliveryFixture(t)
 	ctx := context.Background()
 	project := func(deliveryID, prompt string) {
@@ -70,12 +71,20 @@ func TestAcceptedDeliverySurvivesHumanPromptAndIsReplacedByNextDelivery(t *testi
 	if !accepted("launch-1", "report-batch:first") {
 		t.Fatal("human prompt erased the accepted delivery")
 	}
-	if accepted("launch-2", "report-batch:first") || accepted("launch-1", "report-batch:other") {
+	if accepted("launch-2", "report-batch:first") || accepted("launch-1", "report-batch:other") || accepted("launch-1", "batch:first") {
 		t.Fatal("accepted delivery matched another launch or delivery")
 	}
+	// A delivery accepted just before another one must still be found when its
+	// sender checks again, or that sender pastes it a second time.
 	project("report-batch:second", "next report")
-	if !accepted("launch-1", "report-batch:second") || accepted("launch-1", "report-batch:first") {
-		t.Fatal("next accepted delivery did not replace the first")
+	if !accepted("launch-1", "report-batch:second") || !accepted("launch-1", "report-batch:first") {
+		t.Fatal("next accepted delivery erased the first")
+	}
+	for i := 3; i <= 9; i++ {
+		project(fmt.Sprintf("report-batch:%d", i), "later report")
+	}
+	if accepted("launch-1", "report-batch:first") || !accepted("launch-1", "report-batch:second") || !accepted("launch-1", "report-batch:9") {
+		t.Fatal("accepted deliveries are not the launch's last 8")
 	}
 	rec, _, err := s.GetSession(ctx, sessionID)
 	if err != nil {

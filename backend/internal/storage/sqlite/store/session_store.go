@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -562,8 +563,8 @@ func (s *Store) UpdateSessionFromActivitySignalAndAcceptSemanticDelivery(
 	expectedRevision int64,
 	deliveryID string,
 ) (bool, error) {
-	if deliveryID == "" {
-		return false, fmt.Errorf("semantic delivery id is required")
+	if deliveryID == "" || strings.ContainsRune(deliveryID, ' ') {
+		return false, fmt.Errorf("semantic delivery id %q is invalid", deliveryID)
 	}
 	params := activitySignalProjectionParams(rec, expectedRevision)
 	params.AcceptedDeliveryID = deliveryID
@@ -584,7 +585,7 @@ func (s *Store) updateSessionFromActivitySignal(ctx context.Context, id domain.S
 // accepted deliveryID, even if later prompts replaced the conversation
 // checkpoint.
 func (s *Store) SemanticDeliveryAccepted(ctx context.Context, id domain.SessionID, runtimeLaunchID, deliveryID string) (bool, error) {
-	if runtimeLaunchID == "" || deliveryID == "" {
+	if runtimeLaunchID == "" || deliveryID == "" || strings.ContainsRune(deliveryID, ' ') {
 		return false, nil
 	}
 	accepted, err := s.qr.SessionAcceptedDelivery(ctx, gen.SessionAcceptedDeliveryParams{

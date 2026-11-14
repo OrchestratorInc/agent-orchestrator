@@ -17,7 +17,7 @@ const sessionAcceptedDelivery = `-- name: SessionAcceptedDelivery :one
 SELECT EXISTS (
     SELECT 1 FROM sessions
     WHERE id = ?1
-      AND accepted_delivery_id = ?2
+      AND instr(' ' || accepted_delivery_id || ' ', ' ' || CAST(?2 AS TEXT) || ' ') > 0
       AND accepted_delivery_launch_id = ?3
 )
 `
@@ -56,10 +56,19 @@ UPDATE sessions SET
     native_transcript_path = ?17,
     claude_activity_facts = ?18,
     codex_activity_facts = ?19,
-    -- Only a prompt carrying an AO delivery id writes the accepted delivery,
-    -- so a human prompt never erases it.
-    accepted_delivery_id = CASE WHEN CAST(?20 AS TEXT) = ''
-        THEN accepted_delivery_id ELSE CAST(?20 AS TEXT) END,
+    -- Only a prompt carrying an AO delivery id writes accepted deliveries, so a
+    -- human prompt never erases them. The launch's last 8 are kept, space
+    -- separated, so an earlier delivery is still found after a later one.
+    accepted_delivery_id = CASE
+        WHEN CAST(?20 AS TEXT) = '' THEN accepted_delivery_id
+        WHEN accepted_delivery_id = '' OR accepted_delivery_launch_id <> runtime_launch_id
+            THEN CAST(?20 AS TEXT)
+        WHEN instr(' ' || accepted_delivery_id || ' ', ' ' || CAST(?20 AS TEXT) || ' ') > 0
+            THEN accepted_delivery_id
+        WHEN length(accepted_delivery_id) - length(replace(accepted_delivery_id, ' ', '')) >= 7
+            THEN substr(accepted_delivery_id, instr(accepted_delivery_id, ' ') + 1) || ' ' || CAST(?20 AS TEXT)
+        ELSE accepted_delivery_id || ' ' || CAST(?20 AS TEXT)
+    END,
     accepted_delivery_launch_id = CASE WHEN CAST(?20 AS TEXT) = ''
         THEN accepted_delivery_launch_id ELSE runtime_launch_id END,
     updated_at = ?21
