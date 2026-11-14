@@ -387,6 +387,8 @@ child.spawnSync=(...args)=>{
 		t.Fatal(err)
 	}
 	cfg.Env["AO_RUNTIME_LAUNCH_ID"] = "latest-restore"
+	// A restore launch carries the exact conversation it resumes.
+	cfg.NativeSessionID = id
 	if err := plugin.PrepareRuntimeLaunch(context.Background(), cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -422,5 +424,79 @@ func TestLegacyIdentityAppendProfileFailsWithoutChangingHistory(t *testing.T) {
 	got, err := os.ReadFile(history)
 	if err != nil || string(got) != string(original) {
 		t.Fatalf("legacy history changed: %q %v", got, err)
+	}
+}
+
+// The update-when-idle gate probes live sessions with GetRestoreCommand. The
+// probe must leave the identity pin the running conversation's hooks check;
+// only a real launch's PrepareRuntimeLaunch pins it.
+func TestRestoreProbeLeavesIdentityPinToLaunchPreparation(t *testing.T) {
+	t.Setenv("MINIMAX_DATA_DIR", t.TempDir())
+	previousNode := hookNode
+	t.Cleanup(func() { hookNode = previousNode })
+	hookNode = func(context.Context) string { return "node" }
+	fixture, workspace, restoredID := historyFixture(t)
+	cfg := ports.WorkspaceHookConfig{DataDir: t.TempDir(), SessionID: "probe", WorkspacePath: workspace}
+	plugin := New()
+	plugin.resolvedBinary = "mcode"
+	if err := plugin.GetAgentHooks(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	profile, _ := profilePath(cfg.DataDir, cfg.SessionID)
+	if err := os.RemoveAll(filepath.Join(profile, "v2")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(filepath.Join(fixture, "v2"), filepath.Join(profile, "v2")); err != nil {
+		t.Fatal(err)
+	}
+	identity := filepath.Join(profile, "ao-native-id")
+	readPin := func() string {
+		t.Helper()
+		got, err := os.ReadFile(identity)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(got)
+	}
+
+	// A fresh launch is running a newer conversation than the record names.
+	live := "mvs_fedcba98765432109876543210fedcba\n"
+	if err := os.WriteFile(identity, []byte(live), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, ok, err := plugin.GetRestoreCommand(context.Background(), ports.RestoreConfig{DataDir: cfg.DataDir, Session: ports.SessionRef{
+		ID: cfg.SessionID, WorkspacePath: workspace,
+		Metadata: map[string]string{ports.MetadataKeyAgentSessionID: restoredID},
+	}})
+	if err != nil || !ok {
+		t.Fatalf("restore probe = %v, %v; want the valid history to be resumable", ok, err)
+	}
+	if got := readPin(); got != live {
+		t.Fatalf("restore probe rewrote the live identity pin to %q", got)
+	}
+
+	prepare := func(generation, nativeID string) error {
+		t.Helper()
+		cfg.Env = map[string]string{"AO_SESSION_ID": cfg.SessionID, "AO_DATA_DIR": cfg.DataDir, "AO_RUNTIME_LAUNCH_ID": generation}
+		cfg.NativeSessionID = nativeID
+		return plugin.PrepareRuntimeLaunch(context.Background(), cfg)
+	}
+	if err := prepare("restore", restoredID); err != nil {
+		t.Fatal(err)
+	}
+	if got := readPin(); got != restoredID+"\n" {
+		t.Fatalf("restore launch pinned %q, want %q", got, restoredID)
+	}
+	if err := prepare("fresh", ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := readPin(); got != "\n" {
+		t.Fatalf("fresh launch left pin %q; its SessionStart could not claim the new conversation", got)
+	}
+	if err := prepare("unsafe", "../escape"); err == nil {
+		t.Fatal("launch preparation pinned a malformed native ID")
+	}
+	if got := readPin(); got != "\n" {
+		t.Fatalf("refused launch changed the identity pin to %q", got)
 	}
 }

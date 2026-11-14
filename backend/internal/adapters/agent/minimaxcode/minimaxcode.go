@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -19,7 +18,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/agentbase"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/binaryutil"
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hookutil"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -58,19 +56,13 @@ func (p *Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
 	return agentbase.ModelConfigSpec(ctx, "Configured MiniMax provider/model ID for this session.")
 }
 
-// GetLaunchCommand prepares a fresh native conversation with an identity guard.
+// GetLaunchCommand builds a fresh native conversation's argv. PrepareRuntimeLaunch
+// clears the identity pin so the new conversation's SessionStart can claim it.
 func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) ([]string, error) {
 	if err := validateLaunch(ctx, cfg.Permissions, cfg.SystemPrompt, cfg.SystemPromptFile); err != nil {
 		return nil, err
 	}
-	profile, err := profilePath(cfg.DataDir, cfg.SessionID)
-	if err != nil {
-		return nil, err
-	}
-	if err := os.MkdirAll(profile, 0o700); err != nil {
-		return nil, err
-	}
-	if err := hookutil.AtomicWriteFile(filepath.Join(profile, "ao-native-id"), []byte("\n"), 0o600); err != nil {
+	if _, err := profilePath(cfg.DataDir, cfg.SessionID); err != nil {
 		return nil, err
 	}
 	binary, err := p.ResolveBinary(ctx)
@@ -81,6 +73,8 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 }
 
 // GetRestoreCommand validates and restores the exact recorded conversation.
+// It must stay free of side effects: the update-when-idle gate also calls it as
+// a read-only probe on live sessions. PrepareRuntimeLaunch pins the identity.
 func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig) ([]string, bool, error) {
 	if err := validateLaunch(ctx, cfg.Permissions, cfg.SystemPrompt, cfg.SystemPromptFile); err != nil {
 		return nil, false, err
@@ -97,9 +91,6 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 		return nil, false, fmt.Errorf("MiniMax restore refused: %w", err)
 	}
 	if err := requireStandingTransport(profile); err != nil {
-		return nil, false, err
-	}
-	if err := hookutil.AtomicWriteFile(filepath.Join(profile, "ao-native-id"), []byte(nativeID+"\n"), 0o600); err != nil {
 		return nil, false, err
 	}
 	binary, err := p.ResolveBinary(ctx)

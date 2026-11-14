@@ -496,6 +496,16 @@ func (p *Plugin) PrepareRuntimeLaunch(ctx context.Context, cfg ports.WorkspaceHo
 	if env["AO_SESSION_ID"] != cfg.SessionID || env["AO_DATA_DIR"] != cfg.DataDir || !launchIDPattern.MatchString(env["AO_RUNTIME_LAUNCH_ID"]) {
 		return errors.New("MiniMax hook routing requires the current AO runtime generation")
 	}
+	// Pin the conversation this launch runs: the restored native ID, or empty so
+	// a fresh conversation's SessionStart claims it. Only a real launch reaches
+	// here, never a read-only GetRestoreCommand probe of a live session.
+	pin := "\n"
+	if cfg.NativeSessionID != "" {
+		if !nativeIDPattern.MatchString(cfg.NativeSessionID) {
+			return errors.New("MiniMax restore requires an exact native mvs_ session ID")
+		}
+		pin = cfg.NativeSessionID + "\n"
+	}
 	body, err := json.Marshal(env)
 	if err != nil {
 		return err
@@ -527,6 +537,9 @@ func (p *Plugin) PrepareRuntimeLaunch(ctx context.Context, cfg ports.WorkspaceHo
 		return err
 	}
 	if err := writeHookConfig(filepath.Join(profile, "plugins", "ao-activity"), hookNode(ctx), launch); err != nil {
+		return err
+	}
+	if err := hookutil.AtomicWriteFile(filepath.Join(profile, "ao-native-id"), []byte(pin), 0o600); err != nil {
 		return err
 	}
 	// Publish the complete current generation before pruning. A cached hook
