@@ -247,9 +247,14 @@ ao browser target panel    # switch back
   the group, the session loses it.
 - The same commands and output shapes work, with these differences: `devtools`
   is not available; clicks, typing, key presses, and drags use real (trusted)
-  input, which shows Chrome's "started debugging this browser" bar while acting
-  and brings the session's tab to the front of its window; `screenshot` does
-  the same; `console` and `errors` read what Chrome kept for the page.
+  input, which shows Chrome's "started debugging this browser" bar while acting;
+  `console` and `errors` read what Chrome kept for the page. Input works while
+  the session's window is covered, minimized, or behind the user's tabs, and so
+  does `screenshot` except in a minimized window: Chrome stops drawing it, so a
+  screenshot there may fail with `SCREENSHOT_UNAVAILABLE`. On a site the user
+  limited to synthetic input, a screenshot needs the window on screen and fails
+  with `BROWSER_TAB_HIDDEN` otherwise. In both cases use `snapshot` instead, and
+  never ask the user to bring Chrome forward.
 - A click that opens `alert`/`confirm`/`prompt` returns at once; answer it with
   `ao browser dialog accept|dismiss` before other commands, which otherwise fail
   with `BROWSER_DIALOG_OPEN`.

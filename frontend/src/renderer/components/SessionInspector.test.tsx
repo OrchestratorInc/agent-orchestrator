@@ -2415,6 +2415,38 @@ describe("SessionInspector completion controls", () => {
     expect(navigateMock).toHaveBeenCalledWith({ to: "/" });
   });
 
+  it("offers Archive in a Cloud standalone agent's inspector, returning home once confirmed", async () => {
+    renderWithQuery(
+      <SessionInspector
+        session={session([], { workspaceId: "agent-1", workspaceName: "Fix the flake", status: "idle", cloud: { orgId: "org-1" } })}
+        standaloneAgent
+      />,
+    );
+
+    expect(screen.getByText("Session controls")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("switch", { name: "Archive session when pull requests merge" }),
+    ).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Archive session" }));
+    await userEvent.click(
+      within(screen.getByRole("dialog")).getByRole("button", { name: "Confirm, archive session" }),
+    );
+
+    // A Cloud archive goes to the control plane, never to the local daemon.
+    expect(postMock).not.toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/kill", expect.anything());
+    expect(navigateMock).toHaveBeenCalledWith({ to: "/" });
+  });
+
+  it("keeps Archive out of a shared Cloud standalone agent, and out of a Cloud project session without a PR", () => {
+    const { unmount } = renderWithQuery(
+      <SessionInspector session={session([], { workspaceId: "agent-1", status: "idle", cloud: { orgId: "org-1", shared: true } })} standaloneAgent />,
+    );
+    expect(screen.queryByRole("button", { name: "Archive session" })).not.toBeInTheDocument();
+    unmount();
+    renderWithQuery(<SessionInspector session={session([], { status: "idle", cloud: { orgId: "org-1" } })} />);
+    expect(screen.queryByRole("button", { name: "Archive session" })).not.toBeInTheDocument();
+  });
+
   it("keeps the confirmation dismissed after a termination failure", async () => {
     postMock.mockResolvedValueOnce({
       error: new Error("runtime teardown failed"),
@@ -6138,6 +6170,78 @@ describe("SessionInspector branch summary", () => {
     expect(message).toContain("The conflicting files are `README.md`.");
     expect(message).toContain("push the branch to update PR #8.");
     expect(await within(screen.getByTestId("pr-card")).findByRole("button", { name: "Resolving conflicts…" })).toBeDisabled();
+  });
+
+  it.each([
+    { who: "the owner", shared: false },
+    { who: "a guest", shared: true },
+  ])("hands a Cloud PR's conflicts to the agent through the control plane for $who", async ({ shared }) => {
+    cloudCpMockState.enabled = true;
+    cloudCpMock.sendSessionMessage.mockReset().mockResolvedValue({});
+    cloudCpMock.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
+    const conflicting = prSummary(7, "open", {
+      sourceBranch: "feat/ns",
+      mergeability: { state: "conflicting", reasons: [], prUrl: "https://github.com/acme/repo/pull/7", conflictFiles: [{ path: "src/a.ts" }] },
+    });
+    try {
+      renderWithQuery(
+        <SessionInspector session={session([pr(7, "open")], { cloud: { orgId: "cloud-org-1", ...(shared ? { shared: true } : {}) } })} />,
+        undefined,
+        (client) => {
+          client.setQueryData(settingsQueryKey, {
+            defaultSessionMode: "tui", chatHarnesses: [], client: "", localEnabled: true,
+            cloudEnabled: true, cloudControlPlaneUrl: "https://cloud.example.test",
+          }, { updatedAt: Date.now() + 60_000 });
+          // Both fresh for the test's length, so no refetch replaces the seeded PR.
+          client.setQueryData(["cloud-session-scm-summary", "https://cloud.example.test", "cloud-org-1", "sess-1"], { prs: [conflicting], linkedPrs: [] }, { updatedAt: Date.now() + 60_000 });
+        },
+      );
+      const card = await screen.findByTestId("pr-card");
+      if (shared) {
+        expect(within(card).queryByRole("button", { name: "Resolve conflicts" })).not.toBeInTheDocument();
+        return;
+      }
+      await userEvent.click(within(card).getByRole("button", { name: "Resolve conflicts" }));
+
+      await waitFor(() => expect(cloudCpMock.sendSessionMessage).toHaveBeenCalledTimes(1));
+      const [orgId, sessionId, body] = cloudCpMock.sendSessionMessage.mock.calls[0] as unknown as [string, string, { text: string }];
+      expect([orgId, sessionId]).toEqual(["cloud-org-1", "sess-1"]);
+      expect(body.text).toContain("PR #7 conflicts with `main`.");
+      expect(body.text).toContain("The conflicting files are `src/a.ts`.");
+      // Never the local daemon's send route.
+      expect(sendCalls()).toHaveLength(0);
+      expect(await within(card).findByRole("button", { name: "Resolving conflicts…" })).toBeDisabled();
+    } finally {
+      cloudCpMockState.enabled = false;
+    }
+  });
+
+  it("offers no Resolve conflicts on an archived Cloud session's PR: its agent can take no message", async () => {
+    cloudCpMockState.enabled = true;
+    cloudCpMock.sendSessionMessage.mockReset().mockResolvedValue({});
+    cloudCpMock.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
+    const conflicting = prSummary(7, "open", {
+      sourceBranch: "feat/ns",
+      mergeability: { state: "conflicting", reasons: [], prUrl: "https://github.com/acme/repo/pull/7", conflictFiles: [{ path: "src/a.ts" }] },
+    });
+    try {
+      renderWithQuery(
+        <SessionInspector session={session([pr(7, "open")], { isTerminated: true, status: "terminated", cloud: { orgId: "cloud-org-1" } })} />,
+        undefined,
+        (client) => {
+          client.setQueryData(settingsQueryKey, {
+            defaultSessionMode: "tui", chatHarnesses: [], client: "", localEnabled: true,
+            cloudEnabled: true, cloudControlPlaneUrl: "https://cloud.example.test",
+          }, { updatedAt: Date.now() + 60_000 });
+          client.setQueryData(["cloud-session-scm-summary", "https://cloud.example.test", "cloud-org-1", "sess-1"], { prs: [conflicting], linkedPrs: [] }, { updatedAt: Date.now() + 60_000 });
+        },
+      );
+      const card = await screen.findByTestId("pr-card");
+      expect(within(card).queryByRole("button", { name: "Resolve conflicts" })).not.toBeInTheDocument();
+      expect(cloudCpMock.sendSessionMessage).not.toHaveBeenCalled();
+    } finally {
+      cloudCpMockState.enabled = false;
+    }
   });
 
   it("keeps committing first and puts the update in the menu while work is uncommitted", async () => {

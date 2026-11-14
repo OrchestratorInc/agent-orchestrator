@@ -19940,6 +19940,7 @@ components:
         failureCode:
           enum:
           - provider_key_missing
+          - auth_required
           type: string
         hasHumanPrompt:
           type: boolean
