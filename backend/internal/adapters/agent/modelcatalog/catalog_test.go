@@ -4,9 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -190,6 +194,83 @@ func TestModelDiscoveryErrorExplainsTimeout(t *testing.T) {
 	err := modelDiscoveryError(deadlineCtx, "kilocode", errors.New("signal: killed"), nil)
 	if !strings.Contains(err.Error(), "kilocode model discovery timed out after 20s") {
 		t.Fatalf("error = %q, want clear timeout", err)
+	}
+}
+
+func TestModelDiscoveryErrorExplainsWaitDelay(t *testing.T) {
+	for _, cause := range []error{exec.ErrWaitDelay, fmt.Errorf("command wrapper: %w", exec.ErrWaitDelay)} {
+		err := modelDiscoveryError(context.Background(), "agy", cause, []byte("\x1b[33mCLI diagnostic\x1b[0m\n"))
+		for _, want := range []string{"agy", "background process", "2s", "Retry model refresh"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error = %q, want %q", err, want)
+			}
+		}
+		if strings.Contains(err.Error(), exec.ErrWaitDelay.Error()) {
+			t.Errorf("error = %q, want raw Go sentinel hidden", err)
+		}
+		if !errors.Is(err, exec.ErrWaitDelay) || !errors.Is(err, cause) {
+			t.Errorf("error = %v, want original cause preserved", err)
+		}
+		if diagnostic := errors.Unwrap(err); diagnostic == nil || !strings.Contains(diagnostic.Error(), "CLI diagnostic") {
+			t.Errorf("unwrapped error = %v, want command output retained for diagnostics", diagnostic)
+		}
+	}
+}
+
+func TestModelDiscoveryContextErrorsTakePrecedenceOverWaitDelay(t *testing.T) {
+	deadlineCtx, deadlineCancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer deadlineCancel()
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	for _, tc := range []struct {
+		ctx  context.Context
+		want string
+	}{
+		{deadlineCtx, "agy model discovery timed out after 20s"},
+		{canceledCtx, "agy model discovery canceled"},
+	} {
+		err := modelDiscoveryError(tc.ctx, "agy", exec.ErrWaitDelay, nil)
+		if !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("error = %q, want %q", err, tc.want)
+		}
+		if tc.ctx == canceledCtx && !errors.Is(err, context.Canceled) {
+			t.Errorf("error = %v, want cancellation identity preserved", err)
+		}
+	}
+}
+
+func TestDiscoverExplainsPipeHoldingDescendant(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fixture requires a POSIX shell")
+	}
+	dir := t.TempDir()
+	binary := filepath.Join(dir, "fake-agy")
+	// Keep the pipe open beyond WaitDelay, then explicitly clean up the child.
+	script := "#!/bin/sh\nsleep 30 &\nprintf '%s' \"$!\" > child.pid\nexit 0\n"
+	if err := os.WriteFile(binary, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		data, err := os.ReadFile(filepath.Join(dir, "child.pid"))
+		if err != nil {
+			return
+		}
+		pid, err := strconv.Atoi(string(data))
+		if err != nil || pid <= 0 {
+			return
+		}
+		if child, err := os.FindProcess(pid); err == nil {
+			_ = child.Kill()
+		}
+	})
+	_, err := (Discoverer{}).Discover(context.Background(), ports.AgentModelDiscoveryRequest{
+		AgentID: "agy", Binary: binary, WorkingDir: dir,
+	})
+	if !errors.Is(err, exec.ErrWaitDelay) {
+		t.Fatalf("Discover error = %v, want preserved WaitDelay diagnostic", err)
+	}
+	if !strings.Contains(err.Error(), "Retry model refresh") || strings.Contains(err.Error(), exec.ErrWaitDelay.Error()) {
+		t.Fatalf("Discover error = %q, want actionable warning without Go sentinel", err)
 	}
 }
 
