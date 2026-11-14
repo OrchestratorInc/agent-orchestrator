@@ -279,6 +279,28 @@ describe("ProjectSettingsForm", () => {
 		expect(trigger).toHaveTextContent(selectedLabel);
 	});
 
+	it.each(["Worker agent", "Orchestrator agent"])("leaves a signed-in agent without a session interface out of %s", async (field) => {
+		mockProject({
+			id: "proj-1",
+			name: "Project One",
+			kind: "single_repo",
+			path: "/repo/project-one",
+			repo: "",
+			defaultBranch: "main",
+			config: { worker: { agent: "codex" }, orchestrator: { agent: "codex" } },
+		}, {
+			data: { agents: [agentReadiness("codex", "Codex"), agentReadiness("coder-agents", "Coder Agents")] },
+			error: undefined,
+		});
+
+		renderSettings("proj-1", undefined, "agents");
+		await userEvent.click(await screen.findByRole("button", { name: field }));
+		expect((await screen.findAllByRole("menuitem")).map((option) => option.textContent)).toEqual([
+			"Codex",
+			"Manage agents…",
+		]);
+	});
+
 	it("ensures agent readiness in the background without manual refresh buttons", async () => {
 		mockProject({
 			id: "proj-1",

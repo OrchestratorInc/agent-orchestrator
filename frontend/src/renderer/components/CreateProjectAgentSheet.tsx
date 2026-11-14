@@ -13,6 +13,8 @@ import type { components } from "../../api/schema";
 import { useAgentReadinessQuery, useEnsureAgentReadiness } from "../hooks/useAgentReadinessQuery";
 import { workspaceQueryOptions } from "../hooks/useWorkspaceQuery";
 import { AGENT_OPTIONS, agentLabel } from "../lib/agent-options";
+import { offersSessions } from "../lib/agent-switch-targets";
+import { useSettings } from "../hooks/useSettings";
 import {
 	buildRankedAgentOptions,
 	isLaunchableAgent,
@@ -156,7 +158,12 @@ export function CreateProjectAgentSheet({
 	const agentsQuery = useAgentReadinessQuery(chooseAgents && contentOpen && connected, hostId);
 	useEnsureAgentReadiness({ enabled: chooseAgents && contentOpen && connected, hostId });
 	const agents = agentsQuery.data;
-	const agentOptions = useMemo(() => agents?.agents ?? [], [agents]);
+	const { settings } = useSettings(hostId);
+	const chatHarnesses = settings?.chatHarnesses;
+	const agentOptions = useMemo(
+		() => (agents?.agents ?? []).filter((agent) => offersSessions(agent.id, chatHarnesses)),
+		[agents, chatHarnesses],
+	);
 	const selectableAgents = useMemo(() => hostId ? agentOptions.filter(isLaunchableAgent) : agentOptions, [agentOptions, hostId]);
 	// "configured" belongs here even though it is not a verified credential.
 	// This picks the default preselection, not a gate — every agent stays

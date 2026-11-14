@@ -5,6 +5,7 @@ import { useTranslation } from "react-i18next";
 import type { components } from "../../api/schema";
 import { apiClient } from "../lib/api-client";
 import { buildRankedAgentOptions, DEFAULT_AGENT_PRIORITY_RANK, isReadyAgent } from "../lib/agent-select-options";
+import { offersSessions } from "../lib/agent-switch-targets";
 import { cloudDefaultInterfaceMode, createCloudSession } from "../lib/cloud-session-create";
 import { useNavigateToSession } from "../lib/navigate-to-session";
 import { captureRendererEvent } from "../lib/telemetry";
@@ -38,8 +39,9 @@ export function useCreateArtifactSession() {
 				agents: agentsQuery.data?.agents,
 				priorityRank: DEFAULT_AGENT_PRIORITY_RANK,
 				fallbackAgents: [],
+				filter: (agent) => offersSessions(agent.id, settings?.chatHarnesses),
 			}).find(isReadyAgent)?.id ?? "",
-		[agentsQuery.data],
+		[agentsQuery.data, settings?.chatHarnesses],
 	);
 
 	const create = useCallback(

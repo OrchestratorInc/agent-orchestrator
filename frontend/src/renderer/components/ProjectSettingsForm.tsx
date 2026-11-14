@@ -7,6 +7,7 @@ import type { components } from "../../api/schema";
 import { useAgentReadinessQuery, useEnsureAgentReadiness } from "../hooks/useAgentReadinessQuery";
 import { useRemoteProjectQuery, workspaceQueryKeyForHost, workspaceQueryOptions } from "../hooks/useWorkspaceQuery";
 import { useSettings } from "../hooks/useSettings";
+import { offersSessions } from "../lib/agent-switch-targets";
 import { useConnectedHosts } from "../hooks/useHostConnection";
 import { apiClient } from "../lib/api-client";
 import { clientForHost } from "../lib/host-clients";
@@ -346,7 +347,9 @@ function LocalAgentPicker({ role, draft, value, invalid, onChange, projectId, ho
 	const { t } = useTranslation();
 	useEnsureAgentReadiness({ agentIds: [draft.workerAgent, draft.orchestratorAgent, draft.reviewerHarness], enabled: role === "worker" && Boolean(draft.workerAgent || draft.orchestratorAgent || draft.reviewerHarness), hostId, purpose: hostId ? "launch" : "display" });
 	const disabled = agentsQuery.isFetching && agentsQuery.data === undefined;
-	const agents = hostId ? agentsQuery.data?.agents.filter(isLaunchableAgent) : agentsQuery.data?.agents;
+	const { settings } = useSettings(hostId);
+	const offered = agentsQuery.data?.agents?.filter((agent) => offersSessions(agent.id, settings?.chatHarnesses));
+	const agents = hostId ? offered?.filter(isLaunchableAgent) : offered;
 	return role === "reviewer"
 		? <ReviewerSelect value={value} model={draft.reviewerModel} mode={draft.reviewerMode} projectId={projectId} hostId={hostId} harnessOnly defaultHarness={WORKER_DEFAULT_REVIEWERS[draft.workerAgent] ?? "claude-code"} triggerClassName="w-full" onChange={onChange} ariaLabel={t("settings.project.defaultReviewer")} agents={agents} disabled={disabled} />
 		: <RequiredAgentField id={`${role}Agent`} variant="settings-control" value={value} placeholder={t(role === "worker" ? "settings.project.selectWorker" : "settings.project.selectOrchestrator")} label={t(role === "worker" ? "settings.project.defaultWorker" : "settings.project.defaultOrchestrator")} agents={agents} hostId={hostId} disabled={disabled} invalid={invalid} onChange={onChange} />;

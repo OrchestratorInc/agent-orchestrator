@@ -5,6 +5,11 @@ export const CHAT_SWITCH_TARGETS = [
 ] as const;
 // Agents without a terminal interface need an advertised Chat driver to offer sessions.
 export const CHAT_ONLY_AGENTS: ReadonlySet<string> = new Set(["unreal-agent", "coder-agents"]);
+// Whether a picker may offer `agent` for a new session. A connected account alone
+// cannot make a Chat-only agent offerable while its Chat driver is unavailable.
+export function offersSessions(agent: string, chatHarnesses: readonly string[] | undefined): boolean {
+	return !CHAT_ONLY_AGENTS.has(agent) || Boolean(chatHarnesses?.includes(agent));
+}
 // Agents a Terminal session can switch to: the Chat agents that also run in a terminal (Unreal
 // Agent and Coder Agents have no terminal interface), plus terminal agents that take the handoff note on their command line.
 // Agents that have it typed in after start stay out until each passes a real switch.

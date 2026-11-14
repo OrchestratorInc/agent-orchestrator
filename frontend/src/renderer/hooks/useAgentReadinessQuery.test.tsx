@@ -17,6 +17,7 @@ vi.mock("../lib/api-client", () => ({
 import {
 	agentReadinessQueryOptions,
 	agentReadinessQueryKey,
+	loadProjectAgentDefaults,
 	mergeAgentReadiness,
 	useAgentReadinessQuery,
 	useEnsureAgentReadiness,
@@ -40,6 +41,18 @@ beforeEach(() => {
 });
 
 describe("agent readiness query", () => {
+	it("never starts a new project on a Chat-only agent without a Chat driver", async () => {
+		const queryClient = new QueryClient();
+		queryClient.setQueryData(agentReadinessQueryKey, {
+			agents: [agentReadiness("coder-agents", "Coder Agents"), agentReadiness("codex", "Codex", { installation: "not_installed" })],
+		});
+		queryClient.setQueryData(["settings"], { chatHarnesses: [] });
+		await expect(loadProjectAgentDefaults(queryClient)).resolves.toMatchObject({ workerAgent: "claude-code", orchestratorAgent: "claude-code" });
+
+		queryClient.setQueryData(["settings"], { chatHarnesses: ["coder-agents"] });
+		await expect(loadProjectAgentDefaults(queryClient)).resolves.toMatchObject({ workerAgent: "coder-agents", orchestratorAgent: "coder-agents" });
+	});
+
 	it("leaves freshness policy to the daemon", () => {
 		expect(agentReadinessQueryOptions.staleTime).toBe(Number.POSITIVE_INFINITY);
 		expect(agentReadinessQueryOptions.gcTime).toBe(Number.POSITIVE_INFINITY);
