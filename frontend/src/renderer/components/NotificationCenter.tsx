@@ -16,7 +16,7 @@ import {
 	MessageSquareDiff,
 	MessageSquareDot,
 	X,
-} from "lucide-react";
+} from "@/components/app-icons";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
 	useClearAllNotificationsMutation,
@@ -24,6 +24,7 @@ import {
 	useMarkAllNotificationsReadMutation,
 	useNotificationsQuery,
 } from "../hooks/useNotificationsQuery";
+import { useAppMenuAction, useAppMenuAvailable } from "../hooks/useAppMenuCommand";
 import { useRestoreSession } from "../hooks/useRestoreSession";
 import { useSwipeToDismiss } from "../hooks/useSwipeToDismiss";
 import { useRemoteWorkspaces, useWorkspaceQuery } from "../hooks/useWorkspaceQuery";
@@ -46,11 +47,13 @@ import {
 import { useUiStore } from "../stores/ui-store";
 import { useNavigateToSession } from "../lib/navigate-to-session";
 import { captureRendererEvent } from "../lib/telemetry";
+import { captureTopbarAction } from "../lib/topbar-telemetry";
 import { recordManualWorkerOpen } from "../lib/session-management-telemetry";
 import { cn } from "../lib/utils";
-import { TopbarButton } from "./TopbarButton";
+import { Button } from "./ui/button";
+import { Pressable } from "./ui/pressable";
 import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from "./ui/popover";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
+import { TooltipProvider } from "./ui/tooltip";
 import { useCloudNotifications } from "../hooks/useCloudNotifications";
 import { clearRemoteNotification, clearRemoteNotifications, connectRemoteNotificationStreams, fetchRemoteNotificationsPage, markRemoteNotificationsRead, remoteNotificationsQueryKey, useRemoteNotificationHosts } from "../hooks/useRemoteNotifications";
 import type { CloudCpNotification } from "../lib/cloud-cp/types";
@@ -71,7 +74,7 @@ function useNotificationTargetNavigation() {
 			const sessionId = notification.target.sessionId || notification.sessionId;
 			if (!sessionId) return;
 			recordManualWorkerOpen(sessionId);
-			void captureRendererEvent("ao.renderer.notification_opened", { target: "session" });
+			void captureRendererEvent("ao.notifications.opened", { target: "session" });
 			navigateToSession(notification.projectId, sessionId, hostId);
 		},
 		[navigateToSession],
@@ -80,7 +83,7 @@ function useNotificationTargetNavigation() {
 	const openPrimary = useCallback(
 		(notification: NotificationDTO, hostId: HostId = LOCAL_HOST) => {
 			if (notification.target.kind === "pr" && notification.target.prUrl) {
-				void captureRendererEvent("ao.renderer.notification_opened", { target: "pr" });
+				void captureRendererEvent("ao.notifications.opened", { target: "pr" });
 				window.open(notification.target.prUrl, "_blank", "noopener,noreferrer");
 				return;
 			}
@@ -209,9 +212,8 @@ export function NotificationRuntime() {
 	);
 	useEffect(() => connectRemoteNotificationStreams(queryClient), [queryClient]);
 
-	// Keep the OS launcher badge in sync here rather than in NotificationCenter:
-	// NotificationRuntime is always mounted in the shell, whereas the notification
-	// bell is absent from the Linux topbar and only mounts on the sessions board.
+	// Keep the OS launcher badge in sync in the persistent shell runtime;
+	// topbar controls can remount as the visible page changes.
 	useEffect(() => {
 		void aoBridge.notifications.setBadge(unreadCount);
 	}, [unreadCount]);
@@ -409,7 +411,7 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 
 		setMarkReadError(null);
 		void markAllMutate(newly)
-			.then(() => captureRendererEvent("ao.renderer.notification_mark_read_succeeded", { scope: "all" }))
+			.then(() => captureRendererEvent("ao.notifications.read", { scope: "all" }))
 			.catch((error: unknown) => {
 				void captureRendererEvent("ao.renderer.notification_mark_read_failed", { scope: "all" });
 				for (const id of newly) acknowledgedIdsRef.current.delete(id);
@@ -483,6 +485,7 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 
 	const setPanelOpen = useCallback((nextOpen: boolean) => {
 		setOpen(nextOpen);
+		if (nextOpen) captureTopbarAction("notifications");
 		if (!nextOpen) {
 			remoteHistoryGeneration.current += 1;
 			remoteFirstPageKeys.current.clear();
@@ -493,6 +496,16 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 			keepLatestNotificationsPage(queryClient, recentNotificationsQueryKey);
 		}
 	}, [queryClient]);
+
+	// A fullscreen pane mounts its own bell and covers the panel's; only the bell
+	// the user can see answers the menu.
+	const anchorRef = useRef<HTMLSpanElement>(null);
+	useAppMenuAvailable("toggle-notifications", true);
+	useAppMenuAction("toggle-notifications", () => {
+		const fullscreenElement = document.fullscreenElement;
+		if (fullscreenElement && !fullscreenElement.contains(anchorRef.current)) return;
+		setPanelOpen(!openRef.current);
+	});
 
 	const retryMarkRead = () => {
 		setMarkReadError(null);
@@ -538,7 +551,7 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 	// their cloud project, so they open through the same session route.
 	const openCloudSession = useCallback((projectId: string, sessionId: string) => {
 		recordManualWorkerOpen(sessionId);
-		void captureRendererEvent("ao.renderer.notification_opened", { target: "session" });
+		void captureRendererEvent("ao.notifications.opened", { target: "session" });
 		navigateToSession(projectId, sessionId);
 	}, [navigateToSession]);
 
@@ -673,13 +686,13 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 		<Popover onOpenChange={setPanelOpen} open={open}>
 			{/* Keep the drawer anchored to layout bounds while the bell scales on press. */}
 			<PopoverAnchor asChild>
-				<span className="inline-flex shrink-0">
+				<span className="inline-flex shrink-0" ref={anchorRef}>
 					<PopoverTrigger asChild>
-						<TopbarButton
+						<Button type="button" size="icon-sm"
 							aria-label={unreadCount > 0 ? t("notify.unreadCount", { count: unreadCount }) : t("notify.bell")}
 							className="relative"
 							style={style}
-							variant="icon"
+							variant="quiet"
 						>
 							{unreadCount > 0 ? (
 								<BellRing className="size-icon-base fill-current text-foreground" aria-hidden="true" />
@@ -691,7 +704,7 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 									{unreadCount > 99 ? "99+" : unreadCount}
 								</span>
 							) : null}
-						</TopbarButton>
+						</Button>
 					</PopoverTrigger>
 				</span>
 			</PopoverAnchor>
@@ -712,15 +725,16 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 						) : null}
 					</div>
 					<div className="flex shrink-0 items-center gap-1">
-						<button
-							className="inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-caption font-medium text-muted-foreground transition-none hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:pointer-events-none disabled:opacity-40"
+						<Button
 							disabled={isEmpty || localLoading || clearingAll || clearAll.isPending}
 							onClick={handleClearAll}
+							size="sm"
 							type="button"
+							variant="quiet"
 						>
 							{clearingAll ? <LoaderCircle className="size-icon-sm animate-spin" aria-hidden="true" /> : null}
 							{t("notify.clearAll")}
-						</button>
+						</Button>
 					</div>
 				</div>
 				<TooltipProvider skipDelayDuration={0}>
@@ -733,13 +747,14 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 						className="flex items-center justify-between gap-2 border-b border-border bg-error/5 px-4 py-2 text-caption text-error"
 					>
 						<span>{markReadError}</span>
-						<button
-							className="shrink-0 rounded-sm font-medium underline underline-offset-2 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+						<Button
+							className="shrink-0 font-medium"
+							variant="link"
 							onClick={retryMarkRead}
 							type="button"
 						>
 							{t("notify.retry")}
-						</button>
+						</Button>
 					</div>
 				) : null}
 				{actionError ? (
@@ -751,13 +766,14 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 						className="flex items-center justify-between gap-2 border-b border-border bg-error/5 px-4 py-2 text-caption text-error"
 					>
 						<span>{t("notify.workspaceLoadFailed")}</span>
-						<button
-							className="shrink-0 rounded-sm font-medium underline underline-offset-2 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+						<Button
+							className="shrink-0 font-medium"
+							variant="link"
 							onClick={retryWorkspace}
 							type="button"
 						>
 							{t("notify.retry")}
-						</button>
+						</Button>
 					</div>
 				) : null}
 				{(localLoadFailed || remoteLoadFailed) && !isEmpty ? (
@@ -766,8 +782,9 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 						className="flex items-center justify-between gap-2 border-b border-border bg-error/5 px-4 py-2 text-caption text-error"
 					>
 						<span>{t("notify.loadFailed")}</span>
-						<button
-							className="shrink-0 rounded-sm font-medium underline underline-offset-2 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+						<Button
+							className="shrink-0 font-medium"
+							variant="link"
 							onClick={() => {
 								if (localLoadFailed) void allQuery.refetch();
 								for (const host of remoteAll.hosts) {
@@ -777,7 +794,7 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 							type="button"
 						>
 							{t("notify.retry")}
-						</button>
+						</Button>
 					</div>
 				) : null}
 				{(localLoadFailed || remoteLoadFailed) && isEmpty ? (
@@ -864,13 +881,14 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 								className="flex items-center justify-center gap-2 border-t border-border bg-surface px-3 py-3 text-caption text-error"
 							>
 								{t("notify.earlierLoadFailed")}
-								<button
-									className="rounded-sm font-medium underline underline-offset-2 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+								<Button
+									className="font-medium"
+									variant="link"
 									onClick={() => void allQuery.fetchNextPage()}
 									type="button"
 								>
 									{t("notify.retry")}
-								</button>
+								</Button>
 							</div>
 						) : allQuery.isFetchingNextPage ? (
 							<div
@@ -886,15 +904,15 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 							const cursor = older.length > 0 ? older[older.length - 1].nextCursor : host.data?.nextCursor;
 							if (!cursor || !host.data) return null;
 							return (
-								<button
-									className="block w-full border-t border-border bg-surface px-3 py-3 text-center text-caption font-medium text-muted-foreground transition-none hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60 disabled:opacity-50"
+								<Pressable
+									className="block w-full border-t border-border bg-surface px-3 py-3 text-center text-caption font-medium text-muted-foreground transition-none hover:bg-interactive-hover hover:text-foreground disabled:opacity-50"
 									disabled={remoteLoadingEarlierHost !== null}
 									key={host.hostId}
 									onClick={() => void loadRemoteEarlier(host.hostId, cursor)}
 									type="button"
 								>
 									{remoteLoadingEarlierHost === host.hostId ? t("notify.loadingEarlier") : t("notify.loadEarlierFromHost", { host: host.label })}
-								</button>
+								</Pressable>
 							);
 						})}
 						{remoteEarlierError ? <div aria-live="polite" className="px-4 py-2 text-caption text-error">{remoteEarlierError}</div> : null}
@@ -1002,7 +1020,7 @@ const NotificationItem = memo(function NotificationItem({
 						notificationIconClass(notification.type),
 					)}
 				>
-					<Icon className="size-icon-base" strokeWidth={1.75} aria-hidden="true" />
+					<Icon className="size-icon-base" aria-hidden="true" />
 				</div>
 				<div className="min-w-0">
 					<div className="flex min-h-5 items-start">
@@ -1022,7 +1040,7 @@ const NotificationItem = memo(function NotificationItem({
 										href={titleLink.url}
 										onClick={(event) => {
 											event.stopPropagation();
-											void captureRendererEvent("ao.renderer.notification_opened", { target: "pr" });
+											void captureRendererEvent("ao.notifications.opened", { target: "pr" });
 										}}
 										rel="noopener noreferrer"
 										target="_blank"
@@ -1056,9 +1074,10 @@ const NotificationItem = memo(function NotificationItem({
 							</p>
 						) : null}
 						{offerRestore && sessionId ? (
-							<button
+							<Button
 								title=""
-								className="inline-flex min-h-6 max-w-full items-center gap-1.5 rounded-sm text-left text-muted-foreground underline underline-offset-2 transition-none hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:pointer-events-none disabled:opacity-40"
+								className="min-h-6 max-w-full gap-1.5 whitespace-normal text-left text-muted-foreground"
+								variant="link"
 								disabled={restoreDisabled}
 								onClick={(event) => {
 									event.stopPropagation();
@@ -1069,7 +1088,7 @@ const NotificationItem = memo(function NotificationItem({
 							>
 								{restoring ? <LoaderCircle className="size-icon-sm shrink-0 animate-spin" aria-hidden="true" /> : null}
 								<span className="text-caption leading-snug">{restoring ? t("shell.restoringSession") : t("notify.restoreArchivedPrompt")}</span>
-							</button>
+							</Button>
 						) : null}
 						</div>
 					) : null}
@@ -1080,34 +1099,31 @@ const NotificationItem = memo(function NotificationItem({
 					</time>
 					<div className="flex items-center gap-0.5">
 
-					<Tooltip>
-						<TooltipTrigger asChild>
-							<button
-								aria-label={t("notify.clearOne", { title: hostLabel ? `${hostLabel}: ${copy.title}` : copy.title })}
-								title=""
-								className={cn(
-									"grid size-notification-icon place-items-center rounded-md text-muted-foreground transition-none hover:bg-interactive-active hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:pointer-events-none disabled:opacity-40",
-									clearing
-										? "opacity-100 disabled:opacity-100"
-										: "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100 [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100",
-								)}
-								disabled={clearDisabled}
-								onClick={(event) => {
-									event.stopPropagation();
-									void onClear(notification);
-								}}
-								onKeyDown={(event) => event.stopPropagation()}
-								type="button"
-							>
-								{clearing ? (
-									<LoaderCircle className="size-icon-sm animate-spin" aria-hidden="true" />
-								) : (
-									<X className="size-icon-sm" aria-hidden="true" />
-								)}
-							</button>
-						</TooltipTrigger>
-						<TooltipContent side="top">{t("notify.clearOneShort")}</TooltipContent>
-					</Tooltip>
+					<Button
+						aria-label={t("notify.clearOne", { title: hostLabel ? `${hostLabel}: ${copy.title}` : copy.title })}
+						title=""
+						className={cn(
+							"size-notification-icon",
+							clearing
+								? "opacity-100 disabled:opacity-100"
+								: "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100 [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100",
+						)}
+						disabled={clearDisabled}
+						onClick={(event) => {
+							event.stopPropagation();
+							void onClear(notification);
+						}}
+						onKeyDown={(event) => event.stopPropagation()}
+						size="none"
+						type="button"
+						variant="quiet"
+					>
+						{clearing ? (
+							<LoaderCircle className="size-icon-sm animate-spin" aria-hidden="true" />
+						) : (
+							<X className="size-icon-sm" aria-hidden="true" />
+						)}
+					</Button>
 					</div>
 				</div>
 			</div>
@@ -1193,7 +1209,7 @@ const CloudNotificationItem = memo(function CloudNotificationItem({
 						notificationIconClass(notification.type),
 					)}
 				>
-					<Icon className="size-icon-base" strokeWidth={1.75} aria-hidden="true" />
+					<Icon className="size-icon-base" aria-hidden="true" />
 				</div>
 				<div className="min-w-0">
 					<div className="flex min-h-5 items-start gap-1.5">
@@ -1227,9 +1243,10 @@ const CloudNotificationItem = memo(function CloudNotificationItem({
 							</p>
 						) : null}
 						{offerRestore && sessionId && projectId ? (
-							<button
+							<Button
 								title=""
-								className="inline-flex min-h-6 max-w-full items-center gap-1.5 rounded-sm text-left text-muted-foreground underline underline-offset-2 transition-none hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:pointer-events-none disabled:opacity-40"
+								className="min-h-6 max-w-full gap-1.5 whitespace-normal text-left text-muted-foreground"
+								variant="link"
 								disabled={restoreDisabled}
 								onClick={(event) => {
 									event.stopPropagation();
@@ -1240,7 +1257,7 @@ const CloudNotificationItem = memo(function CloudNotificationItem({
 							>
 								{restoring ? <LoaderCircle className="size-icon-sm shrink-0 animate-spin" aria-hidden="true" /> : null}
 								<span className="text-caption leading-snug">{restoring ? t("shell.restoringSession") : t("notify.restoreArchivedPrompt")}</span>
-							</button>
+							</Button>
 						) : null}
 						</div>
 					) : null}
@@ -1251,34 +1268,31 @@ const CloudNotificationItem = memo(function CloudNotificationItem({
 					</time>
 					<div className="flex items-center gap-0.5">
 
-					<Tooltip>
-						<TooltipTrigger asChild>
-							<button
-								aria-label={t("notify.clearOne", { title: notification.title })}
-								title=""
-								className={cn(
-									"grid size-notification-icon place-items-center rounded-md text-muted-foreground transition-none hover:bg-interactive-active hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:pointer-events-none disabled:opacity-40",
-									clearing
-										? "opacity-100 disabled:opacity-100"
-										: "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100 [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100",
-								)}
-								disabled={clearDisabled}
-								onClick={(event) => {
-									event.stopPropagation();
-									void onClear(notification);
-								}}
-								onKeyDown={(event) => event.stopPropagation()}
-								type="button"
-							>
-								{clearing ? (
-									<LoaderCircle className="size-icon-sm animate-spin" aria-hidden="true" />
-								) : (
-									<X className="size-icon-sm" aria-hidden="true" />
-								)}
-							</button>
-						</TooltipTrigger>
-						<TooltipContent side="top">{t("notify.clearOneShort")}</TooltipContent>
-					</Tooltip>
+					<Button
+						aria-label={t("notify.clearOne", { title: notification.title })}
+						title=""
+						className={cn(
+							"size-notification-icon",
+							clearing
+								? "opacity-100 disabled:opacity-100"
+								: "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100 [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100",
+						)}
+						disabled={clearDisabled}
+						onClick={(event) => {
+							event.stopPropagation();
+							void onClear(notification);
+						}}
+						onKeyDown={(event) => event.stopPropagation()}
+						size="none"
+						type="button"
+						variant="quiet"
+					>
+						{clearing ? (
+							<LoaderCircle className="size-icon-sm animate-spin" aria-hidden="true" />
+						) : (
+							<X className="size-icon-sm" aria-hidden="true" />
+						)}
+					</Button>
 					</div>
 				</div>
 			</div>

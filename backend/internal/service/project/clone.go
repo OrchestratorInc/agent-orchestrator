@@ -1,6 +1,7 @@
 package project
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/subtle"
@@ -11,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -70,7 +72,7 @@ func (m *Service) CheckCloneDestination(ctx context.Context, in CloneInput) (Clo
 		return result, nil
 	}
 	if err != nil {
-		return result, apierr.Invalid("CLONE_DESTINATION_UNAVAILABLE", "AO could not inspect this destination. Choose another folder.", nil)
+		return result, apierr.Invalid("CLONE_DESTINATION_UNAVAILABLE", "Orchestrator could not inspect this destination. Choose another folder.", nil)
 	}
 	result.Exists = true
 	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
@@ -94,13 +96,13 @@ func (m *Service) CheckCloneDestination(ctx context.Context, in CloneInput) (Clo
 // The checkout is staged in a unique sibling directory so a failed or cancelled
 // clone can never leave a half-populated destination behind.
 func (m *Service) Clone(ctx context.Context, in CloneInput) (Project, error) {
-	prepared, err := m.prepareClone(ctx, in)
+	prepared, err := m.prepareClone(ctx, in, nil)
 	if err != nil {
 		return Project{}, err
 	}
 	if !repoHasCommit(ctx, prepared.Path) {
 		m.cleanupPreparedCloneAfterFailure(ctx, prepared)
-		return Project{}, apierr.Invalid("CLONE_EMPTY_REPOSITORY", "AO needs a repository with at least one commit.", nil)
+		return Project{}, apierr.Invalid("CLONE_EMPTY_REPOSITORY", "Orchestrator needs a repository with at least one commit.", nil)
 	}
 
 	project, err := m.Add(ctx, AddInput{
@@ -119,7 +121,13 @@ func (m *Service) Clone(ctx context.Context, in CloneInput) (Project, error) {
 
 // PrepareClone checks out a repository without registering it as a project.
 func (m *Service) PrepareClone(ctx context.Context, in CloneInput) (ClonePreparationResult, error) {
-	return m.prepareClone(ctx, in)
+	return m.prepareClone(ctx, in, nil)
+}
+
+// PrepareCloneWithProgress is PrepareClone that reports each git step through
+// onProgress as the clone reaches it.
+func (m *Service) PrepareCloneWithProgress(ctx context.Context, in CloneInput, onProgress func(CloneProgress)) (ClonePreparationResult, error) {
+	return m.prepareClone(ctx, in, onProgress)
 }
 
 // CleanupPreparedClone removes an unregistered checkout created by PrepareClone,
@@ -152,7 +160,7 @@ func (m *Service) CleanupPreparedClone(ctx context.Context, in ClonePreparationC
 	}
 	if in.KeepCheckout {
 		if err := os.Remove(filepath.Join(path, ".git", clonePreparationMarker)); err != nil {
-			return apierr.Invalid("CLONE_CLEANUP_FAILED", "AO could not release this checkout. Retry before leaving this flow.", nil)
+			return apierr.Invalid("CLONE_CLEANUP_FAILED", "Orchestrator could not release this checkout. Retry before leaving this flow.", nil)
 		}
 		return nil
 	}
@@ -170,7 +178,7 @@ func (m *Service) cleanupPreparedCloneAfterFailure(ctx context.Context, prepared
 	}
 }
 
-func (m *Service) prepareClone(ctx context.Context, in CloneInput) (ClonePreparationResult, error) {
+func (m *Service) prepareClone(ctx context.Context, in CloneInput, onProgress func(CloneProgress)) (ClonePreparationResult, error) {
 	remoteURL := normalizeCloneURL(in.RemoteURL)
 	repositoryName, err := cloneRepositoryName(remoteURL)
 	if err != nil {
@@ -204,11 +212,11 @@ func (m *Service) prepareClone(ctx context.Context, in CloneInput) (ClonePrepara
 	}
 
 	if err := os.MkdirAll(parent, 0o750); err != nil {
-		return ClonePreparationResult{}, apierr.Invalid("CLONE_DESTINATION_UNAVAILABLE", "AO could not create the destination folder.", nil)
+		return ClonePreparationResult{}, apierr.Invalid("CLONE_DESTINATION_UNAVAILABLE", "Orchestrator could not create the destination folder.", nil)
 	}
 	temporaryPath, err := os.MkdirTemp(parent, ".ao-clone-")
 	if err != nil {
-		return ClonePreparationResult{}, apierr.Invalid("CLONE_DESTINATION_UNAVAILABLE", "AO could not prepare the selected clone destination.", nil)
+		return ClonePreparationResult{}, apierr.Invalid("CLONE_DESTINATION_UNAVAILABLE", "Orchestrator could not prepare the selected clone destination.", nil)
 	}
 	cleanupPath := temporaryPath
 	defer func() {
@@ -218,10 +226,18 @@ func (m *Service) prepareClone(ctx context.Context, in CloneInput) (ClonePrepara
 	}()
 
 	for attempt := 0; ; attempt++ {
-		cmd := aoprocess.CommandContext(ctx, "git", "clone", "--origin", "origin", "--", remoteURL, temporaryPath)
+		args := []string{"clone", "--origin", "origin"}
+		stderr := cloneStderr{}
+		if onProgress != nil {
+			// Git only prints progress to a terminal unless asked.
+			args = append(args, "--progress")
+			stderr.report = func(phase CloneProgressPhase, percent *int) {
+				onProgress(CloneProgress{Phase: phase, Attempt: attempt + 1, Percent: percent})
+			}
+		}
+		cmd := aoprocess.CommandContext(ctx, "git", append(args, "--", remoteURL, temporaryPath)...)
 		aoprocess.ConfigureTreeCancellation(cmd)
 		cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=Never", "LC_ALL=C")
-		var stderr limitedCloneOutput
 		cmd.Stderr = &stderr
 		err := cmd.Run()
 		if err == nil {
@@ -243,7 +259,10 @@ func (m *Service) prepareClone(ctx context.Context, in CloneInput) (ClonePrepara
 			}
 			// Only discard this attempt's private staging folder, never target.
 			if err := os.RemoveAll(temporaryPath); err != nil {
-				return ClonePreparationResult{}, apierr.Invalid("CLONE_DESTINATION_UNAVAILABLE", "AO could not reset the temporary clone. Choose another destination.", nil)
+				return ClonePreparationResult{}, apierr.Invalid("CLONE_DESTINATION_UNAVAILABLE", "Orchestrator could not reset the temporary clone. Choose another destination.", nil)
+			}
+			if onProgress != nil {
+				onProgress(CloneProgress{Phase: ClonePhaseRetrying, Attempt: attempt + 2})
 			}
 			timer := time.NewTimer(time.Duration(attempt+1) * time.Second)
 			select {
@@ -261,10 +280,10 @@ func (m *Service) prepareClone(ctx context.Context, in CloneInput) (ClonePrepara
 	}
 	preparationID, err := newClonePreparationID()
 	if err != nil {
-		return ClonePreparationResult{}, apierr.Internal("CLONE_PREPARATION_FAILED", "AO could not identify the prepared clone")
+		return ClonePreparationResult{}, apierr.Internal("CLONE_PREPARATION_FAILED", "Orchestrator could not identify the prepared clone")
 	}
 	if err := os.WriteFile(filepath.Join(temporaryPath, ".git", clonePreparationMarker), []byte(preparationID+"\n"), 0o600); err != nil {
-		return ClonePreparationResult{}, apierr.Invalid("CLONE_PREPARATION_FAILED", "AO could not mark the prepared clone for cleanup.", nil)
+		return ClonePreparationResult{}, apierr.Invalid("CLONE_PREPARATION_FAILED", "Orchestrator could not mark the prepared clone for cleanup.", nil)
 	}
 	if err := os.Rename(temporaryPath, target); err != nil {
 		return ClonePreparationResult{}, apierr.Conflict("CLONE_DESTINATION_EXISTS", "The clone destination became unavailable before the repository could be created.", map[string]any{"path": target})
@@ -287,6 +306,99 @@ func (b *limitedCloneOutput) Write(p []byte) (int, error) {
 }
 
 func (b *limitedCloneOutput) String() string { return string(b.data) }
+
+// cloneProgressPhases maps git's progress titles (LC_ALL=C) to their phases.
+var cloneProgressPhases = map[string]CloneProgressPhase{
+	"Enumerating objects": ClonePhaseEnumeratingObjects,
+	"Counting objects":    ClonePhaseCountingObjects,
+	"Compressing objects": ClonePhaseCompressingObjects,
+	"Receiving objects":   ClonePhaseReceivingObjects,
+	"Resolving deltas":    ClonePhaseResolvingDeltas,
+	"Updating files":      ClonePhaseUpdatingFiles,
+	"Checking out files":  ClonePhaseUpdatingFiles,
+	"Filtering content":   ClonePhaseFilteringContent,
+}
+
+const maxCloneStderrLine = 4 * 1024
+
+// cloneStderr splits git's stderr into lines; progress redraws end in \r. A
+// progress line only moves the reported phase and percent. Every other line is kept,
+// bounded, for retry classification, so a long progress run cannot push the
+// final error out of the buffer.
+type cloneStderr struct {
+	output  limitedCloneOutput
+	pending []byte
+	phase   CloneProgressPhase
+	percent *int
+	report  func(CloneProgressPhase, *int)
+}
+
+func (s *cloneStderr) Write(p []byte) (int, error) {
+	n := len(p)
+	for len(p) > 0 {
+		end := bytes.IndexAny(p, "\r\n")
+		if end < 0 {
+			s.appendPending(p)
+			break
+		}
+		s.appendPending(p[:end])
+		s.line(s.pending)
+		s.pending = s.pending[:0]
+		p = p[end+1:]
+	}
+	return n, nil
+}
+
+func (s *cloneStderr) appendPending(p []byte) {
+	if room := maxCloneStderrLine - len(s.pending); room > 0 {
+		s.pending = append(s.pending, p[:min(len(p), room)]...)
+	}
+}
+
+func (s *cloneStderr) line(line []byte) {
+	if len(line) == 0 {
+		return
+	}
+	if phase, percent, ok := cloneProgressLine(line); ok {
+		if phase != s.phase || !samePercent(percent, s.percent) {
+			s.phase, s.percent = phase, percent
+			if s.report != nil {
+				s.report(phase, percent)
+			}
+		}
+		return
+	}
+	_, _ = s.output.Write(line)
+	_, _ = s.output.Write([]byte{'\n'})
+}
+
+func (s *cloneStderr) String() string { return s.output.String() + string(s.pending) }
+
+// cloneProgressLine reads a progress line's phase and, when git prints one,
+// its percent, as in "Receiving objects:  45% (1234/2700), 12.30 MiB | …".
+func cloneProgressLine(line []byte) (CloneProgressPhase, *int, bool) {
+	title, rest, found := strings.Cut(strings.TrimPrefix(string(line), "remote: "), ":")
+	if !found {
+		return "", nil, false
+	}
+	phase, ok := cloneProgressPhases[title]
+	if !ok {
+		return "", nil, false
+	}
+	value, _, hasPercent := strings.Cut(rest, "%")
+	if !hasPercent {
+		return phase, nil, true
+	}
+	percent, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil || percent < 0 || percent > 100 {
+		return phase, nil, true
+	}
+	return phase, &percent, true
+}
+
+func samePercent(a, b *int) bool {
+	return (a == nil) == (b == nil) && (a == nil || *a == *b)
+}
 
 func transientCloneFailure(output string) bool {
 	output = strings.ToLower(output)

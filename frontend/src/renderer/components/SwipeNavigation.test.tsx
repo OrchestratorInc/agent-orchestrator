@@ -85,6 +85,24 @@ describe("SwipeNavigation", () => {
 		phaseListeners.clear();
 	});
 
+	it("clips the parked pucks in a box that cannot be scrolled", () => {
+		const { getByTestId } = render(<Harness />);
+		const pane = getByTestId("pane");
+		const pucks = pane.querySelectorAll("[data-swipe-puck]");
+		expect(pucks).toHaveLength(2);
+		for (const puck of pucks) {
+			const box = puck.parentElement;
+			// overflow-hidden would still let scrollIntoView or focus scroll the
+			// pane by the pucks' overhang and slide it under the sidebar.
+			expect(box).toHaveAttribute("data-swipe-pucks");
+			expect(box?.className).toContain("overflow-clip");
+			expect(box?.className).not.toContain("overflow-hidden");
+			expect(box?.className).toContain("absolute");
+			expect(box?.className).toContain("inset-0");
+			expect(box?.className).toContain("pointer-events-none");
+		}
+	});
+
 	it("goes back after a two-finger swipe right past the threshold", () => {
 		const { getByTestId } = render(<Harness />);
 		swipe(getByTestId("pane"), drag(-20, 8));

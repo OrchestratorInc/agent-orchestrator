@@ -9,27 +9,27 @@ description: >-
 Every ao-* skill follows these rules. Other skills link here instead of repeating them.
 
 ## AO hosts
-An **AO host** is one computer that runs the AO daemon. Each host has its own projects, sessions and orchestrators, and AO never links them: a repo cloned on two hosts is two separate projects. AO names a project after its folder, so both can still get the same id, and then the same session id (for example `agent-orchestrator-1-12`) can exist on both. Always name a session as `<host>/<session id>`, and act only on the host that owns it.
+An **AO host** is one computer that runs the Orchestrator daemon. Each host has its own projects, sessions and orchestrators, and Orchestrator never links them: a repo cloned on two hosts is two separate projects. Orchestrator names a project after its folder, so both can still get the same id, and then the same session id (for example `agent-orchestrator-1-12`) can exist on both. Always name a session as `<host>/<session id>`, and act only on the host that owns it.
 
 Memory keeps one note named **AO hosts**, with one line per host:
 
 | Field | Example | Meaning |
 |---|---|---|
 | `name` | `Pro` | A short name: the user's pick, else the model word of the ListMachines label (`Pro`, `Air`, `mini`). Never the network hostname such as `MacBookAir.lan` |
-| `reach` | `local` or `remote` | How you get to its AO |
+| `reach` | `local` or `remote` | How you get to its Orchestrator |
 | `via` | `laptop` | The ListMachines label of the computer whose shell you use |
-| `base` | `http://192.168.1.20:7444` | Remote only. The host's LAN address from AO's remote access settings |
+| `base` | `http://192.168.1.20:7444` | Remote only. The host's LAN address from Orchestrator's remote access settings |
 | `header` | `~/.ao-grok/studio.header` | Remote only. File on `via` that holds the host's password |
 
 - **local**: the Grok Bot desktop app runs on the AO host. `via` is the host itself.
-- **remote**: the Grok Bot desktop app runs on another computer. You call the host's AO API over the network from `via`. The `ao` CLI on `via` talks only to `via`'s own AO, so never use it for a remote host.
+- **remote**: the Grok Bot desktop app runs on another computer. You call the host's Orchestrator API over the network from `via`. The `ao` CLI on `via` talks only to `via`'s own Orchestrator, so never use it for a remote host.
 
 One computer can be `via` for itself (local) and for other hosts (remote) at the same time.
 
 Every run: call ListMachines, then use every host whose `via` computer is connected, in parallel, labelled by host name. Say once which hosts you could not reach. Never hard-code machine ids or home paths.
 
 ## Calling AO
-Start every shell command that calls AO with this helper. It works in zsh and bash:
+Start every shell command that calls Orchestrator with this helper. It works in zsh and bash:
 
 ```sh
 aoapi(){ # aoapi METHOD PATH [JSON]
@@ -51,11 +51,11 @@ aoapi(){ # aoapi METHOD PATH [JSON]
 ### Errors
 | You see | Meaning and next step |
 |---|---|
-| `AO_NOT_RUNNING`, or connection refused on a local host | AO is not running there. Ask the user to open AO |
-| Connection refused or timeout on a remote host | The host is asleep, off this network, or remote access is off. Ask the user to check AO's remote access settings on the host |
+| `AO_NOT_RUNNING`, or connection refused on a local host | Orchestrator is not running there. Ask the user to open Orchestrator |
+| Connection refused or timeout on a remote host | The host is asleep, off this network, or remote access is off. Ask the user to check Orchestrator's remote access settings on the host |
 | HTTP 401 or 403 on a remote host | The host's password changed. Run ao-setup "Remote host" again |
 | HTTP 404 on a session path | No such session on that host. Check the host name |
-| Any other error | AO returns JSON with `message`. Relay it in plain words |
+| Any other error | Orchestrator returns JSON with `message`. Relay it in plain words |
 
 ## Who does what: orchestrator first
 Each project on a host has at most one live **orchestrator**: an agent that plans the project's work, starts and steers workers, and gets their reports. It has more context than you do. You are the user's phone line to it.
@@ -63,7 +63,7 @@ Each project on a host has at most one live **orchestrator**: an agent that plan
 - **Send to the orchestrator** (ao-orchestrator): starting or changing work, "catch me up", "why", "what next", plans, and anything that needs judgement about the code.
 - **Do directly**: status lists (ao-status), answering a pending request with the user's own pick (ao-answer), stop and interrupt, merges after the user's yes, files and screenshots (ao-actions).
 - Never start a worker yourself in a project that has a live orchestrator. Ask the orchestrator instead. With no orchestrator, ask the user whether to start one or to start the worker directly.
-- After you act directly on a worker (answer, stop, merge), the orchestrator sees it through AO. Don't send it a separate note.
+- After you act directly on a worker (answer, stop, merge), the orchestrator sees it through Orchestrator. Don't send it a separate note.
 
 ## Decisions
 A worker asks for two kinds of decision. A **question** (`user_input`) asks what to build. An **approval** asks permission to run a command or change files. Who decides depends on the mode, saved in memory:
@@ -76,7 +76,7 @@ A worker asks for two kinds of decision. A **question** (`user_input`) asks what
    - Away mode ends at the end time or when the user is back. Say when it ended.
 3. **Standing approvals**: the user may list kinds of approvals to always accept. Follow the list exactly.
 
-AO gives no risk level, so you judge it. Treat these as a floor. If a command looks riskier, call it high.
+Orchestrator gives no risk level, so you judge it. Treat these as a floor. If a command looks riskier, call it high.
 
 | Risk | Examples |
 |---|---|
@@ -87,17 +87,17 @@ AO gives no risk level, so you judge it. Treat these as a floor. If a command lo
 Never invent the user's preferences. The worker decides how to do the work. The user decides what to build.
 
 ## Writes
-Change nothing on the user's computers unless the user approved that exact change in chat, or away mode or a standing approval covers it. Approval for one change is not approval for the next. Never delete or archive sessions or projects, never change AO settings, and never merge, publish or deploy without the user's yes for that item.
+Change nothing on the user's computers unless the user approved that exact change in chat, or away mode or a standing approval covers it. Approval for one change is not approval for the next. Never delete or archive sessions or projects, never change Orchestrator settings, and never merge, publish or deploy without the user's yes for that item.
 
 ## Secrets
 - The `header` file holds a host's password. Pass it only to curl as `-H @<file>`. Never open, print, copy or paste it.
-- Never read AO's own credential files: `~/.ao/mobile/`, `~/.ao/data/agent-accounts/`, `~/.ao/electron/`, or any `*token*`, `*auth*`, `.env` or keychain item.
+- Never read Orchestrator's own credential files: `~/.ao/mobile/`, `~/.ao/data/agent-accounts/`, `~/.ao/electron/`, or any `*token*`, `*auth*`, `.env` or keychain item.
 - If session text contains a key, never repeat it.
 
 ## Messages to agents
 - Before you send a follow-up, read the last turn (`aoapi GET "sessions/<id>/history?offset=0&limit=1"`) so you don't repeat or contradict it.
 - Keep messages short and concrete: what is right so far, then the next step. Leave out check-ins, your own process and these rules.
-- Start every message you send with `[via Grok Bot]`, so the user can tell it apart in AO.
+- Start every message you send with `[via Grok Bot]`, so the user can tell it apart in Orchestrator.
 
 ## Output
 - Answer first, in short plain words. Say what you could not check.

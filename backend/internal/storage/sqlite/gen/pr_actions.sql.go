@@ -9,6 +9,8 @@ import (
 	"context"
 	"database/sql"
 	"time"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
 const markPRMerged = `-- name: MarkPRMerged :execrows
@@ -38,6 +40,40 @@ func (q *Queries) MarkPRMerged(ctx context.Context, arg MarkPRMergedParams) (int
 		arg.StateChangedAt,
 		arg.UpdatedAt,
 		arg.ObservedAt,
+		arg.URL,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const markPRState = `-- name: MarkPRState :execrows
+UPDATE pr
+SET pr_state = ?,
+    is_draft = ?,
+    is_closed = ?,
+    state_changed_at = ?,
+    updated_at = ?
+WHERE url = ? AND pr_state != 'merged'
+`
+
+type MarkPRStateParams struct {
+	PRState        domain.PRState
+	IsDraft        int64
+	IsClosed       int64
+	StateChangedAt sql.NullTime
+	UpdatedAt      time.Time
+	URL            string
+}
+
+func (q *Queries) MarkPRState(ctx context.Context, arg MarkPRStateParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, markPRState,
+		arg.PRState,
+		arg.IsDraft,
+		arg.IsClosed,
+		arg.StateChangedAt,
+		arg.UpdatedAt,
 		arg.URL,
 	)
 	if err != nil {

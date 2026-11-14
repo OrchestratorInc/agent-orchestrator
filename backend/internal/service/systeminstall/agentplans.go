@@ -3,6 +3,7 @@ package systeminstall
 import (
 	"context"
 	"fmt"
+	"os"
 	"path"
 	"path/filepath"
 	"slices"
@@ -246,13 +247,13 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 	case TargetCodewhale:
 		plans = []Plan{manualPlan(
 			target,
-			"AO does not automatically install Codewhale. Follow the upstream installation instructions, then refresh harness status.",
+			"Orchestrator does not automatically install Codewhale. Follow the upstream installation instructions, then refresh harness status.",
 			agentDocumentationURLs[target],
 		)}
 	case TargetUnreal:
 		plans = []Plan{{
 			Target: target, Unsupported: true, Method: "manual",
-			Reason: "Unreal Agent is built into AO; update AO to update the harness.",
+			Reason: "Unreal Agent is built into Orchestrator; update Orchestrator to update the harness.",
 		}}
 	case TargetMiMoCode:
 		plans = []Plan{s.planNPM(target, "@mimo-ai/cli")}
@@ -293,10 +294,10 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 	}
 	for index := range plans {
 		plans[index].DocsURL = agentDocumentationURLs[target]
-		if target != TargetOpencodeV2 || plans[index].Method != "npm" {
-			plans[index].Notice = installNotice(target)
-		}
 		plans[index] = s.planForOperation(plans[index], operation)
+		if target == TargetOpencodeV2 {
+			plans[index] = s.isolateOpenCodeV2(plans[index])
+		}
 	}
 	return plans
 }
@@ -692,6 +693,72 @@ func pinVendorUpdate(plan Plan, latest string) Plan {
 	return plan
 }
 
+// openCodeV2HomebrewKeg is the opencode-v2 formula's keg name, and
+// openCodeV1HomebrewKeg the formula it declares conflicts_with.
+const (
+	openCodeV2HomebrewKeg = "opencode-v2"
+	openCodeV1HomebrewKeg = "opencode"
+)
+
+// isolateOpenCodeV2 keeps every OpenCode 2 method from replacing OpenCode 1's
+// `opencode` executable. Both majors ship an executable of that name, and each
+// vendor recipe writes it where OpenCode 1's own recipe does. npm already
+// installs into a private prefix (planNPM). The official installer always
+// writes $HOME/.opencode/bin, so it runs with a private HOME and leaves shell
+// profiles alone. Homebrew links opencode-v2 into <prefix>/bin, so the keg is
+// unlinked afterwards and resolved through its opt link; an OpenCode 1 formula
+// that is linked is unlinked first, because opencode-v2 refuses to install
+// beside it, and linked again whatever the outcome.
+func (s requestPlanner) isolateOpenCodeV2(plan Plan) Plan {
+	if plan.Unsupported {
+		return plan
+	}
+	switch plan.Method {
+	case "official-installer":
+		if plan.Script == nil {
+			return plan
+		}
+		home := strings.TrimSpace(s.privateInstallerHomes[TargetOpencodeV2])
+		if home == "" {
+			plan.Unsupported = true
+			plan.Script = nil
+			plan.Reason = "OpenCode 2's private installer home could not be resolved."
+			return plan
+		}
+		plan.Script = withInstallerEnv(plan.Script, "HOME="+home)
+		if !slices.Contains(plan.Script.Args, "--no-modify-path") {
+			plan.Script.Args = append(slices.Clone(plan.Script.Args), "--no-modify-path")
+		}
+	case "homebrew":
+		if len(plan.Command) == 0 {
+			return plan
+		}
+		// Even an absent marker can mean v1 is reinstalling. Reserve its
+		// harness before inspecting linked state in runAgentOperation.
+		plan.alsoChanges = []Target{TargetOpencode}
+		if s.capabilities != nil {
+			plan.homebrewV1Prefix = s.capabilities.Homebrew.Prefix
+		}
+		plan.Cleanup = [][]string{{"brew", "unlink", openCodeV2HomebrewKeg}}
+	}
+	return plan
+}
+
+// withLinkedOpenCodeV1 inspects linked state only after the run reserves v1.
+// A plan may have been built while a v1 reinstall temporarily removed its
+// marker, or long before a deferred update actually starts.
+func (plan Plan) withLinkedOpenCodeV1() Plan {
+	if plan.homebrewV1Prefix == "" {
+		return plan
+	}
+	_, err := os.Lstat(filepath.Join(plan.homebrewV1Prefix, "var", "homebrew", "linked", openCodeV1HomebrewKeg))
+	if err == nil {
+		plan.Prepare = append(slices.Clone(plan.Prepare), []string{"brew", "unlink", openCodeV1HomebrewKeg})
+		plan.Cleanup = append(slices.Clone(plan.Cleanup), []string{"brew", "link", openCodeV1HomebrewKeg})
+	}
+	return plan
+}
+
 // withInstallerEnv returns a copy of script whose environment sets entries,
 // replacing any earlier value of the same keys. Keys compare case-insensitively
 // because Windows environment names do.
@@ -727,7 +794,7 @@ func bindKimiInstallerUpdate(goos string, plan Plan, binaryPath, home, pathList 
 	root, ok := kimiInstallRoot(goos, binaryPath, home)
 	if !ok {
 		plan.Unsupported = true
-		plan.Reason = fmt.Sprintf("AO updates Kimi Code only in its default ~/.kimi-code installation; %q is managed elsewhere, so update it manually.", binaryPath)
+		plan.Reason = fmt.Sprintf("Orchestrator updates Kimi Code only in its default ~/.kimi-code installation; %q is managed elsewhere, so update it manually.", binaryPath)
 		return plan
 	}
 	env := []string{"KIMI_INSTALL_DIR=" + root, "KIMI_NO_MODIFY_PATH=1"}
@@ -797,7 +864,7 @@ func targetInstalledCopy(goos string, plan Plan, target Target, binaryPath strin
 		uncAbsolute := strings.HasPrefix(slashed, "//") && len(strings.Split(strings.TrimPrefix(slashed, "//"), "/")) >= 3
 		if !driveAbsolute && !uncAbsolute {
 			plan.Unsupported = true
-			plan.Reason = "AO could not preserve the confirmed Grok installation directory; update it manually."
+			plan.Reason = "Orchestrator could not preserve the confirmed Grok installation directory; update it manually."
 			return plan
 		}
 		end := strings.LastIndex(slashed, "/")
@@ -859,7 +926,7 @@ func (s *Service) validateNPMUpdateTarget(ctx context.Context, plan Plan, planne
 			writable, _ = s.pathWritable.PathWritable(ctx, plan.PackagePrefix)
 		}
 		if !writable {
-			return reject(fmt.Sprintf("The npm prefix %s that holds the %s sessions run is not writable by the current user. Update it manually; AO will not use sudo.", plan.PackagePrefix, plan.Target))
+			return reject(fmt.Sprintf("The npm prefix %s that holds the %s sessions run is not writable by the current user. Update it manually; Orchestrator will not use sudo.", plan.PackagePrefix, plan.Target))
 		}
 	}
 	if len(plan.Command) > 1 && plan.Command[0] != "npm" {
@@ -868,7 +935,7 @@ func (s *Service) validateNPMUpdateTarget(ctx context.Context, plan Plan, planne
 		node, nodeOK := s.toolVersion(ctx, plan.Command[0], "--version")
 		_, npmOK := s.toolVersion(ctx, plan.Command[0], plan.Command[1], "--version")
 		if !nodeOK || !npmOK {
-			return reject(fmt.Sprintf("AO could not validate the Node.js and npm in %s that update %s.", plan.PackagePrefix, plan.Target))
+			return reject(fmt.Sprintf("Orchestrator could not validate the Node.js and npm in %s that update %s.", plan.PackagePrefix, plan.Target))
 		}
 		if !versionAtLeast(node, minimum) {
 			return reject(fmt.Sprintf("Node.js %s+ is required to update %s with the Node in %s; found %s.", formatToolVersion(minimum), plan.Target, plan.PackagePrefix, formatToolVersion(node)))

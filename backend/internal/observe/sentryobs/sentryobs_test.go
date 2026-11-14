@@ -41,6 +41,72 @@ func TestShouldCaptureStatus(t *testing.T) {
 	}
 }
 
+func TestErrorFingerprintBudgetKeepsFirstEventsAndResets(t *testing.T) {
+	when := time.Date(2026, 11, 1, 10, 0, 0, 0, time.UTC)
+	fingerprint := "9999999999999999"
+	for i := 0; i < 5; i++ {
+		if !allowErrorFingerprintFor(fingerprint, "", when) {
+			t.Fatalf("event %d was dropped", i)
+		}
+	}
+	if allowErrorFingerprintFor(fingerprint, "", when) {
+		t.Fatal("sixth event in a minute was accepted")
+	}
+	if !allowErrorFingerprintFor(fingerprint, "", when.Add(time.Minute)) {
+		t.Fatal("new minute did not admit a new event")
+	}
+	if !allowErrorFingerprintFor(fingerprint, "", when.Add(24*time.Hour)) {
+		t.Fatal("new day did not reset the budget")
+	}
+}
+
+func TestErrorBudgetCapsInstallTotalPerDay(t *testing.T) {
+	when := time.Date(2026, 11, 3, 10, 0, 0, 0, time.UTC)
+	for i := range maxErrorsPerInstallDay {
+		if !allowErrorFingerprintFor(fmt.Sprintf("%016x", 0xa000+i), "", when) {
+			t.Fatalf("event %d under the install total was dropped", i)
+		}
+	}
+	if allowErrorFingerprintFor("bbbbbbbbbbbbbbbb", "", when) {
+		t.Fatal("a new fingerprint passed the per-install daily total")
+	}
+	if !allowErrorFingerprintFor("bbbbbbbbbbbbbbbb", "", when.Add(24*time.Hour)) {
+		t.Fatal("new UTC day did not reset the install total")
+	}
+}
+
+func TestErrorFingerprintBudgetCapsOverflowBucket(t *testing.T) {
+	when := time.Date(2026, 11, 2, 10, 0, 0, 0, time.UTC)
+	errorBudget.Lock()
+	previousDay, previousGroups := errorBudget.day, errorBudget.groups
+	errorBudget.day = when.YearDay() + when.Year()*366
+	errorBudget.groups = make(map[string]errorBudgetGroup, maxErrorFingerprintsPerDay+1)
+	for i := range maxErrorFingerprintsPerDay {
+		errorBudget.groups[fmt.Sprintf("%016x", i)] = errorBudgetGroup{}
+	}
+	errorBudget.Unlock()
+	t.Cleanup(func() {
+		errorBudget.Lock()
+		errorBudget.day, errorBudget.groups = previousDay, previousGroups
+		errorBudget.Unlock()
+	})
+	for i := range maxErrorsPerFingerprintMinute {
+		if !allowErrorFingerprintFor(fmt.Sprintf("%016x", maxErrorFingerprintsPerDay+i), "", when) {
+			t.Fatalf("overflow event %d was dropped", i)
+		}
+	}
+	if allowErrorFingerprintFor("ffffffffffffffff", "", when) {
+		t.Fatal("overflow bucket admitted a sixth event in the minute")
+	}
+	errorBudget.Lock()
+	count := len(errorBudget.groups)
+	group := errorBudget.groups["unknown"]
+	errorBudget.Unlock()
+	if count != maxErrorFingerprintsPerDay+1 || group.minuteCount != maxErrorsPerFingerprintMinute {
+		t.Fatalf("overflow bucket = (%d groups, %d events), want (%d groups, %d events)", count, group.minuteCount, maxErrorFingerprintsPerDay+1, maxErrorsPerFingerprintMinute)
+	}
+}
+
 func TestInitNoDSNIsNoOp(t *testing.T) {
 	if err := Init(Config{}); err != nil {
 		t.Fatalf("Init with empty DSN: %v", err)
@@ -56,7 +122,7 @@ func TestInitNoDSNIsNoOp(t *testing.T) {
 
 func TestCaptureTagsAuthoritativeInstallID(t *testing.T) {
 	transport := &recordingTransport{events: make(chan *sentry.Event, 1)}
-	if err := Init(Config{DSN: "https://public@example.com/1", InstallID: "ins_stable", Release: "1.2.3", Environment: "stable", Transport: transport}); err != nil {
+	if err := Init(Config{DSN: "https://public@example.com/1", InstallID: "ins_sampled_5", Release: "1.2.3", Environment: "stable", Transport: transport}); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { SetPolicyCheck(nil); enabled.Store(false) })
@@ -64,10 +130,10 @@ func TestCaptureTagsAuthoritativeInstallID(t *testing.T) {
 	CaptureError(context.Background(), errString("boom"), map[string]string{"install_id": "ins_spoofed"}, "fp", telemetrymeta.RoutePattern(nil), telemetrymeta.FailureSite{})
 	select {
 	case event := <-transport.events:
-		if event.Tags["install_id"] != "ins_stable" {
+		if event.Tags["install_id"] != "ins_sampled_5" {
 			t.Fatalf("install tag = %q", event.Tags["install_id"])
 		}
-		if event.User.ID != "ins_stable" || event.User.Email != "" || event.Release != "1.2.3" || event.Environment != "stable" {
+		if event.User.ID != "ins_sampled_5" || event.User.Email != "" || event.Release != "1.2.3" || event.Environment != "stable" {
 			t.Fatalf("Sentry identity or build context = user=%+v release=%q environment=%q", event.User, event.Release, event.Environment)
 		}
 	case <-time.After(time.Second):
@@ -75,8 +141,8 @@ func TestCaptureTagsAuthoritativeInstallID(t *testing.T) {
 	}
 }
 
-func TestCaptureWithoutInstallIDKeepsErrorReportingEnabled(t *testing.T) {
-	transport := &recordingTransport{events: make(chan *sentry.Event, 1)}
+func TestCaptureWithoutInstallIDSendsOnlyPanics(t *testing.T) {
+	transport := &recordingTransport{events: make(chan *sentry.Event, 2)}
 	if err := Init(Config{DSN: "https://public@example.com/1", Transport: transport}); err != nil {
 		t.Fatal(err)
 	}
@@ -85,14 +151,22 @@ func TestCaptureWithoutInstallIDKeepsErrorReportingEnabled(t *testing.T) {
 	if !Enabled() {
 		t.Fatal("missing installation ID disabled Sentry")
 	}
-	CaptureError(context.Background(), errString("boom"), map[string]string{"install_id": "ins_spoofed"}, "fp", telemetrymeta.RoutePattern(nil), telemetrymeta.FailureSite{})
+	// An unknown install is outside the error sample; a panic still sends.
+	CaptureError(context.Background(), errString("boom"), nil, "fp", telemetrymeta.RoutePattern(nil), telemetrymeta.FailureSite{})
+	CapturePanic(context.Background(), map[string]string{"install_id": "ins_spoofed"}, "fp", telemetrymeta.RoutePattern(nil), telemetrymeta.FailureSite{})
 	select {
 	case event := <-transport.events:
+		if event.Level != sentry.LevelFatal {
+			t.Fatalf("unsampled install sent a non-fatal error: level=%q", event.Level)
+		}
 		if _, ok := event.Tags["install_id"]; ok {
 			t.Fatal("event used a caller supplied installation ID")
 		}
 		if event.User.ID != "" {
 			t.Fatalf("event used a caller supplied user ID: %+v", event.User)
+		}
+		if event.Tags["sample_rate"] != "1" {
+			t.Fatalf("panic sample_rate = %q, want 1", event.Tags["sample_rate"])
 		}
 		if event.Release != "unknown" || event.Environment != "unknown" {
 			t.Fatalf("missing build context fallback: release=%q environment=%q", event.Release, event.Environment)
@@ -100,11 +174,48 @@ func TestCaptureWithoutInstallIDKeepsErrorReportingEnabled(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("Sentry event missing")
 	}
+	select {
+	case event := <-transport.events:
+		t.Fatalf("unexpected second event: %+v", event.Tags)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func TestInstallErrorSampleIsOneInTenByInstallID(t *testing.T) {
+	// Pinned against the Electron main implementation of the same hash.
+	if !InstallInErrorSample("ins_sampled_5") || InstallInErrorSample("ins_unsampled_0") || InstallInErrorSample("") {
+		t.Fatal("install sample does not match sha256(install_id) % 10 == 0")
+	}
+	in := 0
+	for i := range 10_000 {
+		if InstallInErrorSample(fmt.Sprintf("ins_%d", i)) {
+			in++
+		}
+	}
+	if in < 900 || in > 1100 {
+		t.Fatalf("%d of 10000 installs sampled, want about 1000", in)
+	}
+}
+
+func TestUnsampledInstallSendsNoErrors(t *testing.T) {
+	transport := &recordingTransport{events: make(chan *sentry.Event, 1)}
+	if err := Init(Config{DSN: "https://public@example.com/1", InstallID: "ins_unsampled_0", Transport: transport}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { SetPolicyCheck(nil); enabled.Store(false) })
+	SetPolicyCheck(func(context.Context) bool { return true })
+	CaptureError(context.Background(), errString("boom"), nil, "fp", telemetrymeta.RoutePattern(nil), telemetrymeta.FailureSite{})
+	CaptureBackground(context.Background(), errString("boom"), "chat", "chat_turn", nil)
+	select {
+	case event := <-transport.events:
+		t.Fatalf("unsampled install sent %+v", event.Tags)
+	case <-time.After(50 * time.Millisecond):
+	}
 }
 
 func TestCaptureChecksDurableConsentAtEachCapture(t *testing.T) {
 	transport := &recordingTransport{events: make(chan *sentry.Event, 4)}
-	if err := Init(Config{DSN: "https://public@example.com/1", Transport: transport}); err != nil {
+	if err := Init(Config{DSN: "https://public@example.com/1", InstallID: "ins_sampled_5", Transport: transport}); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { SetPolicyCheck(nil); enabled.Store(false) })
@@ -144,7 +255,7 @@ func TestCaptureChecksDurableConsentAtEachCapture(t *testing.T) {
 
 func TestCaptureRejectsPolicyReplacedDuringCheck(t *testing.T) {
 	transport := &recordingTransport{events: make(chan *sentry.Event, 1)}
-	if err := Init(Config{DSN: "https://public@example.com/1", Transport: transport}); err != nil {
+	if err := Init(Config{DSN: "https://public@example.com/1", InstallID: "ins_sampled_5", Transport: transport}); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { SetPolicyCheck(nil); enabled.Store(false) })
@@ -209,7 +320,7 @@ func TestScrubEventStripsPathsAndContext(t *testing.T) {
 
 func TestCaptureBoundaryKeepsDiagnosticsWithoutUserNames(t *testing.T) {
 	transport := &recordingTransport{events: make(chan *sentry.Event, 3)}
-	if err := Init(Config{DSN: "https://public@example.com/1", InstallID: "ins_stable", Transport: transport}); err != nil {
+	if err := Init(Config{DSN: "https://public@example.com/1", InstallID: "ins_sampled_5", Transport: transport}); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { SetPolicyCheck(nil); enabled.Store(false) })
@@ -233,7 +344,7 @@ func TestCaptureBoundaryKeepsDiagnosticsWithoutUserNames(t *testing.T) {
 		if event.Message != "HTTP server error (INTERNAL_ERROR)" || len(event.Exception) == 0 || event.Exception[0].Value != "" || event.Exception[0].Type != event.Message {
 			t.Fatalf("unsafe title fields: message=%q exception=%+v", event.Message, event.Exception)
 		}
-		if event.Tags["method"] != "GET" || event.Tags["error_code"] != "INTERNAL_ERROR" || event.Tags["install_id"] != "ins_stable" || event.Tags["category"] != "http_5xx" || event.Tags["platform"] != "daemon" || event.Tags["status"] != "500" || len(event.Exception[0].Stacktrace.Frames) == 0 {
+		if event.Tags["method"] != "GET" || event.Tags["error_code"] != "INTERNAL_ERROR" || event.Tags["install_id"] != "ins_sampled_5" || event.Tags["category"] != "http_5xx" || event.Tags["platform"] != "daemon" || event.Tags["status"] != "500" || event.Exception[0].Stacktrace != nil {
 			t.Fatalf("diagnostics lost: %+v", event)
 		}
 		if event.Fingerprint[0] != "0123456789abcdef" {
@@ -259,7 +370,7 @@ func TestCaptureBoundaryKeepsDiagnosticsWithoutUserNames(t *testing.T) {
 	if event.Message != "http handler panic" || event.Exception[0].Value != "" || event.Exception[0].Type != event.Message {
 		t.Fatalf("unsafe panic title: %+v", event)
 	}
-	if event.User.ID != "ins_stable" || event.Release == "" || event.Environment == "" {
+	if event.User.ID != "ins_sampled_5" || event.Release == "" || event.Environment == "" {
 		t.Fatalf("panic lost Sentry identity or build context: %+v", event)
 	}
 	if len(event.Fingerprint) != 1 || event.Fingerprint[0] != "fedcba9876543210" || event.Exception[0].Stacktrace.Frames[0].Function != panicSite.String() {
@@ -285,7 +396,7 @@ func TestCaptureBoundaryKeepsDiagnosticsWithoutUserNames(t *testing.T) {
 
 func TestCaptureBoundaryKeepsRegisteredRouteTemplate(t *testing.T) {
 	transport := &recordingTransport{events: make(chan *sentry.Event, 2)}
-	if err := Init(Config{DSN: "https://public@example.com/1", Transport: transport}); err != nil {
+	if err := Init(Config{DSN: "https://public@example.com/1", InstallID: "ins_sampled_5", Transport: transport}); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { SetPolicyCheck(nil); enabled.Store(false) })
@@ -321,7 +432,7 @@ func TestCaptureBoundaryKeepsRegisteredRouteTemplate(t *testing.T) {
 
 func TestCaptureBoundaryScrubsAgentRelaunchFailure(t *testing.T) {
 	transport := &recordingTransport{events: make(chan *sentry.Event, 1)}
-	if err := Init(Config{DSN: "https://public@example.com/1", InstallID: "ins_stable", Release: "2.0.0", Environment: "stable", Transport: transport}); err != nil {
+	if err := Init(Config{DSN: "https://public@example.com/1", InstallID: "ins_sampled_5", Release: "2.0.0", Environment: "stable", Transport: transport}); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { SetPolicyCheck(nil); enabled.Store(false) })
@@ -347,7 +458,7 @@ func TestCaptureBoundaryScrubsAgentRelaunchFailure(t *testing.T) {
 
 func TestCaptureBoundaryUsesFailureSiteAndFixedAreaLabel(t *testing.T) {
 	transport := &recordingTransport{events: make(chan *sentry.Event, 2)}
-	if err := Init(Config{DSN: "https://public@example.com/1", Release: "2.0.0", Environment: "nightly", Transport: transport}); err != nil {
+	if err := Init(Config{DSN: "https://public@example.com/1", InstallID: "ins_sampled_5", Release: "2.0.0", Environment: "nightly", Transport: transport}); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { SetPolicyCheck(nil); enabled.Store(false) })
@@ -367,9 +478,8 @@ func TestCaptureBoundaryUsesFailureSiteAndFixedAreaLabel(t *testing.T) {
 	if len(event.Fingerprint) != 1 || event.Fingerprint[0] != wantGroup {
 		t.Fatalf("route and code fingerprint = %v, want %q", event.Fingerprint, wantGroup)
 	}
-	frames := event.Exception[0].Stacktrace.Frames
-	if len(frames) != 1 || frames[0].Function != site.String() || frames[0].Lineno != site.Line() || strings.Contains(frames[0].Function, "sentryobs.CaptureError") {
-		t.Fatalf("failure stack = %+v, want AO site %q:%d", frames, site.String(), site.Line())
+	if event.Exception[0].Stacktrace != nil {
+		t.Fatalf("ordinary Go error acquired a synthetic stack: %+v", event.Exception[0].Stacktrace)
 	}
 	encoded, err := event.MarshalJSON()
 	if err != nil || strings.Contains(string(encoded), secret) {
@@ -386,7 +496,7 @@ func TestCaptureBoundaryUsesFailureSiteAndFixedAreaLabel(t *testing.T) {
 
 func TestRecoverBackgroundReportsSanitizedPanicUnderConsent(t *testing.T) {
 	transport := &recordingTransport{events: make(chan *sentry.Event, 1)}
-	if err := Init(Config{DSN: "https://public@example.com/1", InstallID: "ins_stable", Transport: transport}); err != nil {
+	if err := Init(Config{DSN: "https://public@example.com/1", InstallID: "ins_sampled_5", Transport: transport}); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { SetPolicyCheck(nil); enabled.Store(false) })
@@ -406,7 +516,7 @@ func TestRecoverBackgroundReportsSanitizedPanicUnderConsent(t *testing.T) {
 	assertRepanic("resume agent ai-sports-coach-113")
 	select {
 	case event := <-transport.events:
-		if event.Message != "daemon background panic" || event.User.ID != "ins_stable" || event.Tags["panic_kind"] != "string" {
+		if event.Message != "daemon background panic" || event.User.ID != "ins_sampled_5" || event.Tags["panic_kind"] != "string" {
 			t.Fatalf("background panic metadata = %+v", event)
 		}
 		if len(event.Fingerprint) != 1 || len(event.Exception) != 1 || len(event.Exception[0].Stacktrace.Frames) != 1 || strings.Contains(event.Exception[0].Stacktrace.Frames[0].Function, "sentryobs.RecoverBackground") {
@@ -430,7 +540,7 @@ func TestRecoverBackgroundReportsSanitizedPanicUnderConsent(t *testing.T) {
 
 func TestSentryTagRules(t *testing.T) {
 	t.Parallel()
-	for value, want := range map[string]bool{"500": true, "502": true, "503": false, "499": false, "500x": false} {
+	for value, want := range map[string]bool{"500": true, "502": true, "503": true, "409": true, "400": true, "399": false, "600": false, "500x": false} {
 		if got := safeSentryTag("status", value); got != want {
 			t.Fatalf("status %q allowed = %v, want %v", value, got, want)
 		}
@@ -477,7 +587,7 @@ func TestAreaRequiresErrorEvidence(t *testing.T) {
 
 func TestPolicyDisableDrainsEnteredProviderCallAndRejectsLaterCapture(t *testing.T) {
 	transport := &blockingTransport{started: make(chan struct{}, 1), release: make(chan struct{})}
-	if err := Init(Config{DSN: "https://public@example.com/1", Transport: transport}); err != nil {
+	if err := Init(Config{DSN: "https://public@example.com/1", InstallID: "ins_sampled_5", Transport: transport}); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
 	t.Cleanup(func() {
@@ -542,3 +652,39 @@ func (t *blockingTransport) SendEvent(*sentry.Event) {
 type errString string
 
 func (e errString) Error() string { return string(e) }
+
+func TestErrorFingerprintDailyCapReportsDroppedOnNextSend(t *testing.T) {
+	when := time.Date(2026, 11, 3, 10, 0, 0, 0, time.UTC)
+	fingerprint := "aaaaaaaaaaaaaaa1"
+	for i := 0; i < maxErrorsPerFingerprintDay; i++ {
+		// One per minute keeps the per-minute limit out of the way.
+		ok, dropped := admitErrorFingerprint(fingerprint, "", when.Add(time.Duration(i)*time.Minute))
+		if !ok || dropped != 0 {
+			t.Fatalf("event %d: admitted=%v dropped=%d, want admitted with nothing dropped", i, ok, dropped)
+		}
+	}
+	for i := 0; i < 3; i++ {
+		if ok, _ := admitErrorFingerprint(fingerprint, "", when.Add(time.Hour+time.Duration(i)*time.Minute)); ok {
+			t.Fatalf("event %d past the daily cap of %d was admitted", maxErrorsPerFingerprintDay+i, maxErrorsPerFingerprintDay)
+		}
+	}
+	ok, dropped := admitErrorFingerprint(fingerprint, "", when.Add(24*time.Hour))
+	if !ok || dropped != 3 {
+		t.Fatalf("first event of the next day: admitted=%v dropped=%d, want admitted carrying 3", ok, dropped)
+	}
+	if ok, dropped := admitErrorFingerprint(fingerprint, "", when.Add(24*time.Hour+time.Minute)); !ok || dropped != 0 {
+		t.Fatalf("the dropped count was reported twice: admitted=%v dropped=%d", ok, dropped)
+	}
+	tags := withDropped(map[string]string{"operation": "chat_spawn"}, 3)
+	if tags["dropped_since_last"] != "3" || !safeSentryTag("dropped_since_last", "3") {
+		t.Fatalf("dropped_since_last tag = %q, or it does not pass the tag filter", tags["dropped_since_last"])
+	}
+	for _, tag := range [][2]string{{"failed_step", "worktree"}, {"cause", "branch_exists"}} {
+		if !safeSentryTag(tag[0], tag[1]) {
+			t.Errorf("safeSentryTag(%s=%s) = false, want true", tag[0], tag[1])
+		}
+	}
+	if safeSentryTag("cause", "fatal: /Users/me/repo") {
+		t.Error("free-text cause passed the tag filter")
+	}
+}

@@ -709,7 +709,7 @@ INSERT OR IGNORE INTO conversation_turns (
 -- event, so it is a keyed lookup rather than a scan.
 -- name: SelectConversationTurnByProviderID :one
 SELECT * FROM conversation_turns
-WHERE conversation_id = ? AND provider_turn_id = ?
+WHERE conversation_id = ? AND provider_turn_id = ? AND provider_turn_id <> ''
 LIMIT 1;
 
 -- name: BindConversationTurnProviderID :exec
@@ -724,8 +724,10 @@ WHERE id = ?;
 
 -- name: SettleConversationTurn :exec
 UPDATE conversation_turns
-SET state = ?, error_message = ?, failure_code = ?, completed_at = COALESCE(completed_at, ?)
-WHERE id = ?;
+SET state = sqlc.arg(state), error_message = sqlc.arg(error_message), failure_code = sqlc.arg(failure_code),
+    completed_at = COALESCE(completed_at, sqlc.narg(completed_at)),
+    usage_limit_resets_at = COALESCE(sqlc.narg(usage_limit_resets_at), usage_limit_resets_at)
+WHERE id = sqlc.arg(id);
 
 -- A streamed assistant item may not receive item/completed when steering causes
 -- the provider to finish the turn without replaying it: the accumulated text is
@@ -854,6 +856,16 @@ ORDER BY conversation_turns.requested_at, conversation_turns.rowid;
 -- name: UpdateConversationTurnDiff :execrows
 UPDATE conversation_turns
 SET diff_json = ?
+WHERE conversation_id = ? AND provider_turn_id = ? AND provider_turn_id <> '';
+
+-- Record the session artifacts a turn created or edited. AO computes the whole
+-- list once, when the turn ends, so this replaces whatever was there.
+-- execrows so the caller can tell "recorded" from "no such turn".
+-- NOTE: keep these comments ASCII. sqlc locates its star-expansion edits by byte
+-- offset, so a multi-byte character here silently corrupts later queries.
+-- name: UpdateConversationTurnArtifacts :execrows
+UPDATE conversation_turns
+SET artifacts_json = ?
 WHERE conversation_id = ? AND provider_turn_id = ?;
 
 -- Overwrite the turn's plan. The provider re-sends the whole plan on every change,
@@ -866,7 +878,7 @@ WHERE conversation_id = ? AND provider_turn_id = ?;
 -- name: UpdateConversationTurnPlan :execrows
 UPDATE conversation_turns
 SET plan_json = ?
-WHERE conversation_id = ? AND provider_turn_id = ?;
+WHERE conversation_id = ? AND provider_turn_id = ? AND provider_turn_id <> '';
 
 -- name: SelectConversationTurnByID :one
 SELECT * FROM conversation_turns WHERE id = ? LIMIT 1;
@@ -1203,7 +1215,9 @@ SET state = 'completed',
     completed_at = sqlc.arg(completed_at),
     promotion_started_at = NULL,
     promoted_to_turn_id = sqlc.arg(promoted_to_turn_id),
-    batched_input = 1
+    batched_input = 1,
+    batch_delivery_kind = sqlc.arg(batch_delivery_kind),
+    batch_delivery_steer_id = sqlc.arg(batch_delivery_steer_id)
 WHERE id = sqlc.arg(id)
   AND conversation_id = sqlc.arg(conversation_id)
   AND state = 'queued'
@@ -1331,21 +1345,21 @@ SET text = text || ?, revision = revision + 1,
         WHERE conversation_turns.id = conversation_messages.turn_id
           AND conversation_turns.state IN ('completed', 'recovered', 'interrupted', 'failed', 'cancelled')
     ), updated_at = ?
-WHERE conversation_messages.conversation_id = ? AND conversation_messages.provider_item_id = ?;
+WHERE conversation_messages.conversation_id = ? AND conversation_messages.provider_item_id = ? AND conversation_messages.provider_item_id <> '';
 
 -- name: SettleConversationMessage :exec
 UPDATE conversation_messages
 SET text = ?, revision = revision + 1, streaming = 0, updated_at = ?
-WHERE conversation_id = ? AND provider_item_id = ?;
+WHERE conversation_id = ? AND provider_item_id = ? AND provider_item_id <> '';
 
 -- name: SelectConversationMessageByProviderItem :one
 SELECT * FROM conversation_messages
-WHERE conversation_id = ? AND provider_item_id = ?
+WHERE conversation_id = ? AND provider_item_id = ? AND provider_item_id <> ''
 LIMIT 1;
 
 -- name: SelectConversationMessageByClientID :one
 SELECT * FROM conversation_messages
-WHERE conversation_id = ? AND client_message_id = ?
+WHERE conversation_id = ? AND client_message_id = ? AND client_message_id <> ''
 LIMIT 1;
 
 -- A native history import has the provider turn identity but not AO's turn id.
@@ -1403,6 +1417,8 @@ WHERE conversation_messages.conversation_id = sqlc.arg(conversation_id)
   ))
 ORDER BY conversation_messages.sequence;
 
+-- Budget IDs and byte lengths before loading payload columns. A single
+-- oversized row remains readable so every page cursor can advance.
 -- name: SelectConversationMessagesPage :many
 WITH RECURSIVE active_path(branch_id, max_sequence) AS (
     SELECT conversations.active_branch_id, CAST(NULL AS INTEGER)
@@ -1418,8 +1434,10 @@ WITH RECURSIVE active_path(branch_id, max_sequence) AS (
     FROM active_path AS path
     JOIN conversation_branches AS branch ON branch.id = path.branch_id
     WHERE branch.parent_branch_id IS NOT NULL
-)
-SELECT conversation_messages.* FROM conversation_messages
+), page_candidates AS (
+SELECT conversation_messages.id, conversation_messages.sequence,
+       length(CAST(conversation_messages.text AS BLOB)) + length(CAST(conversation_messages.delivery_content_json AS BLOB)) AS row_bytes
+FROM conversation_messages
 JOIN active_path AS path ON path.branch_id = conversation_messages.branch_id
 WHERE conversation_messages.conversation_id = sqlc.arg(conversation_id)
   AND conversation_messages.sequence < sqlc.arg(before_sequence)
@@ -1434,7 +1452,17 @@ WHERE conversation_messages.conversation_id = sqlc.arg(conversation_id)
         )
   ))
 ORDER BY conversation_messages.sequence DESC
-LIMIT sqlc.arg(page_limit);
+LIMIT sqlc.arg(page_limit)
+), page_budget(id, sequence, total_bytes, row_position) AS (
+    SELECT id, sequence,
+           SUM(row_bytes) OVER (ORDER BY sequence DESC ROWS UNBOUNDED PRECEDING) AS total_bytes,
+           ROW_NUMBER() OVER (ORDER BY sequence DESC) AS row_position
+    FROM page_candidates
+)
+SELECT conversation_messages.* FROM conversation_messages
+JOIN page_budget AS budget ON conversation_messages.id = budget.id
+WHERE budget.total_bytes <= CAST(sqlc.arg(page_bytes) AS INTEGER) OR budget.row_position = 1
+ORDER BY budget.sequence DESC;
 
 -- name: InsertConversationActivity :exec
 INSERT INTO conversation_activities (
@@ -1445,7 +1473,65 @@ INSERT INTO conversation_activities (
 -- name: SettleConversationActivity :exec
 UPDATE conversation_activities
 SET status = ?, summary = ?, detail_json = ?, revision = revision + 1, updated_at = ?
-WHERE conversation_id = ? AND provider_item_id = ? AND status <> 'cancelled';
+WHERE conversation_id = ? AND provider_item_id = ? AND provider_item_id <> '' AND status <> 'cancelled';
+
+-- A list the agent keeps across turns has one current copy on the active path:
+-- the one written last. Every copy has a plan row, a turn's included, so the rows
+-- on the path decide it, with the same branch and discarded-turn filters as the
+-- timeline. Copies on other branches keep their marks until their branch is
+-- active again.
+-- name: SelectSpanningPlanCopiesOnActivePath :many
+WITH RECURSIVE active_path(branch_id, max_sequence) AS (
+    SELECT conversations.active_branch_id, CAST(NULL AS INTEGER)
+    FROM conversations
+    WHERE conversations.id = sqlc.arg(conversation_id)
+    UNION ALL
+    SELECT branch.parent_branch_id,
+           CASE
+               WHEN path.max_sequence IS NULL THEN branch.fork_after_sequence
+               WHEN branch.fork_after_sequence < path.max_sequence THEN branch.fork_after_sequence
+               ELSE path.max_sequence
+           END
+    FROM active_path AS path
+    JOIN conversation_branches AS branch ON branch.id = path.branch_id
+    WHERE branch.parent_branch_id IS NOT NULL
+)
+SELECT activity.id,
+       activity.turn_id,
+       activity.sequence,
+       activity.detail_json,
+       activity.created_at,
+       turn.completed_at AS turn_completed_at
+FROM conversation_activities AS activity
+JOIN active_path AS path ON path.branch_id = activity.branch_id
+LEFT JOIN conversation_turns AS turn ON turn.id = activity.turn_id
+WHERE activity.conversation_id = sqlc.arg(conversation_id)
+  AND activity.kind = 'plan'
+  AND json_valid(activity.detail_json)
+  AND json_extract(activity.detail_json, '$.spansTurns') = 1
+  AND (path.max_sequence IS NULL OR activity.sequence <= path.max_sequence)
+  AND (turn.id IS NULL OR (turn.rolled_back_at IS NULL AND turn.state <> 'cancelled'))
+ORDER BY activity.sequence;
+
+-- name: SetConversationPlanActivitySuperseded :exec
+UPDATE conversation_activities
+SET detail_json = CASE WHEN CAST(sqlc.arg(superseded) AS BOOLEAN)
+                       THEN json_set(detail_json, '$.superseded', json('true'))
+                       ELSE json_remove(detail_json, '$.superseded') END,
+    revision = revision + 1,
+    updated_at = sqlc.arg(updated_at)
+WHERE id = sqlc.arg(id)
+  AND ifnull(json_extract(detail_json, '$.superseded'), 0) <> CAST(sqlc.arg(superseded) AS BOOLEAN);
+
+-- name: SetConversationTurnPlanSuperseded :exec
+UPDATE conversation_turns
+SET plan_json = CASE WHEN CAST(sqlc.arg(superseded) AS BOOLEAN)
+                     THEN json_set(plan_json, '$.superseded', json('true'))
+                     ELSE json_remove(plan_json, '$.superseded') END
+WHERE id = sqlc.arg(id)
+  AND plan_json <> ''
+  AND json_valid(plan_json)
+  AND ifnull(json_extract(plan_json, '$.superseded'), 0) <> CAST(sqlc.arg(superseded) AS BOOLEAN);
 
 -- Resolving an approval matches on the provider's request id, so a card the user
 -- left on screen cannot answer a request that replaced it.
@@ -1459,6 +1545,7 @@ SET status = 'resolved',
     updated_at = sqlc.arg(updated_at)
 WHERE conversation_id = sqlc.arg(conversation_id)
   AND request_id = sqlc.arg(request_id)
+  AND request_id <> ''
   AND status = 'pending';
 
 -- name: HasPendingConversationInteractions :one
@@ -1544,6 +1631,7 @@ SET command_output = substr(command_output || sqlc.arg(delta), 1, sqlc.arg(max_o
     updated_at = sqlc.arg(updated_at)
 WHERE conversation_id = sqlc.arg(conversation_id)
   AND provider_item_id = sqlc.arg(provider_item_id)
+  AND provider_item_id <> ''
   AND status <> 'cancelled'
   AND command_output_truncated = 0;
 
@@ -1573,6 +1661,7 @@ SET streamed_text = substr(streamed_text || sqlc.arg(delta), 1, sqlc.arg(max_tex
     updated_at = sqlc.arg(updated_at)
 WHERE conversation_id = sqlc.arg(conversation_id)
   AND provider_item_id = sqlc.arg(provider_item_id)
+  AND provider_item_id <> ''
   AND status <> 'cancelled'
   AND streamed_text_truncated = 0;
 
@@ -1585,6 +1674,7 @@ SELECT EXISTS(
     FROM conversation_activities
     WHERE conversation_id = sqlc.arg(conversation_id)
       AND provider_item_id = sqlc.arg(provider_item_id)
+      AND provider_item_id <> ''
       AND status <> 'cancelled'
 );
 
@@ -1600,19 +1690,39 @@ SELECT EXISTS(
 -- name: SettleConversationActivityStreamedText :execrows
 UPDATE conversation_activities
 SET streamed_text = ?, streamed_text_truncated = 0, revision = revision + 1, updated_at = ?
-WHERE conversation_id = ? AND provider_item_id = ? AND status <> 'cancelled';
+WHERE conversation_id = ? AND provider_item_id = ? AND provider_item_id <> '' AND status <> 'cancelled';
 
 -- name: SelectConversationActivityByProviderItem :one
 SELECT * FROM conversation_activities
-WHERE conversation_id = ? AND provider_item_id = ?
+WHERE conversation_id = ? AND provider_item_id = ? AND provider_item_id <> ''
 LIMIT 1;
+
+-- A question reaches the store with only its request id, and the chat host
+-- replays pending requests after a reconnect. Matching on the request id is
+-- what keeps that replay on the row AO already stored: the
+-- (conversation_id, request_id) index forbids a second row, and failing the
+-- insert stops the whole projection with the turn still running (#7944).
+-- Only an in-flight row is refreshed. A settled row stays settled: a replay
+-- must not reopen a question the user answered (resolved) or one
+-- settleOrphanedWork already failed with its turn - revived, it would sit
+-- pending on a failed turn, where the dock never shows it.
+-- name: SelectConversationActivityByRequest :one
+SELECT * FROM conversation_activities
+WHERE conversation_id = ? AND request_id = ?
+LIMIT 1;
+
+-- name: SettleConversationActivityByRequest :exec
+UPDATE conversation_activities
+SET status = ?, summary = ?, detail_json = ?, revision = revision + 1, updated_at = ?
+WHERE conversation_id = ? AND request_id = ? AND status IN ('pending', 'running');
 
 -- name: SelectConversationContextResetSequence :one
 SELECT CAST(COALESCE(MAX(sequence), 0) AS INTEGER) AS sequence
 FROM conversation_activities
 WHERE conversation_id = ?
   AND kind = 'system'
-  AND provider_item_id = ?;
+  AND provider_item_id = ?
+  AND provider_item_id <> '';
 
 -- Activities the agent still remembers, filtered the same way messages are and for
 -- the same reason. See SelectConversationMessages.
@@ -1636,7 +1746,8 @@ SELECT conversation_activities.* FROM conversation_activities
 JOIN active_path AS path ON path.branch_id = conversation_activities.branch_id
 WHERE conversation_activities.conversation_id = sqlc.arg(conversation_id)
   AND (path.max_sequence IS NULL OR conversation_activities.sequence <= path.max_sequence)
-  AND (conversation_activities.turn_id IS NULL OR conversation_activities.turn_id NOT IN (
+  -- An AO action outlives its turn: rolling back does not undo a spawn or a kill.
+  AND (conversation_activities.turn_id IS NULL OR conversation_activities.kind = 'ao_action' OR conversation_activities.turn_id NOT IN (
       SELECT discarded.id FROM conversation_turns AS discarded
       WHERE discarded.conversation_id = sqlc.arg(conversation_id)
         AND (
@@ -1646,6 +1757,8 @@ WHERE conversation_activities.conversation_id = sqlc.arg(conversation_id)
   ))
 ORDER BY conversation_activities.sequence;
 
+-- Budget IDs and byte lengths before loading payload columns. A single
+-- oversized row remains readable so every page cursor can advance.
 -- name: SelectConversationActivitiesPage :many
 WITH RECURSIVE active_path(branch_id, max_sequence) AS (
     SELECT conversations.active_branch_id, CAST(NULL AS INTEGER)
@@ -1661,13 +1774,16 @@ WITH RECURSIVE active_path(branch_id, max_sequence) AS (
     FROM active_path AS path
     JOIN conversation_branches AS branch ON branch.id = path.branch_id
     WHERE branch.parent_branch_id IS NOT NULL
-)
-SELECT conversation_activities.* FROM conversation_activities
+), page_candidates AS (
+SELECT conversation_activities.id, conversation_activities.sequence,
+       length(CAST(conversation_activities.summary AS BLOB)) + length(CAST(conversation_activities.detail_json AS BLOB)) + length(CAST(conversation_activities.command_output AS BLOB)) + length(CAST(conversation_activities.streamed_text AS BLOB)) AS row_bytes
+FROM conversation_activities
 JOIN active_path AS path ON path.branch_id = conversation_activities.branch_id
 WHERE conversation_activities.conversation_id = sqlc.arg(conversation_id)
   AND conversation_activities.sequence < sqlc.arg(before_sequence)
   AND (path.max_sequence IS NULL OR conversation_activities.sequence <= path.max_sequence)
-  AND (conversation_activities.turn_id IS NULL OR conversation_activities.turn_id NOT IN (
+  -- An AO action outlives its turn: rolling back does not undo a spawn or a kill.
+  AND (conversation_activities.turn_id IS NULL OR conversation_activities.kind = 'ao_action' OR conversation_activities.turn_id NOT IN (
       SELECT discarded.id FROM conversation_turns AS discarded
       WHERE discarded.conversation_id = sqlc.arg(conversation_id)
         AND (
@@ -1676,7 +1792,17 @@ WHERE conversation_activities.conversation_id = sqlc.arg(conversation_id)
         )
   ))
 ORDER BY conversation_activities.sequence DESC
-LIMIT sqlc.arg(page_limit);
+LIMIT sqlc.arg(page_limit)
+), page_budget(id, sequence, total_bytes, row_position) AS (
+    SELECT id, sequence,
+           SUM(row_bytes) OVER (ORDER BY sequence DESC ROWS UNBOUNDED PRECEDING) AS total_bytes,
+           ROW_NUMBER() OVER (ORDER BY sequence DESC) AS row_position
+    FROM page_candidates
+)
+SELECT conversation_activities.* FROM conversation_activities
+JOIN page_budget AS budget ON conversation_activities.id = budget.id
+WHERE budget.total_bytes <= CAST(sqlc.arg(page_bytes) AS INTEGER) OR budget.row_position = 1
+ORDER BY budget.sequence DESC;
 
 -- Push a provider thread title into the session label, without ever overwriting a
 -- name a person chose.
@@ -1995,6 +2121,14 @@ WHERE t.conversation_id = sqlc.arg(conversation_id)
   AND t.completed_at > sqlc.arg(after_at)
 ORDER BY t.completed_at DESC LIMIT 1;
 
+-- Session conversations still waiting for the user to sign in again, with the
+-- harness each session runs, so a confirmed login can be matched to them.
+-- name: SelectConversationsAwaitingLogin :many
+SELECT conversations.id AS conversation_id, sessions.id AS session_id, sessions.harness
+FROM conversations
+JOIN sessions ON sessions.id = conversations.current_session_id
+WHERE json_extract(conversations.account_json, '$.reauthRequiredAt') IS NOT NULL;
+
 
 -- Queued work stays held behind a failed source until its retry succeeds.
 -- name: SelectLatestAutoResumeConversationTurn :one
@@ -2030,3 +2164,36 @@ WHERE conversation_turns.conversation_id = sqlc.arg(conversation_id)
   ))
 ORDER BY conversation_turns.requested_at DESC, conversation_turns.rowid DESC
 LIMIT 1;
+
+-- The queued turns AO batched into another turn's provider input, and how: a
+-- queue drain or a steer. The snapshot turn queries leave them out, so the
+-- client reads the delivery link here. Turns batched before the kind was
+-- recorded are left out.
+-- name: ListConversationBatchedTurns :many
+SELECT id, promoted_to_turn_id, batch_delivery_kind, batch_delivery_steer_id
+FROM conversation_turns
+WHERE conversation_id = sqlc.arg(conversation_id)
+  AND batched_input = 1
+  AND promoted_to_turn_id IS NOT NULL
+  AND batch_delivery_kind != '';
+
+-- The batched turns a page needs: every member of a batch with a message in
+-- [from_sequence, before_sequence), so a drain can still find its siblings'
+-- human message. Bounded by the page rather than by the whole history.
+-- name: ListConversationBatchedTurnsInRange :many
+SELECT member.id, member.promoted_to_turn_id, member.batch_delivery_kind, member.batch_delivery_steer_id
+FROM conversation_turns AS member
+WHERE member.conversation_id = sqlc.arg(conversation_id)
+  AND member.batched_input = 1
+  AND member.batch_delivery_kind != ''
+  AND member.promoted_to_turn_id IN (
+      SELECT loaded.promoted_to_turn_id
+      FROM conversation_messages AS message
+      JOIN conversation_turns AS loaded ON loaded.id = message.turn_id
+      WHERE message.conversation_id = sqlc.arg(conversation_id)
+        AND message.sequence >= sqlc.arg(from_sequence)
+        AND message.sequence < sqlc.arg(before_sequence)
+        AND loaded.batched_input = 1
+        AND loaded.promoted_to_turn_id IS NOT NULL
+        AND loaded.batch_delivery_kind != ''
+  );

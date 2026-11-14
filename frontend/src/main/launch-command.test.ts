@@ -76,3 +76,11 @@ describe("launchCommand", () => {
 		);
 	});
 });
+
+it("passes an explicit recovered shell environment to the terminal process", async () => {
+ const env = { PATH: "/login/bin", GH_TOKEN: "shell-test-token" };
+ const child = Object.assign(new EventEmitter(), { unref: vi.fn() });
+ const spawnProcess = vi.fn(() => { queueMicrotask(() => child.emit("exit", 0)); return child; });
+ await launchCommand("terminal", [], "/home/test", { env, spawnProcess: spawnProcess as unknown as typeof import("node:child_process").spawn });
+ expect(spawnProcess).toHaveBeenCalledWith("terminal", [], expect.objectContaining({ env }));
+});
