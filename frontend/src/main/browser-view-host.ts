@@ -5006,10 +5006,12 @@ export function createBrowserViewHost(
             if (!filler) {
               throw browserError("BROWSER_VAULT_UNAVAILABLE", "The credential vault is unavailable");
             }
-            const projectId = typeof args.projectId === "string" ? args.projectId : "";
-            if (!projectId) {
-              throw browserError("BROWSER_VAULT_UNAVAILABLE", "Credential fills need a project");
+            // The daemon always stamps the session's project; "" is a
+            // standalone session, which may use only all-projects items.
+            if (typeof args.projectId !== "string") {
+              throw browserError("BROWSER_VAULT_UNAVAILABLE", "Credential fills need the daemon's project scope");
             }
+            const projectId = args.projectId;
             const optional = (key: string) =>
               typeof args[key] === "string" && args[key] ? (args[key] as string) : undefined;
             const describedAction = action === "vault-describe" ? optional("action") : action;

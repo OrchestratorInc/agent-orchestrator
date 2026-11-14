@@ -43,14 +43,12 @@ func (s *Service) credentialPreflight(
 	action string,
 	args map[string]interface{},
 ) (map[string]interface{}, *browserruntime.Result, error) {
-	if session.ProjectID == "" {
-		return nil, nil, apierr.Invalid("BROWSER_VAULT_UNAVAILABLE", "Saved credentials need a session that belongs to a project", nil)
-	}
 	if s.approvals == nil {
 		return nil, nil, apierr.Invalid("BROWSER_VAULT_UNAVAILABLE", "Saved credentials need the approval prompt, which is unavailable", nil)
 	}
 	// The project and the approved origin come from the session record and
-	// the user's decision, never from the caller.
+	// the user's decision, never from the caller. A standalone session has no
+	// project; the panel then allows only items scoped to all projects.
 	stamped := make(map[string]interface{}, len(args)+2)
 	for key, value := range args {
 		if key != "approvedOrigin" {

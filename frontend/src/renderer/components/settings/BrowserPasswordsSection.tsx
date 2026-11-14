@@ -1,5 +1,5 @@
 import { Pencil, Plus, RefreshCw, Trash2 } from "@/components/app-icons";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useId, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import type { AoBridge } from "../../../preload";
 import { aoBridge } from "../../lib/bridge";
@@ -18,6 +18,7 @@ import {
 	settingsDialogHeaderClass,
 } from "../ui/dialog";
 import { Input } from "../ui/input";
+import { Label } from "../ui/label";
 import { SettingsRow } from "./SettingsRow";
 import { SettingsSection } from "./SettingsSection";
 
@@ -242,7 +243,6 @@ function VaultItemDialog({
 		}
 	};
 
-	const field = "grid gap-1.5 text-xs text-muted-foreground";
 	return (
 		<Dialog open onOpenChange={(open) => !open && !busy && onClose()}>
 			<DialogContent className={settingsDialogContentClass} showCloseButton={false}>
@@ -263,60 +263,61 @@ function VaultItemDialog({
 						if (canSave) void save();
 					}}
 				>
-					<label className={field}>
-						{t("settings.passwords.sites")}
-						<textarea
-							autoFocus
-							className="min-h-16 rounded-md border border-(--color-border-settings-input) bg-(--color-bg-settings-input) px-3 py-2 font-mono text-sm text-settings-label outline-none placeholder:text-settings-muted"
-							onChange={(event) => setSites(event.target.value)}
-							placeholder={t("settings.passwords.sitesPlaceholder")}
-							spellCheck={false}
-							value={sites}
-						/>
-						<span>{t("settings.passwords.sitesHint")}</span>
-					</label>
-					<label className={field}>
-						{t("settings.passwords.username")}
-						<Input autoComplete="off" onChange={(event) => setUsername(event.target.value)} value={username} />
-					</label>
-					<label className={field}>
-						{t("settings.passwords.password")}
-						<Input
-							autoComplete="new-password"
-							onChange={(event) => setPassword(event.target.value)}
-							placeholder={item ? t("settings.passwords.passwordUnchanged") : undefined}
-							type="password"
-							value={password}
-						/>
-					</label>
-					<label className={field}>
-						{t("settings.passwords.totp")}
-						<Input
-							autoComplete="off"
-							className="font-mono"
-							disabled={removeTotp}
-							onChange={(event) => setTotpSeed(event.target.value)}
-							placeholder={item?.hasTotp ? t("settings.passwords.totpUnchanged") : t("settings.passwords.totpPlaceholder")}
-							spellCheck={false}
-							type="password"
-							value={totpSeed}
-						/>
-					</label>
+					<VaultField label={t("settings.passwords.sites")} hint={t("settings.passwords.sitesHint")}>
+						{(control) => (
+							<textarea
+								{...control}
+								autoFocus
+								className="min-h-16 rounded-md border border-(--color-border-settings-input) bg-(--color-bg-settings-input) px-3 py-2 font-mono text-sm text-settings-label outline-none placeholder:text-settings-muted"
+								onChange={(event) => setSites(event.target.value)}
+								placeholder={t("settings.passwords.sitesPlaceholder")}
+								spellCheck={false}
+								value={sites}
+							/>
+						)}
+					</VaultField>
+					<VaultField label={t("settings.passwords.username")}>
+						{(control) => <Input {...control} autoComplete="off" onChange={(event) => setUsername(event.target.value)} value={username} />}
+					</VaultField>
+					<VaultField label={t("settings.passwords.password")}>
+						{(control) => (
+							<Input
+								{...control}
+								autoComplete="new-password"
+								onChange={(event) => setPassword(event.target.value)}
+								placeholder={item ? t("settings.passwords.passwordUnchanged") : undefined}
+								type="password"
+								value={password}
+							/>
+						)}
+					</VaultField>
+					<VaultField label={t("settings.passwords.totp")}>
+						{(control) => (
+							<Input
+								{...control}
+								autoComplete="off"
+								className="font-mono"
+								disabled={removeTotp}
+								onChange={(event) => setTotpSeed(event.target.value)}
+								placeholder={item?.hasTotp ? t("settings.passwords.totpUnchanged") : t("settings.passwords.totpPlaceholder")}
+								spellCheck={false}
+								type="password"
+								value={totpSeed}
+							/>
+						)}
+					</VaultField>
 					{item?.hasTotp ? (
 						<label className="flex items-center gap-2 text-sm text-settings-label">
 							<input checked={removeTotp} onChange={(event) => setRemoveTotp(event.target.checked)} type="checkbox" />
 							{t("settings.passwords.totpRemove")}
 						</label>
 					) : null}
-					<label className={field}>
-						{t("settings.passwords.label")}
-						<Input maxLength={64} onChange={(event) => setLabel(event.target.value)} placeholder={t("settings.passwords.labelPlaceholder")} value={label} />
-					</label>
-					<label className={field}>
-						{t("settings.passwords.projects")}
-						<Input onChange={(event) => setProjects(event.target.value)} placeholder={t("settings.passwords.projectsPlaceholder")} value={projects} />
-						<span>{t("settings.passwords.projectsHint")}</span>
-					</label>
+					<VaultField label={t("settings.passwords.label")}>
+						{(control) => <Input {...control} maxLength={64} onChange={(event) => setLabel(event.target.value)} placeholder={t("settings.passwords.labelPlaceholder")} value={label} />}
+					</VaultField>
+					<VaultField label={t("settings.passwords.projects")} hint={t("settings.passwords.projectsHint")}>
+						{(control) => <Input {...control} onChange={(event) => setProjects(event.target.value)} placeholder={t("settings.passwords.projectsPlaceholder")} value={projects} />}
+					</VaultField>
 					{error ? <p className="text-xs text-error" role="alert">{error}</p> : null}
 				</form>
 				<div className={settingsDialogFooterClass}>
@@ -329,5 +330,32 @@ function VaultItemDialog({
 				</div>
 			</DialogContent>
 		</Dialog>
+	);
+}
+
+/** One labelled dialog field: an explicit label[for] and, when given, a hint the control is described by. */
+function VaultField({
+	label,
+	hint,
+	children,
+}: {
+	label: string;
+	hint?: string;
+	children: (control: { id: string; "aria-describedby"?: string }) => ReactNode;
+}) {
+	const id = useId();
+	const hintId = `${id}-hint`;
+	return (
+		<div className="grid gap-1.5">
+			<Label className="text-xs font-normal text-muted-foreground" htmlFor={id}>
+				{label}
+			</Label>
+			{children({ id, ...(hint ? { "aria-describedby": hintId } : {}) })}
+			{hint ? (
+				<span className="text-xs text-muted-foreground" id={hintId}>
+					{hint}
+				</span>
+			) : null}
+		</div>
 	);
 }

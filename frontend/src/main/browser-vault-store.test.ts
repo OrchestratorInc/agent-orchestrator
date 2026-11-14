@@ -97,6 +97,12 @@ describe("VaultStore", () => {
     expect(await store.candidates("https://evil.example.com/", "proj-a")).toHaveLength(0);
   });
 
+  it("gives standalone sessions (no project) only all-projects items", async () => {
+    await store.save({ origins: ["https://a.test"], username: "any", password: "pw-any-123", allowedProjects: [] });
+    await store.save({ origins: ["https://a.test"], username: "scoped", password: "pw-scoped-1", allowedProjects: ["proj-a"] });
+    expect((await store.candidates("https://a.test/", "")).map((i) => i.username)).toEqual(["any"]);
+  });
+
   it("deletes an item", async () => {
     const item = await addDemo();
     await store.delete(item.id);

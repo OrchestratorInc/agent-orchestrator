@@ -74,6 +74,21 @@ describe("BrowserPasswordsSection", () => {
 		await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
 	});
 
+	it("names every dialog field with an explicit label and describes it with its hint", async () => {
+		window.ao!.vault = mockBridge();
+		render(<BrowserPasswordsSection />);
+		await userEvent.click(await screen.findByRole("button", { name: "Add password" }));
+		const dialog = await screen.findByRole("dialog");
+		for (const name of ["Sites", "Username", "Password", "2FA setup key", "Name", "Projects"]) {
+			const control = within(dialog).getByLabelText(name);
+			const id = control.getAttribute("id");
+			expect(id, name).toBeTruthy();
+			expect(dialog.querySelector(`label[for="${id}"]`), name).toHaveTextContent(name);
+		}
+		expect(within(dialog).getByLabelText("Sites")).toHaveAccessibleDescription(/Exact origins/);
+		expect(within(dialog).getByLabelText("Projects")).toHaveAccessibleDescription(/comma separated/);
+	});
+
 	it("edits without resending the password and can remove the 2FA key", async () => {
 		const bridge = mockBridge();
 		window.ao!.vault = bridge;

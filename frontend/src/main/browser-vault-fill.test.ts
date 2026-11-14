@@ -22,6 +22,8 @@ type FakeFrame = {
   fields?: FakeField[];
   // Out-of-process frames cannot be scripted from the page's target.
   oopif?: boolean;
+  // document.hasFocus(): false while the app window is in the background.
+  hasFocus?: boolean;
 };
 
 function fakeCdp(frames: FakeFrame[]) {
@@ -52,7 +54,7 @@ function fakeCdp(frames: FakeFrame[]) {
         const frame = contexts.get(params.contextId as number)!;
         const expression = String(params.expression);
         if (expression.includes("ao-vault:probe")) {
-          return { result: { value: frame.focused ? { tag: frame.focused.tag, type: frame.focused.type, visible: frame.focused.visible ?? true } : null } };
+          return { result: { value: frame.focused ? { tag: frame.focused.tag, type: frame.focused.type, visible: frame.focused.visible ?? true, hasFocus: frame.hasFocus ?? true } : null } };
         }
         if (expression.includes("ao-vault:find")) {
           const roles: Record<string, number> = {};
@@ -156,6 +158,43 @@ describe("credential filler", () => {
     await expect(filler.fillSecret(t, { itemId, field: "password" })).rejects.toThrow();
     expect(t.inserted).toEqual([]);
     expect((await store.readAudit())[0]).toMatchObject({ outcome: "denied" });
+  });
+
+  it("fills the top page's focused field while the app window is in the background", async () => {
+    const filler = createCredentialFiller({ store });
+    const t = target([{ id: "top", url: `${ORIGIN}/login`, hasFocus: false, focused: { tag: "INPUT", type: "password" } }]);
+    await filler.fillSecret(t, { itemId, field: "password" });
+    expect(t.inserted).toEqual([PASSWORD]);
+  });
+
+  it("login finds and fills the fields itself while the app window is in the background", async () => {
+    const filler = createCredentialFiller({ store });
+    const t = {
+      ...target([
+        {
+          id: "top",
+          url: `${ORIGIN}/login`,
+          hasFocus: false,
+          fields: [
+            { tag: "INPUT", type: "email", role: "username" },
+            { tag: "INPUT", type: "password", role: "password" },
+          ],
+        },
+      ]),
+      requestedOrigin: ORIGIN,
+    };
+    await expect(filler.login(t, {})).resolves.toMatchObject({ filled: ["username", "password"] });
+    expect(t.inserted).toEqual(["alice", PASSWORD]);
+  });
+
+  it("does not trust a child frame's stale focus without document focus", async () => {
+    const filler = createCredentialFiller({ store });
+    const t = target([
+      { id: "top", url: `${ORIGIN}/login`, hasFocus: false, focused: { tag: "IFRAME", type: "" } },
+      { id: "child", url: `${ORIGIN}/inner`, hasFocus: false, focused: { tag: "INPUT", type: "password" } },
+    ]);
+    await expect(filler.fillSecret(t, { itemId, field: "password" })).rejects.toThrow(/focused/);
+    expect(t.inserted).toEqual([]);
   });
 
   it("refuses a project the item is not allowed in", async () => {

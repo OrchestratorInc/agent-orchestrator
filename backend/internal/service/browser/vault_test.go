@@ -43,13 +43,18 @@ func vaultService(t *testing.T, projectID domain.ProjectID) (*Service, *argsRunt
 	return service, runtime, token
 }
 
-func TestCredentialFillsNeedAProject(t *testing.T) {
-	service, runtime, token := vaultService(t, "")
-	if _, _, err := service.Execute(context.Background(), "s1", token, "fill-secret", map[string]interface{}{"projectId": "x"}); apiErrorCode(err) != "BROWSER_VAULT_UNAVAILABLE" {
-		t.Fatalf("err = %v", err)
+func TestStandaloneSessionsFillWithAnEmptyProject(t *testing.T) {
+	rt := &vaultRuntime{describe: describedDemo()}
+	svc, gate, token := gatedVaultServiceFor(t, rt, "")
+	answerNext(t, gate, approval.DecisionAllowOnce)
+	args := map[string]interface{}{"projectId": "proj-a"}
+	if _, _, err := svc.Execute(context.Background(), "s1", token, "login", args); err != nil {
+		t.Fatal(err)
 	}
-	if runtime.action != "" {
-		t.Fatalf("dispatched %q", runtime.action)
+	// A standalone session claims no project, whatever the caller sends;
+	// the panel then allows only items scoped to all projects.
+	if projectID, ok := rt.last["projectId"]; !ok || projectID != "" {
+		t.Fatalf("dispatched args = %v", rt.last)
 	}
 }
 
@@ -111,13 +116,18 @@ func describedDemo() map[string]interface{} {
 
 func gatedVaultService(t *testing.T, rt *vaultRuntime) (*Service, *approval.Gate, string) {
 	t.Helper()
+	return gatedVaultServiceFor(t, rt, "proj-a")
+}
+
+func gatedVaultServiceFor(t *testing.T, rt *vaultRuntime, projectID domain.ProjectID) (*Service, *approval.Gate, string) {
+	t.Helper()
 	authority := NewAuthority()
 	token, verifier, err := authority.Issue("s1")
 	if err != nil {
 		t.Fatal(err)
 	}
 	svc := New(fakeSessions{session: domain.Session{SessionRecord: domain.SessionRecord{
-		ID: "s1", ProjectID: "proj-a", Metadata: domain.SessionMetadata{BrowserCapabilityVerifier: verifier},
+		ID: "s1", ProjectID: projectID, Metadata: domain.SessionMetadata{BrowserCapabilityVerifier: verifier},
 	}}}, rt, authority)
 	gate, err := approval.Open(t.TempDir())
 	if err != nil {

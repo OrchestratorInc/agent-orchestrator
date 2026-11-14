@@ -28,18 +28,18 @@ export type FillTarget = {
 };
 
 type Frame = { id: string; url: string };
-type FocusProbe = { tag: string; type: string; visible?: boolean } | null;
+type FocusProbe = { tag: string; type: string; visible?: boolean; hasFocus?: boolean } | null;
 
 const WORLD = "ao-vault";
 
 // Runs in an isolated world: page scripts cannot patch what it reads.
 const PROBE = `/*ao-vault:probe*/(() => {
   const el = document.activeElement;
-  if (!document.hasFocus() || !el) return null;
+  if (!el || el === document.body) return null;
   const r = el.getBoundingClientRect();
   const s = getComputedStyle(el);
   const visible = r.width > 0 && r.height > 0 && s.visibility !== "hidden" && s.display !== "none" && Number(s.opacity) > 0 && !el.disabled && !el.readOnly;
-  return { tag: el.tagName, type: (el.getAttribute("type") || "").toLowerCase(), visible };
+  return { tag: el.tagName, type: (el.getAttribute("type") || "").toLowerCase(), visible, hasFocus: document.hasFocus() };
 })()`;
 
 const SELECT = `/*ao-vault:select*/(() => {
@@ -148,7 +148,8 @@ export function createCredentialFiller(options: { store: VaultStore }) {
   /** The one frame whose document holds focus on a form control. */
   const focusedFrame = async (cdp: CdpLike): Promise<{ frame: Frame; probe: NonNullable<FocusProbe> }> => {
     const hits: { frame: Frame; probe: NonNullable<FocusProbe> }[] = [];
-    for (const frame of await frames(cdp)) {
+    const all = await frames(cdp);
+    for (const [index, frame] of all.entries()) {
       let probe: FocusProbe;
       try {
         probe = await evaluate<FocusProbe>(cdp, frame.id, PROBE);
@@ -156,7 +157,13 @@ export function createCredentialFiller(options: { store: VaultStore }) {
         // Out-of-process frames cannot be checked from here; never fill into them.
         continue;
       }
-      if (probe && probe.tag !== "IFRAME" && probe.tag !== "FRAME") hits.push({ frame, probe });
+      if (!probe || probe.tag === "IFRAME" || probe.tag === "FRAME") continue;
+      // The top page's focused element is where CDP types, even while the
+      // app window is in the background (document.hasFocus() is then false).
+      // A child frame keeps a stale activeElement after focus leaves it, so it
+      // counts only while it really holds document focus.
+      if (index > 0 && probe.hasFocus === false) continue;
+      hits.push({ frame, probe });
     }
     if (hits.length !== 1 || !["INPUT", "TEXTAREA"].includes(hits[0].probe.tag)) {
       throw new FillRefused("No focused text field that Orchestrator can verify", "no verifiable focused field");

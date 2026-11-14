@@ -6884,6 +6884,12 @@ describe("browser view host credential fills", () => {
 		expect(inserted).toEqual([]);
 	});
 
+	it("lets a standalone session (empty project) use an all-projects item", async () => {
+		const { host, item, inserted } = await setupVaultHost({});
+		await host.execute("sess-1", "fill-secret", { ref: "e2", itemId: item.id, field: "password", projectId: "", approvedOrigin: ORIGIN });
+		expect(inserted).toEqual([PASSWORD]);
+	});
+
 	it("refuses fills without a daemon-stamped project", async () => {
 		const { host, item, inserted } = await setupVaultHost({});
 		await expect(
