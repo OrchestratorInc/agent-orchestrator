@@ -25,9 +25,9 @@ import (
 const eventBuffer = 4096
 
 // approvalWait bounds how long the provider is left blocked on an unanswered
-// request. Codex holds its turn until the client replies, so an approval nobody
+// approval. Codex holds its turn until the client replies, so an approval nobody
 // resolves would hang the session indefinitely. On expiry AO refuses rather than
-// deciding on the user's behalf.
+// deciding on the user's behalf. Questions have no such bound (see inputDeadline).
 const approvalWait = 30 * time.Minute
 
 // errConversationClosed reports a decision arriving after the controller ended.

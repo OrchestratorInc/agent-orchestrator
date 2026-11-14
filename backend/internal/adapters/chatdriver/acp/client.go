@@ -279,7 +279,10 @@ func (c *conversation) requestInput(
 		parked.result <- *accepted.Input
 	}
 
-	timer := timeAfter(approvalWait)
+	// Unlike an approval, a question has no deadline: it waits for an answer, the
+	// provider withdrawing it (Stop does this), or the conversation ending. An
+	// expired form reaches the agent as an empty one, which reads as the user
+	// having answered nothing.
 	select {
 	case response := <-parked.result:
 		return response, nil
@@ -288,10 +291,6 @@ func (c *conversation) requestInput(
 		if !c.providerDetaching() {
 			c.emit(ports.ChatEvent{Kind: ports.ChatEventInputResolved, RequestID: requestID})
 		}
-		return ports.ChatInputResponse{Action: ports.ChatInputActionCancel}, nil
-	case <-timer:
-		c.discardInput(requestID)
-		c.emit(ports.ChatEvent{Kind: ports.ChatEventInputResolved, RequestID: requestID})
 		return ports.ChatInputResponse{Action: ports.ChatInputActionCancel}, nil
 	}
 }
