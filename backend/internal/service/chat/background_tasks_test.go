@@ -165,3 +165,39 @@ func TestStopBackgroundTaskRefusesProvidersWithoutStopAndNeverWakesASession(t *t
 		t.Fatalf("stopped controller err=%v", err)
 	}
 }
+
+type outputConversation struct {
+	*backgroundConversation
+	output ports.ChatBackgroundTaskOutput
+	read   []string
+}
+
+func (c *outputConversation) BackgroundTaskOutput(_ context.Context, id string) (ports.ChatBackgroundTaskOutput, error) {
+	c.read = append(c.read, id)
+	return c.output, nil
+}
+
+func TestBackgroundTaskOutputReadsTheProviderAndNeverWakesASession(t *testing.T) {
+	conv := &outputConversation{backgroundConversation: &backgroundConversation{fakeConversation: newFakeConversation()}, output: ports.ChatBackgroundTaskOutput{Text: "tick-3"}}
+	h := newHarnessWithConversation(t, conv)
+	got, err := h.svc.BackgroundTaskOutput(context.Background(), testSession, "shell")
+	if err != nil || got.Text != "tick-3" || len(conv.read) != 1 || conv.read[0] != "shell" {
+		t.Fatalf("output=%+v read=%v err=%v", got, conv.read, err)
+	}
+	if _, err := h.svc.BackgroundTaskOutput(context.Background(), "missing-session", "shell"); !errors.Is(err, ports.ErrSessionNotFound) {
+		t.Fatalf("missing session err=%v", err)
+	}
+	if err := h.svc.Stop(context.Background(), testSession); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.svc.BackgroundTaskOutput(context.Background(), testSession, "shell"); !errors.Is(err, ports.ErrBackgroundTaskOutputUnavailable) || len(conv.read) != 1 {
+		t.Fatalf("stopped controller err=%v read=%v", err, conv.read)
+	}
+}
+
+func TestBackgroundTaskOutputIsUnavailableWithoutAReader(t *testing.T) {
+	h := newHarnessWithConversation(t, &backgroundConversation{fakeConversation: newFakeConversation()})
+	if _, err := h.svc.BackgroundTaskOutput(context.Background(), testSession, "shell"); !errors.Is(err, ports.ErrBackgroundTaskOutputUnavailable) {
+		t.Fatalf("err=%v", err)
+	}
+}

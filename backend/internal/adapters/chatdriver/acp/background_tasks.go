@@ -47,6 +47,23 @@ func (c *conversation) StopBackgroundTask(ctx context.Context, taskID string) er
 	return c.stopBackgroundTask(ctx, c.conn, acpsdk.SessionId(id), taskID)
 }
 
+var _ ports.ChatBackgroundTaskOutputReader = (*conversation)(nil)
+
+// BackgroundTaskOutput reads one background task's recent output from the
+// provider. Tasks known only from tool events have no output source.
+func (c *conversation) BackgroundTaskOutput(ctx context.Context, taskID string) (ports.ChatBackgroundTaskOutput, error) {
+	c.mu.Lock()
+	id, closed := c.sessionID, c.closed
+	c.mu.Unlock()
+	if closed {
+		return ports.ChatBackgroundTaskOutput{}, errConversationClosed
+	}
+	if c.backgroundTaskOutput == nil || taskID == "" {
+		return ports.ChatBackgroundTaskOutput{}, ports.ErrBackgroundTaskOutputUnavailable
+	}
+	return c.backgroundTaskOutput(ctx, c.conn, acpsdk.SessionId(id), taskID)
+}
+
 func (c *conversation) observeBackgroundTool(tool *toolState) {
 	// A provider can report an explicit background transition in raw input or
 	// metadata. Do not identify jobs by titles, output text, or terminal existence.
@@ -113,7 +130,11 @@ func (c *conversation) observeBackgroundTool(tool *toolState) {
 	if description == "" {
 		description = tool.title
 	}
-	c.backgroundObserved.Update(ports.ChatBackgroundTask{ID: id, Kind: kind, Description: description, State: state}, now)
+	command := ""
+	if kind == "shell" {
+		command = stringField(input, "command", "cmd")
+	}
+	c.backgroundObserved.Update(ports.ChatBackgroundTask{ID: id, Kind: kind, Description: description, Command: command, State: state}, now)
 }
 
 func backgroundTaskID(value map[string]any) string {

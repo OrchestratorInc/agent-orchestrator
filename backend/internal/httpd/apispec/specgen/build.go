@@ -170,6 +170,7 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ChatFindOccurrence":                                   "ConversationFindOccurrence",
 	"ControllersBackgroundTaskResponse":                    "BackgroundTaskResponse",
 	"ControllersBackgroundTasksResponse":                   "BackgroundTasksResponse",
+	"ControllersBackgroundTaskOutputResponse":              "BackgroundTaskOutputResponse",
 	"ControllersListBackgroundTasksResponse":               "ListBackgroundTasksResponse",
 	"ControllersTelemetryIdentityResponse":                 "TelemetryIdentityResponse",
 	"ControllersAgentAccountIDParam":                       "AgentAccountIDParam",
@@ -1358,6 +1359,12 @@ func shellTerminalOperations() []operation {
 			summary:    "Stop one native background task without waking the session",
 			pathParams: []any{controllers.SessionIDParam{}, controllers.BackgroundTaskIDParam{}},
 			resps:      []respUnit{{http.StatusNoContent, nil}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusConflict, envelope.APIError{}}},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/sessions/{sessionId}/background-tasks/{taskId}/output", id: "getBackgroundTaskOutput", tag: "conversations",
+			summary:    "Read one background task's recent output without waking the session",
+			pathParams: []any{controllers.SessionIDParam{}, controllers.BackgroundTaskIDParam{}},
+			resps:      []respUnit{{http.StatusOK, controllers.BackgroundTaskOutputResponse{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusNotFound, envelope.APIError{}}},
 		},
 		{
 			method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/chat-view", id: "setSessionChatView", tag: "conversations",

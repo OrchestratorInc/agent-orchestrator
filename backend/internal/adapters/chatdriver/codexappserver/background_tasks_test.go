@@ -132,3 +132,39 @@ func TestBackgroundTasksPreservesObservedAgentsWhenShellInventoryUnsupported(t *
 		t.Fatalf("tasks=%+v err=%v", tasks, err)
 	}
 }
+
+func TestBackgroundTasksCodexKeepsTerminalOutputAfterTheTurn(t *testing.T) {
+	d, srv := newTestDriver(t)
+	srv.reply("thread/backgroundTerminals/list", `{"data":[{"processId":"93667","itemId":"exec-1","command":"for i in $(seq 1 40); do echo tick-$i; sleep 1; done"}],"nextCursor":null}`)
+	conv, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: "/tmp/ws"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conv.Close() }()
+	c := conv.(*conversation)
+	delta := func(thread, item, text string) {
+		params, _ := json.Marshal(map[string]string{"threadId": thread, "itemId": item, "turnId": "turn-1", "delta": text})
+		c.observeBackgroundNotification(notification{Method: "item/commandExecution/outputDelta", Params: params})
+	}
+	// Measured on codex-cli 0.158.0: deltas keep coming on the exec item after turn/completed.
+	delta(c.threadID, "exec-1", "tick-1\n")
+	delta(c.threadID, "exec-1", "tick-2\n")
+	delta("child-thread", "exec-1", "not ours\n")
+	delta(c.threadID, "exec-2", "a foreground command\n")
+
+	reader := conv.(ports.ChatBackgroundTaskOutputReader)
+	if _, err := reader.BackgroundTaskOutput(context.Background(), "93667"); !errors.Is(err, ports.ErrBackgroundTaskOutputUnavailable) {
+		t.Fatalf("read output before the terminal was listed: %v", err)
+	}
+	tasks, _ := conv.(ports.ChatBackgroundTaskInspector).BackgroundTasks(context.Background())
+	if len(tasks) != 1 || tasks[0].Command != "for i in $(seq 1 40); do echo tick-$i; sleep 1; done" || tasks[0].RunID != "exec-1" {
+		t.Fatalf("tasks=%+v", tasks)
+	}
+	got, err := reader.BackgroundTaskOutput(context.Background(), "93667")
+	if err != nil || got.Text != "tick-1\ntick-2" {
+		t.Fatalf("output=%+v err=%v", got, err)
+	}
+	if _, err := reader.BackgroundTaskOutput(context.Background(), "unknown"); !errors.Is(err, ports.ErrBackgroundTaskOutputUnavailable) {
+		t.Fatalf("unknown task err=%v", err)
+	}
+}
