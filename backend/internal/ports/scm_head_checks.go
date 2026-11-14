@@ -18,9 +18,8 @@ type SCMHeadChecks struct {
 	Started int
 	// Statuses counts the commit's commit statuses.
 	Statuses int
-	// Since is when checks could first have started: the earliest suite's
-	// creation, which is when the push reached the provider, or the commit's
-	// own date when it has no suites. Zero when unknown.
+	// Since is when this provider first observed the repository/head. Commit
+	// dates cannot establish when a push occurred. Zero when unknown.
 	Since time.Time
 }
 

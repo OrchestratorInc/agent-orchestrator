@@ -50,8 +50,10 @@ type Provider struct {
 	identityMu       sync.Mutex
 	identity         ports.SCMIdentity
 	identityResolved bool
-	// now and randomSuffix name comment attachments; tests pin them, and nil
-	// means the wall clock and crypto/rand.
+	headObservedMu   sync.Mutex
+	headObserved     map[string]time.Time
+	// now also times head observations. Nil uses the wall clock;
+	// randomSuffix defaults to crypto/rand for comment attachments.
 	now          func() time.Time
 	randomSuffix func() string
 }
@@ -705,7 +707,11 @@ func noRollupCIState(pr map[string]any) domain.CIState {
 
 func (p *Provider) confirmNoRollupCI(ctx context.Context, repo ports.SCMRepo, pr map[string]any) error {
 	sha := firstNonEmpty(str(pr["headRefOid"]), latestCommitOID(pr))
-	if statusRollup(pr) != nil || sha == "" {
+	if sha == "" {
+		return nil
+	}
+	p.firstObservedHead(repo, sha)
+	if statusRollup(pr) != nil {
 		return nil
 	}
 	resp, err := p.client.doREST(ctx, http.MethodGet, repoPath(repo.Owner, repo.Name, "actions", "runs"), url.Values{"head_sha": {sha}, "per_page": {"100"}}, nil)

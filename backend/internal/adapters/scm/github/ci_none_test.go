@@ -91,6 +91,8 @@ func TestNullRollupWorkflowEvidence(t *testing.T) {
 	}{
 		{"concurrency pending", `{"total_count":1,"workflow_runs":[{"id":43576558288,"head_sha":"` + sha + `","status":"pending","conclusion":null}]}`, time.Hour, domain.CIPending, false},
 		{"no workflows settled", `{"total_count":0,"workflow_runs":[]}`, time.Hour, domain.CINone, false},
+		{"old commit just pushed", `{"total_count":0,"workflow_runs":[]}`, time.Hour, domain.CIUnknown, false},
+		{"future commit settled", `{"total_count":0,"workflow_runs":[]}`, -time.Hour, domain.CINone, false},
 		{"just pushed", `{"total_count":0,"workflow_runs":[]}`, time.Second, domain.CIUnknown, false},
 		{"unread workflow page", `{"total_count":101,"workflow_runs":[]}`, time.Hour, domain.CIPending, false},
 		{"unreadable workflows", ``, time.Hour, domain.CIUnknown, true},
@@ -99,7 +101,7 @@ func TestNullRollupWorkflowEvidence(t *testing.T) {
 			f := newFakeGH(t)
 			pr := prWithRollup(nil, sha)
 			f.on(http.MethodPost, "/graphql", func(w http.ResponseWriter, _ *http.Request) {
-				_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"repository": map[string]any{"pullRequest": pr}, "pr0": map[string]any{"pullRequest": pr}}})
+				_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"repository": map[string]any{"pullRequest": pr}, "pr0": map[string]any{"pullRequest": pr}, "pr1": map[string]any{"pullRequest": prWithRollup(map[string]any{"state": "SUCCESS"}, sha)}}})
 			})
 			f.on(http.MethodGet, "/repos/o/r/pulls/1", func(w http.ResponseWriter, _ *http.Request) {
 				_, _ = w.Write([]byte(`{"state":"open","head":{"sha":"` + sha + `"}}`))
@@ -122,6 +124,14 @@ func TestNullRollupWorkflowEvidence(t *testing.T) {
 				_ = json.NewEncoder(w).Encode(map[string]any{"commit": map[string]any{"committer": map[string]any{"date": time.Now().Add(-tc.age)}}})
 			})
 			p := newProviderForTest(t, f)
+			if tc.want == domain.CINone {
+				now := time.Now()
+				p.now = func() time.Time { return now }
+				if _, err := p.HeadChecks(ctx(), ports.SCMRepo{Owner: "o", Name: "r"}, sha); err != nil {
+					t.Fatal(err)
+				}
+				now = now.Add(2 * time.Minute)
+			}
 			legacy, err := p.Observe(ctx(), "https://github.com/o/r/pull/1")
 			if tc.unreadable {
 				if err == nil || legacy.Fetched {
@@ -130,10 +140,14 @@ func TestNullRollupWorkflowEvidence(t *testing.T) {
 			} else if err != nil || legacy.CI != tc.want {
 				t.Fatalf("Observe CI=%s err=%v, want %s", legacy.CI, err, tc.want)
 			}
-			obs, err := p.FetchPullRequests(ctx(), []ports.SCMPRRef{{Repo: ports.SCMRepo{Owner: "o", Name: "r"}, Number: 1}})
+			refs := []ports.SCMPRRef{{Repo: ports.SCMRepo{Owner: "o", Name: "r"}, Number: 1}}
 			if tc.unreadable {
-				if err == nil {
-					t.Fatal("unreadable workflows must fail the batch")
+				refs = append(refs, ports.SCMPRRef{Repo: refs[0].Repo, Number: 2})
+			}
+			obs, err := p.FetchPullRequests(ctx(), refs)
+			if tc.unreadable {
+				if err != nil || len(obs) != 2 || obs[0].Fetched || obs[0].Error == nil || !obs[1].Fetched || obs[1].CI.Summary != string(domain.CIPassing) {
+					t.Fatalf("permission failure must leave only the first PR unresolved: obs=%+v err=%v", obs, err)
 				}
 				return
 			}
