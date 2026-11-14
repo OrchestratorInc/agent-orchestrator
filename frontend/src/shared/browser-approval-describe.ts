@@ -145,11 +145,30 @@ export function describeApprovalTarget(
 	if (tag === "input") facts.inputType = (target as HTMLInputElement).type;
 	if (tag === "a") facts.href = clean((target as HTMLAnchorElement).href, 500);
 	if (form) {
-		const submitter = form.querySelector("button:not([type]), button[type=submit], input[type=submit], input[type=image]");
-		facts.formAction = clean(form.action, 500);
-		facts.formMethod = (form.getAttribute("method") ?? "get").toLowerCase();
-		facts.formHasPayment = Array.from(form.querySelectorAll("input, select")).some(paymentField);
-		facts.formHasPassword = form.querySelector("input[type=password]") !== null;
+		// form.elements includes controls outside the form tag that join it
+		// with form="id".
+		const controls = Array.from(form.elements);
+		const submitControl = (el: Element) =>
+			(el.tagName.toLowerCase() === "button" && ((el as HTMLButtonElement).type || "submit").toLowerCase() === "submit") ||
+			(el.tagName.toLowerCase() === "input" && ["submit", "image"].includes((el as HTMLInputElement).type));
+		// The control that submits: the clicked one, else the form's default
+		// button (what Enter in a field uses). Its formaction / formmethod
+		// override the form's own.
+		const submitter = isSubmitControl(target) ? target : controls.find(submitControl) ?? null;
+		const override = (attribute: "formaction" | "formmethod") =>
+			submitter?.hasAttribute(attribute) ? submitter.getAttribute(attribute) : null;
+		const actionOverride = override("formaction");
+		const resolve = (raw: string) => {
+			try {
+				return new URL(raw, doc.baseURI).href;
+			} catch {
+				return raw;
+			}
+		};
+		facts.formAction = clean(actionOverride !== null ? resolve(actionOverride) : form.action, 500);
+		facts.formMethod = (override("formmethod") ?? form.getAttribute("method") ?? "get").toLowerCase();
+		facts.formHasPayment = controls.some((el) => ["input", "select"].includes(el.tagName.toLowerCase()) && paymentField(el));
+		facts.formHasPassword = controls.some((el) => el.tagName.toLowerCase() === "input" && (el as HTMLInputElement).type === "password");
 		facts.submitName = submitter ? accessibleName(submitter) : undefined;
 		// Enter in a single-line field submits its form (implicit submission);
 		// in a textarea it inserts a newline.

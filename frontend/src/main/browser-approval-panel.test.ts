@@ -67,4 +67,23 @@ describe("describePanelApprovalTarget", () => {
 		const out = await describePanelApprovalTarget({ action: "click", ref: "e4", snapshot: async () => ({ refs }), page });
 		expect(out.target).toMatchObject({ role: "button", name: "Place order" });
 	});
+
+	it("reports the matched ref for act so an approval can be bound to it", async () => {
+		const out = await describePanelApprovalTarget({
+			action: "act", instruction: "place order", snapshot: async () => ({ refs }), page: fakePage(checkoutFacts),
+		});
+		expect(out.resolvedRef).toBe("e4");
+	});
+
+	it("does not read DOM facts when several controls share the role and name", async () => {
+		const page = fakePage(checkoutFacts);
+		const out = await describePanelApprovalTarget({
+			action: "click",
+			ref: "e5",
+			snapshot: async () => ({ refs: { e4: { role: "button", name: "Continue" }, e5: { role: "button", name: "Continue" } } }),
+			page,
+		});
+		expect(page.evaluate).not.toHaveBeenCalled();
+		expect(out.target).toEqual({ role: "button", name: "Continue", pageUrl: "https://shop.example/checkout", pageTitle: "Checkout" });
+	});
 });

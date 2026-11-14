@@ -19,6 +19,7 @@ import (
 type scriptedRuntime struct {
 	mu          sync.Mutex
 	actions     []string
+	lastArgs    map[string]interface{}
 	describe    map[string]interface{}
 	describeErr error
 }
@@ -27,10 +28,13 @@ func (r *scriptedRuntime) Status() browserruntime.Status {
 	return browserruntime.Status{Connected: true}
 }
 
-func (r *scriptedRuntime) Execute(_ context.Context, _ domain.SessionID, action string, _ map[string]interface{}) (browserruntime.Result, error) {
+func (r *scriptedRuntime) Execute(_ context.Context, _ domain.SessionID, action string, args map[string]interface{}) (browserruntime.Result, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.actions = append(r.actions, action)
+	if action != describeAction {
+		r.lastArgs = args
+	}
 	if action == describeAction {
 		if r.describeErr != nil {
 			return browserruntime.Result{}, r.describeErr
@@ -268,5 +272,65 @@ func TestPreflightForBatchSteps(t *testing.T) {
 	var denied *ApprovalError
 	if !errors.As(err, &denied) || denied.Decision != approval.DecisionDeny {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestUndescribableTargetAsksInsteadOfPassing(t *testing.T) {
+	for name, rt := range map[string]*scriptedRuntime{
+		"describe fails":  {describeErr: errors.New("tab closed")},
+		"no target facts": {describe: map[string]interface{}{"target": map[string]interface{}{"pageUrl": "https://shop.example/"}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			svc, gate, token := approvalService(t, rt)
+			asked := answer(t, gate, approval.DecisionDeny)
+			_, _, err := svc.Execute(context.Background(), "s1", token, "click", map[string]interface{}{"ref": "e4"})
+			if apiErrorCode(err) != "BROWSER_ACTION_DENIED" || slices.Contains(rt.received(), "click") {
+				t.Fatalf("err=%v received=%v", err, rt.received())
+			}
+			if p := <-asked; p.Category != approval.CategoryScript || p.Reason == "" {
+				t.Fatalf("prompt = %+v", p)
+			}
+		})
+	}
+}
+
+func TestApprovalStorageFailureFailsClosed(t *testing.T) {
+	rt := &scriptedRuntime{describe: placeOrder()}
+	svc, _, token := approvalService(t, rt)
+	svc.approvals = nil
+	svc.ApprovalsUnavailable(errors.New("policy.json: unexpected end of JSON input"))
+	_, _, err := svc.Execute(context.Background(), "s1", token, "click", map[string]interface{}{"ref": "e4"})
+	if apiErrorCode(err) != "BROWSER_APPROVAL_UNAVAILABLE" || slices.Contains(rt.received(), "click") {
+		t.Fatalf("err=%v received=%v", err, rt.received())
+	}
+	if _, _, err := svc.Execute(context.Background(), "s1", token, "snapshot", nil); err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+}
+
+func TestChordedEnterIsGated(t *testing.T) {
+	for _, key := range []string{"Control+Enter", "Return", "Shift+Enter"} {
+		rt := &scriptedRuntime{describe: placeOrder()}
+		svc, gate, token := approvalService(t, rt)
+		answer(t, gate, approval.DecisionDeny)
+		if _, _, err := svc.Execute(context.Background(), "s1", token, "press", map[string]interface{}{"key": key}); apiErrorCode(err) != "BROWSER_ACTION_DENIED" {
+			t.Fatalf("%s: err = %v", key, err)
+		}
+	}
+}
+
+func TestApprovedActIsBoundToTheApprovedElement(t *testing.T) {
+	described := placeOrder()
+	described["resolvedRef"] = "e7"
+	rt := &scriptedRuntime{describe: described}
+	svc, gate, token := approvalService(t, rt)
+	answer(t, gate, approval.DecisionAllowOnce)
+	if _, _, err := svc.Execute(context.Background(), "s1", token, "act", map[string]interface{}{"instruction": "place order"}); err != nil {
+		t.Fatal(err)
+	}
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	if rt.lastArgs["expectRef"] != "e7" || rt.lastArgs["instruction"] != "place order" {
+		t.Fatalf("dispatched args = %v", rt.lastArgs)
 	}
 }

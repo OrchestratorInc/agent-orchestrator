@@ -193,7 +193,8 @@ func (g *Gate) auditPath() string  { return filepath.Join(g.dir, "audit.jsonl") 
 
 // Request asks the user and blocks until they decide, the timeout passes, or
 // ctx ends. Only a timeout or cancellation returns a non-allowed outcome
-// without the user; err is reserved for failures to ask at all.
+// without the user. err reports a failure to ask or to record the outcome in
+// the audit log; the outcome is then never allowed.
 func (g *Gate) Request(ctx context.Context, req Request) (Outcome, error) {
 	if req.Category == "" || req.Action == "" {
 		return Outcome{}, errors.New("approval request needs an action and category")
@@ -206,7 +207,10 @@ func (g *Gate) Request(ctx context.Context, req Request) (Outcome, error) {
 	g.mu.Lock()
 	if g.siteAllowedLocked(req.Site, req.Category) {
 		g.mu.Unlock()
-		g.audit(req, id, now, now, DecisionSiteAllowed)
+		if err := g.audit(req, id, now, now, DecisionSiteAllowed); err != nil {
+			// No record, no action: an allowed outcome needs its audit line.
+			return Outcome{ID: id, Decision: DecisionDeny}, err
+		}
 		return Outcome{ID: id, Decision: DecisionSiteAllowed}, nil
 	}
 	timeout := req.Timeout
@@ -233,7 +237,9 @@ func (g *Gate) Request(ctx context.Context, req Request) (Outcome, error) {
 	case <-ctx.Done():
 		decision = g.resolve(w, DecisionCancelled)
 	}
-	g.audit(req, id, now, g.now(), decision)
+	if err := g.audit(req, id, now, g.now(), decision); err != nil {
+		return Outcome{ID: id, Decision: DecisionDeny}, err
+	}
 	return Outcome{ID: id, Decision: decision}, nil
 }
 
@@ -345,8 +351,7 @@ func (g *Gate) SetDefaultMode(mode Mode) error {
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	g.policy.Default = mode
-	return g.savePolicyLocked()
+	return g.updatePolicyLocked(func(p *policyFile) { p.Default = mode })
 }
 
 // SetSessionMode changes and persists a session's mode.
@@ -356,11 +361,7 @@ func (g *Gate) SetSessionMode(sessionID string, mode Mode) error {
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if g.policy.Sessions == nil {
-		g.policy.Sessions = map[string]Mode{}
-	}
-	g.policy.Sessions[sessionID] = mode
-	return g.savePolicyLocked()
+	return g.updatePolicyLocked(func(p *policyFile) { p.Sessions[sessionID] = mode })
 }
 
 // SiteRules lists "always allow on this site" choices.
@@ -374,14 +375,15 @@ func (g *Gate) SiteRules() []SiteRule {
 func (g *Gate) RemoveSiteRule(site, category string) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	kept := g.policy.Sites[:0]
-	for _, rule := range g.policy.Sites {
-		if rule.Site != site || rule.Category != category {
-			kept = append(kept, rule)
+	return g.updatePolicyLocked(func(p *policyFile) {
+		kept := p.Sites[:0]
+		for _, rule := range p.Sites {
+			if rule.Site != site || rule.Category != category {
+				kept = append(kept, rule)
+			}
 		}
-	}
-	g.policy.Sites = kept
-	return g.savePolicyLocked()
+		p.Sites = kept
+	})
 }
 
 func (g *Gate) siteAllowedLocked(site, category string) bool {
@@ -400,12 +402,32 @@ func (g *Gate) addSiteRuleLocked(site, category string) error {
 	if site == "" || g.siteAllowedLocked(site, category) {
 		return nil
 	}
-	g.policy.Sites = append(g.policy.Sites, SiteRule{Site: site, Category: category, CreatedAt: g.now().UTC()})
-	return g.savePolicyLocked()
+	rule := SiteRule{Site: site, Category: category, CreatedAt: g.now().UTC()}
+	return g.updatePolicyLocked(func(p *policyFile) { p.Sites = append(p.Sites, rule) })
 }
 
-func (g *Gate) savePolicyLocked() error {
-	raw, err := json.MarshalIndent(g.policy, "", "  ")
+// updatePolicyLocked applies change to a copy of the policy, saves it, and
+// only then makes it current: a failed save leaves the policy unchanged, so
+// an unsaved "always allow" can never let a later action through.
+func (g *Gate) updatePolicyLocked(change func(*policyFile)) error {
+	next := policyFile{
+		Default:  g.policy.Default,
+		Sessions: make(map[string]Mode, len(g.policy.Sessions)+1),
+		Sites:    append([]SiteRule(nil), g.policy.Sites...),
+	}
+	for id, mode := range g.policy.Sessions {
+		next.Sessions[id] = mode
+	}
+	change(&next)
+	if err := g.savePolicy(next); err != nil {
+		return err
+	}
+	g.policy = next
+	return nil
+}
+
+func (g *Gate) savePolicy(policy policyFile) error {
+	raw, err := json.MarshalIndent(policy, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -424,23 +446,31 @@ func (g *Gate) savePolicyLocked() error {
 	return os.Rename(tmp.Name(), g.policyPath())
 }
 
-func (g *Gate) audit(req Request, id string, at, decidedAt time.Time, decision Decision) {
+// audit appends one record. Its error reaches Request, which then refuses
+// the action rather than run it unrecorded.
+func (g *Gate) audit(req Request, id string, at, decidedAt time.Time, decision Decision) error {
 	entry := AuditEntry{
 		ID: id, Time: at.UTC(), Kind: req.Kind, SessionID: req.SessionID, Site: req.Site, URL: req.URL,
 		Action: req.Action, Category: req.Category, Reason: req.Reason, Decision: decision, DecidedAt: decidedAt.UTC(),
 	}
 	raw, err := json.Marshal(entry)
 	if err != nil {
-		return
+		return fmt.Errorf("approval audit: %w", err)
 	}
 	g.auditMu.Lock()
 	defer g.auditMu.Unlock()
 	f, err := os.OpenFile(g.auditPath(), os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
 	if err != nil {
-		return
+		return fmt.Errorf("approval audit: %w", err)
 	}
-	defer func() { _ = f.Close() }()
-	_, _ = f.Write(append(raw, '\n'))
+	if _, err := f.Write(append(raw, '\n')); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("approval audit: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("approval audit: %w", err)
+	}
+	return nil
 }
 
 // Audit returns up to limit entries, newest first.

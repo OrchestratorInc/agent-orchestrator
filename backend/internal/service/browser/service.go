@@ -47,6 +47,9 @@ type Service struct {
 
 	approvals       approvalGate
 	approvalTimeout time.Duration
+	// approvalsErr is why the gate could not load. While set, actions that
+	// may need approval are refused rather than run unasked.
+	approvalsErr error
 }
 
 // New creates a browser service.
@@ -121,11 +124,19 @@ func (s *Service) Execute(
 	}
 	rt := s.runtimeFor(target)
 	// Consequential actions (pay, send, post, delete...) wait for the user.
-	if err := s.preflight(ctx, sessionID, rt, action, args); err != nil {
+	args, err := s.preflight(ctx, sessionID, rt, action, args)
+	if err != nil {
 		return browserruntime.Result{}, action, err
 	}
 	result, err := rt.Execute(ctx, sessionID, action, args)
 	return result, action, err
+}
+
+// ApprovalsUnavailable records that the approval gate could not load. Until a
+// gate is installed, consequential actions fail with
+// BROWSER_APPROVAL_UNAVAILABLE instead of running unasked.
+func (s *Service) ApprovalsUnavailable(err error) {
+	s.approvalsErr = err
 }
 
 // target reads or changes which browser the session's commands go to.

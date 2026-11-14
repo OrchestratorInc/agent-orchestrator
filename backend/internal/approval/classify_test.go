@@ -149,3 +149,48 @@ func TestOrdinaryPagesFalsePositiveRate(t *testing.T) {
 		t.Fatalf("false positives on ordinary pages: %d/%d", flagged, total)
 	}
 }
+
+func TestClassifyEnterFallsBackToMessageFieldWhenSubmitIsUnrecognized(t *testing.T) {
+	got := Classify(Target{Action: "press", Key: "Enter", Role: "textbox", Name: "Message", IsSubmit: true, FormMethod: "post", PageURL: "https://chat.example/"}, ModeRisky)
+	if !got.NeedsApproval || got.Category != CategoryMessage {
+		t.Fatalf("verdict = %+v", got)
+	}
+}
+
+func TestClassifyEnterMatchesClickOnAccountForm(t *testing.T) {
+	form := Target{Role: "button", Name: "Save changes", IsSubmit: true, FormMethod: "post", FormHasPassword: true, SubmitName: "Save changes", PageURL: "https://app.example/profile"}
+	click := form
+	click.Action = "click"
+	enter := form
+	enter.Action, enter.Key, enter.Role, enter.Name = "press", "Enter", "textbox", "Display name"
+	c, e := Classify(click, ModeRisky), Classify(enter, ModeRisky)
+	if !c.NeedsApproval || !e.NeedsApproval || c.Category != CategoryAccount || e.Category != CategoryAccount {
+		t.Fatalf("click = %+v, enter = %+v", c, e)
+	}
+}
+
+func TestClassifyUnicodeSpacesMatchLikeASCII(t *testing.T) {
+	for _, name := range []string{"Pay 42.10", "Place order", "Delete　repository"} {
+		if got := Classify(Target{Action: "click", Role: "button", Name: name}, ModeRisky); !got.NeedsApproval {
+			t.Errorf("%q not flagged", name)
+		}
+	}
+	// Non-Latin labels keep their letters.
+	if normalize("Оплатить заказ") != "оплатить заказ" {
+		t.Fatalf("normalize = %q", normalize("Оплатить заказ"))
+	}
+}
+
+func TestIsEnterKey(t *testing.T) {
+	for key, want := range map[string]bool{
+		"Enter": true, "enter": true, "Return": true, "Control+Enter": true, "Shift+Enter": true, "Enter+": true,
+		" Meta + Return ": true, "Tab": false, "Enter+a": false, "": false,
+	} {
+		if IsEnterKey(key) != want {
+			t.Errorf("IsEnterKey(%q) != %v", key, want)
+		}
+	}
+	if got := Classify(Target{Action: "press", Key: "Control+Enter", Role: "button", Name: "Send"}, ModeRisky); !got.NeedsApproval {
+		t.Fatal("chorded Enter not gated")
+	}
+}
