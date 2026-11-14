@@ -793,6 +793,17 @@ describe("BrowserPanel", () => {
 		writeText.mockRestore();
 	});
 
+	it("never hands an agent tab's host-local page to the person's browser", async () => {
+		const url = "http://localhost:5173/";
+		hookState.navState = { ...hookState.navState, url };
+		const agentTab = { id: "a1", url, title: "", active: true, remote: { tabId: "R1" } };
+		hookState.tabs = [agentTab];
+		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={{ ...session, hostId: "h_workbox" }} />);
+
+		await openBrowserControls();
+		expect(screen.getByRole("menuitem", { name: /^Open in (your browser|Chrome)$/ })).toHaveAttribute("data-disabled");
+	});
+
 	it("opens an agent tab's public page in the system browser", async () => {
 		const url = "https://github.com/aoagents/ao";
 		hookState.navState = { ...hookState.navState, url };

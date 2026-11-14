@@ -1807,7 +1807,7 @@ export function createBrowserViewHost(
       return;
     }
     challenge.timer = setTimeout(() => {
-      if (entry.challenge !== challenge || session.tabs.get(entry.tabId) !== entry) return;
+      if (entry.challenge !== challenge || entries.get(session.viewId) !== session || session.tabs.get(entry.tabId) !== entry) return;
       setSiteBlock(session, entry, block);
     }, SITE_CHALLENGE_GRACE_MS);
     challenge.timer.unref?.();
@@ -3117,6 +3117,8 @@ export function createBrowserViewHost(
   const destroy = (viewId: string): void => {
     const session = entries.get(viewId);
     if (!session) return;
+    // Every teardown path below, including a window that already closed.
+    for (const entry of session.tabs.values()) clearSiteChallenge(entry);
 		const live = session.live;
 		live?.sink.error("BROWSER_SESSION_CLOSED", "The desktop browser session was closed");
 		session.live = undefined;
@@ -3859,7 +3861,7 @@ export function createBrowserViewHost(
     const session = isRendererOwned(event, viewId) ? entries.get(viewId) : undefined;
     const entry = session?.tabs.size ? activeEntry(session) : undefined;
     const url = entry ? readNavState(entry).url : "";
-    if (!options.openInUserBrowser || !canOpenInUserBrowser(url)) {
+    if (!options.openInUserBrowser || !canOpenInUserBrowser(url, { agentTab: entry?.agentTab !== undefined })) {
       throw browserError("BROWSER_URL_FORBIDDEN", "This page cannot be opened in another browser");
     }
     return options.openInUserBrowser(url);

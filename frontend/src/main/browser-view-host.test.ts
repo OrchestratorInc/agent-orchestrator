@@ -1223,7 +1223,12 @@ function setupTabHost(
 	loadURLHook?: (viewIndex: number, url: string) => Promise<void>,
 	browserHistoryStore?: BrowserHistoryStore,
 	clearBrowserProfileData = vi.fn(async (_partition: string) => undefined),
-	overrides?: { entryReadyTimeoutMs?: number; openInUserBrowser?: (url: string) => Promise<{ name: string; chrome: boolean }> },
+	overrides?: {
+		entryReadyTimeoutMs?: number;
+		openInUserBrowser?: (url: string) => Promise<{ name: string; chrome: boolean }>;
+		/** Flip `destroyed` to model the BaseWindow closing under the host. */
+		window?: { destroyed: boolean };
+	},
 	prepareBrowserPartition?: (partition: string) => void,
 ) {
 	const constructorOptions: Array<{
@@ -1429,6 +1434,7 @@ function setupTabHost(
 		mainWindow: {
 			contentView: { addChildView, removeChildView: () => undefined },
 			getContentBounds: () => ({ x: 0, y: 0, width: 800, height: 600 }),
+			...(overrides?.window ? { isDestroyed: () => overrides.window!.destroyed } : {}),
 			webContents: {
 				id: 1,
 				focus: () => undefined,
@@ -6794,8 +6800,8 @@ describe("hidden browser background throttling", () => {
 
 describe("sites that refuse the Browser panel", () => {
 	type Completed = (details: { webContentsId: number; resourceType: string; url: string; statusCode: number; method: string; responseHeaders?: Record<string, string[]> }) => void;
-	async function setup(openInUserBrowser = vi.fn(async () => ({ name: "Chrome", chrome: true }))) {
-		const lab = setupTabHost(undefined, false, undefined, undefined, undefined, { openInUserBrowser });
+	async function setup(openInUserBrowser = vi.fn(async () => ({ name: "Chrome", chrome: true })), window = { destroyed: false }) {
+		const lab = setupTabHost(undefined, false, undefined, undefined, undefined, { openInUserBrowser, window });
 		const { viewId } = (await lab.invoke("browser:ensure", "sess-1")) as BrowserNavState;
 		const view = lab.views[0]!;
 		const onCompleted = view.webContents.session.webRequest.onCompleted.mock.calls[0]![1] as Completed;
@@ -6806,7 +6812,7 @@ describe("sites that refuse the Browser panel", () => {
 			const states = lab.sent.filter((entry) => entry.channel === "browser:navState").map((entry) => entry.payload as BrowserNavState);
 			return states.at(-1)?.siteBlock;
 		};
-		return { ...lab, viewId, view, respond, lastBlock, openInUserBrowser };
+		return { ...lab, viewId, view, respond, lastBlock, openInUserBrowser, window };
 	}
 
 	afterEach(() => vi.useRealTimers());
@@ -6846,6 +6852,19 @@ describe("sites that refuse the Browser panel", () => {
 		// Agents learn about it through the errors command, as a site signal.
 		const errors = (await host.execute("sess-1", "errors", {})) as { messages: Array<{ source?: string; message: string }> };
 		expect(errors.messages.some((message) => message.source === "browser-site" && message.message.includes("shop.test"))).toBe(true);
+	});
+
+	it("never publishes a pending check after the window closed under the session", async () => {
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"], shouldAdvanceTime: true });
+		const { invoke, viewId, respond, sent, emit, window } = await setup();
+		await invoke("browser:navigate", { viewId, url: "https://dash.cloudflare.com/login" });
+		respond("https://dash.cloudflare.com/login", 403, { "cf-mitigated": ["challenge"] });
+		// The BaseWindow closing takes destroy()'s window-gone branch.
+		window.destroyed = true;
+		emit("browser:destroy", viewId);
+		const before = sent.length;
+		await vi.advanceTimersByTimeAsync(11_000);
+		expect(sent.slice(before).filter((entry) => entry.channel === "browser:navState")).toEqual([]);
 	});
 
 	it("clears the offer once the tab loads a page that works", async () => {

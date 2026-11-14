@@ -49,6 +49,19 @@ describe("BrowserSiteBlockRow", () => {
 		expect(screen.getByRole("button", { name: "Continue in Chrome" })).toBeEnabled();
 	});
 
+	it("never credits a slow open to the site shown after it", async () => {
+		vi.spyOn(window.ao!.browser, "userBrowser").mockResolvedValue({ name: "Chrome", chrome: true });
+		let finish!: (value: { name: string; chrome: boolean }) => void;
+		vi.spyOn(window.ao!.browser, "openInUserBrowser").mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+		const { rerender } = render(<BrowserSiteBlockRow siteBlock={blocked} viewId="v1" />);
+		fireEvent.click(await screen.findByRole("button", { name: "Continue in Chrome" }));
+		rerender(<BrowserSiteBlockRow siteBlock={{ reason: "blocked", host: "other.test" }} viewId="v1" />);
+		await act(async () => finish({ name: "Chrome", chrome: true }));
+		expect(screen.getByText("other.test is blocking this browser.")).toBeInTheDocument();
+		expect(screen.queryByText("Opened in Chrome")).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Continue in Chrome" })).toBeEnabled();
+	});
+
 	it("stays dismissed for that site, and still offers for another", async () => {
 		const { rerender } = render(<BrowserSiteBlockRow siteBlock={blocked} viewId="v1" />);
 		fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));

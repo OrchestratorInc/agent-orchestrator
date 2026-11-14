@@ -466,7 +466,6 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 		annotationAction = async () => undefined,
 	} = browserView;
 	const userBrowser = useUserBrowser();
-	const canOpenElsewhere = Boolean(viewId) && canOpenInUserBrowser(navState.url) && !browserUnavailable;
 	const [urlInput, setUrlInput] = useState(navState.url);
 	// A popped-out panel is portaled outside #root; the popout flag covers that
 	// case, so this one marks only a live page docked inside the shell.
@@ -487,6 +486,7 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 	// computer's own. Before the viewer's first report the tab shows the viewer
 	// itself, an ao-preview-….localhost address, so that is held back too.
 	const agentPageOnHost = onAgentTab && isHostLocalWebLink(navState.url);
+	const canOpenElsewhere = Boolean(viewId) && canOpenInUserBrowser(navState.url, { agentTab: onAgentTab }) && !browserUnavailable;
 	const canRetryAnnotation = status === "error" && queuedCount > 0;
 	const [devicePreset, setDevicePreset] = useState<string | null>(null);
 	const [customDeviceWidth, setCustomDeviceWidth] = useState("390");

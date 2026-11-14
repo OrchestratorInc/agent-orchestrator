@@ -52,4 +52,12 @@ describe("canOpenInUserBrowser", () => {
 		expect(canOpenInUserBrowser("javascript:alert(1)")).toBe(false);
 		expect(canOpenInUserBrowser("")).toBe(false);
 	});
+
+	it("keeps an agent tab's loopback pages on the agent's host", () => {
+		for (const url of ["http://localhost:5173/", "http://app.localhost/", "http://127.0.0.1:8080/", "http://[::1]:3000/", "http://0.0.0.0:4000/"]) {
+			expect(canOpenInUserBrowser(url, { agentTab: true })).toBe(false);
+			expect(canOpenInUserBrowser(url)).toBe(true);
+		}
+		expect(canOpenInUserBrowser("https://github.com/aoagents/ao", { agentTab: true })).toBe(true);
+	});
 });

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import { createUserBrowser, type UserBrowserDeps } from "./user-browser";
+import { createUserBrowser, launchDetached, type UserBrowserDeps } from "./user-browser";
 
-function deps(overrides: Partial<UserBrowserDeps> & { present?: string[] }): UserBrowserDeps & { run: ReturnType<typeof vi.fn>; openExternal: ReturnType<typeof vi.fn> } {
+function deps(overrides: Partial<UserBrowserDeps> & { present?: string[] }): UserBrowserDeps & { run: ReturnType<typeof vi.fn>; launch: ReturnType<typeof vi.fn>; openExternal: ReturnType<typeof vi.fn> } {
 	const present = new Set(overrides.present ?? []);
 	return {
 		platform: "darwin",
@@ -10,6 +10,7 @@ function deps(overrides: Partial<UserBrowserDeps> & { present?: string[] }): Use
 		exists: async (file: string) => present.has(file),
 		...overrides,
 		run: (overrides.run as ReturnType<typeof vi.fn>) ?? vi.fn(async () => ""),
+		launch: (overrides.launch as ReturnType<typeof vi.fn>) ?? vi.fn(async () => undefined),
 		openExternal: (overrides.openExternal as ReturnType<typeof vi.fn>) ?? vi.fn(async () => undefined),
 	} as never;
 }
@@ -22,7 +23,7 @@ describe("user browser", () => {
 		const browser = createUserBrowser(d);
 		expect(await browser.describe()).toEqual({ name: "Chrome", chrome: true });
 		expect(await browser.open(url)).toEqual({ name: "Chrome", chrome: true });
-		expect(d.run).toHaveBeenCalledWith("/usr/bin/open", ["-b", "com.google.Chrome", url]);
+		expect(d.launch).toHaveBeenCalledWith("/usr/bin/open", ["-b", "com.google.Chrome", url]);
 		expect(d.openExternal).not.toHaveBeenCalled();
 	});
 
@@ -40,7 +41,7 @@ describe("user browser", () => {
 	});
 
 	it("falls back to the default browser when Chrome fails to start", async () => {
-		const d = deps({ present: ["/Applications/Google Chrome.app"], run: vi.fn(async () => { throw new Error("gone"); }) });
+		const d = deps({ present: ["/Applications/Google Chrome.app"], launch: vi.fn(async () => { throw new Error("gone"); }) });
 		expect(await createUserBrowser(d).open(url)).toEqual({ name: "Safari", chrome: false });
 		expect(d.openExternal).toHaveBeenCalledWith(url);
 	});
@@ -53,12 +54,32 @@ describe("user browser", () => {
 		const d = deps({ platform: "win32", present: [exe], run });
 		const browser = createUserBrowser(d);
 		await browser.open(url);
-		expect(run).toHaveBeenCalledWith(exe, [url]);
+		// The registry is a probe; Chrome itself is launched, not run to exit.
+		expect(run).toHaveBeenCalledWith("reg", expect.any(Array));
+		expect(d.launch).toHaveBeenCalledWith(exe, [url]);
+		expect(run).not.toHaveBeenCalledWith(exe, expect.anything());
 	});
 
 	it("finds google-chrome on Linux", async () => {
 		const d = deps({ platform: "linux", present: ["/usr/bin/google-chrome-stable"] });
 		await createUserBrowser(d).open(url);
-		expect(d.run).toHaveBeenCalledWith("/usr/bin/google-chrome-stable", [url]);
+		expect(d.launch).toHaveBeenCalledWith("/usr/bin/google-chrome-stable", [url]);
+	});
+});
+
+describe("launchDetached", () => {
+	it("returns once the browser starts and never waits for or ends it", async () => {
+		const started = Date.now();
+		const pid = await launchDetached(process.execPath, ["-e", "setTimeout(() => {}, 30000)"]);
+		expect(Date.now() - started).toBeLessThan(3_000);
+		expect(pid).toBeGreaterThan(0);
+		await new Promise((resolve) => setTimeout(resolve, 6_000));
+		// Still running past the probe timeout that used to end it.
+		expect(() => process.kill(pid!, 0)).not.toThrow();
+		process.kill(pid!);
+	}, 15_000);
+
+	it("rejects when the browser cannot start", async () => {
+		await expect(launchDetached("/nonexistent/chrome", ["https://example.com"])).rejects.toThrow();
 	});
 });

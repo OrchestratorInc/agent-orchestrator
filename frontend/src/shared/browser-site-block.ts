@@ -64,14 +64,24 @@ export function classifySiteResponse(input: { url: string; statusCode: number; h
 	return { kind: "page", host };
 }
 
-/** Pages that can be handed to another browser: ordinary web pages only. */
-export function canOpenInUserBrowser(rawUrl: string): boolean {
+/**
+ * Pages that can be handed to another browser: ordinary web pages only. An
+ * agent tab shows a page on the agent's host, so a loopback address there
+ * names that host, not this computer.
+ */
+export function canOpenInUserBrowser(rawUrl: string, options: { agentTab?: boolean } = {}): boolean {
 	try {
 		const url = new URL(rawUrl);
 		if (url.protocol !== "http:" && url.protocol !== "https:") return false;
 		// AO's own preview origins only work inside AO.
-		return !/^ao-preview-[0-9a-f]{32}\.localhost$/.test(url.hostname);
+		if (/^ao-preview-[0-9a-f]{32}\.localhost$/.test(url.hostname)) return false;
+		return !(options.agentTab && isLoopbackHost(url.hostname));
 	} catch {
 		return false;
 	}
+}
+
+function isLoopbackHost(hostname: string): boolean {
+	const host = hostname.toLowerCase().replace(/^\[(.*)\]$/, "$1").replace(/\.$/, "");
+	return host === "localhost" || host.endsWith(".localhost") || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host) || host === "::1" || host === "0.0.0.0" || host === "::";
 }

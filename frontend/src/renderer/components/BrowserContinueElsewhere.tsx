@@ -46,22 +46,33 @@ export function continueLabel(t: TFunction, browser: UserBrowserInfo | null, ver
 
 type OpenState = { status: "idle" | "opening" } | { status: "opened"; name: string } | { status: "failed" };
 
-/** Open the view's page in the person's browser, tracking the outcome. */
+/**
+ * Open the view's page in the person's browser, tracking the outcome. A reset
+ * (another site or view) retires any request still in flight: its result
+ * belongs to the page it was asked for, not the one shown now.
+ */
 export function useOpenInUserBrowser(viewId: string): { state: OpenState; open: () => Promise<boolean>; reset: () => void } {
 	const [state, setState] = useState<OpenState>({ status: "idle" });
+	const generation = useRef(0);
 	const open = useCallback(async () => {
 		if (!viewId) return false;
+		const request = ++generation.current;
 		setState({ status: "opening" });
 		try {
 			const used = await window.ao?.browser.openInUserBrowser?.(viewId);
+			if (request !== generation.current) return false;
 			setState({ status: "opened", name: used?.name ?? "" });
 			return true;
 		} catch {
+			if (request !== generation.current) return false;
 			setState({ status: "failed" });
 			return false;
 		}
 	}, [viewId]);
-	const reset = useCallback(() => setState({ status: "idle" }), []);
+	const reset = useCallback(() => {
+		generation.current += 1;
+		setState({ status: "idle" });
+	}, []);
 	return { state, open, reset };
 }
 
@@ -81,10 +92,15 @@ export function BrowserSiteBlockRow({ viewId, siteBlock }: { viewId: string; sit
 	const dismissed = host ? dismissedHosts.has(host) : false;
 	const doneTimer = useRef<number | null>(null);
 
-	// A different site (or none) starts fresh.
+	// A different site, view (or none) starts fresh, and a pending fold-away
+	// for the previous site is dropped.
 	useEffect(() => {
 		reset();
-	}, [host, reset]);
+		if (doneTimer.current !== null) {
+			window.clearTimeout(doneTimer.current);
+			doneTimer.current = null;
+		}
+	}, [host, viewId, reset]);
 
 	useEffect(() => () => {
 		if (doneTimer.current !== null) window.clearTimeout(doneTimer.current);
@@ -96,13 +112,16 @@ export function BrowserSiteBlockRow({ viewId, siteBlock }: { viewId: string; sit
 	}, [host]);
 
 	const continueElsewhere = useCallback(async () => {
+		const openedHost = host;
+		// False also when the site changed while opening: that result is stale.
 		if (!(await open())) return;
 		// Leave the confirmation up long enough to read, then fold away.
 		doneTimer.current = window.setTimeout(() => {
 			doneTimer.current = null;
-			dismiss();
+			if (openedHost) dismissedHosts.add(openedHost);
+			rerender((count) => count + 1);
 		}, OPENED_VISIBLE_MS);
-	}, [dismiss, open]);
+	}, [host, open]);
 
 	const visible = Boolean(siteBlock) && !dismissed;
 	const message = !siteBlock

@@ -3,7 +3,7 @@
 // agents work), otherwise their default browser. URLs are passed as process
 // arguments, never through a shell, so no URL can run a command.
 
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { access } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -21,7 +21,10 @@ export type UserBrowserDeps = {
 	openExternal: (url: string) => Promise<void>;
 	/** Electron's app.getApplicationNameForProtocol. */
 	defaultBrowserName: () => string;
+	/** A short, bounded probe (the Windows registry). */
 	run?: (file: string, args: string[]) => Promise<string>;
+	/** Start the browser and resolve once its process exists; never wait for it to exit. */
+	launch?: (file: string, args: string[]) => Promise<unknown>;
 	exists?: (file: string) => Promise<boolean>;
 	home?: string;
 };
@@ -29,6 +32,18 @@ export type UserBrowserDeps = {
 const defaultRun = (file: string, args: string[]) =>
 	new Promise<string>((resolve, reject) => {
 		execFile(file, args, { timeout: 5_000, windowsHide: true }, (error, stdout) => (error ? reject(error) : resolve(String(stdout))));
+	});
+
+// A browser started here may be the one the person keeps using for hours:
+// detach it, and never time it out or wait for it.
+export const launchDetached = (file: string, args: string[]) =>
+	new Promise<number | undefined>((resolve, reject) => {
+		const child = spawn(file, args, { detached: true, stdio: "ignore", windowsHide: false });
+		child.once("error", reject);
+		child.once("spawn", () => {
+			child.unref();
+			resolve(child.pid);
+		});
 	});
 
 const defaultExists = (file: string) =>
@@ -72,7 +87,7 @@ export function createUserBrowser(deps: UserBrowserDeps): {
 	describe(): Promise<UserBrowser>;
 	open(url: string): Promise<UserBrowser>;
 } {
-	const run = deps.run ?? defaultRun;
+	const launch = deps.launch ?? launchDetached;
 	let chrome: Promise<{ file: string; args: string[] } | undefined> | undefined;
 	const locate = () => (chrome ??= findChrome(deps).catch(() => undefined));
 	const fallback = (): UserBrowser => {
@@ -87,7 +102,7 @@ export function createUserBrowser(deps: UserBrowserDeps): {
 			const found = await locate();
 			if (found) {
 				try {
-					await run(found.file, [...found.args, url]);
+					await launch(found.file, [...found.args, url]);
 					return { name: "Chrome", chrome: true };
 				} catch {
 					// Chrome moved or failed to start: the default browser still works.
