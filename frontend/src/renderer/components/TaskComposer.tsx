@@ -894,8 +894,17 @@ export function useTaskLaunch({ projectId, hostId }: {
 	const effortOptions = isCloudProject && !selectedModelOrMode
 		? []
 		: effortModel?.efforts?.filter((option) => option && option.toLowerCase() !== "default") ?? [];
+	// Freebuff's native catalog enumerates each model's entire effort ladder;
+	// once it loads, an omitted ladder means the model has no effort setting.
+	const freebuffEffortsKnown = selectedAgent === "freebuff" && !isCloudProject && localCatalog !== undefined;
+	// A refreshed Freebuff catalog can remove a rung without changing the
+	// selected model. Use only levels the model advertises rather than
+	// submitting a stale saved override.
+	const selectedEffort = effort && effort !== "default" && (!freebuffEffortsKnown || effortOptions.includes(effort)) ? effort : "";
 	const cloudDefaultEffort = isCloudProject && effortOptions.includes("medium") ? "medium" : "";
-	const inheritedEffort = selectedAgent === configuredProjectAgent ? defaultWorkerEffort : "";
+	const inheritedEffortForAgent = selectedAgent === configuredProjectAgent ? defaultWorkerEffort : "";
+	const incompatibleInheritedEffort = Boolean(inheritedEffortForAgent && freebuffEffortsKnown && !effortOptions.includes(inheritedEffortForAgent));
+	const inheritedEffort = incompatibleInheritedEffort ? "" : inheritedEffortForAgent;
 	const implicitEffort = inheritedEffort || effortModel?.defaultEffort || "";
 	const selectedAgentLabel = availableAgents?.find((item) => item.id === selectedAgent)?.label || selectedAgent;
 	useResetStaleProjectTuning({
@@ -929,11 +938,14 @@ export function useTaskLaunch({ projectId, hostId }: {
 	const launchApproval = usesNativePermissions ? "default" : approvalMode;
 	// With no provider default for the reported levels AO picks one, shows it as
 	// selected, and sends it, so the picker matches what the task runs with.
-	const aoDefaultEffort = requiresTuiFallback ? undefined : fallbackEffort(effortOptions, implicitEffort);
+	// Freebuff has no Chat mode, and its Terminal UI takes effort, so its
+	// Chat-to-TUI fallback keeps the picker.
+	const hidesFallbackEffort = requiresTuiFallback && selectedAgent !== "freebuff";
+	const aoDefaultEffort = hidesFallbackEffort ? undefined : fallbackEffort(effortOptions, implicitEffort);
 	const effectiveEffort = isCloudProject
 		? effort && effort !== "default" && (cloudEffortsUnknown || effortOptions.includes(effort)) ? effort : cloudDefaultEffort
-		: effort && effort !== "default"
-		? effort
+		: selectedEffort
+		? selectedEffort
 		: aoDefaultEffort ?? (isStandalone && effortOptions.includes(implicitEffort) ? implicitEffort : "");
 	// Cursor's effort and thinking are part of its model id; its effort button swaps the id.
 	const cursorFamilies = listsModelVariants(selectedAgent)
@@ -952,12 +964,15 @@ export function useTaskLaunch({ projectId, hostId }: {
 		// concrete effort shown by the picker even when the UI is retrying in TUI
 		// mode, otherwise the native harness may use a different default.
 		? (effectiveEffort || undefined)
+		// An empty explicit override clears an incompatible project/role value.
+		: incompatibleInheritedEffort
+			? effectiveEffort
 		: effortTouched || effortFromPreference
 			? !effectiveEffort || effectiveEffort === implicitEffort ? undefined : effectiveEffort
 			: aoDefaultEffort;
-	const effortAvailability: EffortAvailability = requiresTuiFallback
+	const effortAvailability: EffortAvailability = hidesFallbackEffort
 		? "launch-unavailable"
-		: !effortModel || effortModel.efforts === undefined
+		: !freebuffEffortsKnown && (!effortModel || effortModel.efforts === undefined)
 			? "unknown"
 			: effortOptions.length > 0
 				? "supported"
@@ -1159,7 +1174,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 				} : {
 					agent: selectedAgent ? (selectedAgent as CreateTaskInput["agent"]) : undefined,
 					model: requestedModel,
-					// Only explicit Codex picks set this; agent changes reset it, and TUI retries preserve it.
+					// Send the selected model effort consistently; preserve it on retries.
 					effort: requestedEffort,
 					// The local daemon applies the default session mode itself; the control
 					// plane has none, so a cloud task carries it.
@@ -1327,8 +1342,8 @@ export function useTaskLaunch({ projectId, hostId }: {
 	};
 
 	// A cloud task shows the effort it sends.
-	const shownEffort = isCloudProject ? effectiveEffort : effort;
-	const showEffort = cursorChoice ? cursorChoice.family.efforts.length > 1 : !requiresTuiFallback && (effortOptions.length > 0 || Boolean(shownEffort && shownEffort !== "default"));
+	const shownEffort = isCloudProject ? effectiveEffort : selectedEffort;
+	const showEffort = cursorChoice ? cursorChoice.family.efforts.length > 1 : !hidesFallbackEffort && (effortOptions.length > 0 || Boolean(shownEffort && shownEffort !== "default"));
 	// The same choices in the chat composer's shape, so the new chat page can use its settings bar.
 	// The orchestrator's model says so in the model menus.
 	const orchestratorModelHint = orchestratorModelIsValid

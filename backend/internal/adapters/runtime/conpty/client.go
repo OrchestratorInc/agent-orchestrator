@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"syscall"
 	"time"
@@ -48,67 +49,196 @@ func armClientDeadline(ctx context.Context, conn net.Conn, timeout time.Duration
 		deadline = contextDeadline
 	}
 	_ = conn.SetDeadline(deadline)
-	stop := context.AfterFunc(ctx, func() { _ = conn.SetDeadline(time.Now()) })
-	return func() { _ = stop() }
+	cancelled := make(chan struct{})
+	stop := context.AfterFunc(ctx, func() {
+		_ = conn.SetDeadline(time.Now())
+		close(cancelled)
+	})
+	return func() {
+		if !stop() {
+			<-cancelled
+		}
+	}
 }
 
-// clientSendMessage chunks message by 512 runes and sends each as a
-// MsgTerminalInput frame with 15ms gaps, then pauses 300ms and sends "\r".
-// Mirrors ptyHostSendMessage from pty-client.ts.
-func clientSendMessage(addr, message string) error {
-	conn, err := dialHost(addr, dialTimeout)
+// clientSendMessage chunks message by 512 runes, then sends Enter separately.
+// Once the first frame is accepted, finish the paste and Enter with a bounded
+// detached context: cancellation must not strand a partially pasted draft.
+func clientSendMessage(ctx context.Context, addr, message string) error {
+	return clientWriteInput(ctx, addr, message, true)
+}
+
+func clientSendInput(ctx context.Context, addr, input string) error {
+	return clientWriteInput(ctx, addr, input, false)
+}
+
+// clientWriteInput drains replay/live output while writing. Closing a socket
+// with unread replay can reset it before the host reads its queued input.
+// An ordered status request also proves that the host processed every input
+// frame before we close, rather than merely accepting bytes into TCP buffers.
+func clientWriteInput(ctx context.Context, addr, input string, message bool) error {
+	conn, err := dialHostContext(ctx, addr, dialTimeout)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = conn.Close() }()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
-	runes := []rune(message)
-	for i := 0; i < len(runes); i += ptyInputChunkRunes {
-		end := i + ptyInputChunkRunes
-		if end > len(runes) {
-			end = len(runes)
+	runes := []rune(input)
+	chunks := (len(runes) + ptyInputChunkRunes - 1) / ptyInputChunkRunes
+	budget := dialTimeout
+	if message {
+		budget += time.Duration(chunks)*ptyInputChunkDelay + inputdelay.ForMessage(input, ptyInputEnterDelay)
+	}
+	var stopCancellation func()
+	if message {
+		// Before the first accepted frame, cancellation may interrupt the
+		// write, but must not terminate the replay reader while we switch to
+		// detached completion after that write succeeds.
+		stopTransport := armClientDeadline(context.WithoutCancel(ctx), conn, budget)
+		if deadline, ok := ctx.Deadline(); ok && deadline.Before(time.Now().Add(budget)) {
+			_ = conn.SetWriteDeadline(deadline)
 		}
-		chunk := string(runes[i:end])
-		frame, err := EncodeMessage(MsgTerminalInput, []byte(chunk))
+		cancelled := make(chan struct{})
+		stop := context.AfterFunc(ctx, func() {
+			_ = conn.SetWriteDeadline(time.Now())
+			close(cancelled)
+		})
+		stopCancellation = func() {
+			stopTransport()
+			if !stop() {
+				<-cancelled
+			}
+		}
+	} else {
+		stopCancellation = armClientDeadline(ctx, conn, budget)
+	}
+	completionCtx := ctx
+	cancelCompletion := func() {}
+	// Read the final callbacks at return: both change after the first frame.
+	defer func() {
+		cancelCompletion()
+		stopCancellation()
+	}()
+
+	type inputStatus struct {
+		status StatusPayload
+		err    error
+	}
+	statusC := make(chan inputStatus, 1)
+	readDone := make(chan error, 1)
+	parser := NewMessageParser(func(msgType byte, payload []byte) {
+		if msgType != MsgStatusRes {
+			return
+		}
+		var status StatusPayload
+		err := json.Unmarshal(payload, &status)
+		select {
+		case statusC <- inputStatus{status, err}:
+		default:
+		}
+	})
+	go func() {
+		buf := make([]byte, 32*1024)
+		for {
+			n, err := conn.Read(buf)
+			if n > 0 {
+				parser.Feed(buf[:n])
+			}
+			if err != nil {
+				readDone <- err
+				return
+			}
+		}
+	}()
+
+	started := false
+	writeFrame := func(typ byte, payload []byte) error {
+		frame, err := EncodeMessage(typ, payload)
 		if err != nil {
 			return err
 		}
-		if _, err := conn.Write(frame); err != nil {
+		n, err := conn.Write(frame)
+		if err != nil {
 			return err
 		}
-		// Inter-chunk delay only between chunks, not after the last one.
-		if end < len(runes) {
-			time.Sleep(ptyInputChunkDelay)
+		if n != len(frame) {
+			return io.ErrShortWrite
+		}
+		if !started && message {
+			started = true
+			stopCancellation()
+			completionCtx, cancelCompletion = context.WithTimeout(context.WithoutCancel(ctx), budget) //nolint:gosec // G118: the outer deferred cleanup calls the reassigned cancel function.
+			stopCancellation = armClientDeadline(completionCtx, conn, budget)
+		}
+		return nil
+	}
+	pause := func(delay time.Duration) error {
+		timer := time.NewTimer(delay)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+			return nil
+		case <-completionCtx.Done():
+			return completionCtx.Err()
 		}
 	}
-
-	// Brief pause before Enter (matches TS: Enter sent as a separate frame).
-	// Skipped for an empty message — an Enter-only nudge has no paste to let
-	// settle, and the pause would only widen the guard-read→Enter window
-	// (mirrors the tmux runtime's enterDelay contract).
-	if delay := inputdelay.ForMessage(message, ptyInputEnterDelay); delay > 0 {
-		time.Sleep(delay)
+	if message {
+		for i := 0; i < len(runes); i += ptyInputChunkRunes {
+			end := min(i+ptyInputChunkRunes, len(runes))
+			if err := writeFrame(MsgTerminalInput, []byte(string(runes[i:end]))); err != nil {
+				return err
+			}
+			if end < len(runes) {
+				if err := pause(ptyInputChunkDelay); err != nil {
+					return err
+				}
+			}
+		}
+		if delay := inputdelay.ForMessage(input, ptyInputEnterDelay); delay > 0 {
+			if err := pause(delay); err != nil {
+				return err
+			}
+		}
+		input = "\r"
 	}
-	frame, err := EncodeMessage(MsgTerminalInput, []byte("\r"))
-	if err != nil {
+	if err := writeFrame(MsgTerminalInput, []byte(input)); err != nil {
 		return err
 	}
-	_, err = conn.Write(frame)
-	return err
-}
-
-func clientSendInput(addr, input string) error {
-	conn, err := dialHost(addr, dialTimeout)
-	if err != nil {
+	if err := writeFrame(MsgStatusReq, nil); err != nil {
 		return err
 	}
-	defer func() { _ = conn.Close() }()
-	frame, err := EncodeMessage(MsgTerminalInput, []byte(input))
-	if err != nil {
-		return err
+	result := func(status inputStatus) error {
+		if status.err != nil {
+			return fmt.Errorf("confirm terminal input: %w", status.err)
+		}
+		// Exit status can be broadcast independently of our ordered request.
+		// It cannot prove acceptance, so fail rather than acknowledge lost input.
+		if !status.status.Alive {
+			return errors.New("terminal exited before input acceptance was confirmed")
+		}
+		return nil
 	}
-	_, err = conn.Write(frame)
-	return err
+	select {
+	case status := <-statusC:
+		return result(status)
+	case err := <-readDone:
+		// A response and EOF may arrive together; consume the response first.
+		select {
+		case status := <-statusC:
+			return result(status)
+		default:
+		}
+		if completionCtx.Err() != nil {
+			return completionCtx.Err()
+		}
+		if deadline, ok := completionCtx.Deadline(); ok && !time.Now().Before(deadline) {
+			return context.DeadlineExceeded
+		}
+		return fmt.Errorf("confirm terminal input: %w", err)
+	}
 }
 
 // clientGetOutput sends MsgGetOutputReq and reads frames until MsgGetOutputRes.

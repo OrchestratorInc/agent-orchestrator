@@ -565,15 +565,15 @@ func TestSendInputDeliversEscapeByte(t *testing.T) {
 	h := hosts["sess-escape"]
 	defer h.cleanup(t)
 
-	if err := rt.SendInput(context.Background(), handle, "\x1b"); err != nil {
-		t.Fatalf("SendInput: %v", err)
-	}
 	inputC := make(chan []byte, 1)
 	go func() {
 		buf := make([]byte, 8)
 		n, _ := h.pty.inR.Read(buf)
 		inputC <- append([]byte(nil), buf[:n]...)
 	}()
+	if err := rt.SendInput(context.Background(), handle, "\x1b"); err != nil {
+		t.Fatalf("SendInput: %v", err)
+	}
 	select {
 	case got := <-inputC:
 		if string(got) != "\x1b" {

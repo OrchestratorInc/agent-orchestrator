@@ -2,10 +2,15 @@ package sessionmanager
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/freebuff"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -81,6 +86,97 @@ func TestBusyHarnessSessionsKeepsATerminalThatCannotResume(t *testing.T) {
 	}
 	if len(busy) != 1 || busy[0].SessionID != "fresh-only" || busy[0].Reason != domain.SessionWaitResume {
 		t.Fatalf("busy = %+v, want only fresh-only waiting to resume", busy)
+	}
+}
+
+func TestBusyHarnessSessionsUsesFreebuffProjectHistory(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		projectHistory bool
+		wantBlocked    bool
+	}{
+		{name: "project history with unrelated daemon chat", projectHistory: true},
+		{name: "daemon history cannot replace missing project chat", wantBlocked: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mgr, store, rt := newChatManager(&recordingLauncher{})
+			mgr.runtime = idleWorkloadRuntime{rt}
+			mgr.dataDir = t.TempDir()
+			workspace, projectDir, daemonDir := t.TempDir(), t.TempDir(), t.TempDir()
+			home, binDir := t.TempDir(), t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("USERPROFILE", home)
+			t.Setenv("FREEBUFF_CONFIG_DIR", daemonDir)
+			t.Setenv("PATH", binDir)
+			binaryName := "freebuff"
+			if runtime.GOOS == "windows" {
+				binaryName += ".cmd"
+				t.Setenv("PATHEXT", ".COM;.EXE;.BAT;.CMD")
+			}
+			binary := filepath.Join(binDir, binaryName)
+			if err := os.WriteFile(binary, []byte("not executed by this test\n"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			agent := freebuff.New()
+			if got, err := agent.ResolveBinary(context.Background()); err != nil || got != binary {
+				t.Fatalf("cache isolated Freebuff binary: path=%q err=%v", got, err)
+			}
+			mgr.agents = singleAgent{agent: agent}
+			project := store.projects[string(chatTestProject)]
+			project.Config.Env = map[string]string{"FREEBUFF_CONFIG_DIR": projectDir}
+			store.projects[string(chatTestProject)] = project
+			const preferences = `{"freebuffModel":"deepseek/deepseek-v4-flash","adsEnabled":false}`
+			for _, dir := range []string{projectDir, daemonDir} {
+				if err := os.WriteFile(filepath.Join(dir, "settings.json"), []byte(preferences), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			writeChat := func(dir, id, projectRoot string) {
+				t.Helper()
+				chatDir := filepath.Join(dir, "projects", filepath.Base(workspace), "chats", id)
+				if err := os.MkdirAll(chatDir, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				state, err := json.Marshal(map[string]any{"sessionState": map[string]any{
+					"fileContext": map[string]string{"projectRoot": projectRoot},
+				}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(chatDir, "run-state.json"), state, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			daemonWorkspace := workspace
+			if tc.projectHistory {
+				writeChat(projectDir, "project-chat", workspace)
+				daemonWorkspace = t.TempDir()
+			}
+			writeChat(daemonDir, "daemon-chat", daemonWorkspace)
+			store.sessions["freebuff-1"] = domain.SessionRecord{
+				ID: "freebuff-1", ProjectID: chatTestProject, Kind: domain.KindWorker,
+				Harness: domain.HarnessFreebuff, Mode: domain.SessionModeTUI,
+				Activity: domain.Activity{State: domain.ActivityIdle},
+				Metadata: domain.SessionMetadata{WorkspacePath: workspace, RuntimeHandleID: "freebuff-pane"},
+			}
+			busy, err := mgr.BusyHarnessSessions(context.Background(), domain.HarnessFreebuff)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.wantBlocked {
+				if len(busy) != 1 || busy[0].SessionID != "freebuff-1" || busy[0].Reason != domain.SessionWaitResume {
+					t.Fatalf("busy=%+v, want missing project history to prevent stopping", busy)
+				}
+			} else if len(busy) != 0 {
+				t.Fatalf("busy=%+v, want project history to allow update", busy)
+			}
+			for _, dir := range []string{projectDir, daemonDir} {
+				data, err := os.ReadFile(filepath.Join(dir, "settings.json"))
+				if err != nil || string(data) != preferences {
+					t.Fatalf("resume eligibility changed native preferences: %q err=%v", data, err)
+				}
+			}
+		})
 	}
 }
 

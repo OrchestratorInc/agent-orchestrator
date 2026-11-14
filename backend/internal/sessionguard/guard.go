@@ -121,6 +121,9 @@ type Guard struct {
 
 	startupGateMu           sync.RWMutex
 	startupSignalGatesInput func(domain.AgentHarness) bool
+
+	encoderMu              sync.RWMutex
+	terminalMessageEncoder func(domain.SessionRecord, string) (string, error)
 }
 
 var _ ports.AgentMessenger = (*Guard)(nil)
@@ -180,6 +183,16 @@ func (g *Guard) SetStartupSignalGate(pred func(domain.AgentHarness) bool) {
 	g.startupGateMu.Lock()
 	g.startupSignalGatesInput = pred
 	g.startupGateMu.Unlock()
+}
+
+// SetTerminalMessageEncoder supplies native terminal framing at the final
+// write boundary. It runs after all safety checks, using the fresh session
+// record under the input lease (or the caller's exclusive mutation fence).
+// Nil preserves the semantic message; empty Enter-only input and chat bypass it.
+func (g *Guard) SetTerminalMessageEncoder(encode func(domain.SessionRecord, string) (string, error)) {
+	g.encoderMu.Lock()
+	g.terminalMessageEncoder = encode
+	g.encoderMu.Unlock()
 }
 
 // Send satisfies ports.AgentMessenger so a Guard can sit in for the raw
@@ -442,6 +455,17 @@ func (g *Guard) sendAdmittedChecked(ctx context.Context, id domain.SessionID, ms
 	if preWrite != nil {
 		if err := preWrite(ctx, rec); err != nil {
 			return SuppressedUnknown, fmt.Errorf("guard %s: pre-write check: %w", id, err)
+		}
+	}
+	if msg != "" && domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeTUI {
+		g.encoderMu.RLock()
+		encode := g.terminalMessageEncoder
+		g.encoderMu.RUnlock()
+		if encode != nil {
+			msg, err = encode(rec, msg)
+			if err != nil {
+				return SuppressedUnknown, fmt.Errorf("guard %s: encode terminal message: %w", id, err)
+			}
 		}
 	}
 	// Composer-occupancy check runs last, under the held input lease and on the

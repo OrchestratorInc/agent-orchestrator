@@ -589,6 +589,32 @@ func TestMemcodeReturnsNativePickerLabelsWithoutStartingAgent(t *testing.T) {
 	}
 }
 
+func TestFreebuffReturnsPickerModelsWithEffortLaddersWithoutStartingAgent(t *testing.T) {
+	got, err := (Discoverer{}).Discover(context.Background(), ports.AgentModelDiscoveryRequest{
+		AgentID: "freebuff",
+		Binary:  "/missing/freebuff",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Source != "official-catalog" || got.AllowCustom || len(got.Models) != 12 {
+		t.Fatalf("freebuff catalog = %#v", got)
+	}
+	if got.Models[0].ID != "mimo/mimo-v2.5" || !got.Models[0].IsDefault || len(got.Models[0].Efforts) != 0 {
+		t.Fatalf("freebuff default model = %#v", got.Models[0])
+	}
+	for _, model := range got.Models {
+		if model.ID != "deepseek/deepseek-v4-flash" {
+			continue
+		}
+		if !reflect.DeepEqual(model.Efforts, []string{"low", "high", "max"}) || model.DefaultEffort != "high" {
+			t.Fatalf("deepseek efforts = %#v", model)
+		}
+		return
+	}
+	t.Fatal("freebuff catalog lacks DeepSeek V4.1 Flash")
+}
+
 func TestUnrealCatalogShowsEffectiveModelAndAllowsOverride(t *testing.T) {
 	t.Setenv("UNREAL_HARNESS_LLM_PROVIDER", "openai-codex")
 	t.Setenv("UNREAL_HARNESS_LLM_MODEL", "gpt-6-sol")

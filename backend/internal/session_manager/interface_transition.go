@@ -1128,13 +1128,16 @@ func (m *Manager) preflightTerminalLaunch(
 	}
 	config := restoredAgentConfig(rec, project.Config)
 	config.Launch = m.sessionLaunchOptions(ctx, rec.ID)
+	env := m.runtimeEnvForHarness(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env, rec.Harness)
+	m.augmentAgentRuntimeEnv(agent, env)
 	var cmd []string
 	if nativeConversationID == "" {
 		cmd, _, _, err = freshLaunchArgv(ctx, agent, rec.ID, rec.Metadata.WorkspacePath,
-			rec.Metadata, systemPrompt, "", config, rec.Kind, m.dataDir, true, "", nil)
+			rec.Metadata, systemPrompt, "", config, rec.Kind, m.dataDir, true, "", env)
 	} else {
 		var resumable bool
 		cmd, resumable, err = agent.GetRestoreCommand(ctx, ports.RestoreConfig{
+			Env: env,
 			Session: ports.SessionRef{
 				ID: string(rec.ID), WorkspacePath: rec.Metadata.WorkspacePath,
 				Metadata: map[string]string{ports.MetadataKeyAgentSessionID: nativeConversationID},

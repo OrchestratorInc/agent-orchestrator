@@ -3963,6 +3963,11 @@ func TestToAPIErrorMapsWorkspaceBranchSentinels(t *testing.T) {
 		{"native conversation unverified", fmt.Errorf("switch interface: %w", sessionmanager.ErrNativeConversationUnverified), apierr.KindConflict, "NATIVE_SESSION_UNVERIFIED"},
 		{"unsupported effort", fmt.Errorf("spawn: %w", ports.ErrUnsupportedEffort), apierr.KindInvalid, "UNSUPPORTED_EFFORT"},
 		{"model capabilities unavailable", fmt.Errorf("spawn: %w", ports.ErrModelCapabilitiesUnavailable), apierr.KindInvalid, "MODEL_CAPABILITIES_UNAVAILABLE"},
+		{"standing instructions unsupported on spawn", fmt.Errorf("spawn mer-1: %w: freebuff: %w", sessionmanager.ErrSpawnPromptDelivery, ports.ErrStandingInstructionsUnsupported),
+			apierr.KindInvalid, "STANDING_INSTRUCTIONS_UNSUPPORTED"},
+		{"standing instructions unsupported on restore", &sessionmanager.RelaunchError{Step: "launch command", Err: fmt.Errorf(
+			"restore mer-1: restore command: freebuff: %w", ports.ErrStandingInstructionsUnsupported)},
+			apierr.KindInvalid, "STANDING_INSTRUCTIONS_UNSUPPORTED"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

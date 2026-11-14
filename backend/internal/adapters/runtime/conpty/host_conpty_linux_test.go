@@ -117,7 +117,7 @@ func TestLinuxDefaultSpawnHostEndToEnd(t *testing.T) {
 		}
 	})
 
-	if err := clientSendInput(addr, "hello\n"); err != nil {
+	if err := clientSendInput(context.Background(), addr, "hello\n"); err != nil {
 		t.Fatalf("send input: %v", err)
 	}
 	deadline := time.Now().Add(2 * time.Second)

@@ -1052,6 +1052,16 @@ func New(d Deps) *Manager {
 	m.messenger = sessionguard.New(d.Store, d.Messenger, m.logger)
 	m.messenger.SetInputLease(m)
 	m.messenger.SetStartupSignalGate(m.harnessStartupSignalGatesInput)
+	m.messenger.SetTerminalMessageEncoder(func(rec domain.SessionRecord, message string) (string, error) {
+		if m.agents != nil {
+			if agent, ok := m.agents.Agent(rec.Harness); ok {
+				if encoder, ok := agent.(ports.AgentTerminalMessageEncoder); ok {
+					return encoder.EncodeTerminalMessage(message)
+				}
+			}
+		}
+		return message, nil
+	})
 	return m
 }
 
@@ -1217,7 +1227,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 			cfg.AgentConfigResolved = true
 		}
 	}
-	if mode == domain.SessionModeTUI && (cfg.Harness == domain.HarnessClaudeCode || cfg.Harness == domain.HarnessCodex || strings.TrimSpace(cfg.AgentConfig.Effort) != "") {
+	if mode == domain.SessionModeTUI && (cfg.Harness == domain.HarnessClaudeCode || cfg.Harness == domain.HarnessCodex || cfg.Harness == domain.HarnessFreebuff || strings.TrimSpace(cfg.AgentConfig.Effort) != "") {
 		checked := BeginSpawnStep(ctx, SpawnStepModelCheck)
 		resolved, err := m.resolveTUIAgentConfig(ctx, cfg, project.Config, agentConfig)
 		checked(err)
@@ -1626,6 +1636,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 		launchPrompt = note
 	}
 	launchCfg := ports.LaunchConfig{
+		Env:              env,
 		DataDir:          m.dataDir,
 		SessionID:        string(id),
 		WorkspacePath:    ws.Path,
@@ -1636,7 +1647,6 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 		IssueID:          string(cfg.IssueID),
 		Config:           adapterConfig,
 		Permissions:      adapterConfig.Permissions,
-		Env:              env,
 	}
 	delivery, err := agent.GetPromptDeliveryStrategy(ctx, launchCfg)
 	if err != nil {
@@ -1652,6 +1662,12 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 		}
 		launchCfg.Prompt = ""
 	}
+	releaseStartup, err := acquireAgentStartup(ctx, agent, launchCfg)
+	if err != nil {
+		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, true, false)
+		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnPrepare, err)
+	}
+	defer releaseStartup()
 	argv, err := agent.GetLaunchCommand(ctx, launchCfg)
 	if err != nil {
 		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, true, false)
@@ -1714,6 +1730,13 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrRuntimeCreate, agentlaunch.RedactError(err, project.Config.Env))
 	}
 
+	if err := m.initializeAgentTerminal(ctx, agent, launchCfg, handle); err != nil {
+		runtimeDestroyed := m.destroySpawnRuntimeAfterFailure(ctx, handle)
+		workspaceDestroyed := m.rollbackPreparedSpawnWorkspaceAfterFailure(ctx, rec, ws, workspaceProject, runtimeDestroyed)
+		m.markSpawnFailedTerminatedAfterFailure(ctx, id, runtimeDestroyed && workspaceDestroyed)
+		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnPrepare, err)
+	}
+
 	metadata := domain.SessionMetadata{
 		Permissions:               rec.Metadata.Permissions,
 		Branch:                    ws.Branch,
@@ -1756,6 +1779,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 	}
 	if delivery == ports.PromptDeliveryAfterStart {
 		if err := m.deliverAfterStartPrompt(ctx, agent, launchCfg, handle, id, afterStartPrompt); err != nil {
+			m.logger.Warn("initial native prompt delivery failed", "sessionID", id, "error", agentlaunch.RedactError(err, launchCfg.Env))
 			runtimeDestroyed := m.destroySpawnRuntimeAfterFailure(ctx, handle)
 			workspaceDestroyed := m.rollbackPreparedSpawnWorkspaceAfterFailure(ctx, rec, ws, workspaceProject, runtimeDestroyed)
 			m.markSpawnFailedTerminatedAfterFailure(ctx, id, runtimeDestroyed && workspaceDestroyed)
@@ -1856,13 +1880,13 @@ func (m *Manager) resolveAgentConfigOnce(ctx context.Context, cfg ports.SpawnCon
 		}
 		return resolved, nil
 	}
-	if cfg.Harness != domain.HarnessCodex && cfg.Harness != domain.HarnessClaudeCode && cfg.Harness != domain.HarnessCommandCode && cfg.Harness != domain.HarnessHermes {
+	if cfg.Harness != domain.HarnessCodex && cfg.Harness != domain.HarnessClaudeCode && cfg.Harness != domain.HarnessCommandCode && cfg.Harness != domain.HarnessHermes && cfg.Harness != domain.HarnessFreebuff {
 		// Only a flagged explicit override (the spawn API and delegation mark
 		// request-carried effort) fails loudly: the caller asked for something
 		// the harness cannot honor. Unflagged or inherited effort still clears
 		// silently so role/project defaults keep working for every harness.
 		if cfg.EffortOverride && strings.TrimSpace(requested.Effort) != "" {
-			return ports.AgentConfig{}, fmt.Errorf("%w for harness %q: effort is only supported for codex, claude-code, command-code, and hermes agents, or Grok Chat", ports.ErrUnsupportedEffort, cfg.Harness)
+			return ports.AgentConfig{}, fmt.Errorf("%w for harness %q: effort is only supported for codex, claude-code, command-code, hermes, and freebuff agents, or Grok Chat", ports.ErrUnsupportedEffort, cfg.Harness)
 		}
 		resolved.Effort = ""
 		return resolved, nil
@@ -1881,7 +1905,7 @@ func (m *Manager) resolveAgentConfigOnce(ctx context.Context, cfg ports.SpawnCon
 		return resolved, nil
 	}
 	if m.modelCatalog == nil {
-		if validateClaudeModel {
+		if validateClaudeModel || cfg.Harness == domain.HarnessFreebuff {
 			return ports.AgentConfig{}, fmt.Errorf("%w: model catalog is unavailable", ports.ErrModelCapabilitiesUnavailable)
 		}
 		return resolved, nil
@@ -1957,6 +1981,12 @@ func (m *Manager) resolveAgentConfigOnce(ctx context.Context, cfg ports.SpawnCon
 	}
 	if !containsString(selected.Efforts, resolved.Effort) {
 		return ports.AgentConfig{}, fmt.Errorf("%w %q for model %q", ports.ErrUnsupportedEffort, resolved.Effort, modelID)
+	}
+	if cfg.Harness == domain.HarnessFreebuff && resolved.Model == "" {
+		// Freebuff selects effort through the chosen native model's picker.
+		// An effort-only override must name the default model we validated so
+		// the adapter can apply the choice rather than silently dropping it.
+		resolved.Model = modelID
 	}
 	return resolved, nil
 }
@@ -3964,6 +3994,15 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 	if err := m.prepareWorkspace(ctx, agent, rec.ID, launchPath, systemPrompt, systemPromptFile, agentConfig, env); err != nil {
 		return RestoreResult{}, relaunchFailed("agent hooks", fmt.Errorf("%s %s: %w", operation, rec.ID, err))
 	}
+	releaseStartup, err := acquireAgentStartup(ctx, agent, ports.LaunchConfig{
+		DataDir: m.dataDir, SessionID: string(rec.ID), WorkspacePath: launchPath,
+		Kind: rec.Kind, Config: agentConfig, Permissions: agentConfig.Permissions, Env: env,
+		SystemPrompt: systemPrompt, SystemPromptFile: systemPromptFile,
+	})
+	if err != nil {
+		return RestoreResult{}, fmt.Errorf("%s %s: prepare native startup: %w", operation, rec.ID, err)
+	}
+	defer releaseStartup()
 	if requireNativeHistory && !forceFresh {
 		if probe, ok := agent.(ports.AgentInterfaceHandoffHistoryProbe); ok {
 			ref := ports.SessionRef{ID: string(rec.ID), WorkspacePath: launchPath, Metadata: nativeRestoreMetadata(rec)}
@@ -3997,7 +4036,7 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 			argv, delivery, mode, err = freshLaunchArgv(ctx, agent, rec.ID, launchPath, rec.Metadata,
 				systemPrompt, systemPromptFile, agentConfig, rec.Kind, m.dataDir, true, freshNativeSessionID, env)
 		} else {
-			initialization, err = restorer.PrepareNativeRestore(ctx, ports.RestoreConfig{Session: ports.SessionRef{ID: string(rec.ID), WorkspacePath: launchPath, Metadata: nativeRestoreMetadata(rec)}, DataDir: m.dataDir, Kind: rec.Kind, Config: agentConfig, Permissions: agentConfig.Permissions, SystemPrompt: systemPrompt, SystemPromptFile: systemPromptFile})
+			initialization, err = restorer.PrepareNativeRestore(ctx, ports.RestoreConfig{Env: env, Session: ports.SessionRef{ID: string(rec.ID), WorkspacePath: launchPath, Metadata: nativeRestoreMetadata(rec)}, DataDir: m.dataDir, Kind: rec.Kind, Config: agentConfig, Permissions: agentConfig.Permissions, SystemPrompt: systemPrompt, SystemPromptFile: systemPromptFile})
 			if err == nil {
 				argv = initialization.Argv()
 				for key, value := range initialization.LaunchEnv() {
@@ -4025,6 +4064,7 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 		return RestoreResult{}, fmt.Errorf("%s %s: %w", operation, rec.ID, ErrNotResumable)
 	}
 	launchCfg := ports.LaunchConfig{
+		Env:              env,
 		DataDir:          m.dataDir,
 		SessionID:        string(rec.ID),
 		WorkspacePath:    launchPath,
@@ -4035,7 +4075,6 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 		Config:           agentConfig,
 		Permissions:      agentConfig.Permissions,
 		NativeSessionID:  freshNativeSessionID,
-		Env:              env,
 	}
 	afterStartPrompt := rec.Metadata.Prompt
 	if delivery == ports.PromptDeliveryAfterStart && mode != RestoreModeNative {
@@ -4120,6 +4159,12 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 			return RestoreResult{}, relaunchFailed("agent start check", fmt.Errorf("%s %s: resumed agent did not start: %w", operation, rec.ID, startErr))
 		}
 	}
+	if err := m.initializeAgentTerminal(ctx, agent, launchCfg, handle); err != nil {
+		m.destroySpawnRuntimeAfterFailure(ctx, handle)
+		m.cleanupSystemPromptDir(rec.ID)
+		return RestoreResult{}, fmt.Errorf("%s %s: %w", operation, rec.ID, err)
+	}
+
 	metadata := domain.SessionMetadata{
 		ImportSource:              rec.Metadata.ImportSource,
 		Permissions:               rec.Metadata.Permissions,
@@ -4166,6 +4211,7 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 			afterStartPrompt = "" // restore native state without replaying a user turn
 		}
 		if err := m.deliverAfterStartPrompt(ctx, agent, launchCfg, handle, rec.ID, afterStartPrompt); err != nil {
+			m.logger.Warn("restored native prompt delivery failed", "sessionID", rec.ID, "error", agentlaunch.RedactError(err, launchCfg.Env))
 			m.destroySpawnRuntimeAfterFailure(ctx, handle)
 			// A provider switch brings the source back itself, so its session
 			// must not be ended here.
@@ -7324,7 +7370,99 @@ func (m *Manager) deliverAfterStartPrompt(ctx context.Context, agent ports.Agent
 	if prompt == "" {
 		return nil
 	}
-	return m.deliverStartedInput(ctx, id, prompt)
+	confirmer, confirms := agent.(ports.AgentAfterStartSubmitConfirmer)
+	if confirms && confirmer.PrimesAfterStartSubmit() {
+		rendered, ok := m.runtime.(ports.StyledTerminalOutputReader)
+		if !ok {
+			return errors.New("first-turn priming requires current styled terminal output")
+		}
+		empty, ok := agent.(ports.EmptyComposerDetector)
+		if !ok {
+			return errors.New("first-turn priming requires native empty-composer detection")
+		}
+		output, err := rendered.GetStyledOutput(ctx, handle, 100)
+		if err != nil {
+			return fmt.Errorf("read first-turn priming output: %w", err)
+		}
+		if !empty.ComposerIsEmpty(output) {
+			return errors.New("first-turn priming requires a confirmed empty native composer")
+		}
+		if err := m.deliverStartedInput(ctx, id, ""); err != nil {
+			return fmt.Errorf("prime first-turn input: %w", err)
+		}
+	}
+	if err := m.deliverStartedInput(ctx, id, prompt); err != nil {
+		return fmt.Errorf("type first-turn input: %w", err)
+	}
+	if !confirms {
+		return nil
+	}
+	return m.confirmAfterStartSubmit(ctx, confirmer, cfg, handle, id, prompt)
+}
+
+const afterStartSubmitMaxRetries = 3
+
+// Timings for confirmAfterStartSubmit; variables so tests can shorten them.
+var (
+	afterStartSubmitTimeout = 30 * time.Second
+	afterStartSubmitPoll    = 250 * time.Millisecond
+	afterStartDraftSettle   = 1500 * time.Millisecond
+)
+
+// confirmAfterStartSubmit requires native acceptance of the exact first turn.
+// Enter-only retries are bounded and require a continuously visible matching
+// draft. Unknown screens and unavailable evidence fail without extra input.
+func (m *Manager) confirmAfterStartSubmit(ctx context.Context, confirmer ports.AgentAfterStartSubmitConfirmer, cfg ports.LaunchConfig, handle ports.RuntimeHandle, id domain.SessionID, prompt string) error {
+	rendered, ok := m.runtime.(ports.StyledTerminalOutputReader)
+	if !ok {
+		return errors.New("first-turn submission requires current styled terminal output")
+	}
+	deadline := time.NewTimer(afterStartSubmitTimeout)
+	defer deadline.Stop()
+	ticker := time.NewTicker(afterStartSubmitPoll)
+	defer ticker.Stop()
+	var draftSince time.Time
+	retries := 0
+	var last ports.AfterStartSubmitState
+	for {
+		output, err := rendered.GetStyledOutput(ctx, handle, 100)
+		if err != nil {
+			return fmt.Errorf("read first-turn submission output: %w", err)
+		}
+		last, err = confirmer.AfterStartSubmitState(ctx, cfg, output, prompt)
+		if err != nil {
+			return fmt.Errorf("confirm first-turn native acceptance: %w", err)
+		}
+		switch last {
+		case ports.AfterStartSubmitted:
+			return nil
+		case ports.AfterStartDraftPending:
+			if draftSince.IsZero() {
+				draftSince = time.Now()
+			} else if time.Since(draftSince) >= afterStartDraftSettle {
+				if retries == afterStartSubmitMaxRetries {
+					return fmt.Errorf("first turn stayed unsent in the native composer after %d Enter retries", retries)
+				}
+				if err := m.deliverStartedInput(ctx, id, ""); err != nil {
+					return err
+				}
+				retries++
+				draftSince = time.Time{}
+			}
+		default:
+			draftSince = time.Time{}
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-deadline.C:
+			if last == ports.AfterStartDraftPending {
+				return errors.New("first turn stayed unsent in the native composer")
+			}
+			return errors.New("first-turn native acceptance could not be confirmed")
+		case <-ticker.C:
+		}
+	}
 }
 
 func (m *Manager) waitForAfterStartCommand(ctx context.Context, selector ports.AgentAfterStartCommand, cfg ports.LaunchConfig, handle ports.RuntimeHandle) error {
@@ -7676,6 +7814,7 @@ func freshLaunchArgv(ctx context.Context, agent ports.Agent, id domain.SessionID
 	// meta.Prompt in argv; after-start agents receive it via the messenger once
 	// the runtime is live.
 	launchCfg := ports.LaunchConfig{
+		Env:              env,
 		DataDir:          dataDir,
 		SessionID:        string(id),
 		WorkspacePath:    workspacePath,
@@ -7686,7 +7825,6 @@ func freshLaunchArgv(ctx context.Context, agent ports.Agent, id domain.SessionID
 		Config:           agentConfig,
 		Permissions:      agentConfig.Permissions,
 		NativeSessionID:  nativeSessionID,
-		Env:              env,
 	}
 	delivery, err := agent.GetPromptDeliveryStrategy(ctx, launchCfg)
 	if err != nil {

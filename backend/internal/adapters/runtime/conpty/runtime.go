@@ -526,7 +526,7 @@ func (r *Runtime) SendMessage(ctx context.Context, handle ports.RuntimeHandle, m
 	if sess == nil {
 		return fmt.Errorf("conpty: session %q not found", handle.ID)
 	}
-	return clientSendMessage(sess.addr, message)
+	return clientSendMessage(ctx, sess.addr, message)
 }
 
 // Interrupt sends Ctrl-C to the PTY without tearing down the terminal host.
@@ -538,7 +538,7 @@ func (r *Runtime) Interrupt(ctx context.Context, handle ports.RuntimeHandle) err
 	if sess == nil {
 		return fmt.Errorf("conpty: session %q not found", handle.ID)
 	}
-	return clientSendInput(sess.addr, "\x03")
+	return clientSendInput(ctx, sess.addr, "\x03")
 }
 
 // SendInput writes raw terminal input without appending Enter. It is intended
@@ -551,7 +551,7 @@ func (r *Runtime) SendInput(ctx context.Context, handle ports.RuntimeHandle, inp
 	if sess == nil {
 		return fmt.Errorf("conpty: session %q not found", handle.ID)
 	}
-	return clientSendInput(sess.addr, input)
+	return clientSendInput(ctx, sess.addr, input)
 }
 
 // GetOutput returns the last lines lines from the pty-host ring buffer.

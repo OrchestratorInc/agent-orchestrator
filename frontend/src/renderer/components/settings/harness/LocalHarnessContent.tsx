@@ -74,7 +74,9 @@ const AUTH_VERIFY_RETRY_MS = 1_500;
 
 function authWorkflowSucceeded(workflow: AuthTerminalWorkflow, status: string | undefined): boolean {
 	if (workflow.action === "logout") return status === "unauthorized";
-	return status === "authorized" || (status === "configured" && (workflow.action === "setup" || workflow.agentId === "mimo-code" || workflow.agentId === "claude-code"));
+	// MiMo and Freebuff report locally stored credentials as configured;
+	// closing their completed login terminal does not imply upstream validation.
+	return status === "authorized" || (status === "configured" && (workflow.action === "setup" || workflow.agentId === "mimo-code" || workflow.agentId === "freebuff" || workflow.agentId === "claude-code"));
 }
 
 type AgentAuthStates = Partial<Record<AgentId, AgentAuthState>>;

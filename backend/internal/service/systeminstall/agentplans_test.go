@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -125,8 +126,8 @@ func TestAgentPlansCoverEveryHarnessOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(plans) != 38 {
-		t.Fatalf("got %d plans, want 38", len(plans))
+	if len(plans) != len(domain.AllHarnesses) {
+		t.Fatalf("got %d plans, want %d", len(plans), len(domain.AllHarnesses))
 	}
 	seen := make(map[string]bool, len(plans))
 	for _, plan := range plans {
@@ -139,6 +140,11 @@ func TestAgentPlansCoverEveryHarnessOnce(t *testing.T) {
 		}
 		if plan.Available && (!plan.Automatic || plan.Command == "" || plan.Method == "") {
 			t.Fatalf("available plan %q is incomplete: %+v", plan.AgentID, plan)
+		}
+	}
+	for _, harness := range domain.AllHarnesses {
+		if !seen[string(harness)] {
+			t.Fatalf("missing plan for %q", harness)
 		}
 	}
 }
