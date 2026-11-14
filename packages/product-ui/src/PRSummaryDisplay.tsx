@@ -441,7 +441,7 @@ function StatusRow({
 		: fact
 			? (
 				<span className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1" data-testid="pr-status-fact">
-					<span className="font-normal text-muted-foreground">{fact.title}</span>
+					<span className={rowLabelClass}>{fact.title}</span>
 					<span className={cn("inline-flex min-w-0 items-center gap-1", attentionClass[status.tone])} data-state={fact.state}>
 						<CheckStateGlyph className={toneClass[status.tone]} state={fact.state} />
 						<span className="min-w-0 truncate">{fact.value}</span>
@@ -485,7 +485,7 @@ function StatusRow({
 				)}
 			</div>
 			{status.detail || (status.key === "review" && reviewDetailsAction) ? (
-				<div className={cn("mt-0.5 flex min-w-0 items-baseline gap-2 text-xs leading-4", (dot || plain) && "pl-4")}>
+				<div className={cn("mt-0.5 flex min-w-0 items-baseline gap-2 text-xs leading-4", dot ? "pl-4" : plain && rowChildClass)}>
 					{status.detail ? <span className="text-muted-foreground">{status.detail}</span> : null}
 					{status.key === "review" && reviewDetailsAction ? reviewDetailsAction : null}
 				</div>
@@ -516,6 +516,12 @@ const checkStateClass: Record<PRCheckState, string> = {
 	skipped: "text-passive",
 };
 
+// A row's label is a size down from its state and holds a column, so the states
+// line up and are what the eye lands on.
+const rowLabelClass = "min-w-16 shrink-0 text-caption font-normal text-muted-foreground";
+// What belongs to a row starts under its state: the label column plus the gap.
+const rowChildClass = "pl-19";
+
 /** A state that is in the way takes its colour on the words too; one that is fine stays plain. */
 const attentionClass: Partial<Record<PRDisplayTone, string>> = {
 	review: "text-status-in-review",
@@ -540,7 +546,7 @@ export function CheckStateGlyph({ className, state }: { className?: string; stat
 function ChecksTally({ tally }: { tally: PRChecksTally }) {
 	return (
 		<span className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1" data-testid="pr-checks-tally">
-			<span className="font-normal text-muted-foreground">{tally.title}</span>
+			<span className={rowLabelClass}>{tally.title}</span>
 			{tally.counts.map((count, index) => (
 				<span
 					className={cn(
@@ -599,11 +605,11 @@ function ReadinessFacts({
 	const leadMore = lead ? details?.[lead.key] : readiness.detail;
 	const more = leadMore || others.length > 0 ? (
 		<div className="grid min-w-0 grid-cols-1 gap-y-1.5">
-			{leadMore ? <div className="min-w-0 pl-4 text-xs leading-4 text-muted-foreground">{leadMore}</div> : null}
+			{leadMore ? <div className={cn("min-w-0 text-xs leading-4 text-muted-foreground", rowChildClass)}>{leadMore}</div> : null}
 			{others.map((status) => (
 				<div className="min-w-0" key={status.key}>
 					<StatusRow externalLink={externalLink} reviewDetailsAction={reviewDetailsAction} status={status} />
-					{details?.[status.key] ? <div className="mt-1 min-w-0 pl-4">{details[status.key]}</div> : null}
+					{details?.[status.key] ? <div className={cn("mt-1 min-w-0", rowChildClass)}>{details[status.key]}</div> : null}
 				</div>
 			))}
 		</div>

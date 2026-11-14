@@ -6388,7 +6388,9 @@ describe("SessionInspector branch summary", () => {
     expect(within(tally).getByText("Checks")).toHaveClass("text-muted-foreground");
     expect(tally.querySelector("[data-state='failed']")).toHaveClass("text-error");
     // What opens under a row sits in from it.
-    expect(screen.getByTestId("pr-checks").parentElement).toHaveClass("pl-4");
+    expect(screen.getByTestId("pr-checks").parentElement).toHaveClass("pl-19");
+    // The label is a size down from its state, in a column the states line up after.
+    expect(screen.getByText("Conflicts")).toHaveClass("text-caption", "min-w-16");
   });
 
   it("says the PR row opens a tab, until that tab is showing", async () => {
