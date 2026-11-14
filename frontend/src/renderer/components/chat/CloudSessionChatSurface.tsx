@@ -139,6 +139,25 @@ export function effectiveApprovalMode(harness: string, wanted: ApprovalMode, off
 	return order.slice(start).find((mode) => offered.includes(mode));
 }
 
+// Claude's session modes, as the approval modes the composer names them.
+const CLAUDE_MODE_APPROVAL = new Map<string, ApprovalMode>([
+	["default", "default"],
+	["acceptEdits", "accept-edits"],
+	["auto", "auto"],
+	["bypassPermissions", "bypass-permissions"],
+]);
+
+/**
+ * The approval mode deciding `approval` with `decisionId` leaves Plan mode
+ * for, or undefined. Claude asks before it leaves Plan mode (its ExitPlanMode
+ * tool, an ACP switch_mode request) with one option per mode it can carry on
+ * in, and "plan" to keep planning.
+ */
+function planExitApprovalMode(approval: ConversationItem | undefined, decisionId: string): ApprovalMode | undefined {
+	if (approval?.kind !== "activity" || approval.activityKind !== "approval" || approval.detail?.toolKind !== "switch_mode") return undefined;
+	return CLAUDE_MODE_APPROVAL.get(decisionId);
+}
+
 /**
  * The session's approval modes a model can run. A worker that does not say
  * which modes a model offers (an older one) leaves every mode the session allows.
@@ -1729,9 +1748,20 @@ export function CloudSessionChatSurface({
 		onSettled: () => void invalidate(),
 	});
 	const decide = useMutation({
-		mutationFn: async ({ requestId, decisionId }: { requestId: string; decisionId: string }) => {
+		mutationFn: async ({ requestId, decisionId }: { requestId: string; decisionId: string; key: string; leavesPlanFor?: ApprovalMode }) => {
 			if (!cloud) throw new Error("Cloud session context is unavailable.");
 			await client.decideChatApproval(cloud.orgId, session.id, requestId, decisionId);
+		},
+		// An approved plan ends Plan mode, as it does in local Chat: the agent
+		// carries on in the mode it was approved with, and so do later turns.
+		onSuccess: (_, { key, leavesPlanFor }) => {
+			if (!leavesPlanFor || settingsRef.current.key !== key) return;
+			const current = settingsRef.current.settings;
+			updateSettings({
+				...current,
+				executionMode: "agent",
+				approvalMode: sessionApprovalModes.includes(leavesPlanFor) ? leavesPlanFor : current.approvalMode,
+			});
 		},
 		onSettled: () => void invalidate(),
 	});
@@ -1919,7 +1949,10 @@ export function CloudSessionChatSurface({
 				if (mode) updateSettings({ ...settingsRef.current.settings, approvalMode: mode });
 			} : undefined}
 			rememberedPermissionMode={rememberedMode.key === projectKey ? rememberedMode.mode : readRememberedApprovalMode(projectKey)}
-			onDecide={(requestId, decisionId) => decide.mutate({ requestId, decisionId })}
+			onDecide={(requestId, decisionId) => decide.mutate({
+				requestId, decisionId, key: settingsKey,
+				leavesPlanFor: planExitApprovalMode(snapshot.items.find((item) => item.kind === "activity" && item.requestId === requestId), decisionId),
+			})}
 			busy={send.isPending}
 			controllerTransitioning={controllerTransitioning}
 			newWorkDisabled={newWorkDisabled}
