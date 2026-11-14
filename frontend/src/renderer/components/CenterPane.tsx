@@ -1,4 +1,4 @@
-import { isSettingsPageOpen } from "../hooks/useAppShortcut";
+import { isSettingsPageOpen, onDedicatedShortcut } from "../hooks/useAppShortcut";
 import { motion, Reorder, useDragControls, useMotionValue } from "motion/react";
 import {
 	useCallback,
@@ -414,7 +414,7 @@ export function CenterPane({
 
 	useEffect(
 		() =>
-			aoBridge.app.onCloseShellTerminalShortcut(() => {
+			onDedicatedShortcut("close-shell-terminal", (handler) => aoBridge.app.onCloseShellTerminalShortcut(handler), () => {
 				if (closeFocusedSplitPane) closeFocusedSplitPane();
 				else if (activeWorkspaceTab?.onClose) activeWorkspaceTab.onClose();
 				else if (target.kind === "shell") onCloseShellTerminal?.(target.handleId);
@@ -423,8 +423,12 @@ export function CenterPane({
 	);
 
 	useEffect(() => {
-		const disposePrevious = aoBridge.app.onPreviousTabShortcut(() => !isSettingsPageOpen() && selectAdjacentTab(-1));
-		const disposeNext = aoBridge.app.onNextTabShortcut(() => !isSettingsPageOpen() && selectAdjacentTab(1));
+		const disposePrevious = onDedicatedShortcut("previous-tab", (handler) => aoBridge.app.onPreviousTabShortcut(handler), () => {
+			if (!isSettingsPageOpen()) selectAdjacentTab(-1);
+		});
+		const disposeNext = onDedicatedShortcut("next-tab", (handler) => aoBridge.app.onNextTabShortcut(handler), () => {
+			if (!isSettingsPageOpen()) selectAdjacentTab(1);
+		});
 		return () => {
 			disposePrevious();
 			disposeNext();

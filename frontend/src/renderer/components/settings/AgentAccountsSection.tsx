@@ -1,4 +1,4 @@
-import { LoaderCircle, Plus, RefreshCw, RotateCcw, Trash2, TriangleAlert, X } from "@/components/app-icons";
+import { Info, LoaderCircle, Plus, RefreshCw, RotateCcw, Trash2, TriangleAlert, X } from "@/components/app-icons";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { agentAccountLabel, agentAccountProviderFor, agentAccountProviderNames, describeAccountProblem, useAgentAccountActions, useAgentAccounts, useAgentAccountUsage, withoutSameLogins, type AgentAccount, type AgentAccountLimitWindow, type AgentAccountLogin, type AgentAccountProvider } from "../../hooks/useAgentAccounts";
@@ -229,7 +229,17 @@ function AccountHandoffRow() {
 	const { settings, isLoading } = useSettings();
 	const { update, saving, error } = useUpdateAccountHandoff();
 	return <>
-		<HarnessDetailRow label={t("settings.agentAccounts.handoff")} description={t("settings.agentAccounts.handoffDescription")}>
+		<HarnessDetailRow label={<span className="inline-flex items-center gap-1.5">
+			{t("settings.agentAccounts.handoff")}
+			<Tooltip>
+				<TooltipTrigger asChild>
+					<Button type="button" size="icon-xs" variant="quiet" aria-label={t("settings.agentAccounts.problemDetails")}>
+						<Info className="size-icon-sm" aria-hidden="true" />
+					</Button>
+				</TooltipTrigger>
+				<TooltipContent className="max-w-sm">{t("settings.agentAccounts.handoffDescription")}</TooltipContent>
+			</Tooltip>
+		</span>}>
 			<Switch
 				aria-label={t("settings.agentAccounts.handoff")}
 				checked={settings?.accountHandoff ?? false}
