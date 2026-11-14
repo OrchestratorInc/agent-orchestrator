@@ -161,7 +161,9 @@ func (p *Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
 // mode emits no --permission-mode flag, so Claude's TUI resolves the starting
 // mode from ~/.claude/settings.json exactly as a normal launch. An explicit
 // mode is repeated as the flag-settings defaultMode only to keep Claude's
-// auto-mode default dialog out of the session (see autoDefaultNudgeGuardArgs).
+// auto-mode default dialog out of the session (see autoDefaultNudgeGuardArgs),
+// and bypassPermissions also skips its confirmation dialog there (see
+// claudeLaunchSettingsArgs).
 //
 // The prompt is passed after `--` so a prompt beginning with "-" is not
 // mistaken for a flag.
@@ -209,10 +211,20 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 // settings: Ultracode, and the token count at which it compacts on its own.
 // They share one --settings flag with the auto-mode dialog guard (see
 // autoDefaultNudgeGuardArgs).
+//
+// A bypassPermissions session also carries skipDangerousModePermissionPrompt.
+// Until that key is set, Claude Code opens a confirmation dialog before an
+// interactive session in that mode, and nothing in an AO pane answers it, so
+// the session never reaches its prompt (#6484). Claude reads the key from flag
+// settings as well as user, local, and managed settings (checked in 2.1.302
+// through 2.1.311), so passing it here leaves the user's own files alone.
 func claudeLaunchSettingsArgs(options domain.AgentLaunchOptions, policy agentruntime.PermissionPolicy) []string {
 	settings := autoDefaultNudgeGuardSettings(policy)
 	if settings == nil {
 		settings = map[string]any{}
+	}
+	if agentruntime.NormalizePermissionPolicy(policy) == agentruntime.PermissionBypassPermissions {
+		settings["skipDangerousModePermissionPrompt"] = true
 	}
 	if options.Ultracode {
 		settings["ultracode"] = true
