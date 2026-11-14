@@ -78,7 +78,8 @@ type UseBrowserViewOptions = {
 	sessionEnded?: boolean;
 	/**
 	 * Preview target driven by the daemon (via `ao preview`, streamed over CDC).
-	 * When set, the view navigates here automatically; an empty value clears it.
+	 * When set, the view navigates here once it has a tab or its slot is shown;
+	 * an empty value clears it.
 	 */
 	previewUrl?: string;
 	/**
@@ -352,6 +353,10 @@ export function useBrowserView({
 	const settleTimerRef = useRef<number | null>(null);
 	const observerRef = useRef<ResizeObserver | null>(null);
 	const previewTriggerRef = useRef<PreviewTrigger | null>(null);
+	// A preview waiting for the slot to be shown, because the session had no
+	// tab to load it into.
+	const previewHeldRef = useRef(false);
+	const previewRequestRef = useRef(0);
 	const tabNoticeTimerRef = useRef<number | null>(null);
 	const tabsStateRef = useRef(tabsState);
 	const hasNativeBrowser = Boolean(window.ao?.browser);
@@ -505,6 +510,8 @@ export function useBrowserView({
 		// switches, so seed from the per-session consumed trigger to avoid
 		// reasserting previewUrl over manual navigation on switch-back.
 		previewTriggerRef.current = hasNativeBrowser ? (consumedPreviewTriggers.get(sessionId) ?? null) : null;
+		previewHeldRef.current = false;
+		previewRequestRef.current += 1;
 		const cached = hasNativeBrowser && !terminated ? nativeViewBySession.get(sessionId) : undefined;
 		// The view this run owns, so its cleanup never hides or clears the next
 		// session's view, which the switch below may already have shown.
@@ -1134,10 +1141,14 @@ export function useBrowserView({
 	// A preview never lands in an agent tab: it goes to the person's preview
 	// tab (one on its origin or another preview's), else to a new tab.
 	const showPreview = useCallback(
-		async (url: string) => {
+		async (url: string, held = false) => {
 			const id = viewIdRef.current;
 			const tabs = hasNativeBrowser && id ? (await window.ao!.browser.getTabs(id).catch(() => null))?.tabs : undefined;
-			if (!tabs?.find((tab) => tab.active)?.remote) return navigate(url);
+			const activeTab = tabs?.find((tab) => tab.active);
+			// A held preview is older than a page that reached the person's tab
+			// meanwhile (an agent's `ao browser open`), so that page stays.
+			if (held && activeTab && !activeTab.remote && !isBlankTabUrl(activeTab.url)) return;
+			if (!tabs || !activeTab?.remote) return navigate(url);
 			const preview = /^https:\/\/ao-preview-[0-9a-f]{32}\.localhost(?::\d+)?\//;
 			const own = tabs.find((tab) => !tab.remote && (sameBrowserOrigin(tab.url, url) || preview.test(tab.url)));
 			if (!own) return openTab(url);
@@ -1237,6 +1248,9 @@ export function useBrowserView({
 		return undefined;
 	}, [origin?.hostId, origin?.sessionId, origin?.proxyBase, previewUrl, terminated]);
 
+	const tabsKnown = Boolean(viewId) && tabsState.viewId === viewId;
+	const hasOwnTab = tabsKnown && tabsState.tabs.some((tab) => !tab.remote);
+
 	// Drive the view from the daemon-set preview target. Current daemons key
 	// this on previewRevision (bumped on every `ao preview` call); older daemons
 	// did not send it, so fall back to URL changes for compatibility.
@@ -1254,23 +1268,36 @@ export function useBrowserView({
 		const sameLifecycle = previous?.sessionEnded === Boolean(sessionEnded);
 		if (sameLifecycle && previous?.revision === revision && previous.target === target && previous.origin === source) return;
 		if (sameLifecycle && revision !== null && previous?.revision === revision && previous.origin === source) return;
+		if (target && hasNativeBrowser) {
+			// Entering a session must not start a page for a slot nobody is
+			// looking at. With no tab of the person's to load into, the preview
+			// waits until the slot is shown.
+			if (!active && !hasOwnTab) {
+				if (tabsKnown) previewHeldRef.current = true;
+				return;
+			}
+			// A held preview lets a running agent command finish first.
+			if (previewHeldRef.current && agentBrowserActive) return;
+		}
+		const held = previewHeldRef.current;
+		previewHeldRef.current = false;
 		const consumed: PreviewTrigger = { revision, target, origin: source, sessionEnded: Boolean(sessionEnded) };
 		previewTriggerRef.current = consumed;
 		if (hasNativeBrowser) consumedPreviewTriggers.set(sessionId, consumed);
+		// The newest request wins. A session change bumps this too, so a URL
+		// still resolving never loads into the next session's view.
+		const request = ++previewRequestRef.current;
 		if (target) {
-			let cancelled = false;
 			const resolved = origin
 				? aoBridge.remotes.previewUrl(origin.hostId, origin.sessionId, target)
 				: Promise.resolve(target);
 			void resolved.then((url) => {
-				return cancelled ? undefined : showPreview(url);
+				return previewRequestRef.current === request ? showPreview(url, held) : undefined;
 			}).catch((error) => console.warn("Unable to open browser preview", error));
-			return () => { cancelled = true; };
 		} else if ((revision !== null && revision > 0) || previous?.target) {
 			void clear();
 		}
-		return undefined;
-	}, [clear, hasNativeBrowser, origin?.hostId, origin?.sessionId, origin?.proxyBase, previewRevision, previewUrl, sessionEnded, sessionId, showPreview, terminated, viewId]);
+	}, [active, agentBrowserActive, clear, hasNativeBrowser, hasOwnTab, origin?.hostId, origin?.sessionId, origin?.proxyBase, previewRevision, previewUrl, sessionEnded, sessionId, showPreview, tabsKnown, terminated, viewId]);
 
 	const destroy = useCallback(() => {
 		const id = viewIdRef.current;
