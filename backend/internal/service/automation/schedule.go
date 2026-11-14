@@ -255,3 +255,24 @@ func cronWeekdays(value string) ([]string, error) {
 	}
 	return days, nil
 }
+
+// latestOccurrence returns the newest due occurrence, including an exact tick.
+func latestOccurrence(rruleText, timezone string, at time.Time) (time.Time, error) {
+	loc, err := time.LoadLocation(timezone)
+	if err != nil {
+		return time.Time{}, err
+	}
+	option, err := rrule.StrToROptionInLocation(rruleText, loc)
+	if err != nil {
+		return time.Time{}, err
+	}
+	rule, err := rrule.NewRRule(*option)
+	if err != nil {
+		return time.Time{}, err
+	}
+	latest := rule.Before(at, true)
+	if latest.IsZero() {
+		return time.Time{}, fmt.Errorf("schedule has no due occurrence")
+	}
+	return latest.UTC(), nil
+}
