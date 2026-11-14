@@ -3388,7 +3388,6 @@
 	"artifacts.share.cancel": "Abbrechen",
 	"artifacts.share.published": "Veröffentlicht",
 	"artifacts.share.republishHint": "Seit der Veröffentlichung bearbeitet. Erneut veröffentlichen, um den Link zu aktualisieren.",
-	"artifacts.share.options": "Zugriff und Personen: {{name}}",
 	"artifacts.share.title.publish": "Veröffentlichen",
 	"artifacts.share.title.publishing": "Wird veröffentlicht",
 	"artifacts.share.title.published": "Veröffentlicht",

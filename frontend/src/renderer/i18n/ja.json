@@ -3388,7 +3388,6 @@
 	"artifacts.share.cancel": "キャンセル",
 	"artifacts.share.published": "公開済み",
 	"artifacts.share.republishHint": "公開後に編集されています。再公開するとリンクが更新されます。",
-	"artifacts.share.options": "アクセスとユーザー: {{name}}",
 	"artifacts.share.title.publish": "公開",
 	"artifacts.share.title.publishing": "公開中",
 	"artifacts.share.title.published": "公開済み",

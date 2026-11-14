@@ -3511,7 +3511,6 @@
 	"artifacts.share.cancel": "Отмена",
 	"artifacts.share.published": "Опубликовано",
 	"artifacts.share.republishHint": "Изменено после публикации. Обновите, чтобы обновить ссылку.",
-	"artifacts.share.options": "Доступ и люди: {{name}}",
 	"artifacts.share.title.publish": "Публикация",
 	"artifacts.share.title.publishing": "Публикуется",
 	"artifacts.share.title.published": "Опубликовано",

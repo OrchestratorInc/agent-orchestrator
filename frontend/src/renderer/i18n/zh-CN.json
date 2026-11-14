@@ -3370,7 +3370,6 @@
 	"artifacts.share.cancel": "取消",
 	"artifacts.share.published": "已发布",
 	"artifacts.share.republishHint": "发布后已编辑。重新发布以更新链接。",
-	"artifacts.share.options": "访问权限和人员：{{name}}",
 	"artifacts.share.title.publish": "发布",
 	"artifacts.share.title.publishing": "正在发布",
 	"artifacts.share.title.published": "已发布",
