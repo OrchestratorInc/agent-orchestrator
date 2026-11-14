@@ -222,6 +222,12 @@ if (typeof window !== "undefined") {
 			fetch: async () => ({ bytes: new Uint8Array(), mimeType: "image/png" }),
 			save: async () => true,
 		},
+		fileDownload: {
+			start: async () => "download-1",
+			append: async () => undefined,
+			finish: async () => undefined,
+			cancel: async () => undefined,
+		},
 		sessionShareUrls: {
 			remember: async () => undefined,
 			recall: async () => ({}),

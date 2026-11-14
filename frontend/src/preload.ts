@@ -521,6 +521,12 @@ const api = {
 		fetch: (url: string) => ipcRenderer.invoke("chatImage:fetch", url) as Promise<{ bytes: Uint8Array; mimeType: string }>,
 		save: (input: { name: string; bytes: Uint8Array }) => ipcRenderer.invoke("chatImage:save", input) as Promise<boolean>,
 	},
+	fileDownload: {
+		start: (name: string) => ipcRenderer.invoke("fileDownload:start", name) as Promise<string | null>,
+		append: (id: string, bytes: Uint8Array) => ipcRenderer.invoke("fileDownload:append", id, bytes) as Promise<void>,
+		finish: (id: string) => ipcRenderer.invoke("fileDownload:finish", id) as Promise<void>,
+		cancel: (id: string) => ipcRenderer.invoke("fileDownload:cancel", id) as Promise<void>,
+	},
 	// Cached artifact preview images, rendered once in a hidden window (main/artifact-snapshots.ts).
 	// Cards load them from the snapshot scheme; this only asks for a missing one.
 	artifactSnapshot: {

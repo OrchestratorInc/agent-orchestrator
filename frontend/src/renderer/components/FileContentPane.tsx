@@ -4,7 +4,7 @@ import { useCallback, useContext, useEffect, useLayoutEffect, useRef, useState }
 import { createPortal } from "react-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { Eye, FileCode2, FileText, GitCompareArrows, LoaderCircle, MessageSquarePlus, Pencil, Save, X } from "@/components/app-icons";
+import { Download, Eye, FileCode2, FileText, GitCompareArrows, LoaderCircle, MessageSquarePlus, Pencil, Save, X } from "@/components/app-icons";
 import { Editor, type EditorFactory } from "@pierre/diffs/edit";
 import type { ArtifactMenuAction, ArtifactMenuActions } from "../lib/artifact-menu";
 import { EditProvider } from "@pierre/diffs/react";
@@ -20,6 +20,7 @@ import {
 	type FilesSource,
 } from "../hooks/useSessionWorkspaceFiles";
 import { usePierreFileHighlightReady } from "../hooks/usePierreFileHighlight";
+import { useWorkspaceFileDownload } from "../hooks/useWorkspaceFileDownload";
 import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { subscribeWorkspaceFileChanges } from "../lib/workspace-file-events";
 import { sessionUiKey } from "../lib/hosts";
@@ -155,6 +156,7 @@ export function FileContentPane({
 	toolbar?: "tabs" | "compact";
 }) {
 	const { t } = useTranslation();
+	const downloadFile = useWorkspaceFileDownload(sessionId, hostId);
 	// The menu actions this render offers; published once it commits, and
 	// withdrawn while loading, on an error, or when the pane goes away.
 	const menuPublish = useRef<ArtifactMenuAction[]>([]);
@@ -203,7 +205,8 @@ export function FileContentPane({
 		enabled: Boolean(path) && !outsideWorkspace && !selectionOrMenuActive,
 	});
 	const query = { ...queryResult, data: useSelectionSnapshot(selectionPane, queryResult.data, selectionIdentity) };
-	const canReadLiveText = Boolean(path) && !fileMediaKind(path ?? "") && !outsideWorkspace && mode === "file" && !editing && !initialEditing && !selectionOrMenuActive && source.kind === "workspace" && !commitSha && (scope === "combined" || scope === "uncommitted" || scope === "unstaged" || scope === "untracked");
+	const liveScope = scope === "combined" || scope === "uncommitted" || scope === "unstaged" || scope === "untracked";
+	const canReadLiveText = Boolean(path) && !fileMediaKind(path ?? "") && !outsideWorkspace && mode === "file" && !editing && !initialEditing && !selectionOrMenuActive && source.kind === "workspace" && !commitSha && liveScope;
 	const liveTextResult = useQuery({
 		...sessionSourceFileRevisionQueryOptions({ path: path ?? "", scope, sessionId, hostId, side: "after", source }),
 		enabled: canReadLiveText,
@@ -387,7 +390,7 @@ export function FileContentPane({
 
 	const detail = query.data;
 	// A historical/staged view must never show the current worktree's media.
-	const mediaKind = (source.kind === "snapshot" && fileMediaKind(path)==="image") || source.kind === "artifact" || (source.kind === "workspace" && !commitSha && !detail.deleted && detail.binary && (scope === "combined" || scope === "uncommitted" || scope === "unstaged" || scope === "untracked"))
+	const mediaKind = (source.kind === "snapshot" && fileMediaKind(path)==="image") || source.kind === "artifact" || (source.kind === "workspace" && !commitSha && !detail.deleted && detail.binary && liveScope)
 		? fileMediaKind(path) : undefined;
 	const mediaOnly = Boolean(mediaKind && !detail.imageMediaType);
 	const markdownAvailable = canRenderMarkdown(path, detail);
@@ -481,6 +484,7 @@ export function FileContentPane({
 	// HTML has no Rich preview here: its rendered view is the session's Browser,
 	// which serves the live workspace file, so not for a commit or deleted file.
 	const browserPage = openInBrowser && source.kind === "workspace" && !commitSha && !detail.deleted && /\.html?$/i.test(detail.path);
+	const download = downloadFile && source.kind === "workspace" && !commitSha && liveScope && !detail.deleted ? () => downloadFile(detail.path) : undefined;
 	// Mode switches and file actions share one row and one gap.
 	const toolbarActions = (
 		<div className="flex shrink-0 items-center gap-0.5">
@@ -495,6 +499,12 @@ export function FileContentPane({
 				<Tooltip>
 					<TooltipTrigger asChild><Button aria-label={t("inspector.openInAOBrowser")} className="text-muted-foreground hover:text-foreground" onClick={() => openInBrowser(detail.path)} size="icon-sm" type="button" variant="ghost"><BrowserIcon aria-hidden="true" className="size-icon-sm" /></Button></TooltipTrigger>
 					<TooltipContent side="bottom">{t("inspector.openInAOBrowser")}</TooltipContent>
+				</Tooltip>
+			) : null}
+			{download && !editing ? (
+				<Tooltip>
+					<TooltipTrigger asChild><Button aria-label={t("files.download")} onClick={download} size="icon-sm" type="button" variant="quiet"><Download aria-hidden="true" className="size-icon-sm" /></Button></TooltipTrigger>
+					<TooltipContent side="bottom">{t("files.download")}</TooltipContent>
 				</Tooltip>
 			) : null}
    {onOpenInCenter ? <Tooltip><TooltipTrigger asChild><span tabIndex={editing ? 0 : undefined}><Button aria-label={t("files.openInCenter",{path:detail.path})} disabled={editing} onClick={()=>onOpenInCenter(effectiveMode)} size="icon-sm" type="button" variant="ghost"><VscodeGoToFileIcon aria-hidden="true" className="size-icon-sm"/></Button></span></TooltipTrigger><TooltipContent side="bottom">{editing ? t("files.finishEditingToOpen") : t("files.openInCenter",{path:detail.path})}</TooltipContent></Tooltip> : null}
@@ -542,6 +552,7 @@ export function FileContentPane({
 				id: `mode:${id}`, label, icon, disabled: editing, mode: { checked: effectiveMode === id }, onSelect: () => selectMode(id),
 			})) : []),
 			...(!editing && editable ? [{ id: "edit", label: t("files.editFile"), icon: <Pencil aria-hidden="true" />, onSelect: beginEditing }] : []),
+			...(!editing && download ? [{ id: "download", label: t("files.download"), icon: <Download aria-hidden="true" />, onSelect: download }] : []),
 			...(!editing ? [{
 				id: "feedback",
 				label: t("files.addFeedback"),
