@@ -278,17 +278,27 @@ func splitBrowserBatchLine(line string) ([]string, error) {
 // and checks flags and argument count, so a typo in step 5 fails the batch
 // before step 1 touches the page.
 func validateBrowserBatchStep(step []string, checkTree bool) error {
+	// A leading flag would let Cobra skip ahead to a forbidden command
+	// (`--json=false batch ...`), and remote steps are never resolved here.
+	if strings.HasPrefix(step[0], "-") {
+		return errors.New("a step must start with a browser command, not a flag")
+	}
 	if reason, ok := browserBatchForbiddenCommands[step[0]]; ok {
 		return errors.New(reason)
 	}
+	if step[0] == "help" {
+		return errors.New("help is not a batch step")
+	}
+	// Only flags are checked here: `help` or `--json` typed as a value
+	// (`fill e2 help`) is page data.
 	for _, arg := range step {
 		if arg == "--" {
 			break
 		}
-		switch arg {
-		case "--json":
+		switch {
+		case arg == "--json" || strings.HasPrefix(arg, "--json="):
 			return errors.New("--json is set on the batch, not on a step")
-		case "-h", "--help", "help":
+		case arg == "-h" || arg == "--help":
 			return errors.New("help is not a batch step")
 		}
 	}
@@ -303,15 +313,41 @@ func validateBrowserBatchStep(step []string, checkTree bool) error {
 	if target == tree || target.RunE == nil {
 		return fmt.Errorf("unknown browser command %q", strings.Join(step, " "))
 	}
+	// Check the command Cobra resolved, not only the first word.
+	top := target
+	for top.Parent() != tree {
+		top = top.Parent()
+	}
+	if reason, ok := browserBatchForbiddenCommands[top.Name()]; ok {
+		return errors.New(reason)
+	}
 	if err := target.ParseFlags(rest); err != nil {
 		return err
 	}
+	positional := target.Flags().Args()
 	if target.Args != nil {
-		if err := target.Args(target, target.Flags().Args()); err != nil {
+		if err := target.Args(target, positional); err != nil {
+			return err
+		}
+	}
+	// PreRunE holds each command's option-combination checks and has no side
+	// effects, so running it here rejects `--expect-text a --expect-url b`
+	// before an earlier step has touched the page.
+	if target.PreRunE != nil {
+		if err := target.PreRunE(target, positional); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// browserBatchIsReadStep reports whether a step only returns page state, in
+// either the desktop syntax or the remote agent-browser syntax (`tab list`).
+func browserBatchIsReadStep(step []string) bool {
+	if browserBatchReadCommands[step[0]] {
+		return true
+	}
+	return len(step) > 1 && step[0] == "tab" && step[1] == "list"
 }
 
 func (c *commandContext) runBrowserBatch(ctx context.Context, steps [][]string, snapshotMode string) browserBatchResult {
@@ -473,7 +509,7 @@ func writeBrowserBatchResult(w io.Writer, result browserBatchResult, verbose boo
 			fmt.Fprintf(&b, "\n    error: %s", step.Error)
 		}
 		b.WriteString("\n")
-		showOutput := step.Status == "failed" || (step.Status == "ok" && (verbose || browserBatchReadCommands[step.Args[0]]))
+		showOutput := step.Status == "failed" || (step.Status == "ok" && (verbose || browserBatchIsReadStep(step.Args)))
 		if output := strings.TrimRight(step.Output, "\n"); showOutput && output != "" {
 			b.WriteString(output + "\n")
 		}

@@ -30,8 +30,10 @@ itself reports an error, so add a `wait` after steps that should change the
 page.
 
 ```bash
+ao browser batch --steps 'open http://localhost:5173/search
+snapshot --interactive'
+# the snapshot shows the search field as @e2
 ao browser batch <<'EOF'
-open http://localhost:5173/search
 fill @e2 "invoice 42"
 press Enter
 wait --text "Results"

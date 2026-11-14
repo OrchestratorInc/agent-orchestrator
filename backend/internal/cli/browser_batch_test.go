@@ -117,12 +117,23 @@ ao browser act Sign\ in --expect-text "Welcome, \"Ada\""
 
 func TestBrowserBatchValidatesEveryStepBeforeRunningAny(t *testing.T) {
 	for name, steps := range map[string]string{
-		"unknown command": "open http://x\nclik e3",
-		"unknown flag":    "open http://x\nact Save --expect-txt Saved",
-		"arg count":       "open http://x\nfill e2",
-		"json on a step":  "open http://x\nsnapshot --json",
-		"nested batch":    "open http://x\nbatch -",
-		"chrome setup":    "open http://x\nchrome setup",
+		"unknown command":         "open http://x\nclik e3",
+		"unknown flag":            "open http://x\nact Save --expect-txt Saved",
+		"arg count":               "open http://x\nfill e2",
+		"json on a step":          "open http://x\nsnapshot --json",
+		"nested batch":            "open http://x\nbatch -",
+		"chrome setup":            "open http://x\nchrome setup",
+		"flag before batch":       "open http://x\n--json=false batch --steps 'click e1'",
+		"flag before chrome":      "open http://x\n--json=false chrome setup",
+		"batch flag before batch": "open http://x\n--verbose batch --steps 'click e1'",
+		"json with value":         "open http://x\nsnapshot --json=true",
+		"help command":            "open http://x\nhelp click",
+		"help flag":               "open http://x\nclick e1 --help",
+		"act postconditions":      "click e1\nact Save --expect-text Saved --expect-url /done",
+		"wait conditions":         "click e1\nwait --text a --url b",
+		"snapshot full":           "click e1\nsnapshot --full",
+		"screenshot base64":       "click e1\nscreenshot --base64",
+		"network duration":        "click e1\nnetwork start --duration 0",
 	} {
 		t.Run(name, func(t *testing.T) {
 			server := &batchBrowserServer{}
@@ -389,9 +400,11 @@ func TestBrowserBatchForwardsEachStepToRemoteBrowser(t *testing.T) {
 func TestBrowserBatchRemoteStillRejectsNonPageSteps(t *testing.T) {
 	t.Setenv(envAgentBrowserURL, "http://127.0.0.1:1")
 	t.Setenv(envAgentBrowserToken, "remote-token")
-	_, _, err := executeCLIRoot(t, Deps{}, "browser", "batch", "--steps", "get url\nbatch -")
-	if ExitCode(err) != 2 || !strings.Contains(err.Error(), "step 2") {
-		t.Fatalf("err = %v", err)
+	for _, steps := range []string{"get url\nbatch -", "get url\n--verbose batch -"} {
+		_, _, err := executeCLIRoot(t, Deps{}, "browser", "batch", "--steps", steps)
+		if ExitCode(err) != 2 || !strings.Contains(err.Error(), "step 2") {
+			t.Fatalf("%q: err = %v", steps, err)
+		}
 	}
 }
 
@@ -435,5 +448,35 @@ func TestBrowserBatchStopsAtDeniedStep(t *testing.T) {
 	if !strings.Contains(out, "[2] FAILED: click e3\n    error: The user denied this browser action (BROWSER_ACTION_DENIED)") ||
 		!strings.Contains(out, "[3] not run: get text body") {
 		t.Fatalf("output:\n%s", out)
+	}
+}
+
+func TestBrowserBatchAllowsHelpAsData(t *testing.T) {
+	server := &batchBrowserServer{}
+	deps := startBatchBrowserServer(t, server)
+	_, _, err := executeCLI(t, deps, "browser", "batch", "--steps",
+		"fill e2 help\nact Help --action fill --value help\nwait --text help")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := server.actions(); !reflect.DeepEqual(got, []string{"fill", "act", "wait"}) {
+		t.Fatalf("actions = %v", got)
+	}
+}
+
+func TestBrowserBatchPrintsRemoteTabList(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"output":"t1 Example https://example.com/\n"}`)
+	}))
+	t.Cleanup(srv.Close)
+	t.Setenv(envAgentBrowserURL, srv.URL)
+	t.Setenv(envAgentBrowserToken, "remote-token")
+	out, _, err := executeCLIRoot(t, Deps{HTTPClient: srv.Client()}, "browser", "batch", "--steps", "tab list\ntab new")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(out, "t1 Example https://example.com/") != 1 {
+		t.Fatalf("tab list output should print once, tab new not at all:\n%s", out)
 	}
 }
