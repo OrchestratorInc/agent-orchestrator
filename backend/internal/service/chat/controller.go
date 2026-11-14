@@ -368,6 +368,9 @@ var ErrNoActiveTurn = errors.New("no active turn")
 // session_updated event announces the target mode.
 var ErrControllerHandoff = errors.New("chat controller is switching interfaces")
 
+// ErrForcedHandoffStoppedSource means a failed forced handoff stopped the source and kept its handoff latch; the caller restores the source, then calls AbortHandoff.
+var ErrForcedHandoffStoppedSource = errors.New("the forced handoff stopped the source")
+
 // ErrTurnNotRetryable reports a turn that cannot be retried: it is not part of
 // this conversation, not failed, was rolled back, or carries no durable prompt
 // the user authored. A retry is only ever offered for an eligible failed human
@@ -2573,15 +2576,23 @@ func (c *Controller) BeginForcedBranchHandoff(ctx context.Context) error {
 	c.handoff = controllerHandoffIdleBranch
 	c.branchHandoffDone = make(chan struct{})
 	c.mu.Unlock()
+	terminated := false
+	fail := func(err error) error {
+		restoreSteers()
+		if terminated {
+			return errors.Join(ErrForcedHandoffStoppedSource, err)
+		}
+		c.AbortHandoff()
+		return err
+	}
 	if !lockWithin(ctx, &c.sendMu, forcedHandoffInterruptLimit) {
 		c.prepareBranchHandoffStop()
 		stopCtx, cancel := context.WithTimeout(ctx, forcedHandoffInterruptLimit)
 		stopErr := c.Terminate(stopCtx)
 		cancel()
+		terminated = true
 		if !lockWithin(ctx, &c.sendMu, forcedHandoffInterruptLimit) {
-			c.AbortHandoff()
-			restoreSteers()
-			return errors.Join(errors.New("the provider did not release its pending send after it was stopped"), stopErr)
+			return fail(errors.Join(errors.New("the provider did not release its pending send after it was stopped"), stopErr))
 		}
 	}
 	c.mu.Lock()
@@ -2590,9 +2601,7 @@ func (c *Controller) BeginForcedBranchHandoff(ctx context.Context) error {
 	err := c.store.CancelAllQueuedTurns(ctx, c.conversation.ID, c.now())
 	c.sendMu.Unlock()
 	if err != nil {
-		c.AbortHandoff()
-		restoreSteers()
-		return fmt.Errorf("cancel queued turns before forced handoff: %w", err)
+		return fail(fmt.Errorf("cancel queued turns before forced handoff: %w", err))
 	}
 	if active {
 		interruptCtx, cancel := context.WithTimeout(ctx, forcedHandoffInterruptLimit)

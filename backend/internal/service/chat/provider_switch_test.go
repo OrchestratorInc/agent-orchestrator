@@ -219,6 +219,39 @@ func TestForcedProviderSwitchStopsASendStuckInTheProvider(t *testing.T) {
 	}
 }
 
+func TestFailedForcedSwitchBringsTheStoppedSourceBack(t *testing.T) {
+	t.Cleanup(chatsvc.SetForcedHandoffInterruptLimit(50 * time.Millisecond))
+	h, _, driver := newEditHarness(t, false)
+	ctx := context.Background()
+	stuck := make(chan struct{})
+	t.Cleanup(func() { close(stuck) })
+	h.conv.mu.Lock()
+	h.conv.onSend = func(string) { <-stuck }
+	h.conv.mu.Unlock()
+	go func() {
+		_, _ = h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "never released", Origin: domain.MessageOriginHuman})
+	}()
+	h.awaitSnapshot(t, func(snapshot store.ConversationSnapshot) bool { return len(snapshot.Turns) == 1 })
+	startsBefore := len(driver.startConfigs) + len(driver.resumeCalls)
+
+	err := h.svc.SwitchProvider(ctx, testSession, domain.ProviderSwitchRequest{
+		TargetHarness: domain.HarnessClaudeCode, IdempotencyKey: "forced", Force: true,
+	})
+	var refusal *domain.ProviderSwitchError
+	if !errors.As(err, &refusal) || refusal.Kind != domain.ProviderSwitchRefusalBusy {
+		t.Fatalf("forced switch = %v, want a busy refusal", err)
+	}
+	if record, found, err := h.st.GetSession(ctx, testSession); err != nil || !found || record.Harness == domain.HarnessClaudeCode {
+		t.Fatalf("session = %+v found=%v err=%v, want it still on the source", record, found, err)
+	}
+	if got := len(driver.startConfigs) + len(driver.resumeCalls); got == startsBefore {
+		t.Fatal("the stopped source was not brought back")
+	}
+	if !h.svc.HasLiveChatController(testSession) {
+		t.Fatalf("the session has no live controller after the failed forced switch: %v", err)
+	}
+}
+
 func TestProviderSwitchFailureRestoresSourceController(t *testing.T) {
 	h, _, driver := newEditHarness(t, false)
 	ctx := context.Background()

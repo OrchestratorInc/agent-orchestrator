@@ -224,20 +224,6 @@ func (s *Service) switchProvider(ctx context.Context, id domain.SessionID, reque
 	if err != nil {
 		return err
 	}
-	beginHandoff := source.BeginIdleBranchHandoff
-	if request.Force {
-		beginHandoff = source.BeginForcedBranchHandoff
-	}
-	if err := beginHandoff(ctx); err != nil {
-		return &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalBusy, Detail: err.Error(), Cause: err}
-	}
-	abortSource := true
-	defer func() {
-		if abortSource {
-			source.AbortHandoff()
-		}
-	}()
-
 	startCfg, sourceDriver, err := s.branchLaunchConfig(source)
 	if err != nil {
 		return &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalRecoveryRequired, Detail: "source launch configuration is unavailable", Cause: err}
@@ -249,6 +235,27 @@ func (s *Service) switchProvider(ctx context.Context, id domain.SessionID, reque
 	if err != nil {
 		return err
 	}
+	beginHandoff := source.BeginIdleBranchHandoff
+	if request.Force {
+		beginHandoff = source.BeginForcedBranchHandoff
+	}
+	if err := beginHandoff(ctx); err != nil {
+		if errors.Is(err, ErrForcedHandoffStoppedSource) {
+			restoreCtx, cancelRestore := context.WithTimeout(context.WithoutCancel(ctx), nativeEditHandoffLimit)
+			defer cancelRestore()
+			if restoreErr := s.restoreClosedSourceController(restoreCtx, id, source, activeBranch, startCfg, sourceDriver); restoreErr != nil {
+				err = errors.Join(err, restoreErr)
+			}
+			source.AbortHandoff()
+		}
+		return &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalBusy, Detail: err.Error(), Cause: err}
+	}
+	abortSource := true
+	defer func() {
+		if abortSource {
+			source.AbortHandoff()
+		}
+	}()
 	// The outgoing provider's model, for the handoff marker. Read before it is stopped.
 	sourceModel := cmp.Or(source.Settings().Model, record.Metadata.Model)
 	operationCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), nativeEditHandoffLimit)
