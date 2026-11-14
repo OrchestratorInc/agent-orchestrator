@@ -427,6 +427,8 @@ const api = {
 				ipcRenderer.off(APP_SHORTCUT_CHANNEL, wrapped);
 			};
 		},
+		// Tells main the first frame that shows the workspace is on screen.
+		reportSessionsShown: () => ipcRenderer.send("app:sessionsShown"),
 		setMenuAvailability: (availability: AppMenuAvailability) => {
 			ipcRenderer.send(SET_APP_MENU_AVAILABILITY_CHANNEL, availability);
 		},
