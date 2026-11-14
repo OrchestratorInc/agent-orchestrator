@@ -51,15 +51,17 @@ export function useAgentAccounts(enabled = true, hostId?: HostId) {
 	return useQuery({ queryKey: agentAccountsQueryKeyFor(hostId), queryFn: () => fetchAgentAccounts(false, hostId), refetchInterval: 60_000, enabled });
 }
 
-const freshReadEvery = 60_000;
+// Each fresh read starts the provider CLIs for every account, so cap it at
+// once every two minutes; the daemon itself reuses a reading for five.
+const freshReadEvery = 120_000;
 let lastFreshRead = Number.NEGATIVE_INFINITY;
 let freshReadAttempt = 0;
 // Counts account changes, such as a removal or a new default, so a slow fresh
 // read started before one doesn't put the older list back.
 let accountWrites = 0;
 
-/** Reads every account's limits past the daemon's cache, at most once a
- * minute across mounts. A failed read is returned as error until a fresh read
+/** Reads every account's limits past the daemon's cache, at most once every
+ * two minutes across mounts. A failed read is returned as error until a fresh read
  * succeeds, with failedAt so a caller can retry once a later poll lands, and
  * the next call tries again at once. */
 export function useFreshAgentAccountsRead() {

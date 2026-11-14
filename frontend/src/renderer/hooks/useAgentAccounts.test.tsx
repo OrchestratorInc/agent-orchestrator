@@ -33,7 +33,7 @@ describe("useFreshAgentAccountsRead", () => {
 	});
 	afterEach(() => vi.restoreAllMocks());
 
-	it("reads past the daemon cache at most once a minute", async () => {
+	it("reads past the daemon cache at most once every two minutes", async () => {
 		const { client, result } = renderRead();
 		act(() => {
 			result.current.fresh.read();
@@ -43,10 +43,10 @@ describe("useFreshAgentAccountsRead", () => {
 		expect(getMock).toHaveBeenCalledWith("/api/v1/agents/accounts", { params: { query: { refresh: true } } });
 		await waitFor(() => expect(client.getQueryData(agentAccountsQueryKey)).toEqual([{ id: "acct-1" }]));
 
-		vi.mocked(Date.now).mockReturnValue(1_059_999);
+		vi.mocked(Date.now).mockReturnValue(1_119_999);
 		act(() => result.current.fresh.read());
 		expect(getMock).toHaveBeenCalledTimes(1);
-		vi.mocked(Date.now).mockReturnValue(1_060_000);
+		vi.mocked(Date.now).mockReturnValue(1_120_000);
 		act(() => result.current.fresh.read());
 		expect(getMock).toHaveBeenCalledTimes(2);
 	});
@@ -85,7 +85,7 @@ describe("useFreshAgentAccountsRead", () => {
 		getMock.mockResolvedValueOnce({ data: { accounts: [{ id: "newer" }] } });
 		const { client, result } = renderRead();
 		act(() => result.current.fresh.read());
-		vi.mocked(Date.now).mockReturnValue(1_060_000);
+		vi.mocked(Date.now).mockReturnValue(1_120_000);
 		act(() => result.current.fresh.read());
 		await waitFor(() => expect(client.getQueryData(agentAccountsQueryKey)).toEqual([{ id: "newer" }]));
 		await act(async () => { rejectFirst?.(new Error("timed out")); });
