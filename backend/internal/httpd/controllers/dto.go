@@ -4712,3 +4712,97 @@ type ForkSessionResponse struct {
 	SessionID   domain.SessionID `json:"sessionId"`
 	DisplayName string           `json:"displayName"`
 }
+
+// ApprovalPendingResponse is an agent action waiting for the user's approval.
+type ApprovalPendingResponse struct {
+	ID        string    `json:"id"`
+	Kind      string    `json:"kind" enum:"browser-action,credential-use" description:"What is asking: a browser action, or the first use of a saved login."`
+	SessionID string    `json:"sessionId"`
+	Site      string    `json:"site" description:"Host the action happens on; Always allow is remembered for it."`
+	URL       string    `json:"url,omitempty"`
+	PageTitle string    `json:"pageTitle,omitempty"`
+	Action    string    `json:"action" description:"What will happen, e.g. Click \"Place order\" on shop.example."`
+	Category  string    `json:"category" description:"payment, message, publish, delete, security, account, submit, or credential."`
+	Reason    string    `json:"reason" description:"Why it was flagged."`
+	Element   string    `json:"element,omitempty" description:"The target element's role and label."`
+	Image     string    `json:"image,omitempty" description:"Base64 PNG of the element in its page."`
+	CreatedAt time.Time `json:"createdAt"`
+	ExpiresAt time.Time `json:"expiresAt" description:"When the request is denied if nobody answers."`
+}
+
+// ApprovalListResponse lists pending approval requests, oldest first.
+type ApprovalListResponse struct {
+	Pending []ApprovalPendingResponse `json:"pending"`
+}
+
+// ApprovalIDParam is the {id} path parameter of an approval request.
+type ApprovalIDParam struct {
+	ID string `path:"id" description:"Approval request id."`
+}
+
+// ApprovalDecisionRequest is the user's answer to an approval request.
+type ApprovalDecisionRequest struct {
+	Decision string `json:"decision" enum:"allow-once,allow-site,deny" required:"true"`
+}
+
+// ApprovalDecisionResponse confirms how a request ended.
+type ApprovalDecisionResponse struct {
+	ID       string `json:"id"`
+	Decision string `json:"decision" enum:"allow-once,allow-site,deny,timeout,cancelled,site-allowed"`
+}
+
+// ApprovalAuditQuery filters the approval audit log.
+type ApprovalAuditQuery struct {
+	Limit     *int64 `query:"limit,omitempty" minimum:"1" maximum:"500" description:"Maximum entries, newest first. Defaults to 100."`
+	SessionID string `query:"sessionId,omitempty" description:"Only this session's entries."`
+}
+
+// ApprovalAuditEntryResponse is one gated action in the audit log.
+type ApprovalAuditEntryResponse struct {
+	ID        string    `json:"id"`
+	Time      time.Time `json:"time"`
+	Kind      string    `json:"kind"`
+	SessionID string    `json:"sessionId"`
+	Site      string    `json:"site"`
+	URL       string    `json:"url,omitempty"`
+	Action    string    `json:"action"`
+	Category  string    `json:"category"`
+	Reason    string    `json:"reason,omitempty"`
+	Decision  string    `json:"decision" enum:"allow-once,allow-site,deny,timeout,cancelled,site-allowed"`
+	DecidedAt time.Time `json:"decidedAt"`
+}
+
+// ApprovalAuditResponse is a page of the approval audit log.
+type ApprovalAuditResponse struct {
+	Entries []ApprovalAuditEntryResponse `json:"entries"`
+}
+
+// ApprovalPolicyQuery selects whose mode to report.
+type ApprovalPolicyQuery struct {
+	SessionID string `query:"sessionId,omitempty" description:"Report this session's mode."`
+}
+
+// ApprovalSiteRuleResponse is an "always allow on this site" choice.
+type ApprovalSiteRuleResponse struct {
+	Site      string    `json:"site"`
+	Category  string    `json:"category"`
+	CreatedAt time.Time `json:"createdAt"`
+}
+
+// ApprovalPolicyResponse is a session's approval mode and the remembered sites.
+type ApprovalPolicyResponse struct {
+	Mode  string                     `json:"mode" enum:"off,risky,every-submit"`
+	Sites []ApprovalSiteRuleResponse `json:"sites"`
+}
+
+// ApprovalPolicyRequest changes a session's approval mode.
+type ApprovalPolicyRequest struct {
+	SessionID string `json:"sessionId" required:"true"`
+	Mode      string `json:"mode" enum:"off,risky,every-submit" required:"true"`
+}
+
+// ApprovalSiteRuleQuery names an "always allow" choice to forget.
+type ApprovalSiteRuleQuery struct {
+	Site     string `query:"site" required:"true"`
+	Category string `query:"category" required:"true"`
+}

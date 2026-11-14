@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/aoagents/agent-orchestrator/backend/internal/approval"
 	"log/slog"
 	"net/http"
 	"os"
@@ -926,6 +927,15 @@ func Run(buildVersion string) (retErr error) {
 	// delay the daemon's first response.
 	sessionSearchSvc := startSessionSearch(ctx, store, cfg.StateDir, log)
 	browserService := browsersvc.New(sessionSvc, browserBroker, browserAuthority)
+	// Consequential agent browser actions wait for the user; the policy and
+	// audit log live under the data dir.
+	var approvals controllers.ApprovalService
+	if gate, err := approval.Open(filepath.Join(cfg.DataDir, "approvals")); err != nil {
+		log.Error("browser approvals unavailable; consequential actions will not ask first", "err", err)
+	} else {
+		browserService.UseApprovals(gate, 0)
+		approvals = gate
+	}
 	var browserChrome controllers.BrowserChromeService
 	if chrome != nil {
 		browserService.UseChrome(chrome.broker, chrome.targets, log)
@@ -1308,6 +1318,7 @@ func Run(buildVersion string) (retErr error) {
 		}),
 		Browser:                  browserService,
 		BrowserChrome:            browserChrome,
+		Approvals:                approvals,
 		Panes:                    paneBroker,
 		LinkPreview:              linkpreviewsvc.New(nil),
 		SessionSearch:            sessionSearchSvc,
