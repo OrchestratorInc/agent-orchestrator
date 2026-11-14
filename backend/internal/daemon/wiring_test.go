@@ -775,7 +775,6 @@ func TestWiring_StartLifecycleThreadsMessengerIntoLCM(t *testing.T) {
 	}
 	rec, err := store.CreateSession(ctx, domain.SessionRecord{
 		ProjectID:    "p",
-		CreatedAt:    time.Now().UTC(),
 		Kind:         domain.KindWorker,
 		Activity:     domain.Activity{State: domain.ActivityIdle, LastActivityAt: time.Now()},
 		AutoInjectCI: true,
@@ -800,12 +799,11 @@ func TestWiring_StartLifecycleThreadsMessengerIntoLCM(t *testing.T) {
 		},
 	}
 	if err := store.WriteSCMObservation(ctx, domain.PullRequest{
-		URL:               obs.PR.URL,
-		SessionID:         rec.ID,
-		CreatedAtProvider: rec.CreatedAt,
-		Number:            obs.PR.Number,
-		HeadSHA:           obs.PR.HeadSHA,
-		UpdatedAt:         time.Now(),
+		URL:       obs.PR.URL,
+		SessionID: rec.ID,
+		Number:    obs.PR.Number,
+		HeadSHA:   obs.PR.HeadSHA,
+		UpdatedAt: time.Now(),
 	}, nil, nil, nil, nil, ports.ReviewWritePreserve); err != nil {
 		t.Fatalf("persist PR before lifecycle: %v", err)
 	}
@@ -840,7 +838,6 @@ func TestWiring_MergeConflictNudgeReArmsAfterConflictClears(t *testing.T) {
 	}
 	rec, err := store.CreateSession(ctx, domain.SessionRecord{
 		ProjectID: "p",
-		CreatedAt: time.Now().UTC(),
 		Kind:      domain.KindWorker,
 		Activity:  domain.Activity{State: domain.ActivityIdle, LastActivityAt: time.Now()},
 	})
@@ -850,11 +847,10 @@ func TestWiring_MergeConflictNudgeReArmsAfterConflictClears(t *testing.T) {
 
 	const prURL = "https://github.com/o/r/pull/1"
 	if err := store.WriteSCMObservation(ctx, domain.PullRequest{
-		URL:               prURL,
-		SessionID:         rec.ID,
-		CreatedAtProvider: rec.CreatedAt,
-		Number:            1,
-		UpdatedAt:         time.Now(),
+		URL:       prURL,
+		SessionID: rec.ID,
+		Number:    1,
+		UpdatedAt: time.Now(),
 	}, nil, nil, nil, nil, ports.ReviewWritePreserve); err != nil {
 		t.Fatalf("persist PR before lifecycle: %v", err)
 	}

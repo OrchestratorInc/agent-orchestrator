@@ -135,7 +135,6 @@ func (s *Store) ClaimPR(ctx context.Context, pr domain.PullRequest, checks []dom
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	pr = normalizedPRIdentity(pr)
-	pr.OwnershipSource = domain.PROwnershipClaimed
 	var outcome ports.ClaimOutcome
 	err := s.inTx(ctx, "claim pr", func(q *gen.Queries) error {
 		var err error
@@ -376,9 +375,6 @@ func upsertPRWithIdentity(ctx context.Context, q *gen.Queries, pr domain.PullReq
 		return err
 	}
 	for _, existing := range candidates {
-		if existing.SessionID == pr.SessionID && existing.OwnershipSource == domain.PROwnershipClaimed {
-			pr.OwnershipSource = domain.PROwnershipClaimed
-		}
 		if rejectReassignment && existing.SessionID != pr.SessionID {
 			return fmt.Errorf("pr %s already belongs to session %s", existing.URL, existing.SessionID)
 		}
@@ -702,7 +698,6 @@ func genPRParams(r domain.PullRequest) gen.UpsertPRParams {
 	return gen.UpsertPRParams{
 		URL:                      r.URL,
 		SessionID:                r.SessionID,
-		OwnershipSource:          r.OwnershipSource,
 		Number:                   int64(r.Number),
 		PRState:                  prState(r),
 		ReviewDecision:           reviewOrDefault(r.Review),
@@ -808,7 +803,6 @@ func prRowFromGen(p gen.PR) domain.PullRequest {
 	return domain.PullRequest{
 		URL:                      p.URL,
 		SessionID:                p.SessionID,
-		OwnershipSource:          p.OwnershipSource,
 		Number:                   int(p.Number),
 		Draft:                    p.PRState == domain.PRStateDraft || p.IsDraft != 0,
 		Merged:                   p.PRState == domain.PRStateMerged || p.IsMerged != 0,

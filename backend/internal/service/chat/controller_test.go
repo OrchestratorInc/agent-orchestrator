@@ -4615,7 +4615,7 @@ func TestNestedTurnCompletionDoesNotDrainQueueWhilePrimaryTurnRuns(t *testing.T)
 	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
 		return turnStateByText(t, s)["queued automation"] == domain.TurnStateRunning
 	})
-	if got := h.conv.sentTexts(); len(got) != 2 || !strings.HasSuffix(got[1], "\n\nqueued automation") {
+	if got := h.conv.sentTexts(); len(got) != 2 || got[1] != "queued automation" {
 		t.Fatalf("provider received %v, want automation only after root completion", got)
 	}
 	idleReported := false
@@ -5881,7 +5881,7 @@ func TestRelayedMessageIsAttributedToAutomation(t *testing.T) {
 	if msg.Role != domain.MessageRoleUser {
 		t.Errorf("relay role = %q; a relay is still an inbound request", msg.Role)
 	}
-	if got := h.conv.sentTexts(); len(got) != 1 || !strings.HasSuffix(got[0], "\n\norchestrator: rebase onto main") {
+	if got := h.conv.sentTexts(); len(got) != 1 || got[0] != "orchestrator: rebase onto main" {
 		t.Fatalf("provider received %v, want the relayed text dispatched", got)
 	}
 	rec, ok, err := h.st.GetSession(ctx, testSession)

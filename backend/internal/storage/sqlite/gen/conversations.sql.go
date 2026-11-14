@@ -4454,7 +4454,6 @@ SELECT conversation_turns.id,
        conversation_messages.text,
        conversation_messages.client_message_id,
        conversation_messages.origin,
-       conversation_messages.authored_by_user,
        conversation_messages.delivery_content_json,
        conversation_messages.sender_session_id,
        conversation_messages.sender_project_id,
@@ -4475,7 +4474,6 @@ type SelectNextQueuedConversationTurnRow struct {
 	Text                string
 	ClientMessageID     string
 	Origin              domain.MessageOrigin
-	AuthoredByUser      int64
 	DeliveryContentJson string
 	SenderSessionID     string
 	SenderProjectID     string
@@ -4496,7 +4494,6 @@ func (q *Queries) SelectNextQueuedConversationTurn(ctx context.Context, conversa
 		&i.Text,
 		&i.ClientMessageID,
 		&i.Origin,
-		&i.AuthoredByUser,
 		&i.DeliveryContentJson,
 		&i.SenderSessionID,
 		&i.SenderProjectID,
@@ -4599,7 +4596,6 @@ SELECT conversation_turns.id,
        conversation_messages.text,
        conversation_messages.client_message_id,
        conversation_messages.origin,
-       conversation_messages.authored_by_user,
        conversation_messages.delivery_content_json,
        conversation_messages.sender_session_id,
        conversation_messages.sender_project_id,
@@ -4619,7 +4615,6 @@ type SelectQueuedConversationBatchRow struct {
 	Text                string
 	ClientMessageID     string
 	Origin              domain.MessageOrigin
-	AuthoredByUser      int64
 	DeliveryContentJson string
 	SenderSessionID     string
 	SenderProjectID     string
@@ -4640,7 +4635,6 @@ func (q *Queries) SelectQueuedConversationBatch(ctx context.Context, conversatio
 			&i.Text,
 			&i.ClientMessageID,
 			&i.Origin,
-			&i.AuthoredByUser,
 			&i.DeliveryContentJson,
 			&i.SenderSessionID,
 			&i.SenderProjectID,
@@ -4750,9 +4744,6 @@ SELECT conversation_turns.id,
        conversation_messages.client_message_id,
        conversation_messages.origin,
        conversation_messages.authored_by_user,
-       conversation_messages.sender_session_id,
-       conversation_messages.sender_project_id,
-       conversation_messages.sender_display_name,
        conversation_messages.delivery_content_json
 FROM conversation_turns
 JOIN conversation_messages
@@ -4776,9 +4767,6 @@ type SelectReservedConversationTurnForPromotionRow struct {
 	ClientMessageID     string
 	Origin              domain.MessageOrigin
 	AuthoredByUser      int64
-	SenderSessionID     string
-	SenderProjectID     string
-	SenderDisplayName   string
 	DeliveryContentJson string
 }
 
@@ -4793,9 +4781,6 @@ func (q *Queries) SelectReservedConversationTurnForPromotion(ctx context.Context
 		&i.ClientMessageID,
 		&i.Origin,
 		&i.AuthoredByUser,
-		&i.SenderSessionID,
-		&i.SenderProjectID,
-		&i.SenderDisplayName,
 		&i.DeliveryContentJson,
 	)
 	return i, err

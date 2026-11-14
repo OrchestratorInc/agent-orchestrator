@@ -338,18 +338,6 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 	if err != nil {
 		return TriggerResult{}, err
 	}
-	if source == domain.ReviewTriggerAuto && len(prs) > 0 {
-		var owned []domain.PullRequest
-		for _, pr := range prs {
-			if pr.AllowsAutomaticWork(worker) {
-				owned = append(owned, pr)
-			}
-		}
-		prs = owned
-		if len(prs) == 0 {
-			return TriggerResult{SkipReason: "pr_ownership_uncertain"}, nil
-		}
-	}
 	if len(prs) == 0 {
 		return TriggerResult{}, fmt.Errorf("%w: %s", ErrInvalid, noTrackedPRMessage(worker, opts.BranchPRLookupFoundNone))
 	}

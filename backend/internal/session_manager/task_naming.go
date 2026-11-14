@@ -211,13 +211,7 @@ func (m *Manager) renameTaskBranch(namer ports.WorkspaceTaskNamer, rec domain.Se
 	if project != nil {
 		info = *project
 	}
-	name := strings.TrimSuffix(ws.Branch, "/root")
-	if len(name) > 36 && name[len(name)-37] == '-' {
-		if _, err := uuid.Parse(name[len(name)-36:]); err == nil {
-			slug += name[len(name)-37:]
-		}
-	}
-	held, err := namer.RenameTaskBranch(ctx, info, aoBranch(generatedBranchNamespace(m.dataDir), slug, "root"))
+	held, err := namer.RenameTaskBranch(ctx, info, aoBranch(generatedBranchNamespace(m.dataDir), slug+"-"+uuid.NewString(), "root"))
 	if err == nil && held.Root.Branch != ws.Branch {
 		recordErr := m.recordTaskBranch(ctx, rec.ID, ws.Branch, held)
 		if recordErr == nil {

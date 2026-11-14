@@ -62,8 +62,6 @@ type PullRequest struct {
 	// a draft/open/merged/closed transition.
 	StateChangedAt time.Time
 
-	OwnershipSource string
-
 	Provider string
 	Host     string
 	Repo     string
@@ -110,22 +108,6 @@ type PullRequest struct {
 	// observation did not carry details, and the stored ones are left as they
 	// are. Reads load stored details separately.
 	Details *PullRequestDetails
-}
-
-// PR ownership sources distinguish discovery from an explicit claim.
-const (
-	PROwnershipDiscovered = "discovered"
-	PROwnershipClaimed    = "claimed"
-)
-
-// AllowsAutomaticWork excludes older or undated PRs unless the session explicitly claimed them.
-func (pr PullRequest) AllowsAutomaticWork(session SessionRecord) bool {
-	if pr.SessionID != session.ID {
-		return false
-	}
-	// Providers report creation times with second precision.
-	return pr.OwnershipSource == PROwnershipClaimed ||
-		(!session.CreatedAt.IsZero() && !pr.CreatedAtProvider.IsZero() && !pr.CreatedAtProvider.Before(session.CreatedAt.Truncate(time.Second)))
 }
 
 // MaxPullRequestDescriptionBytes caps a stored PR description. Providers allow

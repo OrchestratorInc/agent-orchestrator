@@ -127,10 +127,11 @@ type Store interface {
 	MarkPRReviewThreadResolved(ctx context.Context, prURL, threadID string) error
 }
 
-// PRRefresher refreshes provider facts. claim records explicit ownership only
-// when the caller names a PR.
+// PRRefresher fetches one pull request fresh from its provider and records it
+// on the worker session. It attaches a PR the session does not track yet, but
+// never takes one over from another active session.
 type PRRefresher interface {
-	RefreshPR(ctx context.Context, workerID domain.SessionID, prURL string, claim bool) error
+	RefreshPR(ctx context.Context, workerID domain.SessionID, prURL string) error
 }
 
 // BranchPRFinder finds open PRs from the worker's own branch that AO does not
@@ -568,7 +569,7 @@ func (s *Service) refreshPRs(ctx context.Context, workerID domain.SessionID, prU
 				break
 			}
 		}
-		if err := s.prRefresher.RefreshPR(ctx, workerID, prURL, true); err != nil && !known {
+		if err := s.prRefresher.RefreshPR(ctx, workerID, prURL); err != nil && !known {
 			return false, err
 		} else if err != nil {
 			slog.Default().WarnContext(ctx, "review trigger: refresh named PR failed; using stored facts", "session", workerID, "err", err)
@@ -579,7 +580,7 @@ func (s *Service) refreshPRs(ctx context.Context, workerID domain.SessionID, prU
 		if pr.Merged || pr.Closed {
 			continue
 		}
-		if err := s.prRefresher.RefreshPR(ctx, workerID, firstNonEmpty(pr.HTMLURL, pr.URL), false); err != nil {
+		if err := s.prRefresher.RefreshPR(ctx, workerID, firstNonEmpty(pr.HTMLURL, pr.URL)); err != nil {
 			slog.Default().WarnContext(ctx, "review trigger: refresh PR failed; using stored facts", "session", workerID, "err", err)
 		}
 	}
@@ -627,7 +628,7 @@ func (s *Service) attachBranchPR(ctx context.Context, workerID domain.SessionID)
 		// The PR may have closed since the lookup, seconds ago; say it was
 		// found, so a not-found or not-open error does not read as a miss.
 		prURL := found.Own[0]
-		if err := s.prRefresher.RefreshPR(ctx, workerID, prURL, false); err != nil {
+		if err := s.prRefresher.RefreshPR(ctx, workerID, prURL); err != nil {
 			return false, fmt.Errorf("found PR %s on worker %q's branch but could not attach it: %w; run `ao review trigger %s --pr %s` to try again", prURL, workerID, err, workerID, prURL)
 		}
 		return false, nil

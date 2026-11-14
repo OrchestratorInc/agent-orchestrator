@@ -170,7 +170,7 @@ func testLifecycleNudgeWakesHibernatedChat(
 		conversation.mu.Lock()
 		sent := append([]ports.ChatUserMessage(nil), conversation.sent...)
 		conversation.mu.Unlock()
-		if len(sent) == 0 || !strings.HasSuffix(sent[0].Text, "\n\n"+message) || sent[0].Origin != domain.MessageOriginAutomation {
+		if len(sent) == 0 || sent[0].Text != message || sent[0].Origin != domain.MessageOriginAutomation {
 			t.Errorf("resumed provider received %+v, want the nudge first", sent)
 		}
 	}

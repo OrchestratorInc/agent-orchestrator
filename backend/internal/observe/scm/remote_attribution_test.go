@@ -184,7 +184,7 @@ func remotePollProvider(base ports.SCMRepo, heads []string, author, branch strin
 	for index, repositoryName := range heads {
 		number := 71 + index
 		address := fmt.Sprintf("https://%s/%s/pull/%d", base.Host, base.Repo, number)
-		listing := ports.SCMPRObservation{CreatedAtProvider: time.Unix(1_800_000_000, 0).UTC(), URL: address, Number: number, HeadRepo: repositoryName, SourceBranch: branch, TargetBranch: "trunk", Author: author, HeadSHA: "revision", State: "open"}
+		listing := ports.SCMPRObservation{URL: address, Number: number, HeadRepo: repositoryName, SourceBranch: branch, TargetBranch: "trunk", Author: author, HeadSHA: "revision", State: "open"}
 		provider.openPRs[prKey(base, 0)] = append(provider.openPRs[prKey(base, 0)], listing)
 		provider.observations[prKey(base, number)] = ports.SCMObservation{
 			Fetched: true, Provider: base.Provider, Host: base.Host, Repo: base.Repo, PR: listing,

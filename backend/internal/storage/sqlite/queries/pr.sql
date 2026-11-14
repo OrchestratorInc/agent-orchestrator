@@ -1,6 +1,6 @@
 -- name: UpsertPR :exec
 INSERT INTO pr (
-    url, session_id, ownership_source, number, pr_state, review_decision, ci_state, mergeability, updated_at, state_changed_at,
+    url, session_id, number, pr_state, review_decision, ci_state, mergeability, updated_at, state_changed_at,
     provider, host, repo, provider_id, source_branch, target_branch, head_sha, title,
     additions, deletions, changed_files, author, author_avatar_url, base_sha, merge_commit_sha,
     is_draft, is_merged, is_closed,
@@ -8,13 +8,9 @@ INSERT INTO pr (
     created_at_provider, updated_at_provider, merged_at_provider, closed_at_provider,
     metadata_hash, ci_hash, review_hash, observed_at, ci_observed_at, review_observed_at, review_partial, auto_inject_ci
 )
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
     COALESCE((SELECT auto_inject_ci FROM sessions WHERE id = ?), TRUE))
 ON CONFLICT (url) DO UPDATE SET
-    ownership_source = CASE
-        WHEN pr.session_id = excluded.session_id AND excluded.ownership_source = 'claimed' THEN 'claimed'
-        ELSE pr.ownership_source
-    END,
     number = excluded.number,
     -- A successful merge is authoritative and irreversible. A poll that
     -- fetched the old open state before that merge must not roll it back.
@@ -507,12 +503,11 @@ LEFT JOIN pr_reviews last_review ON last_review.pr_url = pr.url
 ORDER BY pr.session_id, pr.updated_at DESC;
 
 -- name: ClaimPRForSession :exec
-INSERT INTO pr (url, session_id, ownership_source, number, pr_state, review_decision, ci_state, mergeability, updated_at, state_changed_at, auto_inject_ci)
-VALUES (?, ?, 'claimed', ?, ?, ?, ?, ?, ?, ?,
+INSERT INTO pr (url, session_id, number, pr_state, review_decision, ci_state, mergeability, updated_at, state_changed_at, auto_inject_ci)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?,
     COALESCE((SELECT auto_inject_ci FROM sessions WHERE id = ?), TRUE))
 ON CONFLICT (url) DO UPDATE SET
     session_id = excluded.session_id,
-    ownership_source = 'claimed',
     state_changed_at = CASE
         WHEN pr.pr_state != excluded.pr_state THEN excluded.updated_at
         WHEN pr.state_changed_at IS NULL THEN excluded.state_changed_at

@@ -2654,7 +2654,6 @@ func (s *Store) NextQueuedTurn(ctx context.Context, conversationID string) (doma
 		Text:                row.Text,
 		ClientMessageID:     row.ClientMessageID,
 		Origin:              row.Origin,
-		AuthoredByUser:      row.AuthoredByUser != 0,
 		DeliveryContentJSON: row.DeliveryContentJson,
 		SenderSessionID:     row.SenderSessionID,
 		SenderProjectID:     row.SenderProjectID,
@@ -2678,7 +2677,7 @@ func (s *Store) ListQueuedBatch(ctx context.Context, conversationID string, limi
 	for _, row := range rows {
 		batch = append(batch, domain.QueuedTurn{
 			TurnID: row.ID, Text: row.Text, ClientMessageID: row.ClientMessageID,
-			Origin: row.Origin, AuthoredByUser: row.AuthoredByUser != 0, DeliveryContentJSON: row.DeliveryContentJson,
+			Origin: row.Origin, DeliveryContentJSON: row.DeliveryContentJson,
 			SenderSessionID: row.SenderSessionID, SenderProjectID: row.SenderProjectID,
 			SenderDisplayName: row.SenderDisplayName,
 		})
@@ -2710,7 +2709,7 @@ func (s *Store) ClaimQueuedBatch(ctx context.Context, conversationID string, dis
 			}
 			batch = append(batch, domain.QueuedTurn{
 				TurnID: row.ID, Text: row.Text, ClientMessageID: row.ClientMessageID,
-				Origin: row.Origin, AuthoredByUser: row.AuthoredByUser != 0, DeliveryContentJSON: row.DeliveryContentJson,
+				Origin: row.Origin, DeliveryContentJSON: row.DeliveryContentJson,
 				SenderSessionID: row.SenderSessionID, SenderProjectID: row.SenderProjectID,
 				SenderDisplayName: row.SenderDisplayName,
 			})
@@ -2836,7 +2835,6 @@ func (s *Store) ReserveQueuedTurnForPromotion(
 	return domain.QueuedTurn{
 		TurnID: row.ID, Text: row.Text, ClientMessageID: row.ClientMessageID,
 		Origin: row.Origin, AuthoredByUser: row.AuthoredByUser != 0,
-		SenderSessionID: row.SenderSessionID, SenderProjectID: row.SenderProjectID, SenderDisplayName: row.SenderDisplayName,
 		DeliveryContentJSON: row.DeliveryContentJson,
 	}, nil
 }

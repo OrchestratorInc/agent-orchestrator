@@ -33,11 +33,9 @@ var (
 	ErrSessionNoWorkspace = errors.New("session: no workspace")
 )
 
-// ClaimPROptions controls PR ownership changes.
+// ClaimPROptions controls PR claim conflict behavior.
 type ClaimPROptions struct {
 	AllowTakeover bool
-	// PreserveOwnership refreshes facts without recording an explicit claim.
-	PreserveOwnership bool
 }
 
 // ClaimPRResult is the session PR read model returned after a claim.
@@ -132,26 +130,12 @@ func (s *Service) ClaimPR(ctx context.Context, id domain.SessionID, ref string, 
 	}
 	now := s.clock().UTC()
 	pr, checks, reviews, threads, comments := claimRowsFromSCM(id, obs, reviewMode, now, rec)
-	var outcome ports.ClaimOutcome
-	if opts.PreserveOwnership {
-		writer, ok := s.prClaimer.(ports.SCMWriter)
-		if !ok {
-			return ClaimPRResult{}, ErrSCMUnavailable
-		}
-		pr.OwnershipSource = domain.PROwnershipDiscovered
-		err = writer.WriteSCMObservation(ctx, pr, checks, reviews, threads, comments, reviewMode)
-	} else {
-		outcome, err = s.prClaimer.ClaimPR(ctx, pr, checks, reviews, threads, comments, reviewMode, opts.AllowTakeover)
-	}
+	outcome, err := s.prClaimer.ClaimPR(ctx, pr, checks, reviews, threads, comments, reviewMode, opts.AllowTakeover)
 	if err != nil {
-		if !opts.PreserveOwnership {
-			s.recordClaimed(ctx, id, pr, actionStatusForError(err), err)
-		}
+		s.recordClaimed(ctx, id, pr, actionStatusForError(err), err)
 		return ClaimPRResult{}, err
 	}
-	if !opts.PreserveOwnership {
-		s.recordClaimed(ctx, id, pr, domain.ActivityStatusCompleted, nil)
-	}
+	s.recordClaimed(ctx, id, pr, domain.ActivityStatusCompleted, nil)
 	// The PR has changed hands: tell the previous owner now, so a later read
 	// failing doesn't leave it acting on a PR it no longer owns.
 	tookOver := outcome.PreviousOwner != "" && outcome.PreviousOwner != id

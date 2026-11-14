@@ -545,7 +545,7 @@ func TestCancelTaskPreparationPreservesCommittedBranchButDoesNotReuseIt(t *testi
 	}
 	prepared := st.sessions["mer-1"]
 	if prepared.Metadata.Branch == rec.Metadata.Branch || !isGeneratedBranch(prepared.Metadata.Branch, "ao/mer-1", true) {
-		t.Fatalf("new branch = %q, want a new token after retained user branch", prepared.Metadata.Branch)
+		t.Fatalf("new branch = %q, want a unique namespace after retained user branch", prepared.Metadata.Branch)
 	}
 	if got, want := runManagerGit(t, prepared.Metadata.WorkspacePath, "rev-parse", "HEAD"), runManagerGit(t, repo, "rev-parse", "HEAD"); got != want {
 		t.Fatalf("fresh task started at %q, want main %q", got, want)

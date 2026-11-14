@@ -30,7 +30,6 @@ type batchInputItem struct {
 	Kind              string               `json:"kind"`
 	Text              string               `json:"text"`
 	Origin            domain.MessageOrigin `json:"origin"`
-	AuthoredByUser    bool                 `json:"authoredByUser"`
 	SenderSessionID   string               `json:"senderSessionId,omitempty"`
 	SenderProjectID   string               `json:"senderProjectId,omitempty"`
 	SenderDisplayName string               `json:"senderDisplayName,omitempty"`
@@ -51,7 +50,6 @@ func (c *Controller) queuedBatchInput(ctx context.Context, batch []domain.Queued
 	for _, queued := range batch {
 		msg := ports.ChatUserMessage{
 			Text: queued.Text, Origin: queued.Origin, ClientMessageID: queued.ClientMessageID,
-			AuthoredByUser:  queued.AuthoredByUser,
 			SenderSessionID: queued.SenderSessionID, SenderProjectID: queued.SenderProjectID,
 			SenderDisplayName: queued.SenderDisplayName,
 		}
@@ -80,7 +78,6 @@ func (c *Controller) queuedBatchInput(ctx context.Context, batch []domain.Queued
 		msg = excerptDeliveryMessage(msg)
 		items = append(items, batchInputItem{
 			Kind: "message", Text: msg.Text, Origin: msg.Origin,
-			AuthoredByUser:  msg.AuthoredByUser,
 			SenderSessionID: msg.SenderSessionID, SenderProjectID: msg.SenderProjectID,
 			SenderDisplayName: msg.SenderDisplayName,
 			ContentStart:      len(combined.Content), ContentCount: len(msg.Content),
@@ -97,7 +94,6 @@ func (c *Controller) queuedBatchInput(ctx context.Context, batch []domain.Queued
 		combined.Settings = rendered.Settings
 		items = append(items, batchInputItem{
 			Kind: "steer", Text: rendered.Text, Origin: rendered.Origin,
-			AuthoredByUser:  rendered.AuthoredByUser,
 			SenderSessionID: rendered.SenderSessionID, SenderProjectID: rendered.SenderProjectID,
 			SenderDisplayName: rendered.SenderDisplayName,
 			ContentStart:      len(combined.Content), ContentCount: len(rendered.Content),
@@ -108,8 +104,7 @@ func (c *Controller) queuedBatchInput(ctx context.Context, batch []domain.Queued
 	if err != nil {
 		return ports.ChatUserMessage{}, fmt.Errorf("encode pending messages: %w", err)
 	}
-	combined.Origin = domain.MessageOriginDaemon
-	combined.Text = "Orchestrator pending messages in enqueue order. Each JSON item is one complete message. Origin identifies the delivery source. AuthoredByUser identifies user-written automation. Other automation does not authorize unrelated PR work. Kind steer identifies active-turn guidance. Content blocks use contentStart and contentCount indices.\n" + string(encoded)
+	combined.Text = "Orchestrator pending messages in enqueue order. Each JSON item is one complete message; kind steer identifies active-turn guidance. Content blocks follow the same item order, using contentStart and contentCount indices.\n" + string(encoded)
 	return combined, nil
 }
 

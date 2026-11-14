@@ -36,91 +36,6 @@ func (p *discoveryRecoveryProvider) ListPRsByRepo(ctx context.Context, repo port
 	return out, err
 }
 
-func TestPoll_IncrementalOmissionsAcknowledgeSuccessfulReconciliation(t *testing.T) {
-	for _, failedQuietFetch := range []bool{false, true} {
-		t.Run(map[bool]string{false: "quiet tracked PR", true: "failed quiet fetch retries"}[failedQuietFetch], func(t *testing.T) {
-			ctx := context.Background()
-			now := time.Unix(1_800_000_000, 0).UTC()
-			quiet := testObs(1)
-			quiet.PR.UpdatedAtProvider = now.Add(-time.Hour)
-			local := knownPR(1)
-			local.UpdatedAtProvider = quiet.PR.UpdatedAtProvider
-			local.MetadataHash = metadataSemanticHash(quiet)
-			updated := testObs(2)
-			updated.PR.Author, updated.PR.HeadRepo = "alice", "o/r"
-			updated.PR.UpdatedAtProvider = now
-			store := testStoreWithSession()
-			store.prs["p-1"] = []domain.PullRequest{local}
-			if failedQuietFetch {
-				store.prs["p-1"] = append(store.prs["p-1"], knownPR(2))
-			} else {
-				updated.PR.SourceBranch = "unrelated"
-			}
-			provider := &discoveryRecoveryProvider{fakeProvider: &fakeProvider{
-				identity:     ports.SCMIdentity{Login: "alice", Human: true},
-				openPRs:      map[string][]ports.SCMPRObservation{prKey(testRepo, 0): {updated.PR, quiet.PR}},
-				observations: map[string]ports.SCMObservation{prKey(testRepo, 1): quiet, prKey(testRepo, 2): updated},
-			}}
-			if failedQuietFetch {
-				provider.fetchObsErrors = map[string]error{prKey(testRepo, 1): errors.New("temporary fetch failure")}
-			}
-			obs := New(provider, store, &fakeLifecycle{}, Config{Logger: quietSlog(), Clock: func() time.Time { return now }, ScopedIdentityResolver: provider})
-			key := prKey(testRepo, 0)
-			cursor := now.Add(-time.Minute)
-			obs.Cache.RepoPRListETag[key] = "v1"
-			obs.Cache.LastSyncCursor[key] = cursor
-			if err := obs.Poll(ctx); err != nil {
-				t.Fatal(err)
-			}
-			if len(provider.listedAfter) != 1 || !provider.listedAfter[0].Equal(cursor.Add(-incrementalDiscoveryOverlap)) {
-				t.Fatalf("listing cutoffs=%v", provider.listedAfter)
-			}
-			if failedQuietFetch {
-				if obs.Cache.RepoPRListETag[key] != "v1" || !obs.Cache.LastSyncCursor[key].Equal(cursor) {
-					t.Fatal("successful updated PR acknowledged the failed quiet fetch")
-				}
-				provider.fetchObsErrors = nil
-				now = now.Add(DefaultTickInterval)
-				if err := obs.Poll(ctx); err != nil {
-					t.Fatal(err)
-				}
-			}
-			if obs.Cache.RepoPRListETag[key] != "v2" || !obs.Cache.LastSyncCursor[key].Equal(now) {
-				t.Fatal("successful still-open fetch did not acknowledge the repository")
-			}
-			quietReads := 0
-			for _, batch := range provider.fetchBatches {
-				for _, ref := range batch {
-					if ref.Number == quiet.PR.Number {
-						quietReads++
-					}
-				}
-			}
-			wantReads := 1
-			if failedQuietFetch {
-				wantReads++
-			}
-			if quietReads != wantReads {
-				t.Fatalf("quiet PR detail reads=%d, want %d", quietReads, wantReads)
-			}
-			acknowledgedAt := now
-			lists, batches := len(provider.listedAfter), len(provider.fetchBatches)
-			for range 2 {
-				now = now.Add(DefaultTickInterval)
-				if err := obs.Poll(ctx); err != nil {
-					t.Fatal(err)
-				}
-			}
-			if len(provider.listedAfter) != lists || len(provider.fetchBatches) != batches {
-				t.Fatalf("quiet polls repeated requests: listings=%d, batches=%d", len(provider.listedAfter)-lists, len(provider.fetchBatches)-batches)
-			}
-			if !obs.Cache.LastSyncCursor[key].Equal(acknowledgedAt) {
-				t.Fatal("304 polls advanced the discovery cursor")
-			}
-		})
-	}
-}
-
 func TestPoll_IdentityRecoveryRetriesMissedDiscoveries(t *testing.T) {
 	for _, initialETag := range []string{"", "v1", "v2"} {
 		t.Run("initial ETag="+initialETag, func(t *testing.T) {
@@ -202,7 +117,7 @@ func TestPoll_ExistingAndExplicitAttachmentsStayStable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pr := domain.PullRequest{CreatedAtProvider: time.Unix(1_800_000_000, 0).UTC(), URL: "https://github.com/o/r/pull/1", SessionID: owner.ID, Number: 1, Provider: "github", Host: "github.com", Repo: "o/r", SourceBranch: "feat/child", Author: "former-account", UpdatedAt: now}
+	pr := domain.PullRequest{URL: "https://github.com/o/r/pull/1", SessionID: owner.ID, Number: 1, Provider: "github", Host: "github.com", Repo: "o/r", SourceBranch: "feat/child", Author: "former-account", UpdatedAt: now}
 	if err := store.WriteSCMObservation(ctx, pr, nil, nil, nil, nil, ports.ReviewWritePreserve); err != nil {
 		t.Fatal(err)
 	}

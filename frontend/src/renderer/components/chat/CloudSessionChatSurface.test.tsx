@@ -1,7 +1,8 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { captureFileReference, formatCapturedFileReferences } from "../../../shared/chat-file-reference";
 import { cloudAttachmentReference } from "../../lib/cloud-attachments";
-import { act, render, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { agentModelsQueryKey } from "../../hooks/useAgentModelsQuery";
 import { settingsQueryKey } from "../../hooks/useSettings";
@@ -856,6 +857,70 @@ describe("CloudSessionChatSurface", () => {
 			session.id,
 			expect.objectContaining({ mode: "trusted" }),
 			{ idempotencyKey: "agent-1" },
+		);
+	});
+
+	// Claude asks to leave Plan mode (its ExitPlanMode tool) with one option per
+	// mode it can carry on in, and "plan" to keep planning, as claude-agent-acp
+	// sends it to local Chat.
+	const planApproval: CloudCpClientEvent[] = [
+		{ sessionId: session.id, sequence: 1, type: "chat.user_message", payload: { text: "outline only", turnId: "turn-1", mode: "read-only" }, createdAt: session.updatedAt },
+		{ sessionId: session.id, sequence: 2, type: "chat.turn_started", payload: { turnId: "turn-1" }, createdAt: session.updatedAt },
+		{ sessionId: session.id, sequence: 3, type: "chat.approval_requested", payload: {
+			turnId: "turn-1", requestId: "plan-approval", summary: "Ready to code?", toolKind: "switch_mode", subjectKind: "mcp_tool",
+			decisions: [
+				{ id: "acceptEdits", label: "Yes, and auto-accept edits", kind: "allow_always" },
+				{ id: "default", label: "Yes, and manually approve edits", kind: "allow_once" },
+				{ id: "plan", label: "No, keep planning", kind: "reject_once" },
+			],
+		}, createdAt: session.updatedAt },
+	];
+	const planningSurface = async () => {
+		localStorage.setItem("cloud-chat-settings:org-1:session-1:claude-code", JSON.stringify({ executionMode: "plan" }));
+		cloudMocks.listChatEvents.mockResolvedValue({ events: planApproval, hasMore: false, nextAfter: 3 });
+		cloudMocks.listChatModels.mockResolvedValue({ models: [{ id: "opus", displayName: "Opus", default: true }], modes: ["default", "plan"] });
+		cloudMocks.sendSessionMessage.mockResolvedValue({ event: {} });
+		cloudMocks.decideChatApproval.mockReset().mockResolvedValue({ ok: true });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+		render(<QueryClientProvider client={queryClient}>
+			<CloudSessionChatSurface session={{ ...session, provider: "claude-code", cloud: { orgId: "org-1", permissionMode: "trusted" } }} />
+		</QueryClientProvider>);
+		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].configOptions?.[0].currentValue).toBe("plan"));
+		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].snapshot.items).toContainEqual(expect.objectContaining({
+			activityKind: "approval", requestId: "plan-approval", status: "pending",
+		})));
+	};
+
+	it("leaves Plan mode for the mode the user approved the plan with, as local Chat does", async () => {
+		await planningSurface();
+		act(() => cloudMocks.chatProps.mock.lastCall?.[0].onDecide("plan-approval", "acceptEdits"));
+		await waitFor(() => expect(cloudMocks.decideChatApproval).toHaveBeenCalledWith("org-1", session.id, "plan-approval", "acceptEdits"));
+		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].configOptions?.[0].currentValue).toBe("agent"));
+		await cloudMocks.chatProps.mock.lastCall?.[0].onSend("next step", [], "after-plan");
+		expect(cloudMocks.sendSessionMessage).toHaveBeenLastCalledWith(
+			"org-1",
+			session.id,
+			{ text: "next step", mode: "trusted", approvalMode: "accept-edits" },
+			{ idempotencyKey: "after-plan" },
+		);
+	});
+
+	it("keeps planning when the user rejects the plan, or the approval is refused", async () => {
+		await planningSurface();
+		act(() => cloudMocks.chatProps.mock.lastCall?.[0].onDecide("plan-approval", "plan"));
+		await waitFor(() => expect(cloudMocks.decideChatApproval).toHaveBeenCalledWith("org-1", session.id, "plan-approval", "plan"));
+		// The control plane refuses an approval whose turn already ended: the plan was not approved.
+		cloudMocks.decideChatApproval.mockRejectedValueOnce(new CloudCpError("The turn has finished.", { status: 409, code: "turn_finished" }));
+		act(() => cloudMocks.chatProps.mock.lastCall?.[0].onDecide("plan-approval", "default"));
+		await waitFor(() => expect(cloudMocks.decideChatApproval).toHaveBeenCalledTimes(2));
+		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].commandError).toBeTruthy());
+		expect(cloudMocks.chatProps.mock.lastCall?.[0].configOptions?.[0].currentValue).toBe("plan");
+		await cloudMocks.chatProps.mock.lastCall?.[0].onSend("revise it", [], "still-planning");
+		expect(cloudMocks.sendSessionMessage).toHaveBeenLastCalledWith(
+			"org-1",
+			session.id,
+			{ text: "revise it", mode: "read-only" },
+			{ idempotencyKey: "still-planning" },
 		);
 	});
 
@@ -2029,6 +2094,38 @@ describe("CloudSessionChatSurface", () => {
 			text: "go", mode: "trusted", approvalMode: "bypass-permissions",
 		}, { idempotencyKey: "picked-default" });
 		expect(JSON.parse(localStorage.getItem("cloud-chat-settings:org-1:session-1:claude-code") ?? "{}")).toMatchObject({ approvalMode: "bypass-permissions" });
+	});
+
+	it("sends the approval mode picked from the chat's own settings bar with the next turn", async () => {
+		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		cloudMocks.sendSessionMessage.mockResolvedValue({ event: {} });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+		render(
+			<QueryClientProvider client={queryClient}>
+				<CloudSessionChatSurface session={{ ...session, provider: "claude-code", cloud: { orgId: "org-1", permissionMode: "trusted" } }} />
+			</QueryClientProvider>,
+		);
+		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].onSend).toBeTypeOf("function"));
+		const props = cloudMocks.chatProps.mock.lastCall?.[0];
+		expect(props.snapshot.settings?.approvalMode).toBe("bypass-permissions");
+		// The bar as ChatWorkspace draws it for this chat: the unified one, with the agent picker.
+		const user = userEvent.setup();
+		render(
+			<QueryClientProvider client={queryClient}>
+				<TurnSettingsBar harness={props.snapshot.harness} models={props.models ?? []} settings={props.snapshot.settings}
+					showApprovalMode={props.showApprovalMode} approvalModes={props.approvalModes} approvalModeLimits={props.approvalModeLimits}
+					onChange={props.onChooseSettings} onRememberPermissions={props.onRememberPermissions} agentSwitch={props.agentSwitch} />
+			</QueryClientProvider>,
+		);
+		await user.click(screen.getByRole("button", { name: "Approval policy for the next turn" }));
+		await user.click(screen.getByRole("menuitemradio", { name: /Accept edits/ }));
+		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].snapshot.settings?.approvalMode).toBe("accept-edits"));
+		await cloudMocks.chatProps.mock.lastCall?.[0].onSend("go", [], "picked-from-bar");
+		expect(cloudMocks.sendSessionMessage).toHaveBeenLastCalledWith("org-1", session.id, {
+			text: "go", mode: "trusted", approvalMode: "accept-edits",
+		}, { idempotencyKey: "picked-from-bar" });
+		expect(JSON.parse(localStorage.getItem("cloud-chat-settings:org-1:session-1:claude-code") ?? "{}")).toMatchObject({ approvalMode: "accept-edits" });
 	});
 
 	it("stops showing a pick the session's mode no longer allows", async () => {

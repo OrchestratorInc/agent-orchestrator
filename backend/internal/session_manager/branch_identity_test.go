@@ -1,6 +1,7 @@
 package sessionmanager
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -17,30 +18,48 @@ func isGeneratedBranch(branch, prefix string, root bool) bool {
 			return false
 		}
 	}
-	token, ok := strings.CutPrefix(branch, prefix+"-")
-	if !ok {
-		return false
-	}
-	_, err := uuid.Parse(token)
-	return err == nil
-}
-
-func namedBranch(original, slug string) string {
-	name := strings.TrimSuffix(original, "/root")
-	if len(name) > 36 {
-		slug += name[len(name)-37:]
-	}
-	return "ao/" + slug + "/root"
+	suffix, ok := strings.CutPrefix(branch, prefix+"-")
+	return ok && uuid.Validate(suffix) == nil
 }
 
 func TestGeneratedBranchesDifferAcrossInstallations(t *testing.T) {
 	for _, kind := range []domain.ProjectKind{domain.ProjectKindSingleRepo, domain.ProjectKindWorkspace} {
 		t.Run(string(kind), func(t *testing.T) {
-			a := DefaultSpawnBranch("example-42", domain.KindWorker, "example", kind, t.TempDir())
-			b := DefaultSpawnBranch("example-42", domain.KindWorker, "example", kind, t.TempDir())
-			if a == b || !isGeneratedBranch(a, "ao/example-42", kind != domain.ProjectKindWorkspace) || !isGeneratedBranch(b, "ao/example-42", kind != domain.ProjectKindWorkspace) {
-				t.Fatalf("branches do not have independent tokens: %q %q", a, b)
+			first := DefaultSpawnBranch("p-1", domain.KindWorker, "p", kind, t.TempDir())
+			second := DefaultSpawnBranch("p-1", domain.KindWorker, "p", kind, t.TempDir())
+			root := kind != domain.ProjectKindWorkspace
+			if first == second || !isGeneratedBranch(first, "ao/p-1", root) || !isGeneratedBranch(second, "ao/p-1", root) {
+				t.Fatalf("worker namespaces are not unique: %q, %q", first, second)
 			}
 		})
+	}
+	if got := DefaultOrchestratorBranch("p", t.TempDir()); got != "ao/p-orchestrator" {
+		t.Fatalf("canonical orchestrator branch = %q", got)
+	}
+	if got := DefaultSpawnBranch("p-1", domain.KindOrchestrator, "p", domain.ProjectKindWorkspace, t.TempDir()); got != "ao/p-1" {
+		t.Fatalf("workspace orchestrator branch = %q", got)
+	}
+}
+
+func TestTaskNamesDifferAcrossInstallations(t *testing.T) {
+	var branches [2]string
+	for i := range branches {
+		m, st, _, _ := newGitTaskPreparationManager(t)
+		m.dataDir = t.TempDir()
+		m.chat = &taskNamingLauncher{result: `{"title":"Fix login","slug":"fix-login"}`}
+		cfg := asyncChatSpawnConfig("Fix login")
+		cfg.NameFromPrompt, cfg.Async = true, false
+		rec, _, _, err := m.Spawn(context.Background(), cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		actual := st.sessions[rec.ID]
+		branches[i] = actual.Metadata.Branch
+		if rec.ID != "mer-1" || !isGeneratedBranch(branches[i], "ao/fix-login", true) || !isGeneratedBranch(actual.TemporaryBranch, "ao/mer-1", true) {
+			t.Fatalf("named worker = %+v", actual)
+		}
+	}
+	if branches[0] == branches[1] {
+		t.Fatalf("same task name reused namespace %q", branches[0])
 	}
 }

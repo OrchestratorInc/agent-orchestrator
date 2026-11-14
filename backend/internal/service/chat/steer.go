@@ -282,11 +282,8 @@ func (c *Controller) PromoteQueuedTurn(
 	msg := ports.ChatUserMessage{
 		Text: queued.Text, Content: content, Origin: queued.Origin,
 		AuthoredByUser: queued.AuthoredByUser, ClientMessageID: queued.ClientMessageID,
-		SenderSessionID: queued.SenderSessionID, SenderProjectID: queued.SenderProjectID,
-		SenderDisplayName: queued.SenderDisplayName,
 	}
-	providerMessage := automationDeliveryMessage(excerptDeliveryMessage(msg))
-	ref, err := steerer.Steer(ctx, target, providerMessage)
+	ref, err := steerer.Steer(ctx, target, excerptDeliveryMessage(msg))
 	if err != nil {
 		classified := classify(err)
 		switch {
@@ -313,7 +310,7 @@ func (c *Controller) PromoteQueuedTurn(
 	}
 	activityID := c.newID()
 	activity, err := makeSteerActivity(activityID, msg, turnID, steerProviderInput{
-		Text: providerMessage.Text, Content: providerMessage.Content, SourceTurnIDs: []string{turnID},
+		Text: msg.Text, Content: msg.Content, SourceTurnIDs: []string{turnID},
 	})
 	if err != nil {
 		return PromoteQueuedTurnResult{}, settleUncertain(err)
@@ -465,7 +462,6 @@ func (c *Controller) steerLocked(ctx context.Context, msg ports.ChatUserMessage)
 		}
 	}
 
-	providerMessage = automationDeliveryMessage(providerMessage)
 	ref, err := steerer.Steer(ctx, turn, providerMessage)
 	if err != nil {
 		kind, definitive, refused := classifySteerRejection(err)
@@ -672,7 +668,6 @@ type steerDeliveryRequest struct {
 	Text            string                  `json:"text"`
 	Content         []ports.ChatContent     `json:"content,omitempty"`
 	Origin          domain.MessageOrigin    `json:"origin"`
-	AuthoredByUser  bool                    `json:"authoredByUser,omitempty"`
 	SenderSessionID string                  `json:"senderSessionId,omitempty"`
 	Settings        deliveryRequestSettings `json:"settings"`
 }
@@ -680,7 +675,6 @@ type steerDeliveryRequest struct {
 func encodeSteerDeliveryRequest(msg ports.ChatUserMessage) (string, error) {
 	encoded, err := json.Marshal(steerDeliveryRequest{
 		Text: msg.Text, Content: msg.Content, Origin: normalizeOrigin(msg.Origin),
-		AuthoredByUser:  msg.AuthoredByUser,
 		SenderSessionID: msg.SenderSessionID,
 		Settings: deliveryRequestSettings{
 			Model: msg.Settings.Model, Effort: msg.Settings.Effort, Approval: msg.Settings.Approval,

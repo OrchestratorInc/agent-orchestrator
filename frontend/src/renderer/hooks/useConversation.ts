@@ -171,7 +171,7 @@ export type ConversationLocalEcho = {
 	queued?: boolean;
 	/** Excerpts are rendered inside the optimistic user message bubble. */
 	fileReferences?: ChatFileReference[];
-	excerpts?: (Pick<ChatDraftExcerptReference, "text" | "messageId" | "revision" | "order" | "snapshot"> & { id?: string; conversationId?: string })[];
+	excerpts?: (Pick<ChatDraftExcerptReference, "text" | "comment" | "messageId" | "revision" | "order" | "snapshot"> & { id?: string; conversationId?: string })[];
 	/** Filled after the daemon accepts the send, then used for exact reconciliation. */
 	turnId?: string;
 	/** Sent with an agent switch: the transcript shows the "Switched" line above it at once. */
@@ -734,6 +734,7 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 				id: excerpt.id, order: excerpt.order, snapshot: excerpt.snapshot,
 					conversationId: excerpt.conversationId,
 					text: excerpt.text,
+					comment: excerpt.comment,
 					messageId: excerpt.messageId,
 					revision: excerpt.revision,
 				})),
@@ -1544,8 +1545,10 @@ function steerRefusal(error: unknown): string | undefined {
 			return "The turn finished before this landed. Send it as a message instead.";
 		case "CHAT_INTERFACE_TRANSITION":
 			return "The session is switching interfaces. This guidance was not delivered; send it after the switch finishes.";
-		case "CHAT_TURN_NOT_STEERABLE":
-			return `${apiErrorMessage(error)} Try again once it finishes.`;
+		case "CHAT_TURN_NOT_STEERABLE": {
+			const message = apiErrorMessage(error).trim();
+			return `${/[.!?]$/.test(message) ? message : `${message}.`} Try again once it finishes.`;
+		}
 		case "CHAT_STEER_UNSUPPORTED":
 			// Answered by hiding the control, so there is nothing to say.
 			return undefined;
@@ -2160,6 +2163,7 @@ function toMessage(wire: WireMessage): ConversationMessage {
 			uri: item.uri || undefined,
 			name: item.name || undefined,
 			text: item.text || undefined,
+			comment: item.comment || undefined,
 			fileReference: item.fileReference as ChatFileReference | undefined, annotationId: item.annotationId, annotationOrder: item.annotationOrder,
 			sourceConversationId: item.sourceConversationId || undefined,
 			sourceMessageId: item.sourceMessageId || undefined,

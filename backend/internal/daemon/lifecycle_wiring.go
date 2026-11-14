@@ -929,8 +929,10 @@ func (c chatLauncher) StopChat(ctx context.Context, id domain.SessionID) error {
 	return c.svc.StopChat(ctx, id)
 }
 
-// reviewPRRefresher fetches PR facts before a review.
-// Only a named PR records an explicit claim.
+// reviewPRRefresher lets a review trigger fetch a worker's PR fresh from the
+// provider through the session service's claim, which re-reads the PR and
+// records it on the session. Claiming a PR the session already owns only
+// refreshes its facts; another active session's PR is never taken over.
 type reviewPRRefresher struct {
 	sessions interface {
 		ClaimPR(ctx context.Context, id domain.SessionID, ref string, opts sessionsvc.ClaimPROptions) (sessionsvc.ClaimPRResult, error)
@@ -943,8 +945,8 @@ func (r reviewPRRefresher) FindBranchPRs(ctx context.Context, workerID domain.Se
 	return reviewsvc.BranchPRs{Own: found.Own, OtherAuthor: found.OtherAuthor}, err
 }
 
-func (r reviewPRRefresher) RefreshPR(ctx context.Context, workerID domain.SessionID, prURL string, claim bool) error {
-	_, err := r.sessions.ClaimPR(ctx, workerID, prURL, sessionsvc.ClaimPROptions{AllowTakeover: false, PreserveOwnership: !claim})
+func (r reviewPRRefresher) RefreshPR(ctx context.Context, workerID domain.SessionID, prURL string) error {
+	_, err := r.sessions.ClaimPR(ctx, workerID, prURL, sessionsvc.ClaimPROptions{AllowTakeover: false})
 	var owned ports.PRClaimedByActiveSessionError
 	switch {
 	case err == nil:

@@ -704,7 +704,7 @@ func TestRelayChatTurnWithIDWakesHibernatedSession(t *testing.T) {
 		t.Fatalf("native resume id = %q, want %q", resumeConfig.ProviderConversationID, old.ProviderConversationID())
 	}
 	messages := resumed.sentMessages()
-	if len(messages) != 1 || !strings.HasSuffix(messages[0].Text, "\n\nCI failed; fix it") ||
+	if len(messages) != 1 || messages[0].Text != "CI failed; fix it" ||
 		messages[0].ClientMessageID != "ci-nudge-1" || messages[0].Origin != domain.MessageOriginAutomation {
 		t.Fatalf("resumed provider messages = %+v", messages)
 	}
